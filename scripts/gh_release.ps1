@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Version,
-    [string]$PrevVersion = "v0.59.2",
+    [string]$PrevVersion = "v0.71.0",
     [switch]$Edit  # update an existing release's notes instead of creating it (no asset upload)
 )
 
@@ -68,7 +68,7 @@ $notes += "|------|------|`r`n"
 $notes += "| clustara-v" + $cleanVer + ".tar.gz | Docker 이미지 패키지 (linux/amd64) |`r`n"
 $notes += "| clustara-v" + $cleanVer + ".tar.gz.sha256 | SHA256 체크섬 |`r`n"
 $notes += "| README-offline-v" + $cleanVer + ".md | 오프라인 배포 가이드 |`r`n"
-$notes += "| Clustara_Report.pdf | Clustara 기능·역할 및 비즈니스 가치 종합 보고서 (v0.59.3) |`r`n`r`n"
+$notes += "| Clustara_Report.pdf | Clustara 기능·역할 및 비즈니스 가치 종합 보고서 |`r`n`r`n"
 
 $notes += "### 빠른 시작`r`n"
 $notes += '```' + "bash`r`n"
