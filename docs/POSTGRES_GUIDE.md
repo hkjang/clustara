@@ -1,6 +1,6 @@
 # Clustara - PostgreSQL 연동 및 기동 가이드
 
-본 가이드는 Clustara의 메인 데이터베이스를 기본 SQLite에서 PostgreSQL로 변경하여 운영 환경(특히 다중 인스턴스 이중화/HA 환경)을 구성하고 기동하는 방법을 설명합니다.
+본 가이드는 Clustara(Kubernetes 운영 허브)의 메인 데이터베이스를 기본 SQLite에서 PostgreSQL로 변경하여 운영 환경(특히 다중 인스턴스 이중화/HA 환경)을 구성하고 기동하는 방법을 설명합니다. K8s 인벤토리·리비전·이벤트·메트릭·정책 등 모든 저장은 이 DB를 사용합니다.
 
 ---
 

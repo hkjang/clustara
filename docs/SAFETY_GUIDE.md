@@ -1,5 +1,7 @@
 # Clustara - 안전 및 보안 거버넌스 운영 가이드 (Safety & Governance Operations Guide)
 
+> **참고 — Clustara K8s 운영 허브.** 이 문서는 **내장 게이트웨이 코어**의 AI 트래픽 안전·거버넌스(정책 엔진·Secret Firewall·승인 워크플로우)를 다룹니다. **Kubernetes 보안·정책**(Pod Security 등급·RBAC 위험/Diff·이미지/Secret/NetworkPolicy·TLS 만료·Admission 시뮬레이터·정책 팩)은 어드민 UI의 **보안 / 정책 센터** 메뉴와 **[K8s 운영 허브 가이드](K8S_OPERATIONS_HUB.md)** 를 참고하세요.
+
 본 가이드는 Clustara 어드민 대시보드의 **안전(Safety)** 탭에서 제공하는 핵심 보안 통제 기능들의 아키텍처, 작동 매커니즘, 상세 설정 규격 및 API 활용법을 설명합니다. 본 시스템은 전사 AI 트래픽의 안전성을 확보하고 비즈니스/재무 리스크를 선제적으로 통제하기 위한 다차원 보안 기능을 탑재하고 있습니다.
 
 ---
