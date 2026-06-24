@@ -6425,11 +6425,12 @@ const adminHTML = `<!doctype html>
     async function renderK8sSettings() {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 설정', '<div class="empty">불러오는 중...</div>');
-      let cost, noti;
+      let cost, noti, lat;
       try {
-        [cost, noti] = await Promise.all([api('/admin/k8s/cost/config'), api('/admin/k8s/notify/config')]);
+        [cost, noti, lat] = await Promise.all([api('/admin/k8s/cost/config'), api('/admin/k8s/notify/config'), api('/admin/k8s/latency/config').catch(() => ({}))]);
       } catch (e) { view.innerHTML = section('K8s 운영 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const pr = (cost && cost.prices) || {};
+      lat = lat || {};
       view.innerHTML =
         section('K8s 운영 설정', '<div class="muted" style="font-size:12px;padding:0 4px">비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.</div>') +
         card('비용 단가',
@@ -6443,8 +6444,34 @@ const adminHTML = `<!doctype html>
           '<textarea id="set-channels" rows="3" placeholder=\'{"core":"#core-alerts","data":"#data-ops"}\' style="width:100%">' + escapeHTML(noti.team_channels || '') + '</textarea>' +
           '<div class="muted" style="font-size:11px;margin-top:2px">팀→Mattermost 채널 매핑(JSON). 네임스페이스 오너십의 담당팀 기준으로 알림이 라우팅됩니다.</div>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sSettingsSaveNoti()">저장</button></div></div>') +
+        card('지연 분석 (Prometheus · RCA-10)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:4px">PROMETHEUS_URL: ' + escapeHTML(lat.prometheus_url || '(미설정 — 환경변수)') + ' · 배포 후 latency 회귀 탐지에 사용됩니다.</div>' +
+          '<textarea id="set-promql" rows="2" placeholder="histogram_quantile(0.95, sum by(namespace,workload,le)(rate(http_request_duration_seconds_bucket[5m]))) * 1000" style="width:100%">' + escapeHTML(lat.promql || '') + '</textarea>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">' +
+          '<input id="set-nslabel" value="' + escapeAttr(lat.ns_label || 'namespace') + '" placeholder="namespace 라벨" style="width:140px">' +
+          '<input id="set-namelabel" value="' + escapeAttr(lat.name_label || 'workload') + '" placeholder="workload 라벨" style="width:140px">' +
+          '<button type="button" onclick="k8sSettingsSaveLatency()">저장</button>' +
+          '<button type="button" class="secondary" onclick="k8sLatencyCollect()">지금 수집</button></div></div>') +
         '<div id="set-msg" class="muted" style="font-size:12px;padding:4px"></div>';
     }
+    window.k8sSettingsSaveLatency = async () => {
+      const msg = document.getElementById('set-msg');
+      try {
+        await api('/admin/k8s/latency/config', { method: 'POST', body: JSON.stringify({
+          promql: document.getElementById('set-promql').value.trim(),
+          ns_label: document.getElementById('set-nslabel').value.trim(),
+          name_label: document.getElementById('set-namelabel').value.trim() }) });
+        msg.innerHTML = '<span class="status">지연 분석 설정 저장됨</span>';
+      } catch (e) { msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sLatencyCollect = async () => {
+      const msg = document.getElementById('set-msg');
+      msg.innerHTML = '수집 중...';
+      try {
+        const d = await api('/admin/k8s/latency/collect', { method: 'POST', body: '{}' });
+        msg.innerHTML = d.collected ? '<span class="status">latency ' + fmt(d.stored) + '건 수집됨</span>' : '<span class="status warn">' + escapeHTML(d.note || 'Prometheus 미구성') + '</span>';
+      } catch (e) { msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sSettingsSaveCost = async () => {
       const msg = document.getElementById('set-msg');
       try {

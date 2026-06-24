@@ -381,6 +381,10 @@ func (s *Server) handleK8sRCA(w http.ResponseWriter, r *http.Request) {
 	candidates = analyzer.EnrichWithConfigChanges(candidates, revisions, now, 24*time.Hour)
 	// RCA-10: workloads whose errors appeared right after a deploy.
 	candidates = append(candidates, analyzer.AnalyzePostDeploymentErrors(revisions, events, now, 24*time.Hour)...)
+	// RCA-10 (latency): post-deploy latency regression from external latency samples.
+	if latency, lerr := s.db.ListK8sMetricSamples(r.Context(), clusterID, 4000); lerr == nil {
+		candidates = append(candidates, analyzer.AnalyzeLatencyRegressions(revisions, latency, now, 24*time.Hour)...)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"candidates": candidates,
 		"count":      len(candidates),

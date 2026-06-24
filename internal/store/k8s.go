@@ -90,6 +90,7 @@ type K8sMetricSample struct {
 	CPUMillicores float64 `json:"cpu_millicores"`
 	MemoryBytes   float64 `json:"memory_bytes"`
 	StorageBytes  float64 `json:"storage_bytes"`
+	LatencyMS     float64 `json:"latency_ms"` // request latency from an external source (Prometheus); 0 = unset
 	ObservedAt    string  `json:"observed_at"`
 }
 
@@ -442,15 +443,15 @@ func (s *SQLStore) InsertK8sMetricSample(ctx context.Context, m K8sMetricSample)
 		m.ObservedAt = nowString()
 	}
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_metrics_samples
-		(id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		m.ID, m.ClusterID, m.Namespace, m.ResourceKind, m.ResourceName, m.CPUMillicores, m.MemoryBytes, m.StorageBytes, m.ObservedAt)
+		(id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, latency_ms, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		m.ID, m.ClusterID, m.Namespace, m.ResourceKind, m.ResourceName, m.CPUMillicores, m.MemoryBytes, m.StorageBytes, m.LatencyMS, m.ObservedAt)
 	return err
 }
 
 // ListK8sMetricSamples returns recent metric samples (newest first) for capacity analysis.
 func (s *SQLStore) ListK8sMetricSamples(ctx context.Context, clusterID string, limit int) ([]K8sMetricSample, error) {
-	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, observed_at
+	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, COALESCE(latency_ms, 0), observed_at
 		FROM k8s_metrics_samples WHERE 1=1`
 	args := []any{}
 	if clusterID != "" {
@@ -468,7 +469,7 @@ func (s *SQLStore) ListK8sMetricSamples(ctx context.Context, clusterID string, l
 	for rows.Next() {
 		var m K8sMetricSample
 		if err := rows.Scan(&m.ID, &m.ClusterID, &m.Namespace, &m.ResourceKind, &m.ResourceName,
-			&m.CPUMillicores, &m.MemoryBytes, &m.StorageBytes, &m.ObservedAt); err != nil {
+			&m.CPUMillicores, &m.MemoryBytes, &m.StorageBytes, &m.LatencyMS, &m.ObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

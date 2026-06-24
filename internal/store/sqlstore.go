@@ -1853,9 +1853,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			cpu_millicores REAL NOT NULL DEFAULT 0,
 			memory_bytes REAL NOT NULL DEFAULT 0,
 			storage_bytes REAL NOT NULL DEFAULT 0,
+			latency_ms REAL NOT NULL DEFAULT 0,
 			observed_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_metrics_samples_lookup ON k8s_metrics_samples(cluster_id, resource_kind, namespace, resource_name, observed_at)`,
+		`ALTER TABLE k8s_metrics_samples ADD COLUMN latency_ms REAL NOT NULL DEFAULT 0`,
 		`CREATE TABLE IF NOT EXISTS k8s_security_findings (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL,
