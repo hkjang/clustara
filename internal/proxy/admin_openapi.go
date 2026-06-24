@@ -329,6 +329,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/events", []string{"get"}, "k8s", "List Kubernetes events", false},
 	{"/admin/k8s/findings", []string{"get"}, "k8s", "List Kubernetes health/security findings", false},
 	{"/admin/k8s/rca", []string{"get"}, "k8s", "Kubernetes rule-based RCA candidates", false},
+	{"/admin/k8s/resource-graph", []string{"get"}, "k8s", "Kubernetes resource relationship graph and blast radius", false},
 	{"/admin/k8s/actions", []string{"get", "post"}, "k8s", "List/create Kubernetes action requests", false},
 	{"/admin/k8s/actions/{id}/{command}", []string{"post"}, "k8s", "Approve or reject a Kubernetes action request", false},
 	{"/admin/flow-map", []string{"get"}, "ops", "Request flow map", false},

@@ -178,6 +178,16 @@ const adminHTML = `<!doctype html>
     .stepper .step.blocked { border-color: var(--bad); background: var(--bad-bg); }
     .prompt { max-height: 80px; overflow: hidden; color: var(--ink); white-space: pre-wrap; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--pill-bg); color: var(--ink); font-size: 12px; }
+    .graph-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+    .graph-node {
+      border: 1px solid var(--line); border-radius: 8px; background: var(--panel-alt);
+      padding: 10px; min-height: 86px;
+    }
+    .graph-node.focus { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+    .graph-node .kind { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
+    .graph-node .name { margin-top: 4px; font-weight: 800; overflow-wrap: anywhere; }
+    .graph-node .meta { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .graph-edge-label { font-weight: 800; color: var(--accent); white-space: nowrap; }
 
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(15,23,42,0.55);
@@ -333,6 +343,7 @@ const adminHTML = `<!doctype html>
       <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
       <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
       <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
+      <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
       <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
       <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
       <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
@@ -1150,6 +1161,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
           case 'k8s-incidents': await renderK8sIncidents(params); break;
+          case 'k8s-graph': await renderK8sResourceGraph(params); break;
           case 'k8s-conn': await renderK8sConnectivity(params); break;
           case 'k8s-actions': await renderK8sActions(params); break;
           case 'k8s-meta': await renderK8sMeta(params); break;
@@ -6229,6 +6241,78 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 장애 워룸 (Incident Workspace) ----------
+    function k8sSeverityClass(s) {
+      return s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
+    }
+    function k8sGraphRelationLabel(rel) {
+      return ({
+        routes_to: 'routes to',
+        selects: 'selects',
+        owns: 'owns',
+        scheduled_on: 'scheduled on',
+        mounts: 'mounts',
+        scales: 'scales'
+      })[rel] || rel || '-';
+    }
+    function k8sGraphNodeTitle(n) {
+      if (!n) return '-';
+      return (n.namespace ? n.namespace + '/' : '') + (n.kind || '-') + '/' + (n.name || '-');
+    }
+    function k8sGraphImpactKpis(g) {
+      const im = (g && g.impact) || {};
+      const nodes = (g && g.nodes) || [];
+      const edges = (g && g.edges) || [];
+      return '<div class="kpis">' +
+        kpi('노드', fmt(im.node_count ?? nodes.length)) +
+        kpi('관계', fmt(im.edge_count ?? edges.length)) +
+        kpi('서비스 영향', fmt(im.services || 0) + ' svc · ' + fmt(im.pods || 0) + ' pod') +
+        kpi('high+ 위험', fmt(im.high_risk || 0) + '<div class="muted" style="font-size:11px;font-weight:500;margin-top:6px">최고 ' + escapeHTML(im.highest_risk || 'low') + '</div>') +
+      '</div>';
+    }
+    function k8sGraphChips(values) {
+      values = values || [];
+      return values.length ? values.map(v => '<span class="pill">' + escapeHTML(v) + '</span>').join(' ') : '<span class="muted">-</span>';
+    }
+    function k8sGraphImpactHTML(g) {
+      const im = (g && g.impact) || {};
+      return '<div class="kv">' +
+        '<div class="k">담당팀</div><div class="v">' + k8sGraphChips(im.teams) + '</div>' +
+        '<div class="k">서비스</div><div class="v">' + k8sGraphChips(im.service_names) + '</div>' +
+        '<div class="k">중요도</div><div class="v">' + k8sGraphChips(im.criticalities) + '</div>' +
+        '<div class="k">비용센터</div><div class="v">' + k8sGraphChips(im.cost_centers) + '</div>' +
+        '<div class="k">범위</div><div class="v">' + fmt(im.workloads || 0) + ' workload · ' + fmt(im.ingresses || 0) + ' ingress · ' + fmt(im.pvcs || 0) + ' pvc · ' + fmt(im.nodes || 0) + ' node</div>' +
+      '</div>';
+    }
+    function k8sGraphNodesHTML(g, limit) {
+      const nodes = ((g && g.nodes) || []).slice(0, limit || 60);
+      if (!nodes.length) return '<p class="muted">표시할 노드가 없습니다. 클러스터 수집 후 다시 확인하거나 필터를 넓혀보세요.</p>';
+      return '<div class="graph-nodes">' + nodes.map(n =>
+        '<div class="graph-node' + (n.focus ? ' focus' : '') + '">' +
+          '<div class="kind">' + escapeHTML(n.kind || '') + (n.focus ? ' · focus' : '') + '</div>' +
+          '<div class="name">' + escapeHTML((n.namespace ? n.namespace + '/' : '') + (n.name || '')) + '</div>' +
+          '<div class="meta">' +
+            (n.risk_level ? '<span class="status ' + k8sSeverityClass(n.risk_level) + '" style="font-size:10px">' + escapeHTML(n.risk_level) + '</span>' : '') +
+            (n.status ? '<span class="pill">' + escapeHTML(n.status) + '</span>' : '') +
+            (n.team ? '<span class="pill">' + escapeHTML(n.team) + '</span>' : '') +
+            (n.service ? '<span class="pill">' + escapeHTML(n.service) + '</span>' : '') +
+          '</div>' +
+        '</div>').join('') + '</div>' +
+        (((g && g.nodes) || []).length > nodes.length ? '<p class="muted" style="font-size:12px;margin:8px 0 0">상위 ' + nodes.length + '개만 표시했습니다.</p>' : '');
+    }
+    function k8sGraphEdgesHTML(g, limit) {
+      const byId = {};
+      ((g && g.nodes) || []).forEach(n => { byId[n.id] = n; });
+      const edges = ((g && g.edges) || []).slice(0, limit || 80);
+      if (!edges.length) return '<p class="muted">표시할 관계가 없습니다. Service selector, Ingress backend, Pod volume/node, HPA target 정보가 수집되어야 합니다.</p>';
+      return '<table><thead><tr><th>From</th><th>관계</th><th>To</th><th>근거</th></tr></thead><tbody>' +
+        edges.map(e => '<tr><td>' + escapeHTML(k8sGraphNodeTitle(byId[e.from])) + '</td>' +
+          '<td><span class="graph-edge-label">' + escapeHTML(k8sGraphRelationLabel(e.relation)) + '</span></td>' +
+          '<td>' + escapeHTML(k8sGraphNodeTitle(byId[e.to])) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(e.reason || '') + '</td></tr>').join('') +
+      '</tbody></table>' +
+      (((g && g.edges) || []).length > edges.length ? '<p class="muted" style="font-size:12px;margin:8px 0 0">상위 ' + edges.length + '개 관계만 표시했습니다.</p>' : '');
+    }
+
     async function renderK8sIncidents(params) {
       const id = params && params.get('id');
       if (id) return renderK8sIncidentDetail(id);
@@ -6254,7 +6338,7 @@ const adminHTML = `<!doctype html>
         '<td>' + escapeHTML(i.condition) + '</td>' +
         '<td>' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + '</td>' +
         '<td>' + (i.status === 'open' ? '<span class="status warn" style="font-size:10px">open</span>' : '<span class="status" style="font-size:10px">resolved</span>') + '</td>' +
-        '<td class="muted" style="font-size:11px">' + escapeHTML(ago(i.opened_at)) + '</td></tr>'
+        '<td class="muted" style="font-size:11px">' + ago(i.opened_at) + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">장애가 없습니다.</td></tr>';
       const openN = incs.filter(i => i.status === 'open').length;
       view.innerHTML =
@@ -6275,21 +6359,50 @@ const adminHTML = `<!doctype html>
       const i = d.incident || {};
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '' }).toString();
+      const graphHref = '#/k8s-graph?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '', radius: '2' }).toString();
       const evid = (i.evidence || []).map(e => '<li style="font-size:12px">' + escapeHTML(e) + '</li>').join('') || '<li class="muted">근거 없음</li>';
       const actRows = (d.actions || []).length ? (d.actions || []).map(a =>
-        '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.status) + '</td><td><span class="status ' + sevClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td></tr>').join('')
-        : '<tr><td colspan="3" class="muted">관련 액션 없음 — 액션 승인함에서 요청하세요.</td></tr>';
+        '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.status) + '</td><td><span class="status ' + sevClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td><td class="muted" style="font-size:11px">' + ago(a.created_at) + '</td></tr>').join('')
+        : '<tr><td colspan="4" class="muted">관련 액션 없음 — 액션 승인함에서 요청하세요.</td></tr>';
+      const eventRows = (d.events || []).length ? (d.events || []).map(e =>
+        '<tr><td class="muted" style="font-size:11px">' + ago(e.last_seen || e.created_at) + '</td>' +
+        '<td><span class="status ' + (e.type === 'Warning' ? 'warn' : '') + '" style="font-size:10px">' + escapeHTML(e.type || '') + '</span><div>' + escapeHTML(e.reason || '') + '</div></td>' +
+        '<td>' + escapeHTML((e.namespace || '-') + '/' + e.involved_kind + '/' + e.involved_name) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td></tr>').join('')
+        : '<tr><td colspan="4" class="muted">관련 이벤트가 없습니다.</td></tr>';
+      const revRows = (d.revisions || []).length ? (d.revisions || []).map(r =>
+        '<tr><td class="muted" style="font-size:11px">' + ago(r.observed_at || r.created_at) + '</td>' +
+        '<td>' + escapeHTML(r.change_kind || '') + '</td>' +
+        '<td>' + escapeHTML(r.image_set || '-') + '</td>' +
+        '<td>' + fmt(r.replica || 0) + '</td></tr>').join('')
+        : '<tr><td colspan="4" class="muted">최근 리비전이 없습니다.</td></tr>';
+      const findingRows = (d.findings || []).length ? (d.findings || []).map(f =>
+        '<tr><td><span class="status ' + sevClass(f.severity) + '" style="font-size:10px">' + escapeHTML(f.severity || '') + '</span></td>' +
+        '<td>' + escapeHTML(f.rule || '') + '</td>' +
+        '<td>' + escapeHTML(f.message || '') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(f.evidence || '') + '</td></tr>').join('')
+        : '<tr><td colspan="4" class="muted">이 리소스에 직접 연결된 열린 finding이 없습니다.</td></tr>';
+      const graph = d.graph || {};
       view.innerHTML =
         section('장애 워크스페이스', '<div style="padding:0 4px"><a href="#/k8s-incidents">← 목록</a></div>') +
-        card('<span class="status ' + sevClass(i.severity) + '" style="font-size:10px">' + escapeHTML(i.severity) + '</span> ' + escapeHTML(i.title || i.condition),
-          '<div class="card-body"><div class="muted" style="font-size:12px">대상: ' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + ' · 상태: ' + escapeHTML(i.status) + ' · 발생: ' + escapeHTML(ago(i.opened_at)) + '</div>' +
+        card((i.severity || '-') + ' ' + (i.title || i.condition),
+          '<div class="card-body"><div><span class="status ' + sevClass(i.severity) + '" style="font-size:10px">' + escapeHTML(i.severity) + '</span></div>' +
+          '<div class="muted" style="font-size:12px;margin-top:6px">대상: ' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + ' · 상태: ' + escapeHTML(i.status) + ' · 발생: ' + ago(i.opened_at) + '</div>' +
           '<div style="margin-top:8px">' +
           '<a href="' + escapeAttr(tlHref) + '"><button type="button" class="secondary">변경 타임라인·Diff</button></a> ' +
+          '<a href="' + escapeAttr(graphHref) + '"><button type="button" class="secondary">영향도 그래프</button></a> ' +
           '<button type="button" class="secondary" onclick="k8sIncidentAI(\'' + escapeAttr(i.cluster_id) + '\',\'' + escapeAttr(i.namespace) + '\',\'' + escapeAttr(i.kind) + '\',\'' + escapeAttr(i.name) + '\')">AI 설명</button> ' +
           (i.status === 'open' ? '<button type="button" onclick="k8sIncidentResolve(\'' + escapeAttr(i.id) + '\')">해결 처리</button>' : '') +
           '</div><div id="inc-ai" style="margin-top:8px"></div></div>') +
+        card('영향도 그래프', '<div class="card-body">' + k8sGraphImpactKpis(graph) +
+          '<div style="margin-top:12px">' + k8sGraphImpactHTML(graph) + '</div>' +
+          '<h3 style="font-size:12px;margin:14px 0 8px;color:var(--muted)">관련 노드</h3>' + k8sGraphNodesHTML(graph, 8) +
+          '<h3 style="font-size:12px;margin:14px 0 8px;color:var(--muted)">관계</h3>' + k8sGraphEdgesHTML(graph, 10) + '</div>') +
         card('근거 (RCA·이벤트·변경)', '<div class="card-body"><ul style="margin:0;padding-left:16px">' + evid + '</ul></div>') +
-        card('관련 조치', '<div class="card-body"><table><thead><tr><th>Action</th><th>상태</th><th>위험도</th></tr></thead><tbody>' + actRows + '</tbody></table></div>');
+        card('관련 이벤트', '<div class="card-body"><table><thead><tr><th>시간</th><th>Reason</th><th>대상</th><th>메시지</th></tr></thead><tbody>' + eventRows + '</tbody></table></div>') +
+        card('변경 리비전', '<div class="card-body"><table><thead><tr><th>관측</th><th>유형</th><th>이미지</th><th>Replica</th></tr></thead><tbody>' + revRows + '</tbody></table></div>') +
+        card('정책·보안 Finding', '<div class="card-body"><table><thead><tr><th>심각도</th><th>Rule</th><th>메시지</th><th>근거</th></tr></thead><tbody>' + findingRows + '</tbody></table></div>') +
+        card('관련 조치', '<div class="card-body"><table><thead><tr><th>Action</th><th>상태</th><th>위험도</th><th>요청</th></tr></thead><tbody>' + actRows + '</tbody></table></div>');
     }
     window.k8sIncidentResolve = async (id) => {
       if (!confirm('이 장애를 해결 처리할까요?')) return;
@@ -6306,6 +6419,67 @@ const adminHTML = `<!doctype html>
           (text ? '<div style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px">' + escapeHTML(text) + '</div>' : '') +
           '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">근거 ' + (d.evidence || []).length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + (d.evidence || []).map(e => '<li class="muted" style="font-size:11px">' + escapeHTML(e) + '</li>').join('') + '</ul></details>';
       } catch (e) { out.innerHTML = '<div class="status error">' + escapeHTML(e.message) + '</div>'; }
+    };
+
+    // ---------- K8s 리소스 그래프 (blast radius) ----------
+    async function renderK8sResourceGraph(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const kind = (params && params.get('kind')) || '';
+      const namespace = (params && params.get('namespace')) || '';
+      const name = (params && params.get('name')) || '';
+      const radius = (params && params.get('radius')) || '2';
+      view.innerHTML = section('K8s 리소스 그래프', '<div class="empty">불러오는 중...</div>');
+      const qs = new URLSearchParams();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      if (kind) qs.set('kind', kind);
+      if (namespace) qs.set('namespace', namespace);
+      if (name) qs.set('name', name);
+      if (radius) qs.set('radius', radius);
+      let clusters, data;
+      try {
+        [clusters, data] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/resource-graph' + (qs.toString() ? '?' + qs.toString() : '')),
+        ]);
+      } catch (e) {
+        view.innerHTML = section('K8s 리소스 그래프', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const graph = data.graph || {};
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
+      const kinds = ['', 'Ingress', 'Service', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Pod', 'PersistentVolumeClaim', 'Node', 'HorizontalPodAutoscaler'];
+      const kindOpts = kinds.map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k || '전체 종류') + '</option>').join('');
+      const filter =
+        '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end">' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">클러스터<select id="k8sgraph-cluster">' + clusterOpts + '</select></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">종류<select id="k8sgraph-kind">' + kindOpts + '</select></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">네임스페이스<input id="k8sgraph-namespace" value="' + escapeHTML(namespace) + '" placeholder="default"></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">이름<input id="k8sgraph-name" value="' + escapeHTML(name) + '" placeholder="nginx"></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">반경<select id="k8sgraph-radius"><option value="1"' + (radius === '1' ? ' selected' : '') + '>1-hop</option><option value="2"' + (radius === '2' ? ' selected' : '') + '>2-hop</option><option value="3"' + (radius === '3' ? ' selected' : '') + '>3-hop</option></select></label>' +
+          '<button type="button" onclick="k8sGraphGo()">조회</button>' +
+        '</div><p class="muted" style="font-size:12px;margin:10px 0 0">' + escapeHTML(graph.note || '인벤토리 관계에서 현재 영향 범위를 계산합니다.') + '</p></div>';
+      view.innerHTML =
+        section('K8s 리소스 그래프', k8sGraphImpactKpis(graph)) +
+        card('필터', filter) +
+        card('영향도 요약', '<div class="card-body">' + k8sGraphImpactHTML(graph) + '</div>') +
+        card('노드', '<div class="card-body">' + k8sGraphNodesHTML(graph, 80) + '</div>') +
+        card('관계', '<div class="card-body">' + k8sGraphEdgesHTML(graph, 120) + '</div>');
+    }
+    window.k8sGraphGo = () => {
+      const qs = new URLSearchParams();
+      const cl = document.getElementById('k8sgraph-cluster').value;
+      const kind = document.getElementById('k8sgraph-kind').value;
+      const ns = document.getElementById('k8sgraph-namespace').value.trim();
+      const name = document.getElementById('k8sgraph-name').value.trim();
+      const radius = document.getElementById('k8sgraph-radius').value;
+      if (cl) qs.set('cluster_id', cl);
+      if (kind) qs.set('kind', kind);
+      if (ns) qs.set('namespace', ns);
+      if (name) qs.set('name', name);
+      if (radius) qs.set('radius', radius);
+      location.hash = '#/k8s-graph' + (qs.toString() ? '?' + qs.toString() : '');
     };
 
     // ---------- K8s 연결성 점검 (Service/Ingress/PVC — K8S-22/23/24) ----------
@@ -6482,7 +6656,7 @@ const adminHTML = `<!doctype html>
           const es = (rbacDiff && rbacDiff.entries) || [];
           const rows = es.length ? es.map(e =>
             '<tr><td>' + escapeHTML((e.namespace || '-') + '/' + e.kind + '/' + e.name) + '</td>' +
-            '<td class="muted" style="font-size:11px">' + escapeHTML(ago(e.to_observed_at)) + '</td>' +
+            '<td class="muted" style="font-size:11px">' + ago(e.to_observed_at) + '</td>' +
             '<td>' + ((e.risky || []).length ? '<span class="status error" style="font-size:10px">위험 ' + (e.risky || []).length + '</span> ' : '') + escapeHTML((e.added || []).join(', ')) + '</td></tr>').join('')
             : '<tr><td colspan="3" class="muted">권한 확대 변경 없음.</td></tr>';
           return card('RBAC 권한 변경 (SEC-08)', '<div class="card-body"><table><thead><tr><th>대상</th><th>변경 시각</th><th>추가된 권한(apiGroup|resource|verb)</th></tr></thead><tbody>' + rows + '</tbody></table></div>');

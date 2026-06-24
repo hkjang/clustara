@@ -115,10 +115,63 @@ func (s *Server) handleK8sIncidentByID(w http.ResponseWriter, r *http.Request) {
 	related := []store.K8sActionRequest{}
 	if acts, aerr := s.db.ListK8sActionRequests(r.Context(), store.K8sActionFilter{ClusterID: inc.ClusterID, Limit: 200}); aerr == nil {
 		for _, a := range acts {
-			if a.ResourceName == inc.Name && (inc.Namespace == "" || a.Namespace == inc.Namespace) {
+			if a.ResourceName == inc.Name && strings.EqualFold(a.ResourceKind, inc.Kind) && (inc.Namespace == "" || a.Namespace == inc.Namespace) {
 				related = append(related, a)
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"incident": inc, "actions": related})
+	relatedEvents := []store.K8sEvent{}
+	if events, eerr := s.db.ListK8sEvents(r.Context(), inc.ClusterID, 500); eerr == nil {
+		for _, e := range events {
+			if k8sEventMatchesIncident(inc, e) {
+				relatedEvents = append(relatedEvents, e)
+				if len(relatedEvents) >= 20 {
+					break
+				}
+			}
+		}
+	}
+	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{
+		ClusterID: inc.ClusterID, Kind: inc.Kind, Namespace: inc.Namespace, Name: inc.Name, Limit: 8,
+	})
+	relatedFindings := []store.K8sSecurityFinding{}
+	if findings, ferr := s.db.ListK8sSecurityFindings(r.Context(), store.K8sFindingFilter{ClusterID: inc.ClusterID, Status: "open", Limit: 500}); ferr == nil {
+		for _, f := range findings {
+			if k8sFindingMatchesIncident(inc, f) {
+				relatedFindings = append(relatedFindings, f)
+				if len(relatedFindings) >= 20 {
+					break
+				}
+			}
+		}
+	}
+	items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: inc.ClusterID, Limit: 5000})
+	owners, _ := s.db.ListK8sNamespaceOwnership(r.Context(), inc.ClusterID, "")
+	graph := analyzer.BuildResourceGraph(items, owners, analyzer.ResourceGraphFocus{
+		ClusterID: inc.ClusterID, Kind: inc.Kind, Namespace: inc.Namespace, Name: inc.Name, Radius: 2,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"incident": inc, "actions": related, "events": relatedEvents, "revisions": revisions,
+		"findings": relatedFindings, "graph": graph, "impact": graph.Impact,
+	})
+}
+
+func k8sEventMatchesIncident(inc store.K8sIncident, e store.K8sEvent) bool {
+	if e.ClusterID != inc.ClusterID || e.Namespace != inc.Namespace {
+		return false
+	}
+	if strings.EqualFold(e.InvolvedKind, inc.Kind) && e.InvolvedName == inc.Name {
+		return true
+	}
+	if strings.EqualFold(e.InvolvedKind, "Pod") && inc.Kind != "Pod" {
+		return strings.HasPrefix(e.InvolvedName, inc.Name+"-")
+	}
+	return false
+}
+
+func k8sFindingMatchesIncident(inc store.K8sIncident, f store.K8sSecurityFinding) bool {
+	return f.ClusterID == inc.ClusterID &&
+		f.Namespace == inc.Namespace &&
+		strings.EqualFold(f.ResourceKind, inc.Kind) &&
+		f.ResourceName == inc.Name
 }

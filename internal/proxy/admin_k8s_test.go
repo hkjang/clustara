@@ -416,6 +416,10 @@ func TestK8sIncidentLifecycle(t *testing.T) {
 	snap := postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
 		"cluster_id": cid,
 		"resources":  []map[string]any{{"kind": "Pod", "namespace": "prod", "name": "api-1", "status": "CrashLoopBackOff"}},
+		"events": []map[string]any{{
+			"namespace": "prod", "involved_kind": "Pod", "involved_name": "api-1",
+			"type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container",
+		}},
 	})
 	snap.Body.Close()
 
@@ -452,12 +456,27 @@ func TestK8sIncidentLifecycle(t *testing.T) {
 	// Detail has evidence.
 	dr, _ := http.Get(proxy.URL + "/admin/k8s/incidents/" + id)
 	var detail struct {
-		Incident store.K8sIncident `json:"incident"`
+		Incident  store.K8sIncident           `json:"incident"`
+		Events    []store.K8sEvent            `json:"events"`
+		Revisions []store.K8sResourceRevision `json:"revisions"`
+		Graph     struct {
+			Nodes []struct {
+				Kind  string `json:"kind"`
+				Name  string `json:"name"`
+				Focus bool   `json:"focus"`
+			} `json:"nodes"`
+			Impact struct {
+				NodeCount int `json:"node_count"`
+			} `json:"impact"`
+		} `json:"graph"`
 	}
 	json.NewDecoder(dr.Body).Decode(&detail)
 	dr.Body.Close()
 	if len(detail.Incident.Evidence) == 0 {
 		t.Fatalf("incident detail should carry evidence: %+v", detail.Incident)
+	}
+	if len(detail.Events) == 0 || len(detail.Revisions) == 0 || detail.Graph.Impact.NodeCount == 0 {
+		t.Fatalf("incident detail should include workspace evidence and graph: events=%d revisions=%d graph=%+v", len(detail.Events), len(detail.Revisions), detail.Graph)
 	}
 
 	// Resolve.
@@ -470,6 +489,116 @@ func TestK8sIncidentLifecycle(t *testing.T) {
 	if final.Status != "resolved" {
 		t.Fatalf("incident should be resolved, got %q", final.Status)
 	}
+}
+
+func TestK8sResourceGraphEndpointBuildsBlastRadius(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	reg := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "graph", "server_url": "https://k8s.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1",
+	})
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	json.NewDecoder(reg.Body).Decode(&created)
+	reg.Body.Close()
+	cid := created.Cluster.ID
+	if err := db.UpsertK8sNamespaceOwnership(context.Background(), store.K8sNamespaceOwnership{
+		ID: "own-graph", ClusterID: cid, Namespace: "default", Team: "platform", ServiceName: "frontend", Criticality: "high", CostCenter: "cc-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
+		"cluster_id": cid,
+		"resources": []map[string]any{
+			{
+				"kind": "Ingress", "namespace": "default", "name": "web",
+				"spec": map[string]any{
+					"rules": []any{map[string]any{"http": map[string]any{"paths": []any{
+						map[string]any{"backend": map[string]any{"service": map[string]any{"name": "web"}}},
+					}}}},
+				},
+			},
+			{"kind": "Service", "namespace": "default", "name": "web", "spec": map[string]any{"selector": map[string]any{"app": "web"}}},
+			{"kind": "Deployment", "namespace": "default", "name": "web", "spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}}},
+			{
+				"kind": "Pod", "namespace": "default", "name": "web-123", "status": "Running",
+				"labels": map[string]string{"app": "web"},
+				"spec": map[string]any{
+					"nodeName": "node-a",
+					"volumes":  []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "data"}}},
+				},
+			},
+			{"kind": "PersistentVolumeClaim", "namespace": "default", "name": "data"},
+			{"kind": "Node", "name": "node-a"},
+		},
+	})
+	if snap.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(snap.Body)
+		snap.Body.Close()
+		t.Fatalf("snapshot status=%d body=%s", snap.StatusCode, body)
+	}
+	snap.Body.Close()
+
+	resp, err := http.Get(proxy.URL + "/admin/k8s/resource-graph?cluster_id=" + cid + "&kind=Service&namespace=default&name=web&radius=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Graph struct {
+			Nodes []struct {
+				Kind  string `json:"kind"`
+				Name  string `json:"name"`
+				Team  string `json:"team"`
+				Focus bool   `json:"focus"`
+			} `json:"nodes"`
+			Edges []struct {
+				Relation string `json:"relation"`
+			} `json:"edges"`
+			Impact struct {
+				NodeCount int      `json:"node_count"`
+				Teams     []string `json:"teams"`
+			} `json:"impact"`
+		} `json:"graph"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Graph.Impact.NodeCount != 6 {
+		t.Fatalf("expected 6 graph nodes, got %+v", got.Graph)
+	}
+	for _, relation := range []string{"routes_to", "selects", "owns", "mounts", "scheduled_on"} {
+		if !hasGraphAPIEdge(got.Graph.Edges, relation) {
+			t.Fatalf("missing relation %s in %+v", relation, got.Graph.Edges)
+		}
+	}
+	if len(got.Graph.Impact.Teams) != 1 || got.Graph.Impact.Teams[0] != "platform" {
+		t.Fatalf("namespace ownership should enrich graph impact, got %+v", got.Graph.Impact.Teams)
+	}
+}
+
+func hasGraphAPIEdge(edges []struct {
+	Relation string `json:"relation"`
+}, relation string) bool {
+	for _, e := range edges {
+		if e.Relation == relation {
+			return true
+		}
+	}
+	return false
 }
 
 func TestK8sGroupsAndOwnership(t *testing.T) {

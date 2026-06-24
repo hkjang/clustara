@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 16
+const menuVersion = 17
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -32,6 +32,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_timeline", Label: "변경 타임라인", Path: "#/k8s-timeline", Tab: "k8s-timeline", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_rca", Label: "장애 분석", Path: "#/k8s-rca", Tab: "k8s-rca", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_incidents", Label: "장애 워룸", Path: "#/k8s-incidents", Tab: "k8s-incidents", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_graph", Label: "리소스 그래프", Path: "#/k8s-graph", Tab: "k8s-graph", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_conn", Label: "연결성 점검", Path: "#/k8s-conn", Tab: "k8s-conn", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_actions", Label: "액션 승인함", Path: "#/k8s-actions", Tab: "k8s-actions", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_capacity", Label: "용량·자동확장", Path: "#/k8s-capacity", Tab: "k8s-capacity", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},

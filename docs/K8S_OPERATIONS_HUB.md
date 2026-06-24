@@ -13,6 +13,7 @@
 | 보안·정책(Pod Security·RBAC·RBAC Diff·이미지·Secret·NetworkPolicy·TLS·감사이상·정책센터) | ✅ |
 | **액션 승인 + 실클러스터 executor**(scale/rollout restart/cordon/uncordon/delete pod) | ✅ |
 | 비용(FinOps) · 비용 증가 추세 · Mattermost 알림 · AI 분석 · 운영 홈 · 리포트 센터 | ✅ |
+| Incident Workspace 상세 근거(이벤트·리비전·finding·액션) · Resource Graph 영향도 | ✅ |
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 watch(informer) 수집기 | ⏳ 미구현 (현재는 주기 수집) |
 
@@ -26,7 +27,7 @@
 | GET | `/admin/k8s/home` | 운영 홈 집계: 클러스터 위험 TOP5, 장애 후보 TOP10, 최근 변경 TOP10, 비용 증가 TOP10 |
 | GET | `/admin/k8s/reports` | 리포트 센터: 일간 장애·주간 비용·월간 안정성(SLO) 요약 (로컬 데이터) |
 | GET/POST | `/admin/k8s/incidents` | 장애 워룸: 목록 / (POST)현재 high·critical RCA를 incident로 스캔·묶기 |
-| GET | `/admin/k8s/incidents/{id}` | 장애 상세(근거·관련 액션), `POST /{id}/resolve` 해결 처리 |
+| GET | `/admin/k8s/incidents/{id}` | 장애 상세 워크스페이스: RCA 근거, 관련 이벤트·리비전·finding·액션, 영향도 그래프, `POST /{id}/resolve` 해결 처리 |
 | GET/POST | `/admin/k8s/clusters` | 클러스터 목록/등록 (`group_id`로 그룹 지정 가능) |
 | GET/POST | `/admin/k8s/groups` | 클러스터 그룹 목록(롤업)/생성, `DELETE /groups/{id}` |
 | GET/POST | `/admin/k8s/ownership` | 네임스페이스 오너십(담당팀·담당자·서비스·중요도·비용센터) 조회/설정 |
@@ -39,6 +40,7 @@
 | GET | `/admin/k8s/diff` | 두 리비전의 필드 단위 diff (`from`/`to` 미지정 시 최근 2개 비교, 민감값 자동 마스킹) |
 | GET | `/admin/k8s/timeline` | 리비전·이벤트·액션을 시간순 병합한 변경 타임라인 |
 | GET | `/admin/k8s/manifest` | 현재 리소스 manifest YAML 조회 (Secret/token/env 민감값 자동 마스킹) |
+| GET | `/admin/k8s/resource-graph` | 인벤토리 selector/backend/volume/node/HPA 관계 기반 리소스 그래프·blast radius (`cluster_id`,`kind`,`namespace`,`name`,`radius`) |
 | GET | `/admin/k8s/security` | Pod Security 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백 포스처 |
 | GET | `/admin/k8s/capacity` | HPA 현황·확장한계, 과소/과다 할당, 노드 bin-packing, GPU, 노드 용량 예측(SCALE-05) |
 | GET | `/admin/k8s/capacity/simulate` | replica 시뮬레이션 (SCALE-06): `kind`,`namespace`,`name`,`replicas` |
