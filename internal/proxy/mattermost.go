@@ -23,6 +23,7 @@ type mattermostSnapshot struct {
 	enabled    bool
 	webhookURL string
 	channel    string
+	slashToken string // ChatOps slash-command verification token (Mattermost → Clustara)
 	events     map[string]bool
 	fetchedAt  time.Time
 }
@@ -40,6 +41,9 @@ func (s *Server) mattermostConfig(ctx context.Context) *mattermostSnapshot {
 	}
 	if f, found, err := s.db.GetFlag(ctx, "mattermost_channel"); err == nil && found {
 		snap.channel = f.Value
+	}
+	if f, found, err := s.db.GetFlag(ctx, "mattermost_slash_token"); err == nil && found {
+		snap.slashToken = f.Value
 	}
 	if f, found, err := s.db.GetFlag(ctx, "mattermost_events"); err == nil && found && strings.TrimSpace(f.Value) != "" {
 		for _, e := range strings.Split(f.Value, ",") {
@@ -112,12 +116,14 @@ func (s *Server) handleMattermostConfig(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled": cfg.enabled, "webhook_url": cfg.webhookURL, "channel": cfg.channel,
 			"events": events, "available_events": mattermostEventCategories,
+			"slash_token_set": cfg.slashToken != "", "slash_command_url": "/integrations/mattermost/command",
 		})
 	case http.MethodPost:
 		var p struct {
 			Enabled    *bool    `json:"enabled"`
 			WebhookURL *string  `json:"webhook_url"`
 			Channel    *string  `json:"channel"`
+			SlashToken *string  `json:"slash_token"`
 			Events     []string `json:"events"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -135,6 +141,9 @@ func (s *Server) handleMattermostConfig(w http.ResponseWriter, r *http.Request) 
 		}
 		if p.Channel != nil {
 			set("mattermost_channel", strings.TrimSpace(*p.Channel))
+		}
+		if p.SlashToken != nil {
+			set("mattermost_slash_token", strings.TrimSpace(*p.SlashToken))
 		}
 		if p.Events != nil {
 			valid := []string{}

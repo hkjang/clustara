@@ -6704,12 +6704,13 @@ const adminHTML = `<!doctype html>
     async function renderK8sSettings() {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 설정', '<div class="empty">불러오는 중...</div>');
-      let cost, noti, lat;
+      let cost, noti, lat, mm;
       try {
-        [cost, noti, lat] = await Promise.all([api('/admin/k8s/cost/config'), api('/admin/k8s/notify/config'), api('/admin/k8s/latency/config').catch(() => ({}))]);
+        [cost, noti, lat, mm] = await Promise.all([api('/admin/k8s/cost/config'), api('/admin/k8s/notify/config'), api('/admin/k8s/latency/config').catch(() => ({})), api('/admin/notifications/mattermost').catch(() => ({}))]);
       } catch (e) { view.innerHTML = section('K8s 운영 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const pr = (cost && cost.prices) || {};
       lat = lat || {};
+      mm = mm || {};
       view.innerHTML =
         section('K8s 운영 설정', '<div class="muted" style="font-size:12px;padding:0 4px">비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.</div>') +
         card('비용 단가',
@@ -6731,8 +6732,28 @@ const adminHTML = `<!doctype html>
           '<input id="set-namelabel" value="' + escapeAttr(lat.name_label || 'workload') + '" placeholder="workload 라벨" style="width:140px">' +
           '<button type="button" onclick="k8sSettingsSaveLatency()">저장</button>' +
           '<button type="button" class="secondary" onclick="k8sLatencyCollect()">지금 수집</button></div></div>') +
+        card('ChatOps (Mattermost slash 명령)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">' +
+          'Mattermost 슬래시 명령(예: <code>/clustara incidents</code>)으로 인시던트·RCA·SLO·비용을 채팅에서 조회합니다. ' +
+          'Mattermost 통합 설정에서 Request URL을 <code>' + escapeHTML((mm.slash_command_url || '/integrations/mattermost/command')) + '</code> (POST)로 지정하고, 발급된 토큰을 아래에 저장하세요. 읽기 전용입니다.</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<input id="set-slashtoken" type="password" placeholder="' + (mm.slash_token_set ? '설정됨 — 변경 시 입력' : 'slash 검증 토큰') + '" style="width:260px">' +
+          '<button type="button" onclick="k8sSettingsSaveSlash()">저장</button>' +
+          (mm.slash_token_set ? '<span class="pill">토큰 설정됨</span>' : '<span class="muted" style="font-size:11px">미설정 — ChatOps 비활성</span>') +
+          '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:6px">지원 명령: <code>incidents</code> · <code>rca [namespace]</code> · <code>slo [목표] [일수]</code> · <code>cost</code> · <code>help</code></div></div>') +
         '<div id="set-msg" class="muted" style="font-size:12px;padding:4px"></div>';
     }
+    window.k8sSettingsSaveSlash = async () => {
+      const msg = document.getElementById('set-msg');
+      const v = document.getElementById('set-slashtoken').value.trim();
+      if (!v) { msg.innerHTML = '<span class="status warn">토큰을 입력하세요</span>'; return; }
+      try {
+        await api('/admin/notifications/mattermost', { method: 'POST', body: JSON.stringify({ slash_token: v }) });
+        msg.innerHTML = '<span class="status">ChatOps 토큰 저장됨</span>';
+        document.getElementById('set-slashtoken').value = '';
+      } catch (e) { msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sSettingsSaveLatency = async () => {
       const msg = document.getElementById('set-msg');
       try {

@@ -597,6 +597,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/kill-switch", s.handleKillSwitch)
 	mux.HandleFunc("/admin/notifications/mattermost", s.handleMattermostConfig)
 	mux.HandleFunc("/admin/notifications/mattermost/test", s.handleMattermostTest)
+	mux.HandleFunc("/integrations/mattermost/command", s.handleMattermostCommand) // ChatOps inbound (token-verified, public)
 	mux.HandleFunc("/admin/alerts", s.handleAlertRules)
 	mux.HandleFunc("/admin/alerts/", s.handleAlertRuleByID)
 	mux.HandleFunc("/admin/saved-filters", s.handleSavedFilters)
