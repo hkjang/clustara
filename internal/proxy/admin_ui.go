@@ -6935,13 +6935,14 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 비용', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, cfg, trend;
+      let clusters, data, cfg, trend, recs;
       try {
-        [clusters, data, cfg, trend] = await Promise.all([
+        [clusters, data, cfg, trend, recs] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/cost' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/cost/config'),
           api('/admin/k8s/cost/trend' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ trend: [] })),
+          api('/admin/k8s/cost/recommendations' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ recommendations: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 비용', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -6978,6 +6979,19 @@ const adminHTML = `<!doctype html>
           if (!up.length) return card('비용 증가 (전일 대비)', '<div class="card-body"><p class="muted" style="font-size:12px">증가 데이터 없음 — 일별 스냅샷이 2일 이상 누적되면 표시됩니다.</p></div>');
           const rows = up.slice(0, 10).map(x => '<tr><td>' + escapeHTML(x.key) + '</td><td>' + won(x.previous_krw) + '</td><td>' + won(x.current_krw) + '</td><td><span class="status warn" style="font-size:10px">+' + won(x.delta_krw) + ' (' + fmt(x.pct_change) + '%)</span></td></tr>').join('');
           return card('비용 증가 TOP (전일 대비)', '<div class="card-body"><table><thead><tr><th>Namespace</th><th>전일</th><th>현재</th><th>증가</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        })() +
+        (function () {
+          const rs = (recs && recs.recommendations) || [];
+          if (!rs.length) return card('Rightsizing 권장 (request 대비 실사용)', '<div class="card-body"><p class="muted" style="font-size:12px">권장 사항 없음 — usage 메트릭이 적재되고 request가 설정된 워크로드가 필요합니다.</p></div>');
+          const save = recs.total_monthly_savings_krw || 0;
+          const rows = rs.slice(0, 30).map(x =>
+            '<tr><td><span class="status ' + (x.direction === 'down' ? '' : 'warn') + '" style="font-size:10px">' + escapeHTML(x.direction) + '</span></td>' +
+            '<td>' + escapeHTML((x.namespace || '-') + '/' + x.name) + '</td>' +
+            '<td>' + fmt(x.usage_cpu_m) + 'm / req ' + fmt(x.current_cpu_m) + 'm → ' + fmt(x.recommended_cpu_m) + 'm</td>' +
+            '<td>' + fmt(x.usage_mem_mb) + 'Mi / req ' + fmt(x.current_mem_mb) + 'Mi → ' + fmt(x.recommended_mem_mb) + 'Mi</td>' +
+            '<td>' + (x.monthly_savings_krw > 0 ? '<span class="status">' + fmt(Math.round(x.monthly_savings_krw)) + ' KRW</span>' : '-') + '</td></tr>').join('');
+          return card('Rightsizing 권장 — 월 절감 가능 ' + fmt(Math.round(save)) + ' KRW',
+            '<div class="card-body"><table><thead><tr><th>방향</th><th>워크로드</th><th>CPU(usage/req→권장)</th><th>Mem(usage/req→권장)</th><th>월 절감</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
         lineTable('Namespace별', r.by_namespace) +
         lineTable('담당팀별', r.by_team) +

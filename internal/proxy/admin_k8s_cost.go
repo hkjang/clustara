@@ -101,6 +101,37 @@ func (s *Server) handleK8sCostSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"recorded": n})
 }
 
+// handleK8sCostRecommendations returns right-sizing recommendations (request vs usage) with the
+// monthly saving per workload (FinOps Rightsizing). GET /admin/k8s/cost/recommendations?cluster_id=
+func (s *Server) handleK8sCostRecommendations(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	clusterID := r.URL.Query().Get("cluster_id")
+	items, prices, _, _, _, err := s.costContext(r.Context(), clusterID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
+		return
+	}
+	metrics, _ := s.db.ListK8sMetricSamples(r.Context(), clusterID, 4000)
+	recs := analyzer.RecommendRightsizing(items, metrics, prices)
+	total := 0.0
+	for _, rec := range recs {
+		total += rec.MonthlySavingsKRW
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recommendations":         recs,
+		"count":                   len(recs),
+		"total_monthly_savings_krw": total,
+		"note":                    "request 대비 실사용(usage×1.3) 기준 권장값입니다. down=절감 후보, up=과소할당(증설 권고).",
+	})
+}
+
 // handleK8sCostTrend returns day-over-day cost change per namespace (DW-08 비용 증가).
 // GET /admin/k8s/cost/trend?cluster_id=
 func (s *Server) handleK8sCostTrend(w http.ResponseWriter, r *http.Request) {
