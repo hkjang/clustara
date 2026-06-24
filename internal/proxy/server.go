@@ -261,6 +261,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/clusters", s.handleK8sClusters)
 	mux.HandleFunc("/admin/k8s/clusters/", s.handleK8sClusterByID)
 	mux.HandleFunc("/admin/k8s/snapshot", s.handleK8sSnapshot)
+	mux.HandleFunc("/admin/k8s/agent/events", s.handleK8sAgentEvents)
+	mux.HandleFunc("/admin/k8s/agent/status", s.handleK8sAgentStatus)
 	mux.HandleFunc("/admin/k8s/inventory", s.handleK8sInventory)
 	mux.HandleFunc("/admin/k8s/revisions", s.handleK8sRevisions)
 	mux.HandleFunc("/admin/k8s/diff", s.handleK8sDiff)

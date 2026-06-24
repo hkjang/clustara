@@ -17,9 +17,10 @@
 | 조치 어드바이저(Remediation) · FinOps Rightsizing · SLO·에러버짓 센터 | ✅ (v0.4.0) |
 | ChatOps(Mattermost slash 명령) · Policy as Code(Kyverno/Rego export·import) | ✅ (v0.4.0) |
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
-| 실시간 watch(informer) 수집기 | ⏳ 미구현 (현재는 주기 수집) |
+| 실시간 수집 — 서버측 delta 수신 API + agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
+| 실시간 수집 — 인클러스터 agent 바이너리(informer watch DaemonSet) | ⏳ 미구현 (서버 수신 contract는 완비 — 주기 수집/snapshot 폴백) |
 
-수집은 client-go 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)도 지원합니다. watch 기반 delta 수집기는 향후 추가 예정입니다.
+수집은 client-go 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 agent가 informer watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전이 즉시 갱신되고, `수집 상태` 화면에서 agent 하트비트·watch lag·resourceVersion·재연결을 추적합니다. (서버 수신 contract는 완비; 표준 informer agent 바이너리 배포는 후속.)
 
 ## API
 
@@ -57,6 +58,8 @@
 | GET | `/admin/k8s/slo` | 서비스(namespace)별 SLO·에러버짓 — 가용성/MTTR/다운타임/잔여 버짓 (`days`, `target` 파라미터) |
 | POST | `/admin/k8s/ai/ask` | 자연어 장애 질문 — RCA·이벤트·diff 근거 기반 답변(LLM 미구성 시 근거만) |
 | POST | `/admin/k8s/ai/report` | 클러스터 운영 상태 AI 요약 리포트 |
+| POST | `/admin/k8s/agent/events` | **실시간 수집** — 인클러스터 agent의 watch delta(ADDED/MODIFIED/DELETED) + 하트비트 배치 수신, 인벤토리/리비전 즉시 갱신 |
+| GET | `/admin/k8s/agent/status` | Collector agent 하트비트(버전·resourceVersion·watch lag·재연결·수신수) + stale(90s) 판정 |
 | POST | `/admin/k8s/dw/sink` | K8s fact(change/event/health/security/cost/action/metric)를 ClickHouse 적재 (미구성 시 no-op) |
 | POST | `/admin/k8s/dw/bootstrap` | ClickHouse에 K8s fact 테이블 생성 (미구성 시 no-op) |
 | POST | `/admin/k8s/actions/{id}/execute` | 승인된 액션을 실클러스터에 실행 (scale/rollout_restart/cordon/uncordon/delete_pod) |

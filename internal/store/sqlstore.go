@@ -1963,6 +1963,18 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		)`,
 		`ALTER TABLE workflow_runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ai_app_runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS k8s_agent_heartbeats (
+			cluster_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			last_resource_version TEXT NOT NULL DEFAULT '',
+			watch_lag_ms INTEGER NOT NULL DEFAULT 0,
+			events_received INTEGER NOT NULL DEFAULT 0,
+			reconnects INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			last_seen TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, agent_id)
+		)`,
 	}
 
 	for _, statement := range statements {

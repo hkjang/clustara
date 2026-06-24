@@ -340,6 +340,7 @@ const adminHTML = `<!doctype html>
     <nav id="tabs">
       <a href="#/k8s-home" data-tab="k8s-home" class="active">운영 홈</a>
       <a href="#/k8s" data-tab="k8s">클러스터</a>
+      <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
       <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
       <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
       <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
@@ -1171,6 +1172,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-ai': await renderK8sAI(params); break;
           case 'k8s-reports': await renderK8sReports(params); break;
           case 'k8s-slo': await renderK8sSLO(params); break;
+          case 'k8s-collector': await renderK8sCollector(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
@@ -7245,6 +7247,47 @@ const adminHTML = `<!doctype html>
       const t = document.getElementById('slo-target').value || '99.9';
       const d = document.getElementById('slo-days').value || '30';
       location.hash = '#/k8s-slo?days=' + encodeURIComponent(d) + '&target=' + encodeURIComponent(t) + (cl ? '&cluster_id=' + encodeURIComponent(cl) : '');
+    };
+
+    // ---------- K8s Collector 상태 (Realtime Agent) ----------
+    async function renderK8sCollector(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('K8s Collector 상태', '<div class="empty">불러오는 중...</div>');
+      let clusters, st;
+      try {
+        [clusters, st] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/agent/status' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+        ]);
+      } catch (e) { view.innerHTML = section('K8s Collector 상태', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
+      const agents = st.agents || [];
+      const rows = agents.length ? agents.map(a =>
+        '<tr><td>' + (a.stale ? '🔴 stale' : '🟢 live') + '</td>' +
+        '<td>' + escapeHTML(a.cluster_id) + '</td><td>' + escapeHTML(a.agent_id) + '</td>' +
+        '<td>' + escapeHTML(a.version || '-') + '</td>' +
+        '<td>' + escapeHTML(a.last_resource_version || '-') + '</td>' +
+        '<td>' + fmt(a.watch_lag_ms || 0) + 'ms</td>' +
+        '<td>' + fmt(a.events_received || 0) + '</td>' +
+        '<td>' + fmt(a.reconnects || 0) + '</td>' +
+        '<td>' + (a.age_seconds >= 0 ? fmt(a.age_seconds) + 's 전' : '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(a.last_error || '') + '</td></tr>'
+      ).join('') : '<tr><td colspan="10" class="muted">등록된 실시간 agent가 없습니다 — 주기 수집(snapshot)으로 동작 중입니다.</td></tr>';
+
+      view.innerHTML =
+        section('K8s Collector 상태', '<div class="kpis">' +
+          kpi('agent', fmt(st.count || 0)) + kpi('stale(오프라인)', fmt(st.stale || 0)) +
+          kpi('live', fmt((st.count || 0) - (st.stale || 0))) + kpi('stale 기준', fmt(st.stale_after_secs || 0) + 's') + '</div>') +
+        card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
+        card('실시간 Collector Agent',
+          '<div class="card-body"><table><thead><tr><th>상태</th><th>클러스터</th><th>Agent</th><th>버전</th><th>resourceVersion</th><th>watch lag</th><th>수신 이벤트</th><th>재연결</th><th>마지막 수신</th><th>오류</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(st.note || '') + ' Agent는 <code>POST /admin/k8s/agent/events</code>로 watch delta(ADDED/MODIFIED/DELETED)와 하트비트를 전송합니다. 미배포 시 주기 수집(snapshot)이 폴백으로 동작합니다.</div></div>');
+    }
+    window.k8sCollectorGo = () => {
+      const cl = document.getElementById('col-cluster').value;
+      location.hash = '#/k8s-collector' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
     };
 
     // ---------- K8s 그룹·오너십 (K8S-16 / K8S-17) ----------
