@@ -6197,11 +6197,13 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 장애 분석', '<div class="empty">불러오는 중...</div>');
-      let clusters, rca;
+      let clusters, rca, adv;
       try {
-        [clusters, rca] = await Promise.all([
+        const cq = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+        [clusters, rca, adv] = await Promise.all([
           api('/admin/k8s/clusters'),
-          api('/admin/k8s/rca' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/rca' + cq),
+          api('/admin/k8s/remediation/advice' + cq).catch(() => ({ advice: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 장애 분석', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -6230,10 +6232,22 @@ const adminHTML = `<!doctype html>
           '<div style="margin-top:8px"><a href="' + escapeAttr(tlHref) + '">타임라인·Diff 보기 →</a></div></div>');
       }).join('') : '<div class="card-body"><p class="muted">현재 장애 후보가 없습니다.</p></div>';
 
+      const advList = (adv && adv.advice) || [];
+      const advCard = advList.length ? card('권장 조치 Advisor',
+        '<div class="card-body"><table><thead><tr><th>우선</th><th>대상</th><th>조건</th><th>권장 조치</th><th>위험도</th><th>승인</th><th>롤백</th></tr></thead><tbody>' +
+        advList.map(a => '<tr><td>' + fmt(a.priority) + '</td>' +
+          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.kind + '/' + a.name) + '</td>' +
+          '<td>' + escapeHTML(a.condition) + '</td>' +
+          '<td>' + escapeHTML(a.recommended_action) + (a.actionable ? ' <span class="status" style="font-size:9px">실행가능</span>' : ' <span class="muted" style="font-size:10px">검토</span>') + '<div class="muted" style="font-size:11px">' + escapeHTML(a.rationale) + '</div></td>' +
+          '<td>' + escapeHTML(a.risk_level || '-') + '</td>' +
+          '<td>' + (a.requires_approval ? '필요' : (a.actionable ? '불필요' : '-')) + '</td>' +
+          '<td>' + (a.rollback_possible ? '가능' : '-') + '</td></tr>').join('') +
+        '</tbody></table><div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(adv.note || '') + '</div></div>') : '';
+
       view.innerHTML =
         section('K8s 장애 분석', '<div class="kpis">' + kpi('장애 후보', fmt(list.length)) +
           kpi('high+', fmt(list.filter(x => x.severity === 'high' || x.severity === 'critical').length)) + '</div>') +
-        card('필터', filterBar) + cards;
+        card('필터', filterBar) + advCard + cards;
     }
     window.k8sRCAGo = () => {
       const cl = document.getElementById('k8srca-cluster').value;

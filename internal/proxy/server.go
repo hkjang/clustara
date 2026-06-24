@@ -267,6 +267,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/timeline", s.handleK8sTimeline)
 	mux.HandleFunc("/admin/k8s/manifest", s.handleK8sManifest)
 	mux.HandleFunc("/admin/k8s/resource-graph", s.handleK8sResourceGraph)
+	mux.HandleFunc("/admin/k8s/remediation/advice", s.handleK8sRemediation)
 	mux.HandleFunc("/admin/k8s/connectivity", s.handleK8sConnectivity)
 	mux.HandleFunc("/admin/k8s/security", s.handleK8sSecurity)
 	mux.HandleFunc("/admin/k8s/capacity", s.handleK8sCapacity)
