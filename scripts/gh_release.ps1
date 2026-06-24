@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Version,
-    [string]$PrevVersion = "v0.71.0",
+    [string]$PrevVersion = "v0.3.0",
     [switch]$Edit  # update an existing release's notes instead of creating it (no asset upload)
 )
 

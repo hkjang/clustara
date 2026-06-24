@@ -89,36 +89,30 @@ func TestOpenAPISwaggerAndVersion(t *testing.T) {
 	}
 }
 
-func TestAppVersionNotBelowReleaseNotes(t *testing.T) {
-	re := regexp.MustCompile(`v0\.(\d+)\.(\d+)`)
-	paths := []string{
-		filepath.Join("..", "..", "scripts", "gh_release.ps1"),
-		filepath.Join("..", "..", "scripts", "changelog.txt"),
+// TestAppVersionMatchesNewestRelease pins AppVersion to the NEWEST (top-most) entry in
+// changelog.txt — which is exactly what the release tag is cut from (scripts/gh_release.ps1).
+//
+// Note: changelog.txt intentionally retains the pre-rebrand gateway lineage (v0.1.x … v0.71.x)
+// below the current Clustara line (v0.2.0 → v0.4.0 → …). We therefore compare against the newest
+// ENTRY (file order), not the numeric max across the whole file — the latter would wrongly pin
+// AppVersion to the defunct higher-numbered lineage and is the root of past version drift.
+func TestAppVersionMatchesNewestRelease(t *testing.T) {
+	path := filepath.Join("..", "..", "scripts", "changelog.txt")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read changelog: %v", err)
 	}
-	maxMinor, maxPatch := -1, -1
-	for _, path := range paths {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read release notes source %s: %v", path, err)
-		}
-		matches := re.FindAllStringSubmatch(string(body), -1)
-		if len(matches) == 0 {
-			t.Fatalf("no v0.x.y release versions found in %s", path)
-		}
-		for _, m := range matches {
-			minor, _ := strconv.Atoi(m[1])
-			patch, _ := strconv.Atoi(m[2])
-			if minor > maxMinor || (minor == maxMinor && patch > maxPatch) {
-				maxMinor, maxPatch = minor, patch
-			}
-		}
+	re := regexp.MustCompile(`(?m)^v0\.(\d+)\.(\d+):`)
+	m := re.FindStringSubmatch(string(body))
+	if m == nil {
+		t.Fatalf("no v0.x.y release entry found in %s", path)
 	}
-	appMinor, appPatch, ok := parseAppVersion(AppVersion)
-	if !ok {
+	newest := "v0." + m[1] + "." + m[2]
+	if _, _, ok := parseAppVersion(AppVersion); !ok {
 		t.Fatalf("AppVersion must use v0.x.y format, got %q", AppVersion)
 	}
-	if appMinor < maxMinor || (appMinor == maxMinor && appPatch < maxPatch) {
-		t.Fatalf("AppVersion %s is below release notes max v0.%d.%d", AppVersion, maxMinor, maxPatch)
+	if !strings.EqualFold(AppVersion, newest) {
+		t.Fatalf("AppVersion %s != newest changelog entry %s — bump AppVersion when cutting a release", AppVersion, newest)
 	}
 }
 

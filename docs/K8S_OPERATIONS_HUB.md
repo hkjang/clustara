@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.3.0** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다.
+> **버전: v0.4.0** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.3.0)
+## 기능 상태 (v0.4.0)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -14,6 +14,8 @@
 | **액션 승인 + 실클러스터 executor**(scale/rollout restart/cordon/uncordon/delete pod) | ✅ |
 | 비용(FinOps) · 비용 증가 추세 · Mattermost 알림 · AI 분석 · 운영 홈 · 리포트 센터 | ✅ |
 | Incident Workspace 상세 근거(이벤트·리비전·finding·액션) · Resource Graph 영향도 | ✅ |
+| 조치 어드바이저(Remediation) · FinOps Rightsizing · SLO·에러버짓 센터 | ✅ (v0.4.0) |
+| ChatOps(Mattermost slash 명령) · Policy as Code(Kyverno/Rego export·import) | ✅ (v0.4.0) |
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 watch(informer) 수집기 | ⏳ 미구현 (현재는 주기 수집) |
 
