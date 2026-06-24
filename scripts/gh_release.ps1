@@ -1,0 +1,105 @@
+﻿[CmdletBinding()]
+param(
+    [string]$Version,
+    [string]$PrevVersion = "v0.59.2",
+    [switch]$Edit  # update an existing release's notes instead of creating it (no asset upload)
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not $Version) {
+    throw "Version parameter is required. Example: pwsh -File scripts/gh_release.ps1 -Version v0.1.1"
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $repoRoot
+
+$cleanVer = $Version.TrimStart('v')
+
+# Load changelog file
+$changelogPath = Join-Path $PSScriptRoot "changelog.txt"
+if (-not (Test-Path $changelogPath)) {
+    throw "changelog.txt file is missing at $changelogPath"
+}
+$utf8 = [System.Text.Encoding]::UTF8
+$changelogLines = [System.IO.File]::ReadAllLines($changelogPath, $utf8)
+
+# Verify versions exist and extract all logs between Version and PrevVersion (exclusive)
+$foundStart = $false
+$foundEnd = $false
+$extractedLogs = @()
+
+foreach ($line in $changelogLines) {
+    if ($line -match "^$Version`:") {
+        $foundStart = $true
+    }
+    
+    if ($foundStart) {
+        if ($line -match "^$PrevVersion`:") {
+            $foundEnd = $true
+            break
+        }
+        # Extract the version change note content
+        # Line format: "vX.Y.Z:- Note"
+        $colonIdx = $line.IndexOf(':')
+        if ($colonIdx -gt 0) {
+            $note = $line.Substring($colonIdx + 1).Trim()
+            $extractedLogs += $note
+        }
+    }
+}
+
+if (-not $foundStart) {
+    throw "Target version $Version is not documented in scripts/changelog.txt."
+}
+if (-not $foundEnd) {
+    throw "Previous version $PrevVersion is not documented in scripts/changelog.txt."
+}
+
+$targetChangelog = $extractedLogs -join "`r`n"
+
+$notes = "## Clustara v" + $cleanVer + "`r`n`r`n"
+$notes += "### 주요 변경 사항`r`n"
+$notes += $targetChangelog + "`r`n`r`n"
+
+$notes += "### 배포 파일`r`n"
+$notes += "| 파일 | 설명 |`r`n"
+$notes += "|------|------|`r`n"
+$notes += "| clustara-v" + $cleanVer + ".tar.gz | Docker 이미지 패키지 (linux/amd64) |`r`n"
+$notes += "| clustara-v" + $cleanVer + ".tar.gz.sha256 | SHA256 체크섬 |`r`n"
+$notes += "| README-offline-v" + $cleanVer + ".md | 오프라인 배포 가이드 |`r`n"
+$notes += "| Clustara_Report.pdf | Clustara 기능·역할 및 비즈니스 가치 종합 보고서 (v0.59.3) |`r`n`r`n"
+
+$notes += "### 빠른 시작`r`n"
+$notes += '```' + "bash`r`n"
+$notes += "# 이미지 로드`r`n"
+$notes += "gunzip -c clustara-" + $Version + ".tar.gz | docker load`r`n`n"
+$notes += "# 실행`r`n"
+$notes += "docker run -d --name clustara --restart=always \`r`n"
+$notes += "  -p 8080:8080 \`r`n"
+$notes += "  -v /opt/clustara/data:/data \`n"
+$notes += "  -e UPSTREAM_BASE_URL=https://api.openai.com \`n"
+$notes += "  -e UPSTREAM_API_KEY=sk-... \`n"
+$notes += "  -e ADMIN_TOKEN=change-me \`n"
+$notes += "  clustara:" + $Version + "`r`n"
+$notes += '```'
+
+$notesPath = Join-Path $repoRoot "release\release-notes.txt"
+# Ensure the release directory exists
+$releaseDir = Split-Path -Parent $notesPath
+if (-not (Test-Path $releaseDir)) {
+    New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+}
+
+# Write as UTF-8 WITHOUT BOM via .NET so the GitHub release body has no leading BOM
+# and is identical regardless of which PowerShell edition runs this script.
+[System.IO.File]::WriteAllText($notesPath, $notes, (New-Object System.Text.UTF8Encoding($false)))
+
+if ($Edit) {
+    # Re-publish corrected notes for an already-created release (no asset re-upload).
+    gh release edit $Version --repo hkjang/clustara --notes-file $notesPath
+} else {
+    gh release create $Version "release\clustara-$Version.tar.gz" "release\clustara-$Version.tar.gz.sha256" "release\README-offline-$Version.md" "release\Clustara_Report.pdf" --repo hkjang/clustara --title "$Version - Clustara" --notes-file $notesPath
+}
+
+Remove-Item $notesPath -ErrorAction SilentlyContinue
