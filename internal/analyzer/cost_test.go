@@ -57,6 +57,35 @@ func TestEstimateCost(t *testing.T) {
 	}
 }
 
+func TestComputeCostTrend(t *testing.T) {
+	snaps := []store.K8sCostSnapshot{
+		{Dimension: "namespace", Key: "web", Day: "2026-06-24", MonthlyKRW: 1500},
+		{Dimension: "namespace", Key: "web", Day: "2026-06-23", MonthlyKRW: 1000},
+		{Dimension: "namespace", Key: "api", Day: "2026-06-24", MonthlyKRW: 800},
+		{Dimension: "namespace", Key: "api", Day: "2026-06-23", MonthlyKRW: 1000}, // decreased
+		{Dimension: "namespace", Key: "new", Day: "2026-06-24", MonthlyKRW: 300},  // no prior day
+	}
+	trend := ComputeCostTrend(snaps)
+	byKey := map[string]CostTrendLine{}
+	for _, l := range trend {
+		byKey[l.Key] = l
+	}
+	if byKey["web"].Delta != 500 || byKey["web"].PctChange != 50 {
+		t.Fatalf("web trend wrong: %+v", byKey["web"])
+	}
+	if byKey["api"].Delta != -200 {
+		t.Fatalf("api should show decrease: %+v", byKey["api"])
+	}
+	// new key has no prior day → not a measurable increase (Delta 0, not flagged in home).
+	if byKey["new"].Previous != 0 || byKey["new"].Delta != 0 {
+		t.Fatalf("new key (no prior day) should have no delta: %+v", byKey["new"])
+	}
+	// sorted by delta desc → web first.
+	if trend[0].Key != "web" {
+		t.Fatalf("trend should be sorted by largest increase, got %+v", trend)
+	}
+}
+
 func TestEstimateCostDefaultPrices(t *testing.T) {
 	rep := EstimateCost([]store.K8sInventoryItem{costPod("c1", "n", "p", "1", "0")}, CostPrices{}, nil, nil, nil)
 	if rep.Prices.CPUCoreMonthlyKRW != DefaultCostPrices.CPUCoreMonthlyKRW {

@@ -5867,14 +5867,19 @@ const adminHTML = `<!doctype html>
           '<div class="card-body"><table><thead><tr><th>심각도</th><th>조건</th><th>대상</th><th>원인</th><th></th></tr></thead><tbody>' + failRows + '</tbody></table></div>') +
         card('최근 변경 TOP 10',
           '<div class="card-body"><table><thead><tr><th>시각</th><th>대상</th><th>변경</th><th></th></tr></thead><tbody>' + changeRows + '</tbody></table></div>') +
-        card('비용 TOP 10 (namespace · 월 추정)',
-          '<div class="card-body">' +
-          ((d.cost_top || []).length
-            ? '<table><thead><tr><th>Namespace</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' +
-              (d.cost_top || []).map(c => '<tr><td>' + escapeHTML(c.key) + '</td><td>' + fmt(c.cpu_cores) + '</td><td>' + fmt(c.mem_gb) + '</td><td>' + fmt(Math.round(c.monthly_krw)) + '</td></tr>').join('') +
-              '</tbody></table>'
-            : '<p class="muted" style="font-size:12px">요청(request)이 설정된 워크로드가 없습니다.</p>') +
-          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(d.cost_note || '') + '</div></div>');
+        ((d.cost_increase || []).length
+          ? card('비용 증가 TOP 10 (전일 대비)',
+              '<div class="card-body"><table><thead><tr><th>Namespace</th><th>전일</th><th>현재</th><th>증가</th></tr></thead><tbody>' +
+              (d.cost_increase || []).map(c => '<tr><td>' + escapeHTML(c.key) + '</td><td>' + fmt(Math.round(c.previous_krw)) + '</td><td>' + fmt(Math.round(c.current_krw)) + '</td><td><span class="status warn" style="font-size:10px">+' + fmt(Math.round(c.delta_krw)) + ' (' + fmt(c.pct_change) + '%)</span></td></tr>').join('') +
+              '</tbody></table></div>')
+          : card('비용 TOP 10 (namespace · 월 추정)',
+              '<div class="card-body">' +
+              ((d.cost_top || []).length
+                ? '<table><thead><tr><th>Namespace</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' +
+                  (d.cost_top || []).map(c => '<tr><td>' + escapeHTML(c.key) + '</td><td>' + fmt(c.cpu_cores) + '</td><td>' + fmt(c.mem_gb) + '</td><td>' + fmt(Math.round(c.monthly_krw)) + '</td></tr>').join('') +
+                  '</tbody></table>'
+                : '<p class="muted" style="font-size:12px">요청(request)이 설정된 워크로드가 없습니다.</p>') +
+              '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(d.cost_note || '') + '</div></div>'));
     }
 
     function k8sRegisterGuideHTML() {
@@ -6658,12 +6663,13 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 비용', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, cfg;
+      let clusters, data, cfg, trend;
       try {
-        [clusters, data, cfg] = await Promise.all([
+        [clusters, data, cfg, trend] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/cost' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/cost/config'),
+          api('/admin/k8s/cost/trend' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ trend: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 비용', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -6691,8 +6697,16 @@ const adminHTML = `<!doctype html>
           '<select id="k8scost-cluster" onchange="k8sCostGo()">' + clusterOpts + '</select>' +
           '<input id="cost-cpu" type="number" value="' + escapeAttr(String(prices.cpu_core_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/vCPU·월</span>' +
           '<input id="cost-mem" type="number" value="' + escapeAttr(String(prices.mem_gb_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/GB·월</span>' +
-          '<button type="button" onclick="k8sCostSave()">단가 저장</button></div>' +
-          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(data.note || '') + '</div></div>') +
+          '<button type="button" onclick="k8sCostSave()">단가 저장</button> ' +
+          '<button type="button" class="secondary" onclick="k8sCostSnapshot()">일별 스냅샷 기록</button></div>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(data.note || '') + '</div><div id="cost-msg" class="muted" style="font-size:11px"></div></div>') +
+        (function () {
+          const ts = (trend && trend.trend) || [];
+          const up = ts.filter(x => x.delta > 0);
+          if (!up.length) return card('비용 증가 (전일 대비)', '<div class="card-body"><p class="muted" style="font-size:12px">증가 데이터 없음 — 일별 스냅샷이 2일 이상 누적되면 표시됩니다.</p></div>');
+          const rows = up.slice(0, 10).map(x => '<tr><td>' + escapeHTML(x.key) + '</td><td>' + won(x.previous_krw) + '</td><td>' + won(x.current_krw) + '</td><td><span class="status warn" style="font-size:10px">+' + won(x.delta_krw) + ' (' + fmt(x.pct_change) + '%)</span></td></tr>').join('');
+          return card('비용 증가 TOP (전일 대비)', '<div class="card-body"><table><thead><tr><th>Namespace</th><th>전일</th><th>현재</th><th>증가</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        })() +
         lineTable('Namespace별', r.by_namespace) +
         lineTable('담당팀별', r.by_team) +
         lineTable('클러스터 그룹별', r.by_group) +
@@ -6709,6 +6723,15 @@ const adminHTML = `<!doctype html>
           mem_gb_monthly_krw: parseFloat(document.getElementById('cost-mem').value) || 0 }) });
         await renderK8sCost(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) { alert(e.message); }
+    };
+    window.k8sCostSnapshot = async () => {
+      const msg = document.getElementById('cost-msg');
+      const cl = document.getElementById('k8scost-cluster').value;
+      try {
+        const d = await api('/admin/k8s/cost/snapshot' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : ''), { method: 'POST', body: '{}' });
+        if (msg) msg.innerHTML = '<span class="status">스냅샷 ' + fmt(d.recorded) + '건 기록됨 (매일 1회 기록 시 다음날부터 증가율 표시)</span>';
+        await renderK8sCost(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
 
     // ---------- K8s AI 운영 분석 (AI-OPS-01/06/08) ----------

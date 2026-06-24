@@ -38,6 +38,8 @@
 | POST | `/admin/k8s/policies/simulate` | manifest 적용 전 정책 위반 검증 (SEC-05 Admission 시뮬레이터) |
 | GET | `/admin/k8s/policies/compliance` | 현재 인벤토리의 정책 위반 목록 |
 | GET | `/admin/k8s/cost` | request×단가 월 비용 추정 (namespace/team/group/cost-center), `cost/config`로 단가 조정 |
+| POST | `/admin/k8s/cost/snapshot` | 일별 비용 스냅샷 기록 (비용 증가율 추세용, 로컬 누적) |
+| GET | `/admin/k8s/cost/trend` | namespace별 전일 대비 비용 증가/감소 |
 | POST | `/admin/k8s/ai/ask` | 자연어 장애 질문 — RCA·이벤트·diff 근거 기반 답변(LLM 미구성 시 근거만) |
 | POST | `/admin/k8s/ai/report` | 클러스터 운영 상태 AI 요약 리포트 |
 | POST | `/admin/k8s/dw/sink` | K8s fact(change/event/health/security/cost/action/metric)를 ClickHouse 적재 (미구성 시 no-op) |

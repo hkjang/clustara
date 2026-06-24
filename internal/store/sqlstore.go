@@ -1925,6 +1925,15 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			dedup_key TEXT PRIMARY KEY,
 			last_sent_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_cost_snapshots (
+			cluster_id TEXT NOT NULL DEFAULT '',
+			dimension TEXT NOT NULL,
+			key TEXT NOT NULL,
+			day TEXT NOT NULL,
+			monthly_krw REAL NOT NULL DEFAULT 0,
+			observed_at TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, dimension, key, day)
+		)`,
 		`CREATE TABLE IF NOT EXISTS k8s_policies (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,

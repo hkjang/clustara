@@ -71,6 +71,59 @@ func (s *Server) handleK8sCost(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleK8sCostSnapshot records today's per-namespace cost as a daily snapshot so cost trend /
+// increase can be computed locally (no ClickHouse required). POST /admin/k8s/cost/snapshot?cluster_id=
+func (s *Server) handleK8sCostSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	clusterID := r.URL.Query().Get("cluster_id")
+	items, prices, nsTeam, nsCC, clusterGroup, err := s.costContext(r.Context(), clusterID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
+		return
+	}
+	report := analyzer.EstimateCost(items, prices, nsTeam, nsCC, clusterGroup)
+	n := 0
+	for _, l := range report.ByNamespace {
+		if err := s.db.RecordK8sCostSnapshot(r.Context(), store.K8sCostSnapshot{
+			ClusterID: clusterID, Dimension: "namespace", Key: l.Key, MonthlyKRW: l.MonthlyKRW,
+		}); err == nil {
+			n++
+		}
+	}
+	s.auditAdmin(r, "k8s.cost.snapshot", "", auditJSON(map[string]any{"cluster_id": clusterID, "recorded": n}))
+	writeJSON(w, http.StatusOK, map[string]any{"recorded": n})
+}
+
+// handleK8sCostTrend returns day-over-day cost change per namespace (DW-08 비용 증가).
+// GET /admin/k8s/cost/trend?cluster_id=
+func (s *Server) handleK8sCostTrend(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	snaps, err := s.db.ListK8sCostSnapshots(r.Context(), r.URL.Query().Get("cluster_id"), "namespace", 2000)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cost_trend_failed")
+		return
+	}
+	trend := analyzer.ComputeCostTrend(snaps)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"trend": trend,
+		"note":  "일별 비용 스냅샷(POST /admin/k8s/cost/snapshot)을 누적해 산출합니다. 2일 이상 누적되면 증가율이 표시됩니다.",
+	})
+}
+
 // handleK8sCostConfig reads/sets the cost unit prices. GET/POST /admin/k8s/cost/config
 func (s *Server) handleK8sCostConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {

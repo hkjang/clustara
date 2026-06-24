@@ -277,6 +277,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/policies/", s.handleK8sPolicyByID)
 	mux.HandleFunc("/admin/k8s/cost", s.handleK8sCost)
 	mux.HandleFunc("/admin/k8s/cost/config", s.handleK8sCostConfig)
+	mux.HandleFunc("/admin/k8s/cost/snapshot", s.handleK8sCostSnapshot)
+	mux.HandleFunc("/admin/k8s/cost/trend", s.handleK8sCostTrend)
 	mux.HandleFunc("/admin/k8s/ai/ask", s.handleK8sAIAsk)
 	mux.HandleFunc("/admin/k8s/ai/report", s.handleK8sAIReport)
 	mux.HandleFunc("/admin/k8s/dw/sink", s.handleK8sDWSink)

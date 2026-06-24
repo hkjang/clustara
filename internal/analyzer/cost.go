@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"math"
 	"sort"
 
 	"clustara/internal/store"
@@ -102,5 +103,55 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 }
 
 func round2(f float64) float64 {
-	return float64(int64(f*100+0.5)) / 100
+	return math.Round(f*100) / 100
+}
+
+// CostTrendLine is the day-over-day change for one cost dimension key (DW-08 비용 증가).
+type CostTrendLine struct {
+	Key       string  `json:"key"`
+	Current   float64 `json:"current_krw"`
+	Previous  float64 `json:"previous_krw"`
+	Delta     float64 `json:"delta_krw"`
+	PctChange float64 `json:"pct_change"`
+}
+
+// ComputeCostTrend turns daily cost snapshots into per-key day-over-day deltas, sorted by the
+// largest increase first. Input may be in any order; the two most recent distinct days per key
+// are compared. Pure + testable.
+func ComputeCostTrend(snapshots []store.K8sCostSnapshot) []CostTrendLine {
+	type dayVal struct {
+		day string
+		krw float64
+	}
+	byKey := map[string][]dayVal{}
+	for _, s := range snapshots {
+		byKey[s.Key] = append(byKey[s.Key], dayVal{s.Day, s.MonthlyKRW})
+	}
+	out := []CostTrendLine{}
+	for key, vals := range byKey {
+		sort.SliceStable(vals, func(i, j int) bool { return vals[i].day > vals[j].day }) // newest day first
+		cur := vals[0]
+		var prev dayVal
+		hasPrev := false
+		for _, v := range vals[1:] {
+			if v.day != cur.day {
+				prev = v
+				hasPrev = true
+				break
+			}
+		}
+		line := CostTrendLine{Key: key, Current: round2(cur.krw)}
+		if hasPrev {
+			line.Previous = round2(prev.krw)
+			line.Delta = round2(cur.krw - prev.krw)
+			if prev.krw > 0 {
+				line.PctChange = round2((cur.krw - prev.krw) / prev.krw * 100)
+			} else if cur.krw > 0 {
+				line.PctChange = 100
+			}
+		}
+		out = append(out, line)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Delta > out[j].Delta })
+	return out
 }

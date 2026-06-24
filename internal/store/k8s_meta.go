@@ -139,6 +139,61 @@ func (s *SQLStore) ListK8sNamespaceOwnership(ctx context.Context, clusterID, tea
 	return out, rows.Err()
 }
 
+// K8sCostSnapshot is one daily cost data point per dimension key, enabling cost-trend/increase
+// analysis without an external warehouse (DW-08 trend).
+type K8sCostSnapshot struct {
+	ClusterID  string  `json:"cluster_id"`
+	Dimension  string  `json:"dimension"`
+	Key        string  `json:"key"`
+	Day        string  `json:"day"` // YYYY-MM-DD
+	MonthlyKRW float64 `json:"monthly_krw"`
+	ObservedAt string  `json:"observed_at"`
+}
+
+// RecordK8sCostSnapshot upserts one cost line for its (cluster,dimension,key,day) — idempotent
+// per day, so repeated runs the same day overwrite rather than duplicate.
+func (s *SQLStore) RecordK8sCostSnapshot(ctx context.Context, c K8sCostSnapshot) error {
+	if c.ObservedAt == "" {
+		c.ObservedAt = nowString()
+	}
+	if c.Day == "" && len(c.ObservedAt) >= 10 {
+		c.Day = c.ObservedAt[:10]
+	}
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_cost_snapshots
+		(cluster_id, dimension, key, day, monthly_krw, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(cluster_id, dimension, key, day) DO UPDATE SET
+			monthly_krw = excluded.monthly_krw, observed_at = excluded.observed_at`),
+		c.ClusterID, c.Dimension, c.Key, c.Day, c.MonthlyKRW, c.ObservedAt)
+	return err
+}
+
+// ListK8sCostSnapshots returns recent snapshots for a dimension (newest day first).
+func (s *SQLStore) ListK8sCostSnapshots(ctx context.Context, clusterID, dimension string, limit int) ([]K8sCostSnapshot, error) {
+	query := `SELECT cluster_id, dimension, key, day, monthly_krw, observed_at FROM k8s_cost_snapshots WHERE dimension = ?`
+	args := []any{dimension}
+	if clusterID != "" {
+		query += ` AND cluster_id = ?`
+		args = append(args, clusterID)
+	}
+	query += ` ORDER BY day DESC LIMIT ?`
+	args = append(args, boundedLimit(limit, 500, 5000))
+	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []K8sCostSnapshot{}
+	for rows.Next() {
+		var c K8sCostSnapshot
+		if err := rows.Scan(&c.ClusterID, &c.Dimension, &c.Key, &c.Day, &c.MonthlyKRW, &c.ObservedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // K8sPolicy is a stored guardrail (SEC-05/SEC-10). RuleType/Action are validated at the handler.
 type K8sPolicy struct {
 	ID        string `json:"id"`

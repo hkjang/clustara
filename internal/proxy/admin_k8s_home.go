@@ -119,12 +119,26 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Cost increase TOP from accumulated daily snapshots (local, no ClickHouse needed).
+	costIncrease := []analyzer.CostTrendLine{}
+	if snaps, serr := s.db.ListK8sCostSnapshots(r.Context(), "", "namespace", 2000); serr == nil && len(snaps) > 0 {
+		for _, t := range analyzer.ComputeCostTrend(snaps) {
+			if t.Delta > 0 {
+				costIncrease = append(costIncrease, t)
+			}
+			if len(costIncrease) >= 10 {
+				break
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"generated_at":       time.Now().UTC().Format(time.RFC3339Nano),
 		"clusters_at_risk":   risks,
 		"failure_candidates": failList,
 		"recent_changes":     changes,
 		"cost_top":           costTop,
-		"cost_note":          "namespace별 월 추정 비용 TOP. 전일 대비 증가율은 이력 적재(ClickHouse) 후 제공됩니다.",
+		"cost_increase":      costIncrease,
+		"cost_note":          "namespace별 월 추정 비용 TOP. 증가 TOP은 일별 스냅샷(POST /admin/k8s/cost/snapshot) 2일 이상 누적 시 표시됩니다.",
 	})
 }
