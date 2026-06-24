@@ -390,6 +390,88 @@ func TestK8sHomeAggregates(t *testing.T) {
 	}
 }
 
+func TestK8sIncidentLifecycle(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	reg := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{"name": "inc", "server_url": "https://k8s.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1"})
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	json.NewDecoder(reg.Body).Decode(&created)
+	reg.Body.Close()
+	cid := created.Cluster.ID
+
+	// Snapshot a CrashLoop pod → high RCA → should open an incident on scan.
+	snap := postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
+		"cluster_id": cid,
+		"resources":  []map[string]any{{"kind": "Pod", "namespace": "prod", "name": "api-1", "status": "CrashLoopBackOff"}},
+	})
+	snap.Body.Close()
+
+	// Scan → open incident.
+	sc := postJSON(t, proxy.URL+"/admin/k8s/incidents?cluster_id="+cid, "", map[string]any{})
+	var scanRes struct{ Opened, Updated int }
+	json.NewDecoder(sc.Body).Decode(&scanRes)
+	sc.Body.Close()
+	if scanRes.Opened < 1 {
+		t.Fatalf("scan should open >=1 incident, got %+v", scanRes)
+	}
+
+	// Second scan → updates, not re-opens (dedup).
+	sc2 := postJSON(t, proxy.URL+"/admin/k8s/incidents?cluster_id="+cid, "", map[string]any{})
+	var scanRes2 struct{ Opened, Updated int }
+	json.NewDecoder(sc2.Body).Decode(&scanRes2)
+	sc2.Body.Close()
+	if scanRes2.Opened != 0 || scanRes2.Updated < 1 {
+		t.Fatalf("second scan should update not re-open, got %+v", scanRes2)
+	}
+
+	// List → get id.
+	lr, _ := http.Get(proxy.URL + "/admin/k8s/incidents?cluster_id=" + cid)
+	var list struct {
+		Incidents []store.K8sIncident `json:"incidents"`
+	}
+	json.NewDecoder(lr.Body).Decode(&list)
+	lr.Body.Close()
+	if len(list.Incidents) != 1 {
+		t.Fatalf("expected 1 incident, got %d", len(list.Incidents))
+	}
+	id := list.Incidents[0].ID
+
+	// Detail has evidence.
+	dr, _ := http.Get(proxy.URL + "/admin/k8s/incidents/" + id)
+	var detail struct {
+		Incident store.K8sIncident `json:"incident"`
+	}
+	json.NewDecoder(dr.Body).Decode(&detail)
+	dr.Body.Close()
+	if len(detail.Incident.Evidence) == 0 {
+		t.Fatalf("incident detail should carry evidence: %+v", detail.Incident)
+	}
+
+	// Resolve.
+	rr := postJSON(t, proxy.URL+"/admin/k8s/incidents/"+id+"/resolve", "", map[string]any{})
+	if rr.StatusCode != http.StatusOK {
+		t.Fatalf("resolve status=%d", rr.StatusCode)
+	}
+	rr.Body.Close()
+	final, _ := db.GetK8sIncident(context.Background(), id)
+	if final.Status != "resolved" {
+		t.Fatalf("incident should be resolved, got %q", final.Status)
+	}
+}
+
 func TestK8sGroupsAndOwnership(t *testing.T) {
 	db := openTestStore(t)
 	defer db.Close()

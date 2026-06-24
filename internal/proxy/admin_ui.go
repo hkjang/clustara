@@ -332,6 +332,7 @@ const adminHTML = `<!doctype html>
       <a href="#/k8s" data-tab="k8s">클러스터</a>
       <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
       <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
+      <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
       <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
       <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
       <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
@@ -1148,6 +1149,7 @@ const adminHTML = `<!doctype html>
           case 'k8s':       await renderK8sOperations(); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
+          case 'k8s-incidents': await renderK8sIncidents(params); break;
           case 'k8s-conn': await renderK8sConnectivity(params); break;
           case 'k8s-actions': await renderK8sActions(params); break;
           case 'k8s-meta': await renderK8sMeta(params); break;
@@ -5848,7 +5850,7 @@ const adminHTML = `<!doctype html>
         '<td>' + escapeHTML(f.condition) + '</td>' +
         '<td>' + escapeHTML((f.cluster_name || '') + ' · ' + (f.namespace || '-') + '/' + f.resource_kind + '/' + f.resource_name) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(f.cause || '') + '</td>' +
-        '<td><a href="' + escapeAttr(tlHref(f)) + '">타임라인</a></td></tr>').join('')
+        '<td><a href="' + escapeAttr(tlHref(f)) + '">타임라인</a> · <a href="#/k8s-incidents' + (f.cluster_id ? '?cluster_id=' + encodeURIComponent(f.cluster_id) : '') + '">워룸</a></td></tr>').join('')
         : '<tr><td colspan="5" class="muted">장애 후보 없음.</td></tr>';
 
       const changeRows = (d.recent_changes || []).length ? (d.recent_changes || []).map(c =>
@@ -6224,6 +6226,86 @@ const adminHTML = `<!doctype html>
     window.k8sRCAGo = () => {
       const cl = document.getElementById('k8srca-cluster').value;
       location.hash = '#/k8s-rca' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+
+    // ---------- K8s 장애 워룸 (Incident Workspace) ----------
+    async function renderK8sIncidents(params) {
+      const id = params && params.get('id');
+      if (id) return renderK8sIncidentDetail(id);
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('K8s 장애 워룸', '<div class="empty">스캔 중...</div>');
+      // Refresh incidents from current state, then list.
+      try { await api('/admin/k8s/incidents' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : ''), { method: 'POST', body: '{}' }); } catch (e) {}
+      let clusters, data;
+      try {
+        [clusters, data] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/incidents' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+        ]);
+      } catch (e) { view.innerHTML = section('K8s 장애 워룸', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
+      const incs = data.incidents || [];
+      const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
+      const rows = incs.length ? incs.map(i =>
+        '<tr style="cursor:pointer" onclick="location.hash=\'#/k8s-incidents?id=' + escapeAttr(i.id) + '\'">' +
+        '<td><span class="status ' + sevClass(i.severity) + '" style="font-size:10px">' + escapeHTML(i.severity) + '</span></td>' +
+        '<td>' + escapeHTML(i.condition) + '</td>' +
+        '<td>' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + '</td>' +
+        '<td>' + (i.status === 'open' ? '<span class="status warn" style="font-size:10px">open</span>' : '<span class="status" style="font-size:10px">resolved</span>') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(ago(i.opened_at)) + '</td></tr>'
+      ).join('') : '<tr><td colspan="5" class="muted">장애가 없습니다.</td></tr>';
+      const openN = incs.filter(i => i.status === 'open').length;
+      view.innerHTML =
+        section('K8s 장애 워룸', '<div class="kpis">' + kpi('열린 장애', fmt(openN)) + kpi('전체', fmt(incs.length)) + '</div>') +
+        card('필터', '<div class="card-body"><select id="k8sinc-cluster" onchange="k8sIncGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">화면 진입 시 현재 high/critical 장애를 자동 스캔해 incident로 묶습니다.</span></div>') +
+        card('장애 목록 (클릭하면 워크스페이스)', '<div class="card-body"><table><thead><tr><th>심각도</th><th>조건</th><th>대상</th><th>상태</th><th>발생</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    window.k8sIncGo = () => {
+      const cl = document.getElementById('k8sinc-cluster').value;
+      location.hash = '#/k8s-incidents' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+    async function renderK8sIncidentDetail(id) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('장애 워크스페이스', '<div class="empty">불러오는 중...</div>');
+      let d;
+      try { d = await api('/admin/k8s/incidents/' + encodeURIComponent(id)); }
+      catch (e) { view.innerHTML = section('장애 워크스페이스', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const i = d.incident || {};
+      const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
+      const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '' }).toString();
+      const evid = (i.evidence || []).map(e => '<li style="font-size:12px">' + escapeHTML(e) + '</li>').join('') || '<li class="muted">근거 없음</li>';
+      const actRows = (d.actions || []).length ? (d.actions || []).map(a =>
+        '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.status) + '</td><td><span class="status ' + sevClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td></tr>').join('')
+        : '<tr><td colspan="3" class="muted">관련 액션 없음 — 액션 승인함에서 요청하세요.</td></tr>';
+      view.innerHTML =
+        section('장애 워크스페이스', '<div style="padding:0 4px"><a href="#/k8s-incidents">← 목록</a></div>') +
+        card('<span class="status ' + sevClass(i.severity) + '" style="font-size:10px">' + escapeHTML(i.severity) + '</span> ' + escapeHTML(i.title || i.condition),
+          '<div class="card-body"><div class="muted" style="font-size:12px">대상: ' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + ' · 상태: ' + escapeHTML(i.status) + ' · 발생: ' + escapeHTML(ago(i.opened_at)) + '</div>' +
+          '<div style="margin-top:8px">' +
+          '<a href="' + escapeAttr(tlHref) + '"><button type="button" class="secondary">변경 타임라인·Diff</button></a> ' +
+          '<button type="button" class="secondary" onclick="k8sIncidentAI(\'' + escapeAttr(i.cluster_id) + '\',\'' + escapeAttr(i.namespace) + '\',\'' + escapeAttr(i.kind) + '\',\'' + escapeAttr(i.name) + '\')">AI 설명</button> ' +
+          (i.status === 'open' ? '<button type="button" onclick="k8sIncidentResolve(\'' + escapeAttr(i.id) + '\')">해결 처리</button>' : '') +
+          '</div><div id="inc-ai" style="margin-top:8px"></div></div>') +
+        card('근거 (RCA·이벤트·변경)', '<div class="card-body"><ul style="margin:0;padding-left:16px">' + evid + '</ul></div>') +
+        card('관련 조치', '<div class="card-body"><table><thead><tr><th>Action</th><th>상태</th><th>위험도</th></tr></thead><tbody>' + actRows + '</tbody></table></div>');
+    }
+    window.k8sIncidentResolve = async (id) => {
+      if (!confirm('이 장애를 해결 처리할까요?')) return;
+      try { await api('/admin/k8s/incidents/' + encodeURIComponent(id) + '/resolve', { method: 'POST', body: '{}' }); } catch (e) { alert(e.message); }
+      await renderK8sIncidentDetail(id);
+    };
+    window.k8sIncidentAI = async (cl, ns, kind, name) => {
+      const out = document.getElementById('inc-ai');
+      out.innerHTML = '<div class="muted">분석 중...</div>';
+      try {
+        const d = await api('/admin/k8s/ai/ask', { method: 'POST', body: JSON.stringify({ cluster_id: cl, namespace: ns, kind: kind, name: name, question: '이 리소스에 무슨 장애가 발생했고 원인과 권장 조치는?' }) });
+        const text = d.answer || '';
+        out.innerHTML = (d.llm_available === false ? '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 미구성 — 근거만</div>' : '') +
+          (text ? '<div style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px">' + escapeHTML(text) + '</div>' : '') +
+          '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">근거 ' + (d.evidence || []).length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + (d.evidence || []).map(e => '<li class="muted" style="font-size:11px">' + escapeHTML(e) + '</li>').join('') + '</ul></details>';
+      } catch (e) { out.innerHTML = '<div class="status error">' + escapeHTML(e.message) + '</div>'; }
     };
 
     // ---------- K8s 연결성 점검 (Service/Ingress/PVC — K8S-22/23/24) ----------

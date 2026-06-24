@@ -1925,6 +1925,24 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			dedup_key TEXT PRIMARY KEY,
 			last_sent_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_incidents (
+			id TEXT PRIMARY KEY,
+			dedup_key TEXT NOT NULL,
+			cluster_id TEXT NOT NULL DEFAULT '',
+			namespace TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			condition TEXT NOT NULL DEFAULT '',
+			severity TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'open',
+			title TEXT NOT NULL DEFAULT '',
+			evidence_json TEXT NOT NULL DEFAULT '[]',
+			opened_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			resolved_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_incidents_key_status ON k8s_incidents(dedup_key, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_incidents_cluster_status ON k8s_incidents(cluster_id, status, opened_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_cost_snapshots (
 			cluster_id TEXT NOT NULL DEFAULT '',
 			dimension TEXT NOT NULL,
