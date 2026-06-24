@@ -150,9 +150,14 @@ func (s *Server) handleK8sIncidentByID(w http.ResponseWriter, r *http.Request) {
 	graph := analyzer.BuildResourceGraph(items, owners, analyzer.ResourceGraphFocus{
 		ClusterID: inc.ClusterID, Kind: inc.Kind, Namespace: inc.Namespace, Name: inc.Name, Radius: 2,
 	})
+	confidence := analyzer.ScoreIncidentConfidence(analyzer.ConfidenceInput{
+		Severity: inc.Severity, OpenedAt: inc.OpenedAt,
+		Events: relatedEvents, Revisions: revisions, Findings: relatedFindings,
+		EvidenceCount: len(inc.Evidence), ImpactCount: graph.Impact.NodeCount, Now: time.Now().UTC(),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"incident": inc, "actions": related, "events": relatedEvents, "revisions": revisions,
-		"findings": relatedFindings, "graph": graph, "impact": graph.Impact,
+		"findings": relatedFindings, "graph": graph, "impact": graph.Impact, "confidence": confidence,
 	})
 }
 

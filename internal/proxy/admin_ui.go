@@ -6412,6 +6412,20 @@ const adminHTML = `<!doctype html>
           '<button type="button" class="secondary" onclick="k8sIncidentAI(\'' + escapeAttr(i.cluster_id) + '\',\'' + escapeAttr(i.namespace) + '\',\'' + escapeAttr(i.kind) + '\',\'' + escapeAttr(i.name) + '\')">AI 설명</button> ' +
           (i.status === 'open' ? '<button type="button" onclick="k8sIncidentResolve(\'' + escapeAttr(i.id) + '\')">해결 처리</button>' : '') +
           '</div><div id="inc-ai" style="margin-top:8px"></div></div>') +
+        (function () {
+          const c = d.confidence || {};
+          if (!c.factors) return '';
+          const lvlClass = c.level === 'high' ? '' : (c.level === 'medium' ? 'warn' : 'error');
+          const barCol = c.level === 'high' ? 'var(--accent)' : (c.level === 'medium' ? '#d97706' : 'var(--bad-ink, #dc2626)');
+          const facts = (c.factors || []).map(f => '<li style="font-size:12px">+' + fmt(f.points) + ' · <strong>' + escapeHTML(f.name) + '</strong> — ' + escapeHTML(f.detail) + '</li>').join('');
+          return card('원인 신뢰도 (Confidence)',
+            '<div class="card-body"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
+            '<span class="status ' + lvlClass + '">' + escapeHTML((c.level || 'low').toUpperCase()) + '</span>' +
+            '<div style="flex:1;height:10px;background:var(--panel-alt);border-radius:5px;overflow:hidden"><div style="width:' + fmt(c.score || 0) + '%;height:100%;background:' + barCol + '"></div></div>' +
+            '<strong style="min-width:48px">' + fmt(c.score || 0) + '/100</strong></div>' +
+            '<div class="muted" style="font-size:11px;margin-bottom:4px">이 원인을 믿어야 하는 근거(가중치 합산):</div>' +
+            '<ul style="margin:0;padding-left:16px">' + facts + '</ul></div>');
+        })() +
         card('영향도 그래프', '<div class="card-body">' + k8sGraphImpactKpis(graph) +
           '<div style="margin-top:12px">' + k8sGraphImpactHTML(graph) + '</div>' +
           '<h3 style="font-size:12px;margin:14px 0 8px;color:var(--muted)">관련 노드</h3>' + k8sGraphNodesHTML(graph, 8) +
