@@ -67,6 +67,92 @@ func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleK8sPolicyExport renders the enabled policies as Kyverno or Rego (Policy as Code).
+// GET /admin/k8s/policies/export?format=kyverno|rego
+func (s *Server) handleK8sPolicyExport(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	ps, err := s.db.ListK8sPolicies(r.Context())
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_policies_failed")
+		return
+	}
+	policies := toAnalyzerPolicies(ps)
+	format := strings.ToLower(firstQuery(r.URL.Query().Get("format"), "kyverno"))
+	var content, filename string
+	switch format {
+	case "rego":
+		content, filename = analyzer.ExportRego(policies), "clustara-guardrails.rego"
+	case "kyverno", "yaml":
+		format = "kyverno"
+		content, filename = analyzer.ExportKyverno(policies), "clustara-guardrails.yaml"
+	default:
+		writeOpenAIError(w, http.StatusBadRequest, "format must be kyverno or rego", "invalid_request_error", "invalid_format")
+		return
+	}
+	if content == "" {
+		content = "# 내보낼 활성 정책이 없습니다.\n"
+	}
+	s.auditAdmin(r, "k8s.policy.export", "", auditJSON(map[string]string{"format": format}))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(content))
+}
+
+// handleK8sPolicyImport recognizes rule types from a pasted Kyverno/Rego document and (unless
+// dry_run) creates the corresponding Clustara policies. POST {content, dry_run, action}
+func (s *Server) handleK8sPolicyImport(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var p struct {
+		Content string `json:"content"`
+		DryRun  bool   `json:"dry_run"`
+		Action  string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	if strings.TrimSpace(p.Content) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "content is required", "invalid_request_error", "missing_content")
+		return
+	}
+	matched, warnings := analyzer.ImportPolicyText(p.Content)
+	action := p.Action
+	if action == "" {
+		action = "Warn"
+	}
+	created := []store.K8sPolicy{}
+	if !p.DryRun {
+		for _, m := range matched {
+			pol := store.K8sPolicy{ID: newID("k8spol"), Name: m.Title, RuleType: m.RuleType, Action: action, Enabled: false}
+			if err := s.db.UpsertK8sPolicy(r.Context(), pol); err != nil {
+				continue
+			}
+			created = append(created, pol)
+		}
+		s.auditAdmin(r, "k8s.policy.import", "", auditJSON(map[string]any{"matched": len(matched), "created": len(created)}))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"matched": matched, "count": len(matched), "warnings": warnings,
+		"dry_run": p.DryRun, "created": created,
+		"note":    "가져온 정책은 비활성(enabled=false) 상태로 생성됩니다 — 검토 후 활성화하세요.",
+	})
+}
+
 // handleK8sPolicyByID deletes a policy. DELETE /admin/k8s/policies/{id}
 func (s *Server) handleK8sPolicyByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
@@ -78,7 +164,7 @@ func (s *Server) handleK8sPolicyByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/policies/"), "/")
-	if id == "" || id == "simulate" || id == "compliance" {
+	if id == "" || id == "simulate" || id == "compliance" || id == "export" || id == "import" {
 		writeOpenAIError(w, http.StatusBadRequest, "policy id required", "invalid_request_error", "missing_policy_id")
 		return
 	}

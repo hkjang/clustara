@@ -6830,8 +6830,42 @@ const adminHTML = `<!doctype html>
           '<textarea id="sim-spec" rows="5" placeholder=\'{"template":{"spec":{"containers":[{"name":"c","image":"x:latest"}]}}}\' style="width:100%"></textarea>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sPolicySimulate()">검증</button></div>' +
           '<div id="sim-pol-out" style="margin-top:8px"></div></div>') +
-        card('컴플라이언스 (현재 인벤토리)', '<div class="card-body"><table><thead><tr><th>액션</th><th>규칙</th><th>리소스</th><th>상세</th></tr></thead><tbody>' + compRows + '</tbody></table></div>');
+        card('컴플라이언스 (현재 인벤토리)', '<div class="card-body"><table><thead><tr><th>액션</th><th>규칙</th><th>리소스</th><th>상세</th></tr></thead><tbody>' + compRows + '</tbody></table></div>') +
+        card('Policy as Code (Kyverno / OPA-Rego)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">활성 정책을 Kyverno/Rego로 내보내거나, 기존 Kyverno/Rego 정의를 붙여넣어 Clustara 규칙으로 가져옵니다(가져온 정책은 비활성으로 생성 — 검토 후 활성화).</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">' +
+          '<button type="button" class="secondary" onclick="k8sPolicyExport(\'kyverno\')">Kyverno 내보내기</button>' +
+          '<button type="button" class="secondary" onclick="k8sPolicyExport(\'rego\')">Rego 내보내기</button></div>' +
+          '<textarea id="pol-import" rows="6" placeholder="Kyverno ClusterPolicy 또는 Rego 정의를 붙여넣으세요..." style="width:100%"></textarea>' +
+          '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<button type="button" onclick="k8sPolicyImport(true)">미리보기(dry-run)</button>' +
+          '<button type="button" class="secondary" onclick="k8sPolicyImport(false)">가져오기</button></div>' +
+          '<div id="pol-iac-out" style="margin-top:8px"></div></div>');
     }
+    window.k8sPolicyExport = async (format) => {
+      try {
+        const r = await fetch('/admin/k8s/policies/export?format=' + encodeURIComponent(format), { headers: headers() });
+        if (!r.ok) throw new Error('export 실패 (' + r.status + ')');
+        const text = await r.text();
+        const out = document.getElementById('pol-iac-out');
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">' + escapeHTML(format) + ' 내보내기 결과 (복사해서 사용하세요):</div>' +
+          '<pre style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px;font-size:11px;max-height:320px;overflow:auto">' + escapeHTML(text) + '</pre>';
+      } catch (e) { document.getElementById('pol-iac-out').innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPolicyImport = async (dryRun) => {
+      const out = document.getElementById('pol-iac-out');
+      const content = document.getElementById('pol-import').value;
+      if (!content.trim()) { out.innerHTML = '<span class="status warn">정의를 붙여넣으세요</span>'; return; }
+      try {
+        const d = await api('/admin/k8s/policies/import', { method: 'POST', body: JSON.stringify({ content, dry_run: dryRun }) });
+        const rows = (d.matched || []).map(m => '<li style="font-size:12px">' + (m.match === 'annotation' ? '🟢' : '🟡') + ' <strong>' + escapeHTML(m.rule_type) + '</strong> — ' + escapeHTML(m.title) + ' <span class="muted">(' + escapeHTML(m.match) + ')</span></li>').join('');
+        const warns = (d.warnings || []).map(w => '<li class="muted" style="font-size:11px">⚠️ ' + escapeHTML(w) + '</li>').join('');
+        out.innerHTML = '<div style="margin-bottom:4px">' + (dryRun ? '미리보기' : '<span class="status">' + fmt((d.created || []).length) + '건 생성됨(비활성)</span>') + ' · 인식 ' + fmt(d.count || 0) + '건</div>' +
+          (rows ? '<ul style="margin:0 0 6px;padding-left:16px">' + rows + '</ul>' : '<div class="muted" style="font-size:12px">인식된 규칙 없음</div>') +
+          (warns ? '<ul style="margin:0;padding-left:16px">' + warns + '</ul>' : '');
+        if (!dryRun && (d.created || []).length) await renderK8sPolicy();
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sPolicyAdd = async () => {
       try {
         await api('/admin/k8s/policies', { method: 'POST', body: JSON.stringify({
