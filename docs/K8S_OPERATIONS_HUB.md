@@ -1,16 +1,22 @@
-# K8s Operations Hub MVP
+# K8s Operations Hub
 
-이 문서는 기존 관리자 플랫폼 위에 추가된 Kubernetes 운영 허브 MVP API를 설명합니다.
+> **버전: v0.3.0** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다.
 
-## 범위
+## 기능 상태 (v0.3.0)
 
-- 클러스터 등록과 kubeconfig/token 암호화 저장 참조
-- Resource Inventory 스냅샷 적재
-- Kubernetes Event, Metric sample 적재
-- Health/security finding 자동 생성
-- 위험 액션 요청과 승인/반려 워크플로우
+| 기능 | 상태 |
+| --- | --- |
+| 클러스터 등록(kubeconfig/token AES-GCM 암호화) · 연결 테스트 · 라이브 수집(client-go) | ✅ |
+| 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
+| RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |
+| 연결성(Service/Ingress/PVC) · Rollout/Job · 용량(HPA·할당·packing·GPU·예측·시뮬) | ✅ |
+| 보안·정책(Pod Security·RBAC·RBAC Diff·이미지·Secret·NetworkPolicy·TLS·감사이상·정책센터) | ✅ |
+| **액션 승인 + 실클러스터 executor**(scale/rollout restart/cordon/uncordon/delete pod) | ✅ |
+| 비용(FinOps) · 비용 증가 추세 · Mattermost 알림 · AI 분석 · 운영 홈 · 리포트 센터 | ✅ |
+| ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
+| 실시간 watch(informer) 수집기 | ⏳ 미구현 (현재는 주기 수집) |
 
-아직 실제 Kubernetes API watch 실행기와 action executor는 연결하지 않았습니다. 현재 단계는 외부 collector나 향후 client-go collector가 보낼 표준 스냅샷을 저장하고 분석하는 기반입니다.
+수집은 client-go 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)도 지원합니다. watch 기반 delta 수집기는 향후 추가 예정입니다.
 
 ## API
 

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 ENV CGO_ENABLED=0 \
@@ -23,12 +23,12 @@ USER nonroot:nonroot
 
 COPY --from=build /out/clustara /app/clustara
 
-ENV LISTEN_ADDR=:9090 \
+ENV LISTEN_ADDR=:8080 \
     DB_DRIVER=sqlite \
     DB_DSN=/data/gateway.db \
     LOG_FALLBACK_PATH=/data/fallback.ndjson
 
 VOLUME ["/data"]
-EXPOSE 9090
+EXPOSE 8080
 
 ENTRYPOINT ["/app/clustara"]
