@@ -723,6 +723,14 @@ func intParam(raw string, fallback int) int {
 	return n
 }
 
+func floatParam(raw string, fallback float64) float64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return fallback
+	}
+	return f
+}
+
 func firstQuery(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback

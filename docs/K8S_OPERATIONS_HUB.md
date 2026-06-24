@@ -52,6 +52,7 @@
 | POST | `/admin/k8s/cost/snapshot` | 일별 비용 스냅샷 기록 (비용 증가율 추세용, 로컬 누적) |
 | GET | `/admin/k8s/cost/trend` | namespace별 전일 대비 비용 증가/감소 |
 | GET | `/admin/k8s/cost/recommendations` | Rightsizing 권장(request 대비 usage) — down=절감액·up=증설 권고 |
+| GET | `/admin/k8s/slo` | 서비스(namespace)별 SLO·에러버짓 — 가용성/MTTR/다운타임/잔여 버짓 (`days`, `target` 파라미터) |
 | POST | `/admin/k8s/ai/ask` | 자연어 장애 질문 — RCA·이벤트·diff 근거 기반 답변(LLM 미구성 시 근거만) |
 | POST | `/admin/k8s/ai/report` | 클러스터 운영 상태 AI 요약 리포트 |
 | POST | `/admin/k8s/dw/sink` | K8s fact(change/event/health/security/cost/action/metric)를 ClickHouse 적재 (미구성 시 no-op) |

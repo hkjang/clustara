@@ -350,6 +350,7 @@ const adminHTML = `<!doctype html>
       <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
       <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
       <a href="#/k8s-reports" data-tab="k8s-reports">리포트 센터</a>
+      <a href="#/k8s-slo" data-tab="k8s-slo">SLO 센터</a>
       <a href="#/k8s-cost" data-tab="k8s-cost">비용</a>
       <a href="#/k8s-security" data-tab="k8s-security">보안</a>
       <a href="#/k8s-policy" data-tab="k8s-policy">정책 센터</a>
@@ -1169,6 +1170,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-cost': await renderK8sCost(params); break;
           case 'k8s-ai': await renderK8sAI(params); break;
           case 'k8s-reports': await renderK8sReports(params); break;
+          case 'k8s-slo': await renderK8sSLO(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
@@ -7135,6 +7137,59 @@ const adminHTML = `<!doctype html>
         out.innerHTML = (d.llm_available === false ? '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 미구성 — 근거만</div>' : '') +
           (text ? '<div style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px">' + escapeHTML(text) + '</div>' : '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || '') + '</div>');
       } catch (e) { out.innerHTML = '<div class="status error">' + escapeHTML(e.message) + '</div>'; }
+    };
+
+    // ---------- K8s SLO·에러버짓 센터 ----------
+    async function renderK8sSLO(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const days = (params && params.get('days')) || '30';
+      const target = (params && params.get('target')) || '99.9';
+      view.innerHTML = section('K8s SLO·에러버짓 센터', '<div class="empty">불러오는 중...</div>');
+      let clusters, slo;
+      try {
+        const q = '?days=' + encodeURIComponent(days) + '&target=' + encodeURIComponent(target) + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '');
+        [clusters, slo] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/slo' + q),
+        ]);
+      } catch (e) { view.innerHTML = section('K8s SLO·에러버짓 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
+      const svcs = slo.services || [];
+      const rows = svcs.length ? svcs.map(s =>
+        '<tr><td>' + escapeHTML(s.namespace) + (s.breached ? ' <span class="status error" style="font-size:9px">위반</span>' : '') + '</td>' +
+        '<td><strong>' + fmt(s.availability_pct) + '%</strong></td>' +
+        '<td>' + slobar(s.error_budget_remaining_pct) + '</td>' +
+        '<td>' + fmt(s.incidents) + (s.open ? ' (열림 ' + fmt(s.open) + ')' : '') + '</td>' +
+        '<td>' + fmt(s.mttr_minutes) + '분</td>' +
+        '<td>' + fmt(s.downtime_minutes) + '분</td></tr>'
+      ).join('') : '<tr><td colspan="6" class="muted">윈도우 내 인시던트가 없습니다 — 모든 서비스가 목표 충족.</td></tr>';
+
+      view.innerHTML =
+        section('K8s SLO·에러버짓 센터', '<div class="kpis">' +
+          kpi('대상 서비스', fmt(slo.count || 0)) + kpi('SLO 위반', fmt(slo.breached || 0)) +
+          kpi('최저 가용성', fmt(slo.worst_avail_pct || 0) + '%') + kpi('목표', fmt(slo.target_pct || 0) + '%') +
+          kpi('윈도우', fmt(slo.window_days || 0) + '일') + '</div>') +
+        card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<select id="slo-cluster">' + clusterOpts + '</select>' +
+          '목표% <input id="slo-target" value="' + escapeAttr(target) + '" style="width:70px">' +
+          '기간(일) <input id="slo-days" value="' + escapeAttr(days) + '" style="width:60px">' +
+          '<button type="button" onclick="k8sSLOGo()">적용</button></div>') +
+        card('서비스별 SLO (가용성 낮은 순)',
+          '<div class="card-body"><table><thead><tr><th>Namespace</th><th>가용성</th><th>에러버짓 잔여</th><th>인시던트</th><th>MTTR</th><th>다운타임</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        card('', '<div class="card-body"><div class="muted" style="font-size:11px">' + escapeHTML(slo.note || '') + '</div></div>');
+    }
+    function slobar(pct) {
+      const p = Math.max(0, Math.min(100, pct || 0));
+      const col = p <= 0 ? 'var(--bad-ink, #dc2626)' : (p < 25 ? '#d97706' : 'var(--accent)');
+      return '<div style="display:flex;align-items:center;gap:6px"><div style="flex:1;height:8px;background:var(--panel-alt);border-radius:4px;overflow:hidden"><div style="width:' + p + '%;height:100%;background:' + col + '"></div></div><span style="font-size:11px;min-width:38px">' + fmt(p) + '%</span></div>';
+    }
+    window.k8sSLOGo = () => {
+      const cl = document.getElementById('slo-cluster').value;
+      const t = document.getElementById('slo-target').value || '99.9';
+      const d = document.getElementById('slo-days').value || '30';
+      location.hash = '#/k8s-slo?days=' + encodeURIComponent(d) + '&target=' + encodeURIComponent(t) + (cl ? '&cluster_id=' + encodeURIComponent(cl) : '');
     };
 
     // ---------- K8s 그룹·오너십 (K8S-16 / K8S-17) ----------
