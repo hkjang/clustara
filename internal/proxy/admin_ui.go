@@ -337,6 +337,7 @@ const adminHTML = `<!doctype html>
       <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
       <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
       <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
+      <a href="#/k8s-reports" data-tab="k8s-reports">리포트 센터</a>
       <a href="#/k8s-cost" data-tab="k8s-cost">비용</a>
       <a href="#/k8s-security" data-tab="k8s-security">보안</a>
       <a href="#/k8s-policy" data-tab="k8s-policy">정책 센터</a>
@@ -1153,6 +1154,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-capacity': await renderK8sCapacity(params); break;
           case 'k8s-cost': await renderK8sCost(params); break;
           case 'k8s-ai': await renderK8sAI(params); break;
+          case 'k8s-reports': await renderK8sReports(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
@@ -6786,6 +6788,59 @@ const adminHTML = `<!doctype html>
       try {
         const d = await api('/admin/k8s/ai/report' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : ''), { method: 'POST', body: '{}' });
         k8sAIRender(d);
+      } catch (e) { out.innerHTML = '<div class="status error">' + escapeHTML(e.message) + '</div>'; }
+    };
+
+    // ---------- K8s 리포트 센터 (일간 장애·주간 비용·월간 안정성) ----------
+    async function renderK8sReports(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('K8s 리포트 센터', '<div class="empty">불러오는 중...</div>');
+      let clusters, rep;
+      try {
+        [clusters, rep] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/reports' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+        ]);
+      } catch (e) { view.innerHTML = section('K8s 리포트 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
+      const sm = rep.summary || {}, df = rep.daily_failures || {}, wc = rep.weekly_cost || {}, ms = rep.monthly_stability || {};
+      const condRows = Object.entries(df.conditions || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => '<tr><td>' + escapeHTML(k) + '</td><td>' + fmt(v) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">없음</td></tr>';
+      const incRows = (wc.increases || []).length ? (wc.increases || []).map(x => '<tr><td>' + escapeHTML(x.key) + '</td><td>' + fmt(Math.round(x.previous_krw)) + '</td><td>' + fmt(Math.round(x.current_krw)) + '</td><td>+' + fmt(Math.round(x.delta_krw)) + ' (' + fmt(x.pct_change) + '%)</td></tr>').join('') : '<tr><td colspan="4" class="muted">증가 없음(스냅샷 2일 이상 필요)</td></tr>';
+
+      view.innerHTML =
+        section('K8s 리포트 센터', '<div class="kpis">' +
+          kpi('워크로드', fmt(sm.workloads || 0)) + kpi('high 장애', fmt(sm.high_failures || 0)) +
+          kpi('보안 점수', fmt(sm.security_score || 0)) + kpi('미해결 액션', fmt(sm.open_actions || 0)) +
+          kpi('월 비용(KRW)', fmt(Math.round(sm.monthly_cost_krw || 0))) + '</div>') +
+        card('필터', '<div class="card-body"><select id="k8srep-cluster" onchange="k8sReportsGo()">' + clusterOpts + '</select> ' +
+          '<button type="button" class="secondary" onclick="k8sReportsNarrative()">AI 내러티브 생성</button><div id="rep-ai" style="margin-top:8px"></div></div>') +
+        card('일간 — 장애 요약',
+          '<div class="card-body"><table><thead><tr><th>조건</th><th>건수</th></tr></thead><tbody>' + condRows + '</tbody></table>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">high/critical ' + fmt(df.high_count || 0) + '건 · 미해결 액션 ' + fmt(df.open_actions || 0) + '건</div></div>') +
+        card('주간 — 비용 요약',
+          '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:4px">월 추정 ' + fmt(Math.round(wc.total_monthly_krw || 0)) + ' KRW · 최근 7일 변경 ' + fmt(wc.recent_changes_7d || 0) + '건</div>' +
+          '<table><thead><tr><th>Namespace</th><th>전일</th><th>현재</th><th>증가</th></tr></thead><tbody>' + incRows + '</tbody></table></div>') +
+        card('월간 — 안정성(SLO)',
+          '<div class="card-body"><div class="kpis">' +
+          kpi('안정성 점수', fmt(ms.score || 0)) + kpi('정상', fmt(ms.healthy || 0)) + kpi('저하', fmt(ms.degraded || 0)) + kpi('위험', fmt(ms.critical || 0)) +
+          '</div><div class="muted" style="font-size:11px">health_score 기준: 정상≥80, 저하 50~79, 위험<50</div></div>') +
+        card('', '<div class="card-body"><div class="muted" style="font-size:11px">' + escapeHTML(rep.note || '') + '</div></div>');
+    }
+    window.k8sReportsGo = () => {
+      const cl = document.getElementById('k8srep-cluster').value;
+      location.hash = '#/k8s-reports' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+    window.k8sReportsNarrative = async () => {
+      const out = document.getElementById('rep-ai');
+      out.innerHTML = '<div class="muted">생성 중...</div>';
+      const cl = document.getElementById('k8srep-cluster').value;
+      try {
+        const d = await api('/admin/k8s/ai/report' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : ''), { method: 'POST', body: '{}' });
+        const text = d.report || '';
+        out.innerHTML = (d.llm_available === false ? '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 미구성 — 근거만</div>' : '') +
+          (text ? '<div style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px">' + escapeHTML(text) + '</div>' : '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || '') + '</div>');
       } catch (e) { out.innerHTML = '<div class="status error">' + escapeHTML(e.message) + '</div>'; }
     };
 
