@@ -1975,6 +1975,33 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			last_seen TEXT NOT NULL,
 			PRIMARY KEY (cluster_id, agent_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_watch_events (
+			id TEXT PRIMARY KEY,
+			event_key TEXT NOT NULL DEFAULT '',
+			cluster_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			event_type TEXT NOT NULL DEFAULT '',
+			resource_version TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			namespace TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			uid TEXT NOT NULL DEFAULT '',
+			observed_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_watch_events_key ON k8s_watch_events(event_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_watch_events_cluster_time ON k8s_watch_events(cluster_id, observed_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_collector_offsets (
+			cluster_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			resource_kind TEXT NOT NULL,
+			last_resource_version TEXT NOT NULL DEFAULT '',
+			last_observed_at TEXT NOT NULL DEFAULT '',
+			events_seen INTEGER NOT NULL DEFAULT 0,
+			duplicate_events INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, agent_id, resource_kind)
+		)`,
 	}
 
 	for _, statement := range statements {

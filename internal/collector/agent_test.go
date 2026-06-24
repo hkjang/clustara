@@ -41,11 +41,25 @@ func TestApplyAgentBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Upserted != 2 || res.Revisions != 2 {
+	if res.Upserted != 2 || res.Revisions != 2 || res.WatchEvents != 2 || res.DuplicateEvents != 0 {
 		t.Fatalf("batch1 upserted/revisions: %+v", res)
 	}
 	if got, _ := db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: "c1"}); len(got) != 2 {
 		t.Fatalf("expected 2 inventory items, got %d", len(got))
+	}
+	// Retrying the exact same resourceVersion is idempotent.
+	res, err = ApplyAgentBatch(ctx, db, AgentBatch{
+		ClusterID: "c1", AgentID: "a1", Version: "v1", ResourceVersion: "100", WatchLagMS: 45, EventsTotal: 4,
+		Events: []AgentEvent{
+			{Type: AgentAdded, Object: pod("p1", map[string]any{"replicas": 1})},
+			{Type: AgentAdded, Object: pod("p2", nil)},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Upserted != 0 || res.Revisions != 0 || res.WatchEvents != 0 || res.DuplicateEvents != 2 {
+		t.Fatalf("retry should be deduped: %+v", res)
 	}
 
 	// Batch 2: MODIFY p1 (spec change → new revision), DELETE p2.
@@ -59,7 +73,7 @@ func TestApplyAgentBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Upserted != 1 || res.Deleted != 1 || res.Revisions != 1 {
+	if res.Upserted != 1 || res.Deleted != 1 || res.Revisions != 1 || res.WatchEvents != 2 {
 		t.Fatalf("batch2 result: %+v", res)
 	}
 	got, _ := db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: "c1"})
@@ -71,6 +85,10 @@ func TestApplyAgentBatch(t *testing.T) {
 	hbs, _ := db.ListK8sAgentHeartbeats(ctx, "c1")
 	if len(hbs) != 1 || hbs[0].LastResourceVersion != "150" || hbs[0].Reconnects != 1 || hbs[0].EventsReceived != 4 {
 		t.Fatalf("heartbeat not updated: %+v", hbs)
+	}
+	offsets, _ := db.ListK8sCollectorOffsets(ctx, "c1")
+	if len(offsets) == 0 {
+		t.Fatal("expected collector offsets to be recorded")
 	}
 }
 

@@ -7279,7 +7279,7 @@ const adminHTML = `<!doctype html>
         '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
       const agents = st.agents || [];
       const rows = agents.length ? agents.map(a =>
-        '<tr><td>' + (a.stale ? '🔴 stale' : '🟢 live') + '</td>' +
+        '<tr><td>' + (a.stale ? '<span class="status error" style="font-size:10px">stale</span>' : '<span class="status" style="font-size:10px">live</span>') + '</td>' +
         '<td>' + escapeHTML(a.cluster_id) + '</td><td>' + escapeHTML(a.agent_id) + '</td>' +
         '<td>' + escapeHTML(a.version || '-') + '</td>' +
         '<td>' + escapeHTML(a.last_resource_version || '-') + '</td>' +
@@ -7289,15 +7289,49 @@ const adminHTML = `<!doctype html>
         '<td>' + (a.age_seconds >= 0 ? fmt(a.age_seconds) + 's 전' : '-') + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(a.last_error || '') + '</td></tr>'
       ).join('') : '<tr><td colspan="10" class="muted">등록된 실시간 agent가 없습니다 — 주기 수집(snapshot)으로 동작 중입니다.</td></tr>';
+      const offsets = st.offsets || [];
+      const offsetRows = offsets.length ? offsets.map(o =>
+        '<tr><td>' + escapeHTML(o.cluster_id) + '</td><td>' + escapeHTML(o.agent_id) + '</td>' +
+        '<td>' + escapeHTML(o.resource_kind || '-') + '</td>' +
+        '<td>' + escapeHTML(o.last_resource_version || '-') + '</td>' +
+        '<td>' + fmt(o.events_seen || 0) + '</td><td>' + fmt(o.duplicate_events || 0) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(o.updated_at || o.last_observed_at) + '</td></tr>'
+      ).join('') : '<tr><td colspan="7" class="muted">저장된 resourceVersion checkpoint가 없습니다.</td></tr>';
+      const recent = st.recent_events || [];
+      const eventRows = recent.length ? recent.map(e =>
+        '<tr><td class="muted" style="font-size:11px">' + ago(e.observed_at || e.created_at) + '</td>' +
+        '<td><span class="status ' + (e.event_type === 'DELETED' ? 'warn' : '') + '" style="font-size:10px">' + escapeHTML(e.event_type || '') + '</span></td>' +
+        '<td>' + escapeHTML((e.namespace || '-') + '/' + e.kind + '/' + e.name) + '</td>' +
+        '<td>' + escapeHTML(e.resource_version || '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(e.agent_id || '') + '</td></tr>'
+      ).join('') : '<tr><td colspan="5" class="muted">최근 watch 이벤트가 없습니다.</td></tr>';
+      const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
+      const agentGuide =
+        '<div class="card-body">' +
+        '<div class="muted" style="font-size:12px;margin-bottom:8px">agent는 클러스터 내부에서 get/list/watch만 수행하고 Clustara로 delta batch를 보냅니다. 값 치환 전 샘플 매니페스트를 그대로 apply하지 마세요.</div>' +
+        '<table><thead><tr><th>환경</th><th>CLUSTARA_URL</th><th>이미지</th><th>비고</th></tr></thead><tbody>' +
+        '<tr><td>minikube</td><td><code>http://host.minikube.internal:9090</code></td><td><code>clustara:dev</code> + <code>minikube image load</code></td><td class="muted" style="font-size:11px">Clustara가 이 PC에서 실행 중일 때 Pod가 PC로 접근하는 주소입니다. 현재 dev port가 다르면 9090을 바꾸세요.</td></tr>' +
+        '<tr><td>운영망 K8s</td><td><code>https://clustara.example.com</code></td><td>레지스트리에 push된 운영 이미지</td><td class="muted" style="font-size:11px">내부 DNS/Ingress와 Secret 또는 ExternalSecret으로 토큰을 주입하세요.</td></tr>' +
+        '</tbody></table>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">' +
+        '<div style="flex:1;min-width:280px"><strong style="font-size:12px">minikube 빠른 적용</strong><pre>docker build -t clustara:dev .\nminikube image load clustara:dev\nCopy-Item deploy/k8s/clustara-agent.yaml deploy/k8s/clustara-agent.local.yaml\n# cluster_id: ' + escapeHTML(selectedCluster) + '\n# image, CLUSTARA_URL, token placeholder 치환 후:\nkubectl apply -f deploy/k8s/clustara-agent.local.yaml</pre></div>' +
+        '<div style="flex:1;min-width:280px"><strong style="font-size:12px">운영망 적용</strong><pre>kubectl create ns clustara-system --dry-run=client -o yaml | kubectl apply -f -\nkubectl -n clustara-system create secret generic clustara-agent-auth --from-literal=token=$CLUSTARA_TOKEN --dry-run=client -o yaml | kubectl apply -f -\n# deploy/k8s/clustara-agent.yaml의 URL/image/cluster_id 치환 후:\nkubectl apply -f deploy/k8s/clustara-agent.yaml</pre></div>' +
+        '</div><div class="muted" style="font-size:11px;margin-top:8px">상세 절차: <code>docs/K8S_AGENT.md</code> · 상태 확인: <code>kubectl -n clustara-system logs deploy/clustara-agent --tail=100</code></div>' +
+        '</div>';
 
       view.innerHTML =
         section('K8s Collector 상태', '<div class="kpis">' +
           kpi('agent', fmt(st.count || 0)) + kpi('stale(오프라인)', fmt(st.stale || 0)) +
           kpi('live', fmt((st.count || 0) - (st.stale || 0))) + kpi('stale 기준', fmt(st.stale_after_secs || 0) + 's') + '</div>') +
         card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
+        card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
           '<div class="card-body"><table><thead><tr><th>상태</th><th>클러스터</th><th>Agent</th><th>버전</th><th>resourceVersion</th><th>watch lag</th><th>수신 이벤트</th><th>재연결</th><th>마지막 수신</th><th>오류</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          '<div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(st.note || '') + ' Agent는 <code>POST /admin/k8s/agent/events</code>로 watch delta(ADDED/MODIFIED/DELETED)와 하트비트를 전송합니다. 미배포 시 주기 수집(snapshot)이 폴백으로 동작합니다.</div></div>');
+          '<div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(st.note || '') + ' Agent는 <code>POST /admin/k8s/agent/events</code>로 watch delta(ADDED/MODIFIED/DELETED)와 하트비트를 전송합니다. 미배포 시 주기 수집(snapshot)이 폴백으로 동작합니다.</div></div>') +
+        card('resourceVersion Checkpoint',
+          '<div class="card-body"><table><thead><tr><th>클러스터</th><th>Agent</th><th>Kind</th><th>resourceVersion</th><th>수신</th><th>중복</th><th>갱신</th></tr></thead><tbody>' + offsetRows + '</tbody></table></div>') +
+        card('최근 Watch 이벤트',
+          '<div class="card-body"><table><thead><tr><th>시간</th><th>Type</th><th>리소스</th><th>resourceVersion</th><th>Agent</th></tr></thead><tbody>' + eventRows + '</tbody></table></div>');
     }
     window.k8sCollectorGo = () => {
       const cl = document.getElementById('col-cluster').value;

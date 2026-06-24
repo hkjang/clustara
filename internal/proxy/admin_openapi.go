@@ -325,6 +325,8 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/clusters/{id}/test", []string{"post"}, "k8s", "Test Kubernetes API connectivity", false},
 	{"/admin/k8s/clusters/{id}/collect", []string{"post"}, "k8s", "Collect live Kubernetes inventory/events/metrics", false},
 	{"/admin/k8s/snapshot", []string{"post"}, "k8s", "Ingest a Kubernetes inventory/event/metric snapshot", false},
+	{"/admin/k8s/agent/events", []string{"post"}, "k8s", "Ingest realtime Kubernetes watch delta events from an agent", false},
+	{"/admin/k8s/agent/status", []string{"get"}, "k8s", "Realtime collector agent heartbeat, offsets, and recent watch events", false},
 	{"/admin/k8s/inventory", []string{"get"}, "k8s", "List Kubernetes inventory resources", false},
 	{"/admin/k8s/events", []string{"get"}, "k8s", "List Kubernetes events", false},
 	{"/admin/k8s/findings", []string{"get"}, "k8s", "List Kubernetes health/security findings", false},

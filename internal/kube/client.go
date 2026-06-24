@@ -124,39 +124,16 @@ func (c *HTTPClient) Probe(ctx context.Context) (ProbeResult, error) {
 
 func (c *HTTPClient) Collect(ctx context.Context) (CollectResult, error) {
 	out := CollectResult{Resources: []store.K8sInventoryItem{}, Events: []store.K8sEvent{}, Metrics: []store.K8sMetricSample{}}
-	for _, target := range []struct {
-		path       string
-		kind       string
-		apiVersion string
-	}{
-		{"/api/v1/namespaces", "Namespace", "v1"},
-		{"/api/v1/nodes", "Node", "v1"},
-		{"/api/v1/pods", "Pod", "v1"},
-		{"/apis/apps/v1/deployments", "Deployment", "apps/v1"},
-		{"/apis/apps/v1/statefulsets", "StatefulSet", "apps/v1"},
-		{"/apis/apps/v1/daemonsets", "DaemonSet", "apps/v1"},
-		{"/api/v1/services", "Service", "v1"},
-		{"/apis/networking.k8s.io/v1/ingresses", "Ingress", "networking.k8s.io/v1"},
-		{"/apis/networking.k8s.io/v1/networkpolicies", "NetworkPolicy", "networking.k8s.io/v1"},
-		{"/api/v1/persistentvolumeclaims", "PersistentVolumeClaim", "v1"},
-		{"/api/v1/secrets", "Secret", "v1"},
-		{"/apis/batch/v1/jobs", "Job", "batch/v1"},
-		{"/apis/batch/v1/cronjobs", "CronJob", "batch/v1"},
-		{"/apis/autoscaling/v2/horizontalpodautoscalers", "HorizontalPodAutoscaler", "autoscaling/v2"},
-		{"/apis/rbac.authorization.k8s.io/v1/roles", "Role", "rbac.authorization.k8s.io/v1"},
-		{"/apis/rbac.authorization.k8s.io/v1/clusterroles", "ClusterRole", "rbac.authorization.k8s.io/v1"},
-		{"/apis/rbac.authorization.k8s.io/v1/rolebindings", "RoleBinding", "rbac.authorization.k8s.io/v1"},
-		{"/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", "ClusterRoleBinding", "rbac.authorization.k8s.io/v1"},
-	} {
-		items, err := c.list(ctx, target.path)
+	for _, target := range DefaultInventoryTargets() {
+		items, err := c.list(ctx, target.Path)
 		if err != nil {
-			if isOptionalAPI(target.path) {
+			if target.Optional || isOptionalAPI(target.Path) {
 				continue
 			}
 			return out, err
 		}
 		for _, obj := range items {
-			out.Resources = append(out.Resources, inventoryFromObject(target.kind, target.apiVersion, obj))
+			out.Resources = append(out.Resources, inventoryFromObject(target.Kind, target.APIVersion, obj))
 		}
 	}
 	events, err := c.list(ctx, "/api/v1/events")

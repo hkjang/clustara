@@ -41,7 +41,13 @@ func (s *Server) handleK8sAgentEvents(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "k8s_agent_batch_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	opened, updated, evaluated, _ := s.scanK8sIncidentsForCluster(r.Context(), batch.ClusterID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result": result,
+		"incidents": map[string]int{
+			"opened": opened, "updated": updated, "evaluated": evaluated,
+		},
+	})
 }
 
 // handleK8sAgentStatus reports collector agent liveness + watch telemetry, flagging stale agents.
@@ -80,8 +86,12 @@ func (s *Server) handleK8sAgentStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, agentView{K8sAgentHeartbeat: h, Stale: isStale, AgeSeconds: age})
 	}
+	offsets, _ := s.db.ListK8sCollectorOffsets(r.Context(), r.URL.Query().Get("cluster_id"))
+	recent, _ := s.db.ListK8sWatchEvents(r.Context(), r.URL.Query().Get("cluster_id"), 50)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agents":           views,
+		"offsets":          offsets,
+		"recent_events":    recent,
 		"count":            len(views),
 		"stale":            stale,
 		"stale_after_secs": int(agentStaleAfter.Seconds()),

@@ -16,12 +16,15 @@ ARG TARGETARCH=amd64
 ARG VERSION=dev
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/clustara ./cmd/clustara
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags "-s -w" -o /out/clustara-agent ./cmd/clustara-agent
 
 FROM gcr.io/distroless/static:nonroot AS runtime
 WORKDIR /app
 USER nonroot:nonroot
 
 COPY --from=build /out/clustara /app/clustara
+COPY --from=build /out/clustara-agent /app/clustara-agent
 
 ENV LISTEN_ADDR=:8080 \
     DB_DRIVER=sqlite \

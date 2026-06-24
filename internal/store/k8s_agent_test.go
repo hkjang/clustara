@@ -77,3 +77,55 @@ func TestDeleteK8sInventoryItem(t *testing.T) {
 		t.Fatalf("expected 0 items after delete, got %d", len(got))
 	}
 }
+
+func TestK8sWatchEventsAndOffsets(t *testing.T) {
+	ctx := context.Background()
+	db := openK8sAgentTestStore(t)
+
+	event := K8sWatchEvent{
+		ID: "we1", EventKey: "c1/a1/100/MODIFIED/Pod/ns/p1", ClusterID: "c1", AgentID: "a1",
+		EventType: "MODIFIED", ResourceVersion: "100", Kind: "Pod", Namespace: "ns", Name: "p1",
+		ObservedAt: "2026-06-24T00:00:00Z", CreatedAt: "2026-06-24T00:00:00Z",
+	}
+	inserted, err := db.InsertK8sWatchEvent(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inserted {
+		t.Fatal("first watch event insert should be accepted")
+	}
+	dupe, err := db.InsertK8sWatchEvent(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dupe {
+		t.Fatal("duplicate watch event should be ignored by event_key")
+	}
+	recent, err := db.ListK8sWatchEvents(ctx, "c1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 1 || recent[0].ResourceVersion != "100" {
+		t.Fatalf("unexpected watch events: %+v", recent)
+	}
+
+	if err := db.UpsertK8sCollectorOffset(ctx, K8sCollectorOffset{
+		ClusterID: "c1", AgentID: "a1", ResourceKind: "Pod", LastResourceVersion: "100",
+		LastObservedAt: "2026-06-24T00:00:00Z", EventsSeen: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertK8sCollectorOffset(ctx, K8sCollectorOffset{
+		ClusterID: "c1", AgentID: "a1", ResourceKind: "Pod", LastResourceVersion: "120",
+		LastObservedAt: "2026-06-24T00:01:00Z", EventsSeen: 2, DuplicateEvents: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	offsets, err := db.ListK8sCollectorOffsets(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offsets) != 1 || offsets[0].LastResourceVersion != "120" || offsets[0].EventsSeen != 3 || offsets[0].DuplicateEvents != 1 {
+		t.Fatalf("offset should accumulate counters and advance rv: %+v", offsets)
+	}
+}

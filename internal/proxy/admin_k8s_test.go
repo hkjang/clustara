@@ -590,6 +590,112 @@ func TestK8sResourceGraphEndpointBuildsBlastRadius(t *testing.T) {
 	}
 }
 
+func TestK8sAgentEventsUpdateInventoryStatusAndIncidents(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	reg := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "agent", "server_url": "https://k8s.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1",
+	})
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	json.NewDecoder(reg.Body).Decode(&created)
+	reg.Body.Close()
+	cid := created.Cluster.ID
+
+	batch := map[string]any{
+		"cluster_id":       cid,
+		"agent_id":         "agent-1",
+		"version":          "test",
+		"resource_version": "100",
+		"observed_at":      "2026-06-24T01:00:00Z",
+		"watch_lag_ms":     12,
+		"events_total":     1,
+		"events": []map[string]any{{
+			"type": "ADDED",
+			"object": map[string]any{
+				"kind": "Pod", "namespace": "prod", "name": "api-1", "status": "CrashLoopBackOff",
+			},
+		}},
+		"k8s_events": []map[string]any{{
+			"namespace": "prod", "involved_kind": "Pod", "involved_name": "api-1",
+			"type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container",
+		}},
+	}
+	resp := postJSON(t, proxy.URL+"/admin/k8s/agent/events", "", batch)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("agent events status=%d body=%s", resp.StatusCode, body)
+	}
+	var applied struct {
+		Result struct {
+			Upserted    int `json:"upserted"`
+			WatchEvents int `json:"watch_events"`
+		} `json:"result"`
+		Incidents struct {
+			Opened int `json:"opened"`
+		} `json:"incidents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Result.Upserted != 1 || applied.Result.WatchEvents != 1 || applied.Incidents.Opened != 1 {
+		t.Fatalf("agent batch should update inventory and open incident: %+v", applied)
+	}
+
+	lr, _ := http.Get(proxy.URL + "/admin/k8s/incidents?cluster_id=" + cid)
+	var list struct {
+		Incidents []store.K8sIncident `json:"incidents"`
+	}
+	json.NewDecoder(lr.Body).Decode(&list)
+	lr.Body.Close()
+	if len(list.Incidents) != 1 {
+		t.Fatalf("expected incident from realtime batch, got %+v", list.Incidents)
+	}
+
+	sr, _ := http.Get(proxy.URL + "/admin/k8s/agent/status?cluster_id=" + cid)
+	var status struct {
+		Agents       []map[string]any           `json:"agents"`
+		Offsets      []store.K8sCollectorOffset `json:"offsets"`
+		RecentEvents []store.K8sWatchEvent      `json:"recent_events"`
+	}
+	json.NewDecoder(sr.Body).Decode(&status)
+	sr.Body.Close()
+	if len(status.Agents) != 1 || len(status.Offsets) == 0 || len(status.RecentEvents) != 1 {
+		t.Fatalf("agent status should expose heartbeat, offsets and recent events: %+v", status)
+	}
+
+	dupe := postJSON(t, proxy.URL+"/admin/k8s/agent/events", "", batch)
+	defer dupe.Body.Close()
+	var dupeResp struct {
+		Result struct {
+			Upserted        int `json:"upserted"`
+			DuplicateEvents int `json:"duplicate_events"`
+		} `json:"result"`
+		Incidents struct {
+			Opened int `json:"opened"`
+		} `json:"incidents"`
+	}
+	if err := json.NewDecoder(dupe.Body).Decode(&dupeResp); err != nil {
+		t.Fatal(err)
+	}
+	if dupeResp.Result.Upserted != 0 || dupeResp.Result.DuplicateEvents != 1 || dupeResp.Incidents.Opened != 0 {
+		t.Fatalf("duplicate watch event should not reapply: %+v", dupeResp)
+	}
+}
+
 func hasGraphAPIEdge(edges []struct {
 	Relation string `json:"relation"`
 }, relation string) bool {

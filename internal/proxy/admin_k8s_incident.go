@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -39,19 +40,27 @@ func (s *Server) handleK8sIncidents(w http.ResponseWriter, r *http.Request) {
 // POST /admin/k8s/incidents  (or /incidents/scan)
 func (s *Server) scanK8sIncidents(w http.ResponseWriter, r *http.Request) {
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 4000})
+	opened, updated, evaluated, err := s.scanK8sIncidentsForCluster(r.Context(), clusterID)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
 	}
-	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 1000)
-	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Limit: 2000})
+	s.auditAdmin(r, "k8s.incident.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "opened": opened, "updated": updated}))
+	writeJSON(w, http.StatusOK, map[string]any{"opened": opened, "updated": updated, "evaluated": evaluated})
+}
+
+func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID string) (opened, updated, evaluated int, err error) {
+	items, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: clusterID, Limit: 4000})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	events, _ := s.db.ListK8sEvents(ctx, clusterID, 1000)
+	revisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Limit: 2000})
 	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
 	drafts := analyzer.BuildIncidents(items, rca, events)
 
-	opened, updated := 0, 0
 	for _, d := range drafts {
-		_, isNew, err := s.db.UpsertK8sIncidentByKey(r.Context(), store.K8sIncident{
+		_, isNew, err := s.db.UpsertK8sIncidentByKey(ctx, store.K8sIncident{
 			DedupKey: d.Key, ClusterID: d.ClusterID, Namespace: d.Namespace, Kind: d.Kind, Name: d.Name,
 			Condition: d.Condition, Severity: d.Severity, Title: d.Title, Evidence: d.Evidence,
 		}, newID)
@@ -64,8 +73,7 @@ func (s *Server) scanK8sIncidents(w http.ResponseWriter, r *http.Request) {
 			updated++
 		}
 	}
-	s.auditAdmin(r, "k8s.incident.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "opened": opened, "updated": updated}))
-	writeJSON(w, http.StatusOK, map[string]any{"opened": opened, "updated": updated, "evaluated": len(drafts)})
+	return opened, updated, len(drafts), nil
 }
 
 // handleK8sIncidentByID returns an incident with related actions, or resolves it.

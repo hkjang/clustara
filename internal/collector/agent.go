@@ -19,8 +19,9 @@ const (
 
 // AgentEvent is one watch delta: a verb plus the affected object (inventory item shape).
 type AgentEvent struct {
-	Type   string                 `json:"type"`
-	Object store.K8sInventoryItem `json:"object"`
+	Type            string                 `json:"type"`
+	ResourceVersion string                 `json:"resource_version"`
+	Object          store.K8sInventoryItem `json:"object"`
 }
 
 // AgentBatch is a batch of watch deltas plus the agent's heartbeat telemetry, posted by an
@@ -41,14 +42,16 @@ type AgentBatch struct {
 
 // AgentApplyResult summarizes what a batch changed.
 type AgentApplyResult struct {
-	ClusterID  string `json:"cluster_id"`
-	AgentID    string `json:"agent_id"`
-	Upserted   int    `json:"upserted"`
-	Deleted    int    `json:"deleted"`
-	Revisions  int    `json:"revisions"`
-	Events     int    `json:"events"`
-	Skipped    int    `json:"skipped"`
-	ObservedAt string `json:"observed_at"`
+	ClusterID       string `json:"cluster_id"`
+	AgentID         string `json:"agent_id"`
+	Upserted        int    `json:"upserted"`
+	Deleted         int    `json:"deleted"`
+	Revisions       int    `json:"revisions"`
+	Events          int    `json:"events"`
+	WatchEvents     int    `json:"watch_events"`
+	DuplicateEvents int    `json:"duplicate_events"`
+	Skipped         int    `json:"skipped"`
+	ObservedAt      string `json:"observed_at"`
 }
 
 // ApplyAgentBatch applies realtime watch deltas: ADDED/MODIFIED upsert inventory (+ a revision when
@@ -72,6 +75,9 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 	result := AgentApplyResult{ClusterID: batch.ClusterID, AgentID: batch.AgentID, ObservedAt: batch.ObservedAt}
 	analyzedResources := []store.K8sInventoryItem{}
 	analyzedEvents := []store.K8sEvent{}
+	seenByKind := map[string]int64{}
+	dupByKind := map[string]int64{}
+	rvByKind := map[string]string{}
 
 	for _, ev := range batch.Events {
 		item := ev.Object
@@ -82,13 +88,49 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 			continue
 		}
 		item.ClusterID = batch.ClusterID
-		switch strings.ToUpper(strings.TrimSpace(ev.Type)) {
+		eventType := strings.ToUpper(strings.TrimSpace(ev.Type))
+		if eventType == "" {
+			eventType = AgentModified
+		}
+		if eventType != AgentAdded && eventType != AgentModified && eventType != AgentDeleted {
+			result.Skipped++
+			continue
+		}
+		rv := first(ev.ResourceVersion, batch.ResourceVersion)
+		if rv != "" {
+			rvByKind[item.Kind] = rv
+		}
+		inserted, err := db.InsertK8sWatchEvent(ctx, store.K8sWatchEvent{
+			ID:              newID("k8swatch"),
+			EventKey:        watchEventKey(batch, ev, item, eventType, rv),
+			ClusterID:       batch.ClusterID,
+			AgentID:         batch.AgentID,
+			EventType:       eventType,
+			ResourceVersion: rv,
+			Kind:            item.Kind,
+			Namespace:       item.Namespace,
+			Name:            item.Name,
+			UID:             item.UID,
+			ObservedAt:      first(item.ObservedAt, batch.ObservedAt),
+			CreatedAt:       batch.ObservedAt,
+		})
+		if err != nil {
+			return result, err
+		}
+		if !inserted {
+			result.DuplicateEvents++
+			dupByKind[item.Kind]++
+			continue
+		}
+		result.WatchEvents++
+		seenByKind[item.Kind]++
+		switch eventType {
 		case AgentDeleted:
 			if err := db.DeleteK8sInventoryItem(ctx, batch.ClusterID, item.Kind, item.Namespace, item.Name); err != nil {
 				return result, err
 			}
 			result.Deleted++
-		case AgentAdded, AgentModified, "":
+		case AgentAdded, AgentModified:
 			item.ID = first(item.ID, newID("k8sres"))
 			item.ObservedAt = first(item.ObservedAt, batch.ObservedAt)
 			analyzer.ScoreResource(&item)
@@ -111,8 +153,6 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 				result.Revisions++
 			}
 			analyzedResources = append(analyzedResources, item)
-		default:
-			result.Skipped++
 		}
 	}
 
@@ -154,5 +194,58 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 	}); err != nil {
 		return result, err
 	}
+	if err := db.UpsertK8sCollectorOffset(ctx, store.K8sCollectorOffset{
+		ClusterID:           batch.ClusterID,
+		AgentID:             batch.AgentID,
+		ResourceKind:        "__batch__",
+		LastResourceVersion: batch.ResourceVersion,
+		LastObservedAt:      batch.ObservedAt,
+		EventsSeen:          int64(result.WatchEvents),
+		DuplicateEvents:     int64(result.DuplicateEvents),
+		UpdatedAt:           batch.ObservedAt,
+	}); err != nil {
+		return result, err
+	}
+	for kind, n := range seenByKind {
+		if err := db.UpsertK8sCollectorOffset(ctx, store.K8sCollectorOffset{
+			ClusterID:           batch.ClusterID,
+			AgentID:             batch.AgentID,
+			ResourceKind:        kind,
+			LastResourceVersion: first(rvByKind[kind], batch.ResourceVersion),
+			LastObservedAt:      batch.ObservedAt,
+			EventsSeen:          n,
+			DuplicateEvents:     dupByKind[kind],
+			UpdatedAt:           batch.ObservedAt,
+		}); err != nil {
+			return result, err
+		}
+		delete(dupByKind, kind)
+	}
+	for kind, n := range dupByKind {
+		if err := db.UpsertK8sCollectorOffset(ctx, store.K8sCollectorOffset{
+			ClusterID:           batch.ClusterID,
+			AgentID:             batch.AgentID,
+			ResourceKind:        kind,
+			LastResourceVersion: first(rvByKind[kind], batch.ResourceVersion),
+			LastObservedAt:      batch.ObservedAt,
+			DuplicateEvents:     n,
+			UpdatedAt:           batch.ObservedAt,
+		}); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
+}
+
+func watchEventKey(batch AgentBatch, ev AgentEvent, item store.K8sInventoryItem, eventType, rv string) string {
+	stableVersion := first(rv, item.UID, item.ObservedAt, batch.ObservedAt)
+	return strings.Join([]string{
+		batch.ClusterID,
+		batch.AgentID,
+		stableVersion,
+		eventType,
+		item.Kind,
+		item.Namespace,
+		item.Name,
+	}, "|")
 }

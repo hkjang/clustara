@@ -155,12 +155,12 @@ var capabilityRegistry = []Capability{
 	},
 	{
 		Key: "k8s_operations", Name: "K8s 운영 허브", Group: "ops",
-		Description: "클러스터 등록, 리소스 인벤토리, Event/Metric 스냅샷 적재, health/security finding, 승인형 액션 요청.",
-		APIs:        []string{"GET/POST /admin/k8s/clusters", "POST /admin/k8s/snapshot", "GET /admin/k8s/inventory", "GET /admin/k8s/findings", "GET/POST /admin/k8s/actions"},
-		UITabs:      []string{"k8s"},
+		Description: "클러스터 등록, 리소스 인벤토리, Event/Metric 스냅샷 적재, realtime watch delta 수신, health/security finding, 승인형 액션 요청.",
+		APIs:        []string{"GET/POST /admin/k8s/clusters", "POST /admin/k8s/snapshot", "POST /admin/k8s/agent/events", "GET /admin/k8s/agent/status", "GET /admin/k8s/inventory", "GET /admin/k8s/findings", "GET/POST /admin/k8s/actions"},
+		UITabs:      []string{"k8s", "k8s-collector"},
 		Scopes:      []string{"admin:read", "admin:write"},
-		Tables:      []string{"k8s_clusters", "k8s_inventory", "k8s_events", "k8s_security_findings", "k8s_action_requests", "k8s_collector_status"},
-		Workers:     []string{"k8s_snapshot_ingest", "k8s_analyzer"},
+		Tables:      []string{"k8s_clusters", "k8s_inventory", "k8s_events", "k8s_watch_events", "k8s_agent_heartbeats", "k8s_collector_offsets", "k8s_security_findings", "k8s_action_requests", "k8s_collector_status"},
+		Workers:     []string{"k8s_snapshot_ingest", "k8s_agent_delta_ingest", "k8s_analyzer"},
 	},
 	{
 		Key: "ops_visibility", Name: "운영 가시성", Group: "ops",
