@@ -6796,11 +6796,13 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 리포트 센터', '<div class="empty">불러오는 중...</div>');
-      let clusters, rep;
+      let clusters, rep, dw;
       try {
-        [clusters, rep] = await Promise.all([
+        const cq = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+        [clusters, rep, dw] = await Promise.all([
           api('/admin/k8s/clusters'),
-          api('/admin/k8s/reports' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/reports' + cq),
+          api('/admin/k8s/dw/report?kind=cost' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ available: false })),
         ]);
       } catch (e) { view.innerHTML = section('K8s 리포트 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -6826,6 +6828,13 @@ const adminHTML = `<!doctype html>
           '<div class="card-body"><div class="kpis">' +
           kpi('안정성 점수', fmt(ms.score || 0)) + kpi('정상', fmt(ms.healthy || 0)) + kpi('저하', fmt(ms.degraded || 0)) + kpi('위험', fmt(ms.critical || 0)) +
           '</div><div class="muted" style="font-size:11px">health_score 기준: 정상≥80, 저하 50~79, 위험<50</div></div>') +
+        (function () {
+          if (!dw || !dw.available) {
+            return card('장기 추세 (ClickHouse)', '<div class="card-body"><p class="muted" style="font-size:12px">ClickHouse 미구성 — 장기 추세는 비활성입니다. 위 일간/주간/월간 리포트는 로컬 데이터로 동작합니다.</p></div>');
+          }
+          const rows = (dw.data || []).slice(-30).map(r => '<tr><td>' + escapeHTML(String(r.day)) + '</td><td>' + escapeHTML(String(r.name || '-')) + '</td><td>' + fmt(Math.round(r.value || 0)) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">데이터 없음</td></tr>';
+          return card('장기 추세 — namespace별 일별 비용 (ClickHouse)', '<div class="card-body"><table><thead><tr><th>날짜</th><th>Namespace</th><th>월 추정 KRW</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        })() +
         card('', '<div class="card-body"><div class="muted" style="font-size:11px">' + escapeHTML(rep.note || '') + '</div></div>');
     }
     window.k8sReportsGo = () => {

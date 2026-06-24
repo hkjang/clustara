@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -189,6 +192,76 @@ func (s *Server) handleK8sDWBootstrap(w http.ResponseWriter, r *http.Request) {
 		resp["errors"] = errs
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+var safeIDRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]*$`)
+
+// handleK8sDWReport runs a daily aggregation over the K8s fact tables for long-term trend
+// analysis (DW 장기 추세). kind=cost|health|events. No-op when ClickHouse is unset.
+// GET /admin/k8s/dw/report?kind=&days=&cluster_id=
+func (s *Server) handleK8sDWReport(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	cfg := s.cfg.ClickHouse
+	if cfg.URL == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "note": "ClickHouse가 구성되지 않았습니다 (CLICKHOUSE_URL)."})
+		return
+	}
+	q := r.URL.Query()
+	kind := q.Get("kind")
+	days := intParam(q.Get("days"), 30)
+	if days > 365 {
+		days = 365
+	}
+	clusterID := q.Get("cluster_id")
+	if !safeIDRe.MatchString(clusterID) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid cluster_id", "invalid_request_error", "bad_cluster_id")
+		return
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	clusterFilter := ""
+	if clusterID != "" {
+		clusterFilter = " AND cluster_id = '" + clusterID + "'"
+	}
+
+	var table, query string
+	switch kind {
+	case "cost":
+		table = k8sFactTable("cost")
+		query = fmt.Sprintf("SELECT substring(ts,1,10) AS day, key AS name, round(avg(monthly_krw),2) AS value FROM %%s WHERE dimension='namespace' AND substring(ts,1,10) >= '%s'%s GROUP BY day, name ORDER BY day", since, clusterFilter)
+	case "health":
+		table = k8sFactTable("workload_health")
+		query = fmt.Sprintf("SELECT substring(ts,1,10) AS day, round(avg(health_score),1) AS value FROM %%s WHERE substring(ts,1,10) >= '%s'%s GROUP BY day ORDER BY day", since, clusterFilter)
+	case "events":
+		table = k8sFactTable("event")
+		query = fmt.Sprintf("SELECT substring(ts,1,10) AS day, count() AS value FROM %%s WHERE lower(type)='warning' AND substring(ts,1,10) >= '%s'%s GROUP BY day ORDER BY day", since, clusterFilter)
+	default:
+		writeOpenAIError(w, http.StatusBadRequest, "kind must be cost|health|events", "invalid_request_error", "bad_kind")
+		return
+	}
+	ref := table
+	if cfg.Database != "" && !strings.Contains(ref, ".") {
+		ref = cfg.Database + "." + ref
+	}
+	body, code, err := s.clickhouseQuery(r.Context(), cfg, fmt.Sprintf(query, ref)+" FORMAT JSON")
+	if err != nil || code != http.StatusOK {
+		writeOpenAIError(w, http.StatusBadGateway, "clickhouse query failed", "server_error", "clickhouse_failed")
+		return
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": true, "kind": kind, "raw": body})
+		return
+	}
+	parsed["available"] = true
+	parsed["kind"] = kind
+	writeJSON(w, http.StatusOK, parsed)
 }
 
 // handleK8sDWSink pushes the current K8s facts (change/event/health/security/cost/action/metrics)

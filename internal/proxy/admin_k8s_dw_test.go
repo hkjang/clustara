@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"clustara/internal/analyzer"
@@ -58,6 +59,52 @@ func TestK8sFactRowBuilders(t *testing.T) {
 func TestK8sFactTableNameDefault(t *testing.T) {
 	if got := k8sFactTable("change"); got != "k8s_change_fact" {
 		t.Fatalf("default table = %q, want k8s_change_fact", got)
+	}
+}
+
+func TestK8sDWReport(t *testing.T) {
+	// Fake ClickHouse that returns a valid JSON result for SELECT queries.
+	var gotQuery string
+	ch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("query")
+		_, _ = w.Write([]byte(`{"meta":[{"name":"day"},{"name":"value"}],"data":[{"day":"2026-06-24","value":42}]}`))
+	}))
+	defer ch.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 8, filepath.Join(t.TempDir(), "dw.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	cfg.ClickHouse.URL = ch.URL
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.Routes())
+	defer srv.Close()
+
+	// Happy path: kind=cost → aggregation query + parsed data.
+	resp, err := http.Get(srv.URL + "/admin/k8s/dw/report?kind=cost&days=7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if body["available"] != true || body["data"] == nil {
+		t.Fatalf("expected available report with data, got %+v", body)
+	}
+	if !strings.Contains(gotQuery, "avg(monthly_krw)") || !strings.Contains(gotQuery, "dimension='namespace'") {
+		t.Fatalf("cost report query wrong: %s", gotQuery)
+	}
+
+	// Bad cluster_id is rejected (SQL-injection guard).
+	resp2, _ := http.Get(srv.URL + "/admin/k8s/dw/report?kind=cost&cluster_id=a%27b")
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malicious cluster_id should be 400, got %d", resp2.StatusCode)
 	}
 }
 
