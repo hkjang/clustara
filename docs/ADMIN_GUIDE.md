@@ -1,6 +1,6 @@
 # 관리자 가이드 (Admin Guide)
 
-Clustara(Kubernetes 운영 허브) 어드민 UI(`http://<host>:8080/admin`)의 메뉴별 사용법입니다. 모든 화면은 동일한 이름의 REST API(`/admin/k8s/*`)로도 자동화할 수 있습니다. API 상세·클러스터 등록은 **[K8s 운영 허브 가이드](K8S_OPERATIONS_HUB.md)** 를 참고하세요.
+Clustara(Kubernetes 운영 허브) 어드민 UI(`http://<host>:9090/admin`)의 메뉴별 사용법입니다. 모든 화면은 동일한 이름의 REST API(`/admin/k8s/*`)로도 자동화할 수 있습니다. API 상세·클러스터 등록은 **[K8s 운영 허브 가이드](K8S_OPERATIONS_HUB.md)** 를 참고하세요.
 
 ## 접속과 권한
 

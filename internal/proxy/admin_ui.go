@@ -339,24 +339,50 @@ const adminHTML = `<!doctype html>
     <h1>Clustara</h1>
     <nav id="tabs">
       <a href="#/k8s-home" data-tab="k8s-home" class="active">운영 홈</a>
-      <a href="#/k8s" data-tab="k8s">클러스터</a>
-      <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
-      <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
-      <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
-      <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
-      <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
-      <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
-      <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
-      <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
-      <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
-      <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
-      <a href="#/k8s-reports" data-tab="k8s-reports">리포트 센터</a>
-      <a href="#/k8s-slo" data-tab="k8s-slo">SLO 센터</a>
-      <a href="#/k8s-cost" data-tab="k8s-cost">비용</a>
-      <a href="#/k8s-security" data-tab="k8s-security">보안</a>
-      <a href="#/k8s-policy" data-tab="k8s-policy">정책 센터</a>
-      <a href="#/k8s-settings" data-tab="k8s-settings">운영 설정</a>
-      <a href="#/settings" data-tab="settings">설정</a>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">리소스 관리</button>
+        <div class="nav-group-menu">
+          <a href="#/k8s" data-tab="k8s">클러스터</a>
+          <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
+          <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
+          <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
+        </div>
+      </div>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">모니터링</button>
+        <div class="nav-group-menu">
+          <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
+          <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
+          <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
+          <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
+          <a href="#/k8s-reports" data-tab="k8s-reports">리포트 센터</a>
+          <a href="#/k8s-slo" data-tab="k8s-slo">SLO 센터</a>
+        </div>
+      </div>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">장애 및 대응</button>
+        <div class="nav-group-menu">
+          <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
+          <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
+          <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
+          <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
+        </div>
+      </div>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">비용 & 보안</button>
+        <div class="nav-group-menu">
+          <a href="#/k8s-cost" data-tab="k8s-cost">비용</a>
+          <a href="#/k8s-security" data-tab="k8s-security">보안</a>
+          <a href="#/k8s-policy" data-tab="k8s-policy">정책 센터</a>
+        </div>
+      </div>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">설정</button>
+        <div class="nav-group-menu">
+          <a href="#/k8s-settings" data-tab="k8s-settings">운영 설정</a>
+          <a href="#/settings" data-tab="settings">설정</a>
+        </div>
+      </div>
     </nav>
     <div class="header-tools">
       <div class="user-menu-wrap">
@@ -1220,6 +1246,20 @@ const adminHTML = `<!doctype html>
       }
     }
     window.addEventListener('hashchange', route);
+
+    // Close nav dropdowns when mouse leaves or when a menu link is clicked
+    document.querySelectorAll('#tabs .nav-group').forEach(g => {
+      g.addEventListener('mouseleave', () => {
+        if (g.contains(document.activeElement)) {
+          document.activeElement.blur();
+        }
+      });
+    });
+    document.querySelectorAll('#tabs .nav-group-menu a').forEach(a => {
+      a.addEventListener('click', () => {
+        a.blur();
+      });
+    });
 
     // ---------- auto-refresh ----------
     let refreshTimer = null;
@@ -2111,7 +2151,7 @@ const adminHTML = `<!doctype html>
         '<div class="banner warn" style="margin:0 14px 14px">' +
           '<strong>아직 수집된 VCS 이벤트가 없습니다.</strong><br>' +
           '· <strong>자동(설정 불필요)</strong>: 에이전트 대화에 <code>git commit -m "…"</code>·<code>git push</code> 가 나타나면 <em>추론</em> 이벤트로 자동 기록됩니다(현재 세션·사용자에 연결). 아직 그런 호출이 없으면 비어 있습니다.<br>' +
-          '· <strong>정식 연동(MR·머지까지)</strong>: <code>VCS_WEBHOOK_SECRET</code> 설정 후 GitLab 웹훅 <code>http://&lt;gateway&gt;:8080/vcs/webhook/gitlab</code>(Secret Token=시크릿, Push·MR) 또는 Bitbucket <code>/vcs/webhook/bitbucket?token=&lt;시크릿&gt;</code>, 또는 CI·git 훅 <code>POST /vcs/events</code>(헤더 <code>X-Vibe-VCS-Secret</code>). 커밋 메시지/MR 제목의 <code>Vibe-Session: &lt;세션ID&gt;</code> 마커로 세션 연결.' +
+          '· <strong>정식 연동(MR·머지까지)</strong>: <code>VCS_WEBHOOK_SECRET</code> 설정 후 GitLab 웹훅 <code>http://&lt;gateway&gt;:9090/vcs/webhook/gitlab</code>(Secret Token=시크릿, Push·MR) 또는 Bitbucket <code>/vcs/webhook/bitbucket?token=&lt;시크릿&gt;</code>, 또는 CI·git 훅 <code>POST /vcs/events</code>(헤더 <code>X-Vibe-VCS-Secret</code>). 커밋 메시지/MR 제목의 <code>Vibe-Session: &lt;세션ID&gt;</code> 마커로 세션 연결.' +
         '</div>';
 
       const table = events.length

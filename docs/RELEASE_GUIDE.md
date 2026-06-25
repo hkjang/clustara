@@ -72,8 +72,8 @@ go run ./cmd/clustara
 기동 후 헬스체크:
 
 ```bash
-curl http://localhost:8080/health   # {"status":"ok"}
-curl http://localhost:8080/ready    # {"status":"ready"}
+curl http://localhost:9090/health   # {"status":"ok"}
+curl http://localhost:9090/ready    # {"status":"ready"}
 ```
 
 ---
@@ -247,7 +247,7 @@ gunzip -c clustara-v0.1.0.tar.gz | docker load
 
 ```bash
 docker run -d --name clustara --restart=always \
-  -p 8080:8080 \
+  -p 9090:9090 \
   -v /opt/clustara/data:/data \
   -e UPSTREAM_BASE_URL=https://api.openai.com \
   -e UPSTREAM_API_KEY=sk-... \
@@ -275,14 +275,14 @@ docker compose logs -f gateway
 ### 8.1 헬스체크
 
 ```bash
-curl -fsS http://<HOST>:8080/health   # {"status":"ok"}
-curl -fsS http://<HOST>:8080/ready    # {"status":"ready"}
+curl -fsS http://<HOST>:9090/health   # {"status":"ok"}
+curl -fsS http://<HOST>:9090/ready    # {"status":"ready"}
 ```
 
 ### 8.2 어드민 UI 접속
 
 ```
-http://<HOST>:8080/admin
+http://<HOST>:9090/admin
 ```
 
 - 헤더의 "관리자 토큰" 입력란에 `ADMIN_TOKEN` 값 입력
@@ -291,7 +291,7 @@ http://<HOST>:8080/admin
 ### 8.3 프록시 동작 확인
 
 ```bash
-curl http://<HOST>:8080/v1/chat/completions \
+curl http://<HOST>:9090/v1/chat/completions \
   -H "Authorization: Bearer <PROXY_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hello"}]}'
@@ -300,7 +300,7 @@ curl http://<HOST>:8080/v1/chat/completions \
 ### 8.4 메트릭 확인
 
 ```bash
-curl http://<HOST>:8080/metrics | grep proxy_requests_total
+curl http://<HOST>:9090/metrics | grep proxy_requests_total
 ```
 
 ---
@@ -318,7 +318,7 @@ docker rm clustara
 
 # 이전 버전으로 기동
 docker run -d --name clustara --restart=always \
-  -p 8080:8080 \
+  -p 9090:9090 \
   -v /opt/clustara/data:/data \
   -e ... \
   clustara:v0.0.9   ← 이전 버전
@@ -343,7 +343,7 @@ mv data/gateway.db data/gateway.db.broken
 tar -xzf backups/gateway-YYYYMMDD-HHMM.tar.gz -C /tmp
 cp /tmp/data/gateway.db data/gateway.db
 docker compose up -d gateway
-curl -fsS http://localhost:8080/ready
+curl -fsS http://localhost:9090/ready
 ```
 
 > **주의**: 롤백 시 `GATEWAY_SECRET` 은 백업 시점과 동일한 값을 유지해야 합니다.

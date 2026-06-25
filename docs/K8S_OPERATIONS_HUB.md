@@ -196,7 +196,7 @@ current-context: prod
 ### API로 직접 등록
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/k8s/clusters `
+curl.exe -X POST http://localhost:9090/admin/k8s/clusters `
   -H "Content-Type: application/json" `
   -d '{
     "name": "prod-a",
@@ -212,19 +212,19 @@ curl.exe -X POST http://localhost:8080/admin/k8s/clusters `
 등록 후 연결 테스트:
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/k8s/clusters/k8scl_.../test
+curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../test
 ```
 
 라이브 수집:
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/k8s/clusters/k8scl_.../collect
+curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 ```
 
 ## 스냅샷 적재
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/k8s/snapshot `
+curl.exe -X POST http://localhost:9090/admin/k8s/snapshot `
   -H "Content-Type: application/json" `
   -d '{
     "cluster_id": "k8scl_...",
@@ -274,7 +274,7 @@ curl.exe -X POST http://localhost:8080/admin/k8s/snapshot `
 ## 액션 요청
 
 ```powershell
-curl.exe -X POST http://localhost:8080/admin/k8s/actions `
+curl.exe -X POST http://localhost:9090/admin/k8s/actions `
   -H "Content-Type: application/json" `
   -d '{
     "cluster_id": "k8scl_...",

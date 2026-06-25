@@ -388,6 +388,14 @@ func inventoryFromObject(kind, apiVersion string, obj map[string]any) store.K8sI
 	meta := asMap(obj["metadata"])
 	status := summarizeStatus(kind, obj)
 	spec := asMap(obj["spec"])
+	if refs := meta["ownerReferences"]; refs != nil {
+		next := map[string]any{}
+		for k, v := range spec {
+			next[k] = v
+		}
+		next["ownerReferences"] = refs
+		spec = next
+	}
 	// RBAC objects carry their permissions at the top level (rules / roleRef / subjects),
 	// not under .spec — fold them into Spec so the analyzers (SEC-02) and revisions see them.
 	switch kind {

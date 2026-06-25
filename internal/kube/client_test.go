@@ -1,8 +1,13 @@
 package kube
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +73,75 @@ func TestSummarizeStatusDaemonSetUsesDaemonSetCounters(t *testing.T) {
 
 	if got := summarizeStatus("DaemonSet", obj); got != "Available 1/1" {
 		t.Fatalf("summarizeStatus(DaemonSet) = %q", got)
+	}
+}
+
+func TestHTTPClientPodLogs(t *testing.T) {
+	var gotPath, gotQuery, gotAuth string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("hello\nerror line\n"))
+	}))
+	defer api.Close()
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.PodLogs(context.Background(), "default", "api-1", PodLogOptions{
+		Container: "app", Previous: true, TailLines: 50, SinceSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "hello\nerror line\n" {
+		t.Fatalf("body = %q", body)
+	}
+	if gotPath != "/api/v1/namespaces/default/pods/api-1/log" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	for _, want := range []string{"container=app", "previous=true", "tailLines=50", "sinceSeconds=300"} {
+		if !strings.Contains(gotQuery, want) {
+			t.Fatalf("query %q missing %q", gotQuery, want)
+		}
+	}
+	if gotAuth != "Bearer tok" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+}
+
+func TestHTTPClientPodLogsStream(t *testing.T) {
+	var gotPath, gotQuery string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte("line 1\nline 2\n"))
+	}))
+	defer api.Close()
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := client.PodLogsStream(context.Background(), "default", "api-1", PodLogOptions{Container: "app", TailLines: 25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	gotBody, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotBody) != "line 1\nline 2\n" {
+		t.Fatalf("body = %q", string(gotBody))
+	}
+	if gotPath != "/api/v1/namespaces/default/pods/api-1/log" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	for _, want := range []string{"container=app", "follow=true", "tailLines=25"} {
+		if !strings.Contains(gotQuery, want) {
+			t.Fatalf("query %q missing %q", gotQuery, want)
+		}
 	}
 }
 

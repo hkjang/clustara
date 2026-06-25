@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"clustara/internal/store"
@@ -782,6 +783,164 @@ func TestK8sGroupsAndOwnership(t *testing.T) {
 	}
 	if len(own.Ownership) != 1 || own.Ownership[0].Namespace != "payments" || own.Ownership[0].Team != "core" {
 		t.Fatalf("team filter should return the payments/core row, got %+v", own.Ownership)
+	}
+}
+
+func TestK8sPodManagementAndLogs(t *testing.T) {
+	var logQuery string
+	kubeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/version":
+			_, _ = w.Write([]byte(`{"gitVersion":"v1.30.0"}`))
+		case "/api/v1/namespaces":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"default","uid":"ns1"}}]}`))
+		case "/api/v1/nodes":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"node-a","uid":"node1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`))
+		case "/api/v1/pods":
+			_, _ = w.Write([]byte(`{"items":[{"apiVersion":"v1","metadata":{"namespace":"default","name":"api-1","uid":"pod1","labels":{"app":"api"},"ownerReferences":[{"kind":"ReplicaSet","name":"api-abc","controller":true}]},"spec":{"nodeName":"node-a","containers":[{"name":"app","image":"example/api:1.0"}]},"status":{"phase":"Running","podIP":"10.0.0.5","qosClass":"Burstable","startTime":"2026-06-24T00:00:00Z","containerStatuses":[{"name":"app","image":"example/api:1.0","ready":false,"restartCount":3,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}]}`))
+		case "/api/v1/namespaces/default/pods/api-1/log":
+			logQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("info ok\nException password=supersecret Authorization: Bearer abc.def\nwarn retry\n"))
+		case "/api/v1/events":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"namespace":"default","name":"api.1","creationTimestamp":"2026-06-24T00:01:00Z"},"involvedObject":{"kind":"Pod","namespace":"default","name":"api-1"},"type":"Warning","reason":"BackOff","message":"Back-off restarting failed container","count":4}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	}))
+	defer kubeAPI.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "pod-cluster", "server_url": kubeAPI.URL, "auth_mode": "token", "token": "test-token",
+	})
+	defer resp.Body.Close()
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/clusters/"+created.Cluster.ID+"/collect", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("collect status=%d body=%s", resp.StatusCode, body)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Pods []struct {
+			Name         string   `json:"name"`
+			RestartCount int      `json:"restart_count"`
+			OwnerKind    string   `json:"owner_kind"`
+			Images       []string `json:"images"`
+		} `json:"pods"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Pods) != 1 || list.Pods[0].RestartCount != 3 || list.Pods[0].OwnerKind != "ReplicaSet" || len(list.Pods[0].Images) != 1 {
+		t.Fatalf("unexpected pod list: %+v", list.Pods)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var detail struct {
+		Events []store.K8sEvent `json:"events"`
+		Pod    struct {
+			Ready string `json:"ready"`
+		} `json:"pod"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Pod.Ready != "0/1" || len(detail.Events) != 1 || detail.Events[0].Reason != "BackOff" {
+		t.Fatalf("unexpected detail: %+v", detail)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs?cluster_id=" + created.Cluster.ID + "&container=app&previous=true&tail_lines=50&q=Exception")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var logs struct {
+		Text    string `json:"text"`
+		Summary struct {
+			Lines int `json:"lines"`
+			Error int `json:"error"`
+		} `json:"summary"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&logs); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logQuery, "container=app") || !strings.Contains(logQuery, "previous=true") || !strings.Contains(logQuery, "tailLines=50") {
+		t.Fatalf("Kubernetes log query = %q", logQuery)
+	}
+	if strings.Contains(logs.Text, "supersecret") || strings.Contains(logs.Text, "abc.def") || !strings.Contains(logs.Text, "***REDACTED***") {
+		t.Fatalf("logs were not masked: %q", logs.Text)
+	}
+	if logs.Summary.Lines != 1 || logs.Summary.Error != 1 {
+		t.Fatalf("summary = %+v", logs.Summary)
+	}
+	audit, err := db.ListK8sPodLogQueries(context.Background(), created.Cluster.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) != 1 || !audit[0].Previous || audit[0].Container != "app" || audit[0].Query != "Exception" || audit[0].ErrorCount != 1 {
+		t.Fatalf("unexpected pod log audit: %+v", audit)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs/stream?cluster_id=" + created.Cluster.ID + "&container=app&tail_lines=25&q=retry&error_only=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	streamBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status=%d body=%s", resp.StatusCode, streamBody)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("expected SSE content-type, got %q", ct)
+	}
+	if !strings.Contains(logQuery, "follow=true") || !strings.Contains(logQuery, "tailLines=25") {
+		t.Fatalf("Kubernetes stream query = %q", logQuery)
+	}
+	if !strings.Contains(string(streamBody), "event: line") || !strings.Contains(string(streamBody), "warn retry") || strings.Contains(string(streamBody), "supersecret") {
+		t.Fatalf("unexpected stream body: %s", streamBody)
+	}
+	audit, err = db.ListK8sPodLogQueries(context.Background(), created.Cluster.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundStreamAudit := false
+	for _, row := range audit {
+		if row.Stream && row.Query == "retry" && row.Container == "app" {
+			foundStreamAudit = true
+		}
+	}
+	if len(audit) != 2 || !foundStreamAudit {
+		t.Fatalf("unexpected stream audit: %+v", audit)
 	}
 }
 

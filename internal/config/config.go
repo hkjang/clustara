@@ -321,8 +321,13 @@ type ModelPrice struct {
 }
 
 func Load() (Config, error) {
+	addr := getEnv("LISTEN_ADDR", ":9090")
+	if _, err := strconv.Atoi(addr); err == nil {
+		addr = ":" + addr
+	}
+
 	cfg := Config{
-		ListenAddr:            getEnv("LISTEN_ADDR", ":9090"),
+		ListenAddr:            addr,
 		RuntimeReloadInterval: durationEnv("SETTINGS_RELOAD_INTERVAL", 10*time.Second),
 		Upstream: UpstreamConfig{
 			Provider:     getEnv("UPSTREAM_PROVIDER", "openai"),

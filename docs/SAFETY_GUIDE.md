@@ -32,13 +32,13 @@
 ### 1.2 API 활용 예제
 ```bash
 # 1. 킬스위치 즉시 작동 (전체 차단)
-curl -X POST http://localhost:8080/admin/kill-switch \
+curl -X POST http://localhost:9090/admin/kill-switch \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"disabled": true, "reason": "긴급 내부 보안 점검으로 인한 임시 서비스 차단"}'
 
 # 2. 서비스 운영 재개 (정상화)
-curl -X POST http://localhost:8080/admin/kill-switch \
+curl -X POST http://localhost:9090/admin/kill-switch \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"disabled": false}'

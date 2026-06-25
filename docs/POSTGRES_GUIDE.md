@@ -108,7 +108,7 @@ services:
     container_name: clustara
     restart: always
     ports:
-      - "8080:8080"
+      - "9090:9090"
     depends_on:
       postgres-db:
         condition: service_healthy
@@ -140,7 +140,7 @@ docker compose -f docker-compose.postgres.yml up -d
 docker compose -f docker-compose.postgres.yml logs -f gateway
 
 # 서비스 헬스체크 호출
-curl -fsS http://localhost:8080/ready
+curl -fsS http://localhost:9090/ready
 ```
 
 ---
@@ -190,7 +190,7 @@ services:
     container_name: clustara
     restart: always
     ports:
-      - "8080:8080"
+      - "9090:9090"
     environment:
       - UPSTREAM_BASE_URL=https://api.openai.com
       - UPSTREAM_API_KEY=sk-...

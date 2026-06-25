@@ -110,7 +110,7 @@ cat > "$README_PATH" <<EOF
 
    \`\`\`bash
    docker run -d --name clustara --restart=always \\
-       -p 8080:8080 \\
+       -p 9090:9090 \\
        -v /opt/clustara/data:/data \\
        -e UPSTREAM_BASE_URL=https://api.openai.com \\
        -e UPSTREAM_API_KEY=sk-... \\
@@ -122,7 +122,7 @@ cat > "$README_PATH" <<EOF
 
 4. 관리자 UI
 
-   - http://<host>:8080/admin
+   - http://<host>:9090/admin
    - 토큰은 ADMIN_TOKEN 값
 EOF
 
