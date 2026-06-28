@@ -5,6 +5,7 @@ v0.4.0:
 - **조치 어드바이저 (Remediation Advisor)**: RCA 조건별로 안전한 조치(scale/rollout restart/cordon/이미지 롤백 등)를 근거와 함께 추천합니다. (`analyzer.AdviseRemediation`, `/admin/k8s/remediation`)
 - **FinOps Rightsizing**: Pod request 대비 실사용(metrics)을 비교해 `usage × 1.3` 권장값을 산출합니다. reliability-first(어느 자원이든 usage > request면 증설 우선) 정책을 지원하며, down 권고에는 월 절감액(KRW)을 표기합니다. (`analyzer.RecommendRightsizing`, `/admin/k8s/cost/recommendations` 및 비용 화면 카드)
 - **SLO · 에러버짓 센터**: 인시던트 이력(open/resolved)을 윈도우 내로 집계해 서비스(namespace)별 가용성·MTTR·다운타임·에러버짓 잔여를 목표(기본 99.9%) 대비로 산출합니다. (`analyzer.ComputeSLO`, `/admin/k8s/slo?days=&target=` 및 SLO 센터 메뉴)
+- **Pod 관리 및 분석**: Pod 목록·상세 조회와 함께 실시간 로그 스트리밍(SSE), 로그 마스킹 내보내기, 마스크된 전체 진단 로그/메트릭/이벤트를 묶은 증적 번들(ZIP) 다운로드 기능을 추가했습니다. 추가로 정상 기준 Pod와 비교하는 **Golden Pod Diff** 및 상태 변화 흐름을 추적하는 **Health Replay** 분석 기능을 도입했습니다. (`/admin/k8s/pods`, `/golden-diff`, `/health-replay`)
 - **기타 개선 사항**:
   - 신규 분석 로직 전부 순수 함수 및 단위 테스트 구성 완료 (`diff`, `incident`, `resource_graph`, `remediation`, `rightsizing`, `slo`).
   - 문서 (`K8S_OPERATIONS_HUB` API 표) 및 메뉴 (`menuVersion 18`, SLO 센터 추가) 정합성을 반영하고 전체 빌드 및 테스트를 통과했습니다.

@@ -800,7 +800,7 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 		case "/api/v1/nodes":
 			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"node-a","uid":"node1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`))
 		case "/api/v1/pods":
-			_, _ = w.Write([]byte(`{"items":[{"apiVersion":"v1","metadata":{"namespace":"default","name":"api-1","uid":"pod1","labels":{"app":"api"},"ownerReferences":[{"kind":"ReplicaSet","name":"api-abc","controller":true}]},"spec":{"nodeName":"node-a","containers":[{"name":"app","image":"example/api:1.0"}]},"status":{"phase":"Running","podIP":"10.0.0.5","qosClass":"Burstable","startTime":"2026-06-24T00:00:00Z","containerStatuses":[{"name":"app","image":"example/api:1.0","ready":false,"restartCount":3,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}]}`))
+			_, _ = w.Write([]byte(`{"items":[{"apiVersion":"v1","metadata":{"namespace":"default","name":"api-1","uid":"pod1","labels":{"app":"api","version":"canary"},"ownerReferences":[{"kind":"ReplicaSet","name":"api-abc","controller":true}]},"spec":{"nodeName":"node-a","serviceAccountName":"api-sa","containers":[{"name":"app","image":"example/api:1.1","env":[{"name":"LOG_LEVEL","value":"debug"},{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"db","key":"password"}}}],"resources":{"requests":{"cpu":"250m","memory":"256Mi"},"limits":{"memory":"512Mi"}},"readinessProbe":{"httpGet":{"path":"/ready","port":8080}},"volumeMounts":[{"name":"config","mountPath":"/etc/api"}]}],"volumes":[{"name":"config","configMap":{"name":"api-config"}}]},"status":{"phase":"Running","podIP":"10.0.0.5","qosClass":"Burstable","startTime":"2026-06-24T00:00:00Z","containerStatuses":[{"name":"app","image":"example/api:1.1","ready":false,"restartCount":3,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}},{"apiVersion":"v1","metadata":{"namespace":"default","name":"api-2","uid":"pod2","labels":{"app":"api","version":"stable"},"ownerReferences":[{"kind":"ReplicaSet","name":"api-abc","controller":true}]},"spec":{"nodeName":"node-b","serviceAccountName":"api-sa","containers":[{"name":"app","image":"example/api:1.0","env":[{"name":"LOG_LEVEL","value":"info"},{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"db","key":"password"}}}],"resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"memory":"256Mi"}},"readinessProbe":{"httpGet":{"path":"/ready","port":8080}},"volumeMounts":[{"name":"config","mountPath":"/etc/api"}]}],"volumes":[{"name":"config","configMap":{"name":"api-config"}}]},"status":{"phase":"Running","podIP":"10.0.0.6","qosClass":"Burstable","startTime":"2026-06-24T00:00:00Z","containerStatuses":[{"name":"app","image":"example/api:1.0","ready":true,"restartCount":0,"state":{"running":{"startedAt":"2026-06-24T00:00:05Z"}}}]}}]}`))
 		case "/api/v1/namespaces/default/pods/api-1/log":
 			logQuery = r.URL.RawQuery
 			w.Header().Set("Content-Type", "text/plain")
@@ -859,7 +859,16 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Pods) != 1 || list.Pods[0].RestartCount != 3 || list.Pods[0].OwnerKind != "ReplicaSet" || len(list.Pods[0].Images) != 1 {
+	var api1Found bool
+	for _, p := range list.Pods {
+		if p.Name == "api-1" {
+			api1Found = true
+			if p.RestartCount != 3 || p.OwnerKind != "ReplicaSet" || len(p.Images) != 1 {
+				t.Fatalf("unexpected api-1 list row: %+v", p)
+			}
+		}
+	}
+	if len(list.Pods) != 2 || !api1Found {
 		t.Fatalf("unexpected pod list: %+v", list.Pods)
 	}
 
@@ -879,6 +888,47 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if detail.Pod.Ready != "0/1" || len(detail.Events) != 1 || detail.Events[0].Reason != "BackOff" {
 		t.Fatalf("unexpected detail: %+v", detail)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/golden-diff?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var goldenDiff struct {
+		AutoSelected bool `json:"auto_selected"`
+		Golden       struct {
+			Name string `json:"name"`
+		} `json:"golden"`
+		Summary struct {
+			Total int `json:"total"`
+			High  int `json:"high"`
+		} `json:"summary"`
+		Changes []struct {
+			Field    string `json:"field"`
+			Category string `json:"category"`
+			Severity string `json:"severity"`
+			Target   string `json:"target"`
+			Golden   string `json:"golden"`
+		} `json:"changes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&goldenDiff); err != nil {
+		t.Fatal(err)
+	}
+	if !goldenDiff.AutoSelected || goldenDiff.Golden.Name != "api-2" || goldenDiff.Summary.Total == 0 || goldenDiff.Summary.High == 0 {
+		t.Fatalf("unexpected golden diff: %+v", goldenDiff)
+	}
+	foundImageDiff, foundMaskedEnv := false, false
+	for _, c := range goldenDiff.Changes {
+		if c.Field == "container.app.image" && c.Category == "image" && c.Severity == "high" {
+			foundImageDiff = true
+		}
+		if c.Field == "container.app.env" && !strings.Contains(c.Target, "supersecret") && strings.Contains(c.Target, "DB_PASSWORD<-secretKeyRef") {
+			foundMaskedEnv = true
+		}
+	}
+	if !foundImageDiff || !foundMaskedEnv {
+		t.Fatalf("golden diff should include image and masked env differences: %+v", goldenDiff.Changes)
 	}
 
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs?cluster_id=" + created.Cluster.ID + "&container=app&previous=true&tail_lines=50&q=Exception")
@@ -911,6 +961,38 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if len(audit) != 1 || !audit[0].Previous || audit[0].Container != "app" || audit[0].Query != "Exception" || audit[0].ErrorCount != 1 {
 		t.Fatalf("unexpected pod log audit: %+v", audit)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/health-replay?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var replay struct {
+		Entries []struct {
+			Category string `json:"category"`
+			Severity string `json:"severity"`
+			Title    string `json:"title"`
+			Detail   string `json:"detail"`
+		} `json:"entries"`
+		Summary struct {
+			Total int `json:"total"`
+		} `json:"summary"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Summary.Total == 0 || len(replay.Entries) == 0 {
+		t.Fatalf("health replay should include entries: %+v", replay)
+	}
+	replayCategories := map[string]bool{}
+	for _, e := range replay.Entries {
+		replayCategories[e.Category] = true
+	}
+	for _, want := range []string{"status", "event", "log", "revision"} {
+		if !replayCategories[want] {
+			t.Fatalf("health replay missing %s: %+v", want, replay.Entries)
+		}
 	}
 
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs/stream?cluster_id=" + created.Cluster.ID + "&container=app&tail_lines=25&q=retry&error_only=true")

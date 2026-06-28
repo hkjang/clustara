@@ -6192,6 +6192,8 @@ const adminHTML = `<!doctype html>
       view.innerHTML =
         section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0)) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
         card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a></div></div>') +
+        card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
+        card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
         card('로그', '<div class="card-body"><div id="podlog-context" data-cluster="' + escapeHTML(clusterId || '') + '" data-ns="' + escapeHTML(ns || '') + '" data-pod="' + escapeHTML(pod || '') + '" style="display:none"></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
@@ -6220,6 +6222,8 @@ const adminHTML = `<!doctype html>
     window.k8sPodStartStreamFromDetail = () => { const c = podLogContext(); return window.k8sPodStartStream(c.clusterId, c.ns, c.pod); };
     window.k8sPodExportLogsFromDetail = () => { const c = podLogContext(); return window.k8sPodExportLogs(c.clusterId, c.ns, c.pod); };
     window.k8sPodDownloadEvidenceFromDetail = () => { const c = podLogContext(); return window.k8sPodDownloadEvidence(c.clusterId, c.ns, c.pod); };
+    window.k8sPodLoadGoldenDiffFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadGoldenDiff(c.clusterId, c.ns, c.pod); };
+    window.k8sPodLoadHealthReplayFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadHealthReplay(c.clusterId, c.ns, c.pod); };
     let podLogStreamController = null;
     function podLogLineHTML(line) {
       const color = line.level === 'error' ? 'color:#b91c1c;font-weight:700' : (line.level === 'warn' ? 'color:#b45309' : '');
@@ -6280,6 +6284,48 @@ const adminHTML = `<!doctype html>
       const res = await fetch('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/evidence-bundle?' + q.toString(), { method: 'POST', headers: headers() });
       if (!res.ok) { alert(await res.text()); return; }
       const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = ns + '_' + pod + '_evidence.zip'; a.click(); URL.revokeObjectURL(a.href);
+    };
+    window.k8sPodLoadGoldenDiff = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-golden-diff');
+      const q = new URLSearchParams({ cluster_id: clusterId || '' });
+      const golden = (document.getElementById('pod-golden-name') && document.getElementById('pod-golden-name').value || '').trim();
+      if (golden) q.set('golden', golden);
+      out.innerHTML = '<span class="muted">비교 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/golden-diff?' + q.toString());
+        const summary = d.summary || {};
+        const head = '<div class="kpis" style="margin-bottom:8px">' + kpi('Golden', escapeHTML(((d.golden || {}).namespace || '-') + '/' + ((d.golden || {}).name || '-'))) + kpi('차이', fmt(summary.total || 0)) + kpi('High', fmt(summary.high || 0)) + kpi('Medium', fmt(summary.medium || 0)) + '</div>';
+        const note = '<div class="muted" style="font-size:11px;margin-bottom:8px">' + escapeHTML(d.selection_note || '') + ' · 민감 env/secret 값은 마스킹 또는 참조 유형으로만 표시됩니다.</div>';
+        const sev = (s) => '<span class="status ' + (s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(s || 'low') + '</span>';
+        const rows = (d.changes || []).length ? (d.changes || []).map(c =>
+          '<tr><td>' + sev(c.severity) + '</td><td>' + escapeHTML(c.category || '-') + '</td><td style="word-break:break-all">' + escapeHTML(c.field || '-') + '</td>' +
+          '<td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(c.target || '∅') + '</td><td style="font-size:11px;word-break:break-all">' + escapeHTML(c.golden || '∅') + '</td></tr>').join('') :
+          '<tr><td colspan="5" class="muted">Golden Pod와 의미 있는 차이가 없습니다.</td></tr>';
+        out.innerHTML = head + note + '<table><thead><tr><th>Severity</th><th>Category</th><th>Field</th><th>대상 Pod</th><th>Golden Pod</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) {
+        out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sPodLoadHealthReplay = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-health-replay');
+      const q = new URLSearchParams({ cluster_id: clusterId || '' });
+      const win = (document.getElementById('pod-replay-window') && document.getElementById('pod-replay-window').value || '').trim();
+      if (win) q.set('window_minutes', win);
+      out.innerHTML = '<span class="muted">재생 타임라인 구성 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/health-replay?' + q.toString());
+        const summary = d.summary || {};
+        const byCat = summary.by_category || {};
+        const sev = (s) => '<span class="status ' + (s === 'critical' ? 'error' : (s === 'warning' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(s || 'info') + '</span>';
+        const rows = (d.entries || []).length ? (d.entries || []).map(e =>
+          '<tr><td class="muted" style="font-size:11px;min-width:128px">' + ago(e.at) + '</td><td>' + sev(e.severity) + '</td><td>' + escapeHTML(e.category || '-') + '</td>' +
+          '<td><strong>' + escapeHTML(e.title || '-') + '</strong><div class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(e.detail || '') + '</div></td></tr>').join('') :
+          '<tr><td colspan="4" class="muted">표시할 Pod 상태 흐름이 없습니다.</td></tr>';
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:8px">entries ' + fmt(summary.total || 0) + ' · event ' + fmt(byCat.event || 0) + ' · metric ' + fmt(byCat.metric || 0) + ' · revision ' + fmt(byCat.revision || 0) + ' · log ' + fmt(byCat.log || 0) + '</div>' +
+          '<table><thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Detail</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) {
+        out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
+      }
     };
 
     // ---------- K8s 변경 타임라인 + Resource Diff (K8S-18 / K8S-19) ----------

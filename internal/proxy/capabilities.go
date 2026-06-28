@@ -155,8 +155,8 @@ var capabilityRegistry = []Capability{
 	},
 	{
 		Key: "k8s_operations", Name: "K8s 운영 허브", Group: "ops",
-		Description: "클러스터 등록, 리소스 인벤토리, Pod 관리·로그·실시간 tail·증적 번들, Event/Metric 스냅샷 적재, realtime watch delta 수신, health/security finding, 승인형 액션 요청.",
-		APIs:        []string{"GET/POST /admin/k8s/clusters", "POST /admin/k8s/snapshot", "POST /admin/k8s/agent/events", "GET /admin/k8s/agent/status", "GET /admin/k8s/pods", "GET /admin/k8s/pods/{namespace}/{pod}/logs", "GET /admin/k8s/pods/{namespace}/{pod}/logs/stream", "POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle", "GET /admin/k8s/inventory", "GET /admin/k8s/findings", "GET/POST /admin/k8s/actions"},
+		Description: "클러스터 등록, 리소스 인벤토리, Pod 관리·로그·실시간 tail·증적 번들·Golden Pod Diff·Health Replay, Event/Metric 스냅샷 적재, realtime watch delta 수신, health/security finding, 승인형 액션 요청.",
+		APIs:        []string{"GET/POST /admin/k8s/clusters", "POST /admin/k8s/snapshot", "POST /admin/k8s/agent/events", "GET /admin/k8s/agent/status", "GET /admin/k8s/pods", "GET /admin/k8s/pods/{namespace}/{pod}/logs", "GET /admin/k8s/pods/{namespace}/{pod}/logs/stream", "POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle", "GET /admin/k8s/pods/{namespace}/{pod}/golden-diff", "GET /admin/k8s/pods/{namespace}/{pod}/health-replay", "GET /admin/k8s/inventory", "GET /admin/k8s/findings", "GET/POST /admin/k8s/actions"},
 		UITabs:      []string{"k8s", "k8s-collector", "k8s-pods"},
 		Scopes:      []string{"admin:read", "admin:write"},
 		Tables:      []string{"k8s_clusters", "k8s_inventory", "k8s_events", "k8s_watch_events", "k8s_agent_heartbeats", "k8s_collector_offsets", "k8s_pod_log_queries", "k8s_security_findings", "k8s_action_requests", "k8s_collector_status"},

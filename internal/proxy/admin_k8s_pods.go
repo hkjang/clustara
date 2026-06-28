@@ -5,11 +5,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +75,25 @@ type k8sPodLogResponse struct {
 	Text         string              `json:"text"`
 }
 
+type k8sPodGoldenDiffChange struct {
+	Field    string `json:"field"`
+	Category string `json:"category"`
+	Severity string `json:"severity"`
+	Target   string `json:"target"`
+	Golden   string `json:"golden"`
+}
+
+type k8sPodReplayEntry struct {
+	At        string `json:"at"`
+	Category  string `json:"category"`
+	Severity  string `json:"severity"`
+	Title     string `json:"title"`
+	Detail    string `json:"detail"`
+	Ref       string `json:"ref,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
 type podLogReader interface {
 	PodLogs(ctx context.Context, namespace, pod string, opts kube.PodLogOptions) (string, error)
 }
@@ -115,6 +137,22 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleK8sPodEvidenceBundle(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "golden-diff" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodGoldenDiff(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "health-replay" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodHealthReplay(w, r, namespace, pod)
 		return
 	}
 	if parts[2] == "logs" {
@@ -260,6 +298,72 @@ func (s *Server) handleK8sPodEvidenceBundle(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	_, _ = w.Write(buf.Bytes())
+}
+
+func (s *Server) handleK8sPodGoldenDiff(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, target, ok := s.resolvePodInventory(w, r, namespace, pod)
+	if !ok {
+		return
+	}
+	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 1000)
+	golden, autoSelected, err := s.selectGoldenPod(r.Context(), clusterID, target, strings.TrimSpace(r.URL.Query().Get("golden")), events)
+	if err != nil {
+		writeOpenAIError(w, http.StatusNotFound, err.Error(), "invalid_request_error", "golden_pod_not_found")
+		return
+	}
+	targetView := podView(target, events, true)
+	goldenView := podView(golden, events, true)
+	changes := comparePodsForGoldenDiff(targetView, goldenView)
+	summary := map[string]int{"total": len(changes), "high": 0, "medium": 0, "low": 0}
+	for _, c := range changes {
+		summary[c.Severity]++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id":     clusterID,
+		"namespace":      namespace,
+		"target":         targetView,
+		"golden":         goldenView,
+		"owner":          map[string]string{"kind": targetView.OwnerKind, "name": targetView.OwnerName},
+		"auto_selected":  autoSelected,
+		"masked":         true,
+		"summary":        summary,
+		"changes":        changes,
+		"selection_note": goldenSelectionNote(targetView, goldenView, autoSelected),
+	})
+}
+
+func (s *Server) handleK8sPodHealthReplay(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, item, ok := s.resolvePodInventory(w, r, namespace, pod)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	limit := boundedInt(q.Get("limit"), 200, 10, 1000)
+	windowMinutes := boundedInt(q.Get("window_minutes"), 60, 5, 7*24*60)
+	entries, err := s.buildPodHealthReplay(r.Context(), clusterID, item, limit)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_health_replay_failed")
+		return
+	}
+	filtered := entries
+	if strings.TrimSpace(q.Get("center_at")) != "" || strings.TrimSpace(q.Get("window_minutes")) != "" {
+		center := parseReplayTime(strings.TrimSpace(q.Get("center_at")))
+		if center.IsZero() {
+			center = latestReplayTime(entries)
+		}
+		filtered = filterReplayWindow(entries, center, time.Duration(windowMinutes)*time.Minute)
+	}
+	if len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id":     clusterID,
+		"namespace":      namespace,
+		"pod":            pod,
+		"window_minutes": windowMinutes,
+		"entries":        filtered,
+		"summary":        podReplaySummary(filtered),
+	})
 }
 
 func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, pod string) (k8sPodLogResponse, error) {
@@ -691,6 +795,601 @@ func (s *Server) resolvePodInventory(w http.ResponseWriter, r *http.Request, nam
 		return "", store.K8sInventoryItem{}, false
 	}
 	return matched[0].ClusterID, matched[0], true
+}
+
+func (s *Server) buildPodHealthReplay(ctx context.Context, clusterID string, item store.K8sInventoryItem, limit int) ([]k8sPodReplayEntry, error) {
+	namespace, pod := item.Namespace, item.Name
+	events, err := s.db.ListK8sEvents(ctx, clusterID, 1000)
+	if err != nil {
+		return nil, err
+	}
+	entries := []k8sPodReplayEntry{}
+	p := podView(item, events, true)
+	entries = append(entries, k8sPodReplayEntry{
+		At:        firstNonEmpty(item.ObservedAt, item.UpdatedAt, strAny(item.StatusObject["startTime"])),
+		Category:  "status",
+		Severity:  replaySeverityFromRisk(firstNonEmpty(p.RiskLevel, podStatusRisk(firstNonEmpty(p.Status, p.Phase)))),
+		Title:     "Pod 상태 스냅샷",
+		Detail:    fmt.Sprintf("phase %s · ready %s · restarts %d · node %s", firstNonEmpty(p.Phase, p.Status, "-"), firstNonEmpty(p.Ready, "-"), p.RestartCount, firstNonEmpty(p.NodeName, "-")),
+		Namespace: namespace,
+		Name:      pod,
+	})
+	for _, c := range p.Containers {
+		if c.RestartCount == 0 && c.Ready && strings.EqualFold(c.State, "running") {
+			continue
+		}
+		severity := "info"
+		if c.RestartCount > 0 || !c.Ready || c.State == "waiting" || c.State == "terminated" {
+			severity = "warning"
+		}
+		if strings.Contains(strings.ToLower(c.Reason+" "+c.LastReason), "crashloop") {
+			severity = "critical"
+		}
+		entries = append(entries, k8sPodReplayEntry{
+			At:        firstNonEmpty(item.ObservedAt, item.UpdatedAt, strAny(item.StatusObject["startTime"])),
+			Category:  "container",
+			Severity:  severity,
+			Title:     "컨테이너 상태 · " + firstNonEmpty(c.Name, "-"),
+			Detail:    fmt.Sprintf("ready %t · restarts %d · state %s · reason %s", c.Ready, c.RestartCount, firstNonEmpty(c.State, "-"), firstNonEmpty(c.Reason, c.LastReason, "-")),
+			Namespace: namespace,
+			Name:      pod,
+		})
+	}
+	for _, e := range filterPodEvents(events, namespace, pod) {
+		sev := "info"
+		if strings.EqualFold(e.Type, "Warning") {
+			sev = "warning"
+		}
+		entries = append(entries, k8sPodReplayEntry{
+			At:        firstNonEmpty(e.LastSeen, e.FirstSeen, e.CreatedAt),
+			Category:  "event",
+			Severity:  sev,
+			Title:     firstNonEmpty(e.Reason, e.Type, "Kubernetes event"),
+			Detail:    e.Message,
+			Ref:       e.ID,
+			Namespace: e.Namespace,
+			Name:      e.InvolvedName,
+		})
+	}
+	metrics, err := s.db.ListK8sMetricSamples(ctx, clusterID, 1000)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range metrics {
+		if !strings.EqualFold(m.ResourceKind, "Pod") || m.Namespace != namespace || m.ResourceName != pod {
+			continue
+		}
+		entries = append(entries, k8sPodReplayEntry{
+			At:        m.ObservedAt,
+			Category:  "metric",
+			Severity:  "info",
+			Title:     "리소스 사용량",
+			Detail:    fmt.Sprintf("cpu %.0fm · memory %.0fMi", m.CPUMillicores, m.MemoryBytes/1024/1024),
+			Ref:       m.ID,
+			Namespace: m.Namespace,
+			Name:      m.ResourceName,
+		})
+	}
+	revisions, err := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Kind: "Pod", Namespace: namespace, Name: pod, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	for _, rev := range revisions {
+		detail := "spec 변경"
+		if rev.ImageSet != "" {
+			detail = "image: " + rev.ImageSet
+		}
+		if rev.Replica > 0 {
+			detail += " · replicas: " + strconv.Itoa(rev.Replica)
+		}
+		entries = append(entries, k8sPodReplayEntry{
+			At:        rev.ObservedAt,
+			Category:  "revision",
+			Severity:  "info",
+			Title:     revisionTitle(rev.ChangeKind),
+			Detail:    detail,
+			Ref:       rev.ID,
+			Namespace: rev.Namespace,
+			Name:      rev.Name,
+		})
+	}
+	logQueries, err := s.db.ListK8sPodLogQueries(ctx, clusterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range logQueries {
+		if row.Namespace != namespace || row.Pod != pod {
+			continue
+		}
+		mode := "current"
+		if row.Stream {
+			mode = "stream"
+		} else if row.Previous {
+			mode = "previous"
+		}
+		sev := "info"
+		if row.ErrorCount > 0 {
+			sev = "warning"
+		}
+		entries = append(entries, k8sPodReplayEntry{
+			At:        row.CreatedAt,
+			Category:  "log",
+			Severity:  sev,
+			Title:     "로그 조회 · " + mode,
+			Detail:    fmt.Sprintf("container %s · tail %d · lines %d · errors %d · query %s", firstNonEmpty(row.Container, "-"), row.TailLines, row.LineCount, row.ErrorCount, firstNonEmpty(row.Query, "-")),
+			Ref:       row.ID,
+			Namespace: row.Namespace,
+			Name:      row.Pod,
+		})
+	}
+	allItems, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: clusterID, Limit: 2000})
+	if err != nil {
+		return nil, err
+	}
+	allRevisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Limit: 500})
+	for _, finding := range filterPodRCA(analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(allItems, events), allRevisions, time.Now().UTC(), 24*time.Hour), namespace, pod) {
+		entries = append(entries, k8sPodReplayEntry{
+			At:        firstNonEmpty(item.ObservedAt, item.UpdatedAt),
+			Category:  "rca",
+			Severity:  replaySeverityFromRisk(finding.Severity),
+			Title:     firstNonEmpty(finding.Condition, "RCA 후보"),
+			Detail:    finding.Cause,
+			Namespace: finding.Namespace,
+			Name:      finding.ResourceName,
+		})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return replayEntryTime(entries[i]).Before(replayEntryTime(entries[j]))
+	})
+	if len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+	return entries, nil
+}
+
+func replaySeverityFromRisk(value string) string {
+	switch strings.ToLower(value) {
+	case "critical", "high":
+		return "critical"
+	case "medium", "warning", "warn":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
+func replayEntryTime(e k8sPodReplayEntry) time.Time {
+	return parseReplayTime(e.At)
+}
+
+func parseReplayTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+func latestReplayTime(entries []k8sPodReplayEntry) time.Time {
+	var latest time.Time
+	for _, e := range entries {
+		if t := replayEntryTime(e); !t.IsZero() && t.After(latest) {
+			latest = t
+		}
+	}
+	return latest
+}
+
+func filterReplayWindow(entries []k8sPodReplayEntry, center time.Time, window time.Duration) []k8sPodReplayEntry {
+	if center.IsZero() {
+		return entries
+	}
+	start := center.Add(-window)
+	end := center.Add(window)
+	out := []k8sPodReplayEntry{}
+	for _, e := range entries {
+		t := replayEntryTime(e)
+		if t.IsZero() || (!t.Before(start) && !t.After(end)) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func podReplaySummary(entries []k8sPodReplayEntry) map[string]any {
+	byCategory := map[string]int{}
+	bySeverity := map[string]int{"critical": 0, "warning": 0, "info": 0}
+	for _, e := range entries {
+		byCategory[e.Category]++
+		bySeverity[e.Severity]++
+	}
+	return map[string]any{
+		"total":       len(entries),
+		"by_category": byCategory,
+		"by_severity": bySeverity,
+	}
+}
+
+func (s *Server) selectGoldenPod(ctx context.Context, clusterID string, target store.K8sInventoryItem, explicitName string, events []store.K8sEvent) (store.K8sInventoryItem, bool, error) {
+	items, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: clusterID, Kind: "Pod", Namespace: target.Namespace, Limit: 1000})
+	if err != nil {
+		return store.K8sInventoryItem{}, false, err
+	}
+	if explicitName != "" {
+		for _, item := range items {
+			if item.Name == explicitName && item.Name != target.Name {
+				return item, false, nil
+			}
+		}
+		return store.K8sInventoryItem{}, false, fmt.Errorf("golden pod %q was not found in namespace %s", explicitName, target.Namespace)
+	}
+	targetView := podView(target, events, false)
+	type candidate struct {
+		item  store.K8sInventoryItem
+		view  k8sPodView
+		score int
+	}
+	candidates := []candidate{}
+	for _, item := range items {
+		if item.Name == target.Name {
+			continue
+		}
+		if !samePodWorkload(target, item) {
+			continue
+		}
+		view := podView(item, events, false)
+		candidates = append(candidates, candidate{item: item, view: view, score: goldenPodScore(view)})
+	}
+	if len(candidates) == 0 {
+		return store.K8sInventoryItem{}, false, fmt.Errorf("no comparable golden pod found for %s/%s under %s", target.Namespace, target.Name, podOwnerLabel(targetView))
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if candidates[i].view.RestartCount != candidates[j].view.RestartCount {
+			return candidates[i].view.RestartCount < candidates[j].view.RestartCount
+		}
+		return candidates[i].item.Name < candidates[j].item.Name
+	})
+	return candidates[0].item, true, nil
+}
+
+func samePodWorkload(a, b store.K8sInventoryItem) bool {
+	ak, an := podOwner(a.Spec)
+	bk, bn := podOwner(b.Spec)
+	if ak != "" && an != "" && bk != "" && bn != "" {
+		if strings.EqualFold(ak, bk) && an == bn {
+			return true
+		}
+	}
+	for _, key := range []string{"app.kubernetes.io/instance", "app.kubernetes.io/name", "app"} {
+		if a.Labels[key] != "" && a.Labels[key] == b.Labels[key] {
+			return true
+		}
+	}
+	return false
+}
+
+func goldenPodScore(p k8sPodView) int {
+	score := 0
+	if strings.EqualFold(p.Phase, "Running") || strings.EqualFold(p.Status, "Running") {
+		score += 60
+	}
+	if p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount {
+		score += 50
+	} else {
+		score += p.ReadyCount * 10
+	}
+	switch strings.ToLower(p.RiskLevel) {
+	case "critical", "high":
+		score -= 80
+	case "medium", "warning":
+		score -= 35
+	}
+	score -= p.WarningEvents * 15
+	score -= p.RestartCount * 6
+	if podStatusRisk(firstNonEmpty(p.Status, p.Phase)) == "high" {
+		score -= 80
+	}
+	return score
+}
+
+func goldenSelectionNote(target, golden k8sPodView, autoSelected bool) string {
+	if autoSelected {
+		return "same owner/label workload에서 Running, Ready, 낮은 restart/warning 점수를 기준으로 자동 선택: " + podOwnerLabel(target)
+	}
+	return "사용자가 지정한 golden Pod와 비교했습니다: " + golden.Namespace + "/" + golden.Name
+}
+
+func podOwnerLabel(p k8sPodView) string {
+	if p.OwnerKind != "" || p.OwnerName != "" {
+		return firstNonEmpty(p.OwnerKind, "-") + "/" + firstNonEmpty(p.OwnerName, "-")
+	}
+	return "same workload"
+}
+
+func comparePodsForGoldenDiff(target, golden k8sPodView) []k8sPodGoldenDiffChange {
+	targetFields := podCompareFields(target)
+	goldenFields := podCompareFields(golden)
+	keys := map[string]struct{}{}
+	for k := range targetFields {
+		keys[k] = struct{}{}
+	}
+	for k := range goldenFields {
+		keys[k] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for k := range keys {
+		ordered = append(ordered, k)
+	}
+	sort.Strings(ordered)
+	changes := []k8sPodGoldenDiffChange{}
+	for _, key := range ordered {
+		tv, gv := targetFields[key], goldenFields[key]
+		if tv == gv {
+			continue
+		}
+		changes = append(changes, k8sPodGoldenDiffChange{
+			Field:    key,
+			Category: podDiffCategory(key),
+			Severity: podDiffSeverity(key, tv, gv),
+			Target:   tv,
+			Golden:   gv,
+		})
+	}
+	return changes
+}
+
+func podCompareFields(p k8sPodView) map[string]string {
+	fields := map[string]string{
+		"status.phase":         firstNonEmpty(p.Phase, p.Status),
+		"status.ready":         p.Ready,
+		"status.restart_count": strconv.Itoa(p.RestartCount),
+		"placement.node":       p.NodeName,
+		"placement.qos_class":  p.QoSClass,
+		"spec.service_account": firstNonEmpty(strAny(p.Spec["serviceAccountName"]), strAny(p.Spec["serviceAccount"])),
+		"spec.priority_class":  strAny(p.Spec["priorityClassName"]),
+		"spec.scheduler":       strAny(p.Spec["schedulerName"]),
+		"spec.images":          joinStableStrings(p.Images),
+		"spec.volumes":         podVolumeSignature(p.Spec),
+		"metadata.labels":      stringMapSignature(p.Labels),
+		"metadata.annotations": stringMapSignature(maskedStringMapToStringMap(p.Annotations)),
+		"container.names":      podContainerNameSignature(p.Spec),
+		"init_container.names": podInitContainerNameSignature(p.Spec),
+	}
+	for _, c := range p.Containers {
+		prefix := "container." + firstNonEmpty(c.Name, "-")
+		fields[prefix+".ready"] = strconv.FormatBool(c.Ready)
+		fields[prefix+".restart_count"] = strconv.Itoa(c.RestartCount)
+		fields[prefix+".state"] = firstNonEmpty(c.State, "-")
+		fields[prefix+".reason"] = firstNonEmpty(c.Reason, c.LastReason)
+	}
+	addContainerSpecFields(fields, "container", asSliceAny(p.Spec["containers"]))
+	addContainerSpecFields(fields, "init_container", asSliceAny(p.Spec["initContainers"]))
+	return fields
+}
+
+func addContainerSpecFields(fields map[string]string, group string, containers []any) {
+	for _, raw := range containers {
+		c := asMapAny(raw)
+		name := firstNonEmpty(strAny(c["name"]), "-")
+		prefix := group + "." + name
+		fields[prefix+".image"] = strAny(c["image"])
+		fields[prefix+".env"] = podEnvSignature(c)
+		fields[prefix+".env_from"] = podEnvFromSignature(c)
+		fields[prefix+".resources"] = compactMaskedJSON(c["resources"])
+		fields[prefix+".probes"] = podProbeSignature(c)
+		fields[prefix+".volume_mounts"] = podVolumeMountSignature(c)
+	}
+}
+
+func podDiffCategory(field string) string {
+	switch {
+	case strings.Contains(field, "image"):
+		return "image"
+	case strings.Contains(field, "env") || strings.Contains(field, "labels") || strings.Contains(field, "annotations") || strings.Contains(field, "service_account"):
+		return "config"
+	case strings.Contains(field, "resource"):
+		return "resource"
+	case strings.Contains(field, "probe"):
+		return "probe"
+	case strings.Contains(field, "volume"):
+		return "storage"
+	case strings.Contains(field, "node") || strings.Contains(field, "qos") || strings.Contains(field, "scheduler") || strings.Contains(field, "priority"):
+		return "placement"
+	case strings.Contains(field, "ready") || strings.Contains(field, "restart") || strings.Contains(field, "state") || strings.Contains(field, "reason") || strings.Contains(field, "phase"):
+		return "runtime"
+	default:
+		return "spec"
+	}
+}
+
+func podDiffSeverity(field, target, golden string) string {
+	switch podDiffCategory(field) {
+	case "image", "config":
+		return "high"
+	case "runtime":
+		if strings.Contains(field, "restart") && target != golden {
+			return "high"
+		}
+		if strings.Contains(field, "ready") || strings.Contains(field, "state") || strings.Contains(field, "phase") {
+			return "high"
+		}
+		return "medium"
+	case "probe", "resource", "storage":
+		return "medium"
+	case "placement":
+		return "low"
+	default:
+		return "low"
+	}
+}
+
+func podContainerNameSignature(spec map[string]any) string {
+	return podNamedListSignature(asSliceAny(spec["containers"]))
+}
+
+func podInitContainerNameSignature(spec map[string]any) string {
+	return podNamedListSignature(asSliceAny(spec["initContainers"]))
+}
+
+func podNamedListSignature(values []any) string {
+	names := []string{}
+	for _, raw := range values {
+		if name := strAny(asMapAny(raw)["name"]); name != "" {
+			names = append(names, name)
+		}
+	}
+	return joinStableStrings(names)
+}
+
+func podEnvSignature(container map[string]any) string {
+	entries := []string{}
+	for _, raw := range asSliceAny(container["env"]) {
+		env := asMapAny(raw)
+		name := strAny(env["name"])
+		if name == "" {
+			continue
+		}
+		source := "value:" + maskedValueFingerprint(strAny(env["value"]))
+		if vf := asMapAny(env["valueFrom"]); len(vf) > 0 {
+			source = "valueFrom"
+			for _, key := range []string{"configMapKeyRef", "secretKeyRef", "fieldRef", "resourceFieldRef"} {
+				if _, ok := vf[key]; ok {
+					source = key
+					break
+				}
+			}
+		}
+		entries = append(entries, name+"<-"+source)
+	}
+	return joinStableStrings(entries)
+}
+
+func maskedValueFingerprint(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return maskedValue + "#" + hex.EncodeToString(sum[:4])
+}
+
+func podEnvFromSignature(container map[string]any) string {
+	entries := []string{}
+	for _, raw := range asSliceAny(container["envFrom"]) {
+		envFrom := asMapAny(raw)
+		prefix := strAny(envFrom["prefix"])
+		source := ""
+		switch {
+		case len(asMapAny(envFrom["configMapRef"])) > 0:
+			source = "configMapRef:" + strAny(asMapAny(envFrom["configMapRef"])["name"])
+		case len(asMapAny(envFrom["secretRef"])) > 0:
+			source = "secretRef:" + maskedValue
+		}
+		if source != "" {
+			entries = append(entries, firstNonEmpty(prefix, "-")+":"+source)
+		}
+	}
+	return joinStableStrings(entries)
+}
+
+func podProbeSignature(container map[string]any) string {
+	entries := []string{}
+	for _, key := range []string{"livenessProbe", "readinessProbe", "startupProbe"} {
+		if v, ok := container[key]; ok {
+			entries = append(entries, key+"="+compactMaskedJSON(v))
+		}
+	}
+	return joinStableStrings(entries)
+}
+
+func podVolumeSignature(spec map[string]any) string {
+	entries := []string{}
+	for _, raw := range asSliceAny(spec["volumes"]) {
+		v := asMapAny(raw)
+		name := firstNonEmpty(strAny(v["name"]), "-")
+		kind := "unknown"
+		for _, key := range []string{"configMap", "secret", "persistentVolumeClaim", "emptyDir", "projected", "hostPath", "csi", "downwardAPI"} {
+			if _, ok := v[key]; ok {
+				kind = key
+				break
+			}
+		}
+		if kind == "secret" {
+			entries = append(entries, name+":secret:"+maskedValue)
+		} else {
+			entries = append(entries, name+":"+kind)
+		}
+	}
+	return joinStableStrings(entries)
+}
+
+func podVolumeMountSignature(container map[string]any) string {
+	entries := []string{}
+	for _, raw := range asSliceAny(container["volumeMounts"]) {
+		mount := asMapAny(raw)
+		name := firstNonEmpty(strAny(mount["name"]), "-")
+		path := firstNonEmpty(strAny(mount["mountPath"]), "-")
+		readOnly := ""
+		if boolAny(mount["readOnly"]) {
+			readOnly = ":ro"
+		}
+		entries = append(entries, name+":"+path+readOnly)
+	}
+	return joinStableStrings(entries)
+}
+
+func maskedStringMapToStringMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		if isSensitivePath(k) {
+			out[k] = maskedValue
+		} else {
+			out[k] = analyzer.MaskSensitive(v)
+		}
+	}
+	return out
+}
+
+func stringMapSignature(in map[string]string) string {
+	entries := []string{}
+	for k, v := range in {
+		entries = append(entries, k+"="+v)
+	}
+	return joinStableStrings(entries)
+}
+
+func compactMaskedJSON(v any) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(maskManifestValue(v))
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func joinStableStrings(values []string) string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
 
 func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContainers bool) k8sPodView {

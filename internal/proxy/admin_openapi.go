@@ -333,6 +333,8 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/stream", []string{"get"}, "k8s", "Stream masked Pod logs over SSE with follow=true", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/export", []string{"post"}, "k8s", "Download masked Pod logs as text evidence", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/evidence-bundle", []string{"post"}, "k8s", "Download a ZIP evidence bundle with masked logs, events, manifest, metrics, revisions, RCA, and audit", false},
+	{"/admin/k8s/pods/{namespace}/{pod}/golden-diff", []string{"get"}, "k8s", "Compare a risky Pod with an auto-selected healthy sibling Pod under the same owner/label", false},
+	{"/admin/k8s/pods/{namespace}/{pod}/health-replay", []string{"get"}, "k8s", "Replay Pod health timeline from status, events, metrics, revisions, log audit, and RCA evidence", false},
 	{"/admin/k8s/inventory", []string{"get"}, "k8s", "List Kubernetes inventory resources", false},
 	{"/admin/k8s/events", []string{"get"}, "k8s", "List Kubernetes events", false},
 	{"/admin/k8s/findings", []string{"get"}, "k8s", "List Kubernetes health/security findings", false},
