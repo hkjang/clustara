@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Version,
     [string]$PrevVersion = "v0.3.0",
@@ -95,11 +95,21 @@ if (-not (Test-Path $releaseDir)) {
 # and is identical regardless of which PowerShell edition runs this script.
 [System.IO.File]::WriteAllText($notesPath, $notes, (New-Object System.Text.UTF8Encoding($false)))
 
+$assets = @(
+    "release\clustara-$Version.tar.gz",
+    "release\clustara-$Version.tar.gz.sha256",
+    "release\README-offline-$Version.md"
+)
+$reportPath = "release\Clustara_Report.pdf"
+if (Test-Path $reportPath) {
+    $assets += $reportPath
+}
+
 if ($Edit) {
     # Re-publish corrected notes for an already-created release (no asset re-upload).
     gh release edit $Version --repo hkjang/clustara --notes-file $notesPath
 } else {
-    gh release create $Version "release\clustara-$Version.tar.gz" "release\clustara-$Version.tar.gz.sha256" "release\README-offline-$Version.md" "release\Clustara_Report.pdf" --repo hkjang/clustara --title "$Version - Clustara" --notes-file $notesPath
+    gh release create $Version $assets --repo hkjang/clustara --title "$Version - Clustara" --notes-file $notesPath
 }
 
 Remove-Item $notesPath -ErrorAction SilentlyContinue
