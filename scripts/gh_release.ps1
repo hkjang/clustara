@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Version,
     [string]$PrevVersion = "v0.3.0",
@@ -32,6 +32,9 @@ $extractedLogs = @()
 foreach ($line in $changelogLines) {
     if ($line -match "^$Version`:") {
         $foundStart = $true
+        $note = $line.Substring($line.IndexOf(':') + 1).Trim()
+        if ($note) { $extractedLogs += $note }
+        continue
     }
     
     if ($foundStart) {
@@ -39,13 +42,7 @@ foreach ($line in $changelogLines) {
             $foundEnd = $true
             break
         }
-        # Extract the version change note content
-        # Line format: "vX.Y.Z:- Note"
-        $colonIdx = $line.IndexOf(':')
-        if ($colonIdx -gt 0) {
-            $note = $line.Substring($colonIdx + 1).Trim()
-            $extractedLogs += $note
-        }
+        $extractedLogs += $line
     }
 }
 
@@ -59,22 +56,22 @@ if (-not $foundEnd) {
 $targetChangelog = $extractedLogs -join "`r`n"
 
 $notes = "## Clustara v" + $cleanVer + "`r`n`r`n"
-$notes += "### 주요 변경 사항`r`n"
+$notes += [regex]::Unescape("### \uc8fc\uc694 \ubcc0\uacbd \uc0ac\ud56d`r`n")
 $notes += $targetChangelog + "`r`n`r`n"
 
-$notes += "### 배포 파일`r`n"
-$notes += "| 파일 | 설명 |`r`n"
+$notes += [regex]::Unescape("### \ubc30\ud3ec \ud30c\uc77c`r`n")
+$notes += [regex]::Unescape("| \ud30c\uc77c | \uc124\uba85 |`r`n")
 $notes += "|------|------|`r`n"
-$notes += "| clustara-v" + $cleanVer + ".tar.gz | Docker 이미지 패키지 (linux/amd64) |`r`n"
-$notes += "| clustara-v" + $cleanVer + ".tar.gz.sha256 | SHA256 체크섬 |`r`n"
-$notes += "| README-offline-v" + $cleanVer + ".md | 오프라인 배포 가이드 |`r`n"
-$notes += "| Clustara_Report.pdf | Clustara 기능·역할 및 비즈니스 가치 종합 보고서 |`r`n`r`n"
+$notes += "| clustara-v" + $cleanVer + [regex]::Unescape(".tar.gz | Docker \uc774\ubbf8\uc9c0 \ud328\ud0a4\uc9c0 (linux/amd64) |`r`n")
+$notes += "| clustara-v" + $cleanVer + [regex]::Unescape(".tar.gz.sha256 | SHA256 \uccb4\ud06c\uc12c |`r`n")
+$notes += "| README-offline-v" + $cleanVer + [regex]::Unescape(".md | \uc624\ud504\ub77c\uc778 \ubc30\ud3ec \uac00\uc774\ub4dc |`r`n")
+$notes += [regex]::Unescape("| Clustara_Report.pdf | Clustara \uae30\ub2a5\u00b7\uc5ed\ud560 \ubc0f \ube44\uc988\ub2c8\uc2a4 \uac00\uce58 \uc885\ud569 \ubcf4\uace0\uc11c |`r`n`r`n")
 
-$notes += "### 빠른 시작`r`n"
+$notes += [regex]::Unescape("### \ube60\ub978 \uc2dc\uc791`r`n")
 $notes += '```' + "bash`r`n"
-$notes += "# 이미지 로드`r`n"
+$notes += [regex]::Unescape("# \uc774\ubbf8\uc9c0 \ub85c\ub4dc`r`n")
 $notes += "gunzip -c clustara-" + $Version + ".tar.gz | docker load`r`n`n"
-$notes += "# 실행`r`n"
+$notes += [regex]::Unescape("# \uc2e4\ud589`r`n")
 $notes += "docker run -d --name clustara --restart=always \`r`n"
 $notes += "  -p 9090:9090 \`r`n"
 $notes += "  -v /opt/clustara/data:/data \`n"
