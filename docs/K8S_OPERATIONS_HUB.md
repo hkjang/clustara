@@ -20,6 +20,7 @@
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
+| Pod 관리 센터 — 목록·상세·컨테이너 상태·이벤트·현재/previous 로그·실시간 tail·증적 번들·감사 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -40,6 +41,12 @@
 | POST | `/admin/k8s/clusters/{id}/collect` | Kubernetes API에서 라이브 인벤토리·이벤트·메트릭 수집 |
 | POST | `/admin/k8s/snapshot` | 리소스, 이벤트, 메트릭 스냅샷 적재 |
 | GET | `/admin/k8s/inventory` | 리소스 인벤토리 조회 |
+| GET | `/admin/k8s/pods` | Pod 관리 목록: 클러스터·namespace·node·owner·status·risk·검색 필터, restart/warning 요약 |
+| GET | `/admin/k8s/pods/{namespace}/{pod}` | Pod 상세: 상태, 컨테이너 상태, 관련 이벤트, Pod 메트릭, 로그 감사, 마스킹 manifest |
+| GET | `/admin/k8s/pods/{namespace}/{pod}/logs` | Pod 로그 조회: `cluster_id`, `container`, `previous`, `tail_lines`, `since`, `since_time`, `q`, `error_only`, `timestamps` |
+| GET | `/admin/k8s/pods/{namespace}/{pod}/logs/stream` | Pod 실시간 로그 tail(SSE): `follow=true`, `container`, `tail_lines`, `since`, `q`, `error_only`, `timestamps` |
+| POST | `/admin/k8s/pods/{namespace}/{pod}/logs/export` | 마스킹된 Pod 로그를 text 파일로 다운로드하고 조회 감사 기록 |
+| POST | `/admin/k8s/pods/{namespace}/{pod}/evidence-bundle` | Pod 증적 ZIP 생성: current/previous 로그, 이벤트, 메트릭, manifest, 리비전, RCA, 로그 감사 |
 | GET | `/admin/k8s/revisions` | 리소스 spec 변경 리비전 이력 (`cluster_id`,`kind`,`namespace`,`name`,`limit`) |
 | GET | `/admin/k8s/diff` | 두 리비전의 필드 단위 diff (`from`/`to` 미지정 시 최근 2개 비교, 민감값 자동 마스킹) |
 | GET | `/admin/k8s/timeline` | 리비전·이벤트·액션을 시간순 병합한 변경 타임라인 |
@@ -125,6 +132,9 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces", "nodes", "pods", "services", "persistentvolumeclaims", "events"]
   verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
   verbs: ["get", "list", "watch"]
@@ -220,6 +230,21 @@ curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../test
 ```powershell
 curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 ```
+
+## Pod 관리와 증적 번들
+
+`Pod 관리` 화면은 수집된 Pod 인벤토리 위에서 목록·상세·로그를 제공합니다. 목록에서는 클러스터, namespace, node, owner, status, risk, 검색어로 필터링하고 CrashLoop/OOM/ImagePull/Pending/Evicted 계열 Pod를 위험 Pod로 강조합니다. 상세에서는 ready, restart, node, owner, QoS, Pod IP, 컨테이너별 상태, 관련 이벤트, 최근 메트릭, 최근 로그 감사, 마스킹 manifest를 확인합니다.
+
+로그 조회와 실시간 tail은 Kubernetes API의 `pods/log` subresource를 사용합니다. minikube처럼 관리자 kubeconfig를 등록한 경우 바로 사용할 수 있고, 운영망 전용 ServiceAccount를 쓰는 경우 위 RBAC 예시처럼 `pods/log`의 `get` 권한이 필요합니다. 로그 응답과 증적 번들 안의 로그는 서버에서 token, password, Authorization, 주민등록번호, 카드번호 등 민감 패턴을 마스킹한 뒤 반환합니다.
+
+```powershell
+curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/logs?cluster_id=k8scl_...&container=nginx&tail_lines=200"
+curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/logs?cluster_id=k8scl_...&previous=true&q=Exception&error_only=true"
+curl.exe -N "http://localhost:9090/admin/k8s/pods/default/nginx/logs/stream?cluster_id=k8scl_...&tail_lines=50"
+curl.exe -X POST "http://localhost:9090/admin/k8s/pods/default/nginx/evidence-bundle?cluster_id=k8scl_...&tail_lines=1000" -o nginx-evidence.zip
+```
+
+증적 ZIP에는 `summary.md`, `pod.json`, `manifest.json`, `events.json`, `metrics.json`, `revisions.json`, `rca.json`, `log-audit.json`, `logs/current.log`, `logs/previous.log`가 포함됩니다. previous 로그가 없는 경우에는 `logs/previous.error.txt`로 원인을 기록합니다.
 
 ## 스냅샷 적재
 

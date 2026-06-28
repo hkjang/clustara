@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -105,6 +107,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleK8sPodDetail(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "evidence-bundle" {
+		if r.Method != http.MethodPost {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodEvidenceBundle(w, r, namespace, pod)
 		return
 	}
 	if parts[2] == "logs" {
@@ -230,6 +240,26 @@ func (s *Server) handleK8sPodLogExport(w http.ResponseWriter, r *http.Request, n
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	_, _ = w.Write([]byte(resp.Text))
+}
+
+func (s *Server) handleK8sPodEvidenceBundle(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, item, ok := s.resolvePodInventory(nil, r, namespace, pod)
+	if !ok {
+		writeOpenAIError(w, http.StatusBadRequest, "pod not found or cluster_id is missing", "invalid_request_error", "pod_not_found")
+		return
+	}
+	buf, err := s.buildPodEvidenceBundle(r, clusterID, item)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "k8s_pod_evidence_bundle_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.pod.evidence_bundle", "", auditJSON(map[string]any{
+		"cluster_id": clusterID, "namespace": namespace, "pod": pod,
+	}))
+	name := sanitizeDownloadName(clusterID + "_" + namespace + "_" + pod + "_evidence.zip")
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, pod string) (k8sPodLogResponse, error) {
@@ -411,6 +441,222 @@ func writeSSE(w http.ResponseWriter, event string, payload any) {
 		data = []byte(`{"error":"marshal failed"}`)
 	}
 	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+}
+
+func (s *Server) buildPodEvidenceBundle(r *http.Request, clusterID string, item store.K8sInventoryItem) (*bytes.Buffer, error) {
+	ctx := r.Context()
+	namespace, pod := item.Namespace, item.Name
+	events, _ := s.db.ListK8sEvents(ctx, clusterID, 1000)
+	relatedEvents := filterPodEvents(events, namespace, pod)
+	metrics, _ := s.db.ListK8sMetricSamples(ctx, clusterID, 1000)
+	relatedMetrics := []store.K8sMetricSample{}
+	for _, m := range metrics {
+		if strings.EqualFold(m.ResourceKind, "Pod") && m.Namespace == namespace && m.ResourceName == pod {
+			relatedMetrics = append(relatedMetrics, m)
+			if len(relatedMetrics) >= 30 {
+				break
+			}
+		}
+	}
+	logQueries, _ := s.db.ListK8sPodLogQueries(ctx, clusterID, 100)
+	relatedLogQueries := []store.K8sPodLogQuery{}
+	for _, q := range logQueries {
+		if q.Namespace == namespace && q.Pod == pod {
+			relatedLogQueries = append(relatedLogQueries, q)
+			if len(relatedLogQueries) >= 30 {
+				break
+			}
+		}
+	}
+	revisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Kind: "Pod", Namespace: namespace, Name: pod, Limit: 20})
+	allItems, _ := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: clusterID, Limit: 4000})
+	allRevisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Limit: 500})
+	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(allItems, events), allRevisions, time.Now().UTC(), 24*time.Hour)
+	relatedRCA := filterPodRCA(rca, namespace, pod)
+	view := podView(item, events, true)
+	manifest := assembleManifest(item)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	summary := podEvidenceSummaryMarkdown(generatedAt, clusterID, view, relatedEvents, relatedMetrics, relatedRCA)
+	if err := zipWriteText(zw, "summary.md", summary); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "bundle.json", map[string]any{
+		"generated_at": generatedAt,
+		"cluster_id":   clusterID,
+		"namespace":    namespace,
+		"pod":          pod,
+		"masked":       true,
+		"files": []string{
+			"summary.md", "pod.json", "manifest.json", "events.json", "metrics.json", "revisions.json", "rca.json", "log-audit.json", "logs/current.log", "logs/previous.log",
+		},
+	}); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "pod.json", view); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "manifest.json", manifest); err != nil {
+		return nil, err
+	}
+	if ownerKind, ownerName := view.OwnerKind, view.OwnerName; ownerKind != "" && ownerName != "" {
+		if owner, err := s.db.GetK8sInventoryItem(ctx, clusterID, ownerKind, namespace, ownerName); err == nil {
+			_ = zipWriteJSON(zw, "owner-manifest.json", assembleManifest(owner))
+		}
+	}
+	if err := zipWriteJSON(zw, "events.json", relatedEvents); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "metrics.json", relatedMetrics); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "revisions.json", revisions); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "rca.json", relatedRCA); err != nil {
+		return nil, err
+	}
+	if err := zipWriteJSON(zw, "log-audit.json", relatedLogQueries); err != nil {
+		return nil, err
+	}
+	if err := s.addPodEvidenceLogs(ctx, r, zw, clusterID, item); err != nil {
+		_ = zipWriteText(zw, "logs/client.error.txt", err.Error())
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return &buf, nil
+}
+
+func (s *Server) addPodEvidenceLogs(ctx context.Context, r *http.Request, zw *zip.Writer, clusterID string, item store.K8sInventoryItem) error {
+	cluster, err := s.db.GetK8sCluster(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	client, err := s.k8sClientForCluster(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	reader, ok := client.(podLogReader)
+	if !ok {
+		return fmt.Errorf("cluster client does not support Pod logs")
+	}
+	q := r.URL.Query()
+	container := strings.TrimSpace(q.Get("container"))
+	if container == "" {
+		container = defaultContainerName(item)
+	}
+	tailLines := boundedInt(q.Get("tail_lines"), 500, 1, 5000)
+	opts := kube.PodLogOptions{
+		Container:    container,
+		TailLines:    tailLines,
+		SinceSeconds: parseSinceSeconds(q.Get("since")),
+		SinceTime:    strings.TrimSpace(q.Get("since_time")),
+		Timestamps:   parseBool(q.Get("timestamps")),
+		LimitBytes:   boundedInt(q.Get("limit_bytes"), 5*1024*1024, 4096, 10*1024*1024),
+	}
+	for _, previous := range []bool{false, true} {
+		mode := "current"
+		if previous {
+			mode = "previous"
+		}
+		opts.Previous = previous
+		raw, err := reader.PodLogs(ctx, item.Namespace, item.Name, opts)
+		if err != nil {
+			if zerr := zipWriteText(zw, "logs/"+mode+".error.txt", err.Error()); zerr != nil {
+				return zerr
+			}
+			continue
+		}
+		processed := processPodLogs(raw, "", false)
+		if err := zipWriteText(zw, "logs/"+mode+".log", processed.Text); err != nil {
+			return err
+		}
+		if err := zipWriteJSON(zw, "logs/"+mode+".summary.json", processed.Summary); err != nil {
+			return err
+		}
+		_ = s.db.InsertK8sPodLogQuery(ctx, store.K8sPodLogQuery{
+			ID:           newID("k8splog"),
+			ClusterID:    clusterID,
+			Namespace:    item.Namespace,
+			Pod:          item.Name,
+			Container:    container,
+			Previous:     previous,
+			TailLines:    opts.TailLines,
+			SinceSeconds: opts.SinceSeconds,
+			SinceTime:    opts.SinceTime,
+			Query:        "evidence_bundle",
+			RequestedBy:  adminID(r),
+			Masked:       true,
+			LineCount:    processed.Summary.Lines,
+			ErrorCount:   processed.Summary.Error,
+			WarnCount:    processed.Summary.Warn,
+		})
+	}
+	return nil
+}
+
+func zipWriteText(zw *zip.Writer, name, text string) error {
+	f, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write([]byte(text))
+	return err
+}
+
+func zipWriteJSON(zw *zip.Writer, name string, value any) error {
+	b, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return zipWriteText(zw, name, string(b)+"\n")
+}
+
+func podEvidenceSummaryMarkdown(generatedAt, clusterID string, pod k8sPodView, events []store.K8sEvent, metrics []store.K8sMetricSample, rca []analyzer.RCAFinding) string {
+	var b strings.Builder
+	b.WriteString("# Clustara Pod Evidence Bundle\n\n")
+	b.WriteString("- Generated: " + generatedAt + "\n")
+	b.WriteString("- Cluster: " + clusterID + "\n")
+	b.WriteString("- Pod: " + pod.Namespace + "/" + pod.Name + "\n")
+	b.WriteString("- Phase: " + firstNonEmpty(pod.Phase, pod.Status, "-") + "\n")
+	b.WriteString("- Ready: " + firstNonEmpty(pod.Ready, "-") + "\n")
+	b.WriteString("- Restarts: " + strconv.Itoa(pod.RestartCount) + "\n")
+	b.WriteString("- Node: " + firstNonEmpty(pod.NodeName, "-") + "\n")
+	owner := "-"
+	if pod.OwnerKind != "" || pod.OwnerName != "" {
+		owner = firstNonEmpty(pod.OwnerKind, "-") + "/" + firstNonEmpty(pod.OwnerName, "-")
+	}
+	b.WriteString("- Owner: " + owner + "\n")
+	b.WriteString("- Masked: true\n\n")
+	b.WriteString("## Counts\n\n")
+	b.WriteString("- Events: " + strconv.Itoa(len(events)) + "\n")
+	b.WriteString("- Metrics: " + strconv.Itoa(len(metrics)) + "\n")
+	b.WriteString("- RCA candidates: " + strconv.Itoa(len(rca)) + "\n\n")
+	b.WriteString("## Files\n\n")
+	for _, f := range []string{"pod.json", "manifest.json", "events.json", "metrics.json", "revisions.json", "rca.json", "log-audit.json", "logs/current.log", "logs/previous.log"} {
+		b.WriteString("- " + f + "\n")
+	}
+	return b.String()
+}
+
+func filterPodRCA(findings []analyzer.RCAFinding, namespace, pod string) []analyzer.RCAFinding {
+	out := []analyzer.RCAFinding{}
+	for _, f := range findings {
+		if f.Namespace == namespace && strings.EqualFold(f.ResourceKind, "Pod") && f.ResourceName == pod {
+			out = append(out, f)
+			continue
+		}
+		for _, ev := range f.Evidence {
+			if strings.Contains(ev, pod) && (f.Namespace == "" || f.Namespace == namespace) {
+				out = append(out, f)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (s *Server) resolvePodInventory(w http.ResponseWriter, r *http.Request, namespace, pod string) (string, store.K8sInventoryItem, bool) {

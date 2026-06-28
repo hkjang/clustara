@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -941,6 +943,44 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if len(audit) != 2 || !foundStreamAudit {
 		t.Fatalf("unexpected stream audit: %+v", audit)
+	}
+
+	resp, err = http.Post(proxy.URL+"/admin/k8s/pods/default/api-1/evidence-bundle?cluster_id="+created.Cluster.ID+"&container=app&tail_lines=20", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	bundleBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bundle status=%d body=%s", resp.StatusCode, bundleBody)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/zip") {
+		t.Fatalf("expected zip content-type, got %q", ct)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(bundleBody), int64(len(bundleBody)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(rc)
+		rc.Close()
+		files[f.Name] = string(body)
+	}
+	for _, want := range []string{"summary.md", "pod.json", "manifest.json", "events.json", "metrics.json", "revisions.json", "rca.json", "log-audit.json", "logs/current.log", "logs/previous.log"} {
+		if _, ok := files[want]; !ok {
+			t.Fatalf("bundle missing %s; files=%v", want, files)
+		}
+	}
+	if !strings.Contains(files["summary.md"], "Clustara Pod Evidence Bundle") || !strings.Contains(files["events.json"], "BackOff") {
+		t.Fatalf("bundle summary/events missing expected evidence")
+	}
+	if strings.Contains(files["logs/current.log"], "supersecret") || strings.Contains(files["logs/current.log"], "abc.def") || !strings.Contains(files["logs/current.log"], "***REDACTED***") {
+		t.Fatalf("bundle logs were not masked: %q", files["logs/current.log"])
 	}
 }
 
