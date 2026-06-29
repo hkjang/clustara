@@ -7256,6 +7256,11 @@ const adminHTML = `<!doctype html>
           return card('이미지 사용 현황 (REG-REQ-04 · mutable ' + fmt(sm.mutable_tag || 0) + ' / pinned ' + fmt(sm.digest_pinned || 0) + ')',
             '<div class="card-body"><table><thead><tr><th>고정</th><th>이미지</th><th>워크로드 수</th><th>사용처</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
+        card('Config 변경 영향 (blast radius · CFG-REQ-04)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">ConfigMap/Secret 변경 전 참조 워크로드와 재시작 필요 여부를 확인합니다.</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="ci-kind"><option value="ConfigMap">ConfigMap</option><option value="Secret">Secret</option></select>' +
+          '<input id="ci-name" placeholder="이름" style="min-width:160px"><input id="ci-cluster" type="hidden" value="' + escapeAttr(clusterId) + '"><button type="button" onclick="k8sConfigImpact()">영향 조회</button></div>' +
+          '<div id="ci-out" style="margin-top:8px"></div></div>') +
         (function () {
           const es = (rbacDiff && rbacDiff.entries) || [];
           const rows = es.length ? es.map(e =>
@@ -7286,6 +7291,22 @@ const adminHTML = `<!doctype html>
     window.k8sSecGo = () => {
       const cl = document.getElementById('k8ssec-cluster').value;
       location.hash = '#/k8s-security' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+    window.k8sConfigImpact = async () => {
+      const out = document.getElementById('ci-out');
+      const kind = document.getElementById('ci-kind').value;
+      const name = (document.getElementById('ci-name').value || '').trim();
+      const cl = (document.getElementById('ci-cluster').value || '').trim();
+      if (!name) { out.innerHTML = '<span class="status warn">이름을 입력하세요</span>'; return; }
+      out.innerHTML = '<span class="muted">조회 중...</span>';
+      try {
+        const q = new URLSearchParams({ kind, name }); if (cl) q.set('cluster_id', cl);
+        const d = await api('/admin/k8s/config-impact?' + q.toString());
+        const im = d.impact || {};
+        const rows = (im.workloads || []).map(wl => '<tr><td>' + escapeHTML((wl.namespace || '-') + '/' + wl.kind + '/' + wl.name) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((wl.via || []).join(', ')) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">참조 워크로드 없음</td></tr>';
+        out.innerHTML = '<div style="margin-bottom:4px">' + (im.restart_recommend ? '<span class="status warn">재시작 필요 ' + fmt(im.restart_needed || 0) + '</span>' : '<span class="status">재시작 불필요</span>') + ' <span class="muted" style="font-size:11px">참조 ' + fmt(im.count || 0) + '개</span></div>' +
+          '<table><thead><tr><th>워크로드</th><th>참조 경로</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
@@ -7531,13 +7552,32 @@ const adminHTML = `<!doctype html>
     async function renderK8sPolicy() {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 정책 센터', '<div class="empty">불러오는 중...</div>');
-      let data, comp;
+      let data, comp, term;
       try {
-        [data, comp] = await Promise.all([
+        [data, comp, term] = await Promise.all([
           api('/admin/k8s/policies'),
           api('/admin/k8s/policies/compliance').catch(() => ({ violations: [] })),
+          api('/admin/k8s/terminal-policies').catch(() => ({ templates: [], policies: [] })),
         ]);
       } catch (e) { view.innerHTML = section('K8s 정책 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      term = term || { templates: [], policies: [] };
+      window._k8sTermTemplates = term.templates || [];
+      const activeTermPolicies = (term.policies || []).filter(p => p.enabled).length;
+      const tmplCards = (term.templates || []).map(t => {
+        const allow = t.command_allowlist || [];
+        const preview = allow.slice(0, 12).join(', ') + (allow.length > 12 ? ' …' : '');
+        const k = escapeAttr(t.key);
+        return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">' +
+          '<strong>' + escapeHTML(t.name) + '</strong>' +
+          '<span class="muted" style="font-size:11px">' + (t.require_approval ? '승인 필요' : '승인 불필요') + ' · ' + fmt(t.max_session_minutes || 0) + '분 · allow ' + fmt(allow.length) + '</span></div>' +
+          '<div class="muted" style="font-size:11px;margin:4px 0">' + escapeHTML(t.description || '') + '</div>' +
+          '<div class="muted" style="font-size:10px;margin-bottom:6px">허용: ' + escapeHTML(preview) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<input id="tmpl-cluster-' + k + '" placeholder="cluster_id (비우면 전체)" style="width:180px">' +
+          '<input id="tmpl-ns-' + k + '" value="' + escapeAttr(t.namespace_pattern || '*') + '" placeholder="namespace glob" style="width:150px">' +
+          '<button type="button" onclick="k8sTermTemplateApply(\'' + k + '\')">적용</button></div></div>';
+      }).join('') || '<div class="muted" style="font-size:12px">사용 가능한 템플릿이 없습니다.</div>';
       const ruleOpts = (data.available_rule_types || []).map(t => '<option value="' + escapeAttr(t) + '">' + escapeHTML(t) + '</option>').join('');
       const polRows = (data.policies || []).length ? (data.policies || []).map(p =>
         '<tr><td>' + escapeHTML(p.name) + '</td><td>' + escapeHTML(p.rule_type) + '</td>' +
@@ -7551,7 +7591,10 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
       view.innerHTML =
-        section('K8s 정책 센터', '<div class="kpis">' + kpi('정책', fmt((data.policies || []).length)) + kpi('위반 리소스', fmt((comp.violations || []).length)) + '</div>') +
+        section('K8s 정책 센터', '<div class="kpis">' + kpi('정책', fmt((data.policies || []).length)) + kpi('위반 리소스', fmt((comp.violations || []).length)) + kpi('활성 터미널 정책', fmt(activeTermPolicies)) + '</div>') +
+        card('터미널 정책 템플릿 (Pod exec)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 터미널(exec)은 기본 거부입니다 — 매칭되는 활성 정책이 없으면 차단됩니다. 아래 템플릿을 적용하면 해당 스코프의 정책이 즉시 활성화됩니다. cluster_id·namespace는 적용 전 조정하세요. 세부 편집·삭제·평가는 <a href="#/k8s-settings">운영 설정</a>의 Terminal Policy Builder에서 합니다.</div>' +
+          tmplCards + '<div id="tmpl-msg" class="muted" style="font-size:12px;margin-top:4px"></div></div>') +
         card('정책 추가 (SEC-10)',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<input id="pol-name" placeholder="정책 이름" style="min-width:160px">' +
@@ -7613,6 +7656,26 @@ const adminHTML = `<!doctype html>
           (rows ? '<ul style="margin:0 0 6px;padding-left:16px">' + rows + '</ul>' : '<div class="muted" style="font-size:12px">인식된 규칙 없음</div>') +
           (warns ? '<ul style="margin:0;padding-left:16px">' + warns + '</ul>' : '');
         if (!dryRun && (d.created || []).length) await renderK8sPolicy();
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sTermTemplateApply = async (key) => {
+      const out = document.getElementById('tmpl-msg');
+      const t = (window._k8sTermTemplates || []).find(x => x.key === key);
+      if (!t) { if (out) out.innerHTML = '<span class="status error">템플릿을 찾을 수 없습니다</span>'; return; }
+      const clusterEl = document.getElementById('tmpl-cluster-' + key);
+      const nsEl = document.getElementById('tmpl-ns-' + key);
+      const ns = ((nsEl && nsEl.value) || t.namespace_pattern || '*').trim();
+      try {
+        const d = await api('/admin/k8s/terminal-policies', { method: 'POST', body: JSON.stringify({
+          name: t.name, role: t.role || '*',
+          cluster_id: ((clusterEl && clusterEl.value) || '').trim(),
+          namespace_pattern: ns, pod_selector: t.pod_selector || '',
+          command_allowlist: t.command_allowlist || [], command_denylist: t.command_denylist || [],
+          require_approval: !!t.require_approval, max_session_minutes: t.max_session_minutes || 10,
+          audit_enabled: true, enabled: true,
+        }) });
+        const p = d.policy || {};
+        out.innerHTML = '<span class="status">템플릿 적용 — 정책 활성화됨: ' + escapeHTML(p.name || t.name) + ' (ns=' + escapeHTML(ns) + ', allow ' + fmt((p.command_allowlist || []).length) + ')</span>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPolicyAdd = async () => {
