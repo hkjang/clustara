@@ -30,5 +30,8 @@ func gatewayToolContracts() []gatewayToolContract {
 		{"gateway_list_skills", "low", "free", 10000, "", false, "{skills[]}"},
 		{"gateway_explain_request", "low", "free", 10000, "", false, "{request_id, model, cost, routing, policy} — own request only"},
 		{"gateway_get_usage_summary", "low", "free", 10000, "", false, "{window, requests, tokens, cost_krw}"},
+		{"k8s_list_clusters", "low", "free", 10000, "admin", false, "{clusters[], count} — id·name·group·status (read-only)"},
+		{"k8s_list_incidents", "low", "free", 15000, "admin", false, "{incidents[], count, status} — 장애 워룸 인시던트 (read-only)"},
+		{"k8s_pod_health", "low", "free", 20000, "admin", false, "{workloads[], count} — owner 단위 Pod Health 요약 (read-only)"},
 	}
 }

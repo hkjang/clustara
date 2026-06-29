@@ -27,6 +27,7 @@
 | 워크로드 묶음 보기 — owner(ReplicaSet/StatefulSet/DaemonSet) 단위 Pod 상태·Health·증상 집계, 위험 순 정렬 | ✅ |
 | Pod Compare Matrix — 같은 워크로드 Pod를 필드 단위 비교, 다른 값·소수(outlier) Pod 강조 | ✅ |
 | Pod Watch List — 중요 namespace/워크로드 감시 등록, 현재 위험 상태(밴드·위험 Pod·증상) 집계 | ✅ |
+| K8s MCP Toolset — `/mcp/gateway`에 read-only 운영 도구(`k8s_list_clusters`·`k8s_list_incidents`·`k8s_pod_health`) 노출, admin:read 게이트 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -172,6 +173,9 @@ func gatewayToolDefs() []mcpToolDef {
 		{Name: "gateway_list_skills", Description: "사용 가능한 production Skill 목록을 조회합니다(팀 권한 기준).", InputSchema: obj(``)},
 		{Name: "gateway_explain_request", Description: "본인 요청의 모델·비용·라우팅·정책 요약(영수증)을 조회합니다.", InputSchema: obj(`"request_id":{"type":"string"}`)},
 		{Name: "gateway_get_usage_summary", Description: "본인 사용량/비용 요약을 조회합니다.", InputSchema: obj(`"window":{"type":"string","description":"예: 7d, 30d"}`)},
+		{Name: "k8s_list_clusters", Description: "등록된 Kubernetes 클러스터 목록(id·이름·그룹)을 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(``)},
+		{Name: "k8s_list_incidents", Description: "K8s 장애 워룸의 인시던트를 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(`"cluster_id":{"type":"string"},"status":{"type":"string","description":"open|resolved (기본 open)"}`)},
+		{Name: "k8s_pod_health", Description: "클러스터의 워크로드(owner) 단위 Pod Health 요약을 위험 순으로 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(`"cluster_id":{"type":"string"},"namespace":{"type":"string","description":"선택 — 특정 namespace만"}`)},
 	}
 }
 
@@ -473,6 +477,75 @@ func (s *Server) runGatewayTool(ctx context.Context, r *http.Request, apiKeyID s
 			return nil, err
 		}
 		return gatewayToolJSON(map[string]any{"requests": u.Requests, "tokens": u.Tokens, "cost_krw": round1(u.CostKRW), "errors": u.Errors, "since": since.UTC().Format(time.RFC3339)}), nil
+
+	case "k8s_list_clusters", "k8s_list_incidents", "k8s_pod_health":
+		// K8s operational tools are admin-gated (read-only).
+		if authCtx == nil || !hasScope(authCtx.Scopes, "admin:read") {
+			return nil, errGateway("admin:read scope required for K8s tools")
+		}
+		return s.runK8sGatewayTool(ctx, name, args)
+	}
+	return nil, errGateway("unknown tool: " + name)
+}
+
+// runK8sGatewayTool serves the read-only K8s MCP tools (incidents, pod health, clusters) so
+// Claude Code/Cursor can query Clustara operational state. Caller is already admin-gated.
+func (s *Server) runK8sGatewayTool(ctx context.Context, name string, args json.RawMessage) (map[string]any, error) {
+	switch name {
+	case "k8s_list_clusters":
+		clusters, err := s.db.ListK8sClusters(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]map[string]any, 0, len(clusters))
+		for _, c := range clusters {
+			out = append(out, map[string]any{"id": c.ID, "name": c.Name, "group_id": c.GroupID, "status": c.Status})
+		}
+		return gatewayToolJSON(map[string]any{"clusters": out, "count": len(out)}), nil
+
+	case "k8s_list_incidents":
+		var a struct {
+			ClusterID string `json:"cluster_id"`
+			Status    string `json:"status"`
+		}
+		_ = json.Unmarshal(args, &a)
+		status := strings.TrimSpace(a.Status)
+		if status == "" {
+			status = "open"
+		}
+		incs, err := s.db.ListK8sIncidents(ctx, store.K8sIncidentFilter{ClusterID: strings.TrimSpace(a.ClusterID), Status: status, Limit: 50})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]map[string]any, 0, len(incs))
+		for _, inc := range incs {
+			out = append(out, map[string]any{
+				"id": inc.ID, "cluster_id": inc.ClusterID, "namespace": inc.Namespace,
+				"kind": inc.Kind, "name": inc.Name, "condition": inc.Condition,
+				"severity": inc.Severity, "status": inc.Status, "title": inc.Title, "opened_at": inc.OpenedAt,
+			})
+		}
+		return gatewayToolJSON(map[string]any{"incidents": out, "count": len(out), "status": status}), nil
+
+	case "k8s_pod_health":
+		var a struct {
+			ClusterID string `json:"cluster_id"`
+			Namespace string `json:"namespace"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if strings.TrimSpace(a.ClusterID) == "" {
+			return nil, errGateway("cluster_id is required (use k8s_list_clusters to discover ids)")
+		}
+		groups := s.workloadGroupsForCluster(ctx, strings.TrimSpace(a.ClusterID))
+		ns := strings.TrimSpace(a.Namespace)
+		out := []analyzer.WorkloadGroup{}
+		for _, g := range groups {
+			if ns != "" && g.Namespace != ns {
+				continue
+			}
+			out = append(out, g)
+		}
+		return gatewayToolJSON(map[string]any{"workloads": out, "count": len(out)}), nil
 	}
 	return nil, errGateway("unknown tool: " + name)
 }
