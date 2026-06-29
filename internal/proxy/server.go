@@ -300,6 +300,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/latency/collect", s.handleK8sLatencyCollect)
 	mux.HandleFunc("/admin/k8s/latency/config", s.handleK8sLatencyConfig)
 	mux.HandleFunc("/admin/k8s/exec/sessions", s.handleK8sExecSessions)
+	mux.HandleFunc("/admin/k8s/exec/sessions/", s.handleK8sExecSessionByID)
 	mux.HandleFunc("/admin/k8s/terminal-policies", s.handleK8sTerminalPolicies)
 	mux.HandleFunc("/admin/k8s/terminal-policies/", s.handleK8sTerminalPolicyByID)
 	mux.HandleFunc("/admin/k8s/groups", s.handleK8sGroups)

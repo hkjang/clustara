@@ -21,7 +21,7 @@
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
 | Pod 관리 센터 — 목록·상세·컨테이너 상태·이벤트·현재/previous 로그·로그 분석·실시간 tail·증적 번들·Golden Pod Diff·Health Replay·exec 세션 요청·감사 | ✅ |
-| Terminal Policy Builder — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·세션 요청 평가 | ✅ |
+| Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·세션 요청 평가/승인 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -53,6 +53,7 @@
 | GET | `/admin/k8s/pods/{namespace}/{pod}/health-replay` | Pod 상태·컨테이너 상태·이벤트·메트릭·리비전·로그 감사·RCA 후보를 시간순으로 재생 |
 | GET/POST | `/admin/k8s/pods/{namespace}/{pod}/exec/sessions` | Pod별 정책 기반 exec 세션 요청/이력: role, container, command, reason, `ready`/`pending_approval`/`denied` |
 | GET | `/admin/k8s/exec/sessions` | 전체 Pod exec 세션 요청 이력 조회: cluster, namespace, pod, status 필터 |
+| POST | `/admin/k8s/exec/sessions/{id}/approve`, `/reject`, `/execute` | `pending_approval` 세션 승인/반려, `ready` 세션의 단일 제한 명령 실행. 실행 결과는 `completed`/`failed`, exit code, 마스킹 출력 샘플로 감사 기록 |
 | GET/POST | `/admin/k8s/terminal-policies` | Pod web terminal/exec 사전 정책 목록·생성: role, cluster, namespace glob, label selector, allow/deny 명령, 승인·감사 설정 |
 | DELETE | `/admin/k8s/terminal-policies/{id}` | 터미널 정책 삭제 |
 | POST | `/admin/k8s/terminal-policies/evaluate` | 특정 role/namespace/pod labels/command를 실제 exec 전에 정책으로 평가 |
@@ -263,7 +264,7 @@ curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/health-replay?clust
 
 `운영 설정` 화면의 Terminal Policy Builder는 실제 Pod exec/web terminal 기능을 켜기 전에 접속 정책을 먼저 정의하는 안전장치입니다. 정책은 role, cluster, namespace glob, Pod label selector, 허용 명령, 차단 명령, 승인 필요 여부, 최대 세션 시간, 감사 저장 여부를 포함합니다. 내장 차단 규칙은 `rm -rf`, `dd`, `mkfs`, `shutdown/reboot`, `curl|sh`, `kubectl delete`, 패키지 설치 명령 등을 기본적으로 차단합니다.
 
-Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 현재 단계에서는 실제 WebSocket/TTY를 열지 않고 세션 상태와 정책 근거를 기록합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다.
+Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다. 운영 설정의 `Exec 세션 승인함`에서 `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`로 전환되고 `decided_by`, `decided_at`, `decision_note`가 남습니다. `ready` 세션은 무입력·무TTY 단일 명령으로만 실행되며, 완료 후 `completed` 또는 `failed`로 닫히고 `executed_by`, `executed_at`, `exit_code`, 마스킹된 출력 샘플이 기록됩니다.
 
 ```powershell
 curl.exe -X POST "http://localhost:9090/admin/k8s/terminal-policies" `

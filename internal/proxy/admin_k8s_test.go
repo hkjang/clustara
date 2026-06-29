@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -790,6 +791,7 @@ func TestK8sGroupsAndOwnership(t *testing.T) {
 
 func TestK8sPodManagementAndLogs(t *testing.T) {
 	var logQuery string
+	var execQuery url.Values
 	kubeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -805,6 +807,14 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 			logQuery = r.URL.RawQuery
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte("info ok\nException password=supersecret Authorization: Bearer abc.def\nwarn retry\n"))
+		case "/api/v1/namespaces/default/pods/api-1/exec":
+			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				http.Error(w, "websocket disabled in test", http.StatusBadRequest)
+				return
+			}
+			execQuery = r.URL.Query()
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("config password=supersecret Authorization: Bearer abc.def\nok\n"))
 		case "/api/v1/events":
 			_, _ = w.Write([]byte(`{"items":[{"metadata":{"namespace":"default","name":"api.1","creationTimestamp":"2026-06-24T00:01:00Z"},"involvedObject":{"kind":"Pod","namespace":"default","name":"api-1"},"type":"Warning","reason":"BackOff","message":"Back-off restarting failed container","count":4}]}`))
 		default:
@@ -943,6 +953,75 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if deniedExec.Session.Status != "denied" || deniedExec.Session.RiskLevel != "critical" || deniedExec.PolicyResult.Allowed || deniedExec.NextAction != "blocked" {
 		t.Fatalf("unexpected denied exec request: %+v", deniedExec)
 	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/exec/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"role":      "viewer",
+		"container": "app",
+		"command":   "cat /app/config",
+		"reason":    "inspect config reference",
+	})
+	defer resp.Body.Close()
+	var rejectReq struct {
+		Session store.K8sPodExecSession `json:"session"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rejectReq); err != nil {
+		t.Fatal(err)
+	}
+	if rejectReq.Session.Status != "pending_approval" {
+		t.Fatalf("expected second safe command to wait for approval: %+v", rejectReq.Session)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+execReq.Session.ID+"/approve", "", map[string]any{"note": "approved for read-only inspection"})
+	defer resp.Body.Close()
+	var approvedExec struct {
+		Session    store.K8sPodExecSession `json:"session"`
+		NextAction string                  `json:"next_action"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&approvedExec); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || approvedExec.Session.Status != "ready" || approvedExec.NextAction != "connect_exec_transport" || approvedExec.Session.DecidedBy == "" || approvedExec.Session.DecidedAt == "" {
+		t.Fatalf("unexpected approved exec session: status=%d body=%+v", resp.StatusCode, approvedExec)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+execReq.Session.ID+"/execute", "", map[string]any{})
+	defer resp.Body.Close()
+	var executedExec struct {
+		Session  store.K8sPodExecSession `json:"session"`
+		Executed bool                    `json:"executed"`
+		Result   struct {
+			Stdout   string `json:"stdout"`
+			Stderr   string `json:"stderr"`
+			ExitCode int    `json:"exit_code"`
+			Masked   bool   `json:"masked"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&executedExec); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !executedExec.Executed || executedExec.Session.Status != "completed" || executedExec.Session.ExecutedBy == "" || executedExec.Result.ExitCode != 0 || !executedExec.Result.Masked {
+		t.Fatalf("unexpected executed exec session: status=%d body=%+v", resp.StatusCode, executedExec)
+	}
+	if strings.Contains(executedExec.Result.Stdout, "supersecret") || strings.Contains(executedExec.Result.Stdout, "abc.def") || !strings.Contains(executedExec.Result.Stdout, "***REDACTED***") {
+		t.Fatalf("exec stdout should be masked: %q", executedExec.Result.Stdout)
+	}
+	if strings.Join(execQuery["command"], " ") != "ls /app" || execQuery.Get("container") != "app" || execQuery.Get("stdin") != "false" || execQuery.Get("stdout") != "true" || execQuery.Get("stderr") != "true" {
+		t.Fatalf("unexpected exec query: %v", execQuery)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+rejectReq.Session.ID+"/reject", "", map[string]any{"note": "duplicate investigation"})
+	defer resp.Body.Close()
+	var rejectedExec struct {
+		Session store.K8sPodExecSession `json:"session"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rejectedExec); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || rejectedExec.Session.Status != "rejected" || rejectedExec.Session.DecisionNote != "duplicate investigation" {
+		t.Fatalf("unexpected rejected exec session: status=%d body=%+v", resp.StatusCode, rejectedExec)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+deniedExec.Session.ID+"/approve", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("denied session must not be approvable: status=%d body=%s", resp.StatusCode, body)
+	}
 	resp, err = http.Get(proxy.URL + "/admin/k8s/exec/sessions?cluster_id=" + created.Cluster.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -954,8 +1033,8 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&execList); err != nil {
 		t.Fatal(err)
 	}
-	if len(execList.Sessions) != 2 {
-		t.Fatalf("expected two exec session audit rows, got %+v", execList.Sessions)
+	if len(execList.Sessions) != 3 {
+		t.Fatalf("expected three exec session audit rows, got %+v", execList.Sessions)
 	}
 
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/golden-diff?cluster_id=" + created.Cluster.ID)

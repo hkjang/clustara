@@ -145,6 +145,45 @@ func TestHTTPClientPodLogsStream(t *testing.T) {
 	}
 }
 
+func TestHTTPClientPodExecFallback(t *testing.T) {
+	var gotPath, gotMethod, gotAuth string
+	var gotCommand []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "websocket disabled in test", http.StatusBadRequest)
+			return
+		}
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		gotCommand = r.URL.Query()["command"]
+		_, _ = w.Write([]byte("exec ok\n"))
+	}))
+	defer api.Close()
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.PodExec(context.Background(), "default", "api-1", PodExecOptions{
+		Container: "app", Command: "ls /app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/namespaces/default/pods/api-1/exec" {
+		t.Fatalf("method/path = %s %s", gotMethod, gotPath)
+	}
+	if strings.Join(gotCommand, " ") != "ls /app" {
+		t.Fatalf("command query = %+v", gotCommand)
+	}
+	if gotAuth != "Bearer tok" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if res.Stdout != "exec ok\n" || res.ExitCode != 0 {
+		t.Fatalf("unexpected exec result: %+v", res)
+	}
+}
+
 func writeTestFile(t *testing.T, path string, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

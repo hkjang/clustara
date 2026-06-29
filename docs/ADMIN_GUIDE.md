@@ -52,9 +52,9 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 - **증적 번들**: current/previous 로그, 이벤트, 메트릭, manifest, 리비전, RCA, 로그 감사를 ZIP으로 생성합니다.
 - **Golden Pod Diff**: 같은 owner/label의 Running·Ready Pod를 자동 기준으로 골라 image, env 참조, resource, probe, volume, node, restart 차이를 비교합니다. env/secret 값은 노출하지 않습니다.
 - **Health Replay**: Pod 상태, 컨테이너 상태, 이벤트, 메트릭, 리비전, 로그 조회 감사, RCA 후보를 시간순으로 묶어 장애 전후 흐름을 확인합니다.
-- **터미널 요청**: container, role, command, reason을 Terminal Policy로 평가하고, 실제 WebSocket/TTY 연결 전 세션 요청을 `ready`/`pending_approval`/`denied` 상태로 감사 기록합니다.
+- **터미널 요청**: container, role, command, reason을 Terminal Policy로 평가하고 세션 요청을 `ready`/`pending_approval`/`denied` 상태로 감사 기록합니다. 승인이 필요한 요청은 운영 설정의 Exec 세션 승인함에서 `ready` 또는 `rejected`로 결정하고, `ready` 세션은 단일 제한 명령으로 실행해 `completed` 또는 `failed`로 닫습니다.
 - 운영망 전용 ServiceAccount는 `pods/log`의 `get` 권한이 필요합니다.
-- API: `GET /admin/k8s/pods`, `GET /admin/k8s/pods/{namespace}/{pod}`, `GET /admin/k8s/pods/{namespace}/{pod}/logs`, `POST /admin/k8s/pods/{namespace}/{pod}/logs/analyze`, `GET /admin/k8s/pods/{namespace}/{pod}/logs/stream`, `POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle`, `GET /admin/k8s/pods/{namespace}/{pod}/golden-diff`, `GET /admin/k8s/pods/{namespace}/{pod}/health-replay`
+- API: `GET /admin/k8s/pods`, `GET /admin/k8s/pods/{namespace}/{pod}`, `GET /admin/k8s/pods/{namespace}/{pod}/logs`, `POST /admin/k8s/pods/{namespace}/{pod}/logs/analyze`, `GET /admin/k8s/pods/{namespace}/{pod}/logs/stream`, `POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle`, `GET /admin/k8s/pods/{namespace}/{pod}/golden-diff`, `GET /admin/k8s/pods/{namespace}/{pod}/health-replay`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`
 
 ## 5. 변경 타임라인 (`#/k8s-timeline`)
 
@@ -146,9 +146,10 @@ namespace/service 단위 SLO와 에러버짓을 확인합니다. 현재는 incid
 
 비용 단가(KRW/vCPU·월, KRW/GB·월), 알림(조용한 시간 `HH-HH`, 팀→Mattermost 채널 매핑 JSON), latency 분석, ChatOps, Terminal Policy Builder를 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정(설정 메뉴)을 따릅니다.
 
-- Terminal Policy Builder: role, cluster, namespace glob, Pod label selector, 허용·차단 명령, 승인 필요, 최대 세션 시간, 감사 저장 여부를 설정합니다. Pod 상세의 터미널 요청은 이 정책 평가를 통과한 뒤 세션 요청 이력과 승인 워크플로우로 연결됩니다.
+- Terminal Policy Builder: role, cluster, namespace glob, Pod label selector, 허용·차단 명령, 승인 필요, 최대 세션 시간, 감사 저장 여부를 설정합니다. Pod 상세의 터미널 요청은 이 정책 평가를 통과한 뒤 세션 요청 이력과 Exec 세션 승인함으로 연결됩니다.
+- Exec 세션 승인함: `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`가 되며 승인자·시각·메모가 남습니다. `ready` 세션의 실행 결과는 exit code, 실행자, 실행 시각, 마스킹 출력 샘플로 기록됩니다.
 - API: `GET/POST /admin/k8s/cost/config`, `/admin/k8s/notify/config`, `/admin/k8s/latency/config`, `/admin/notifications/mattermost`
-- 터미널 정책/세션 API: `GET/POST /admin/k8s/terminal-policies`, `DELETE /admin/k8s/terminal-policies/{id}`, `POST /admin/k8s/terminal-policies/evaluate`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`, `GET /admin/k8s/exec/sessions`
+- 터미널 정책/세션 API: `GET/POST /admin/k8s/terminal-policies`, `DELETE /admin/k8s/terminal-policies/{id}`, `POST /admin/k8s/terminal-policies/evaluate`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`, `GET /admin/k8s/exec/sessions`, `POST /admin/k8s/exec/sessions/{id}/approve|reject|execute`
 
 ---
 
