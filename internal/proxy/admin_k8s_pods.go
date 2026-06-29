@@ -37,6 +37,10 @@ type k8sPodView struct {
 	Images         []string                 `json:"images"`
 	Age            string                   `json:"age"`
 	WarningEvents  int                      `json:"warning_events"`
+	HealthScore    int                      `json:"health_score"`
+	HealthBand     string                   `json:"health_band"`
+	PrimarySymptom string                   `json:"primary_symptom"`
+	Symptoms       []string                 `json:"symptoms,omitempty"`
 	Containers     []k8sContainerStatusView `json:"containers,omitempty"`
 }
 
@@ -322,6 +326,8 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, view)
 	}
+	// Worst health first so the operator sees "어디부터 봐야 하는지" at the top.
+	sort.SliceStable(views, func(i, j int) bool { return views[i].HealthScore < views[j].HealthScore })
 	critical, warning, restarts := 0, 0, 0
 	for _, p := range views {
 		if p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" || p.RestartCount > 0 || p.WarningEvents > 0 {
@@ -1666,7 +1672,36 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 			view.RiskLevel = risk
 		}
 	}
+	reasons := make([]string, 0, len(containers)*2)
+	for _, c := range containers {
+		if c.Reason != "" {
+			reasons = append(reasons, c.Reason)
+		}
+		if c.LastReason != "" {
+			reasons = append(reasons, c.LastReason)
+		}
+	}
+	health := analyzer.ScorePodHealth(analyzer.PodHealthInput{
+		Phase: view.Phase, ContainerCount: view.ContainerCount, ReadyCount: view.ReadyCount,
+		RestartCount: view.RestartCount, WarningEvents: view.WarningEvents, RiskLevel: view.RiskLevel,
+		Deleting: strAny(status["deletionTimestamp"]) != "" || metadataDeleting(item),
+		ContainerReasons: reasons,
+	})
+	view.HealthScore = health.Score
+	view.HealthBand = health.Band
+	view.PrimarySymptom = health.PrimarySymptom
+	view.Symptoms = health.Symptoms
 	return view
+}
+
+// metadataDeleting reports whether the inventory item carries a deletionTimestamp (Terminating).
+func metadataDeleting(item store.K8sInventoryItem) bool {
+	if md := asMapAny(item.StatusObject["metadata"]); md != nil {
+		if strAny(md["deletionTimestamp"]) != "" {
+			return true
+		}
+	}
+	return strAny(item.StatusObject["deletionTimestamp"]) != ""
 }
 
 func podContainerStatuses(spec, status map[string]any) []k8sContainerStatusView {
