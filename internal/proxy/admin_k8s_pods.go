@@ -339,17 +339,27 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		}
 		restarts += p.RestartCount
 	}
+	stormPods := make([]analyzer.RestartStormPod, 0, len(views))
+	for _, p := range views {
+		stormPods = append(stormPods, analyzer.RestartStormPod{
+			Namespace: p.Namespace, Name: p.Name, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName,
+			RestartCount: p.RestartCount, Unhealthy: p.HealthBand == "critical",
+		})
+	}
+	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
 	bookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 20})
 	autoBookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: "system:auto", ClusterID: clusterID, Limit: 20})
 	recentAccess, _ := s.db.ListK8sPodAccesses(r.Context(), store.K8sPodAccessFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 12})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pods":           views,
+		"restart_storms": storms,
 		"bookmarks":      bookmarks,
 		"auto_bookmarks": autoBookmarks,
 		"recent_access":  recentAccess,
 		"log_presets":    podLogFilterPresets(),
 		"summary": map[string]int{
 			"total": len(views), "risky": critical, "with_warning_events": warning, "restarts": restarts,
+			"restart_storms": len(storms),
 		},
 	})
 }

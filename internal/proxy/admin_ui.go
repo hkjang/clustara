@@ -6175,8 +6175,18 @@ const adminHTML = `<!doctype html>
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: a.cluster_id || '', namespace: a.namespace || '', pod: a.pod || '' }).toString();
         return '<tr><td><a href="' + escapeAttr(href) + '">' + escapeHTML((a.namespace || '-') + '/' + (a.pod || '-')) + '</a></td><td>' + escapeHTML(a.action || '-') + '</td><td>' + fmt(a.count || 0) + '</td><td class="muted" style="font-size:11px">' + ago(a.last_seen) + '</td></tr>';
       }).join('') || '<tr><td colspan="4" class="muted">최근 접속 이력이 없습니다.</td></tr>';
+      const storms = d.restart_storms || [];
+      const stormCard = storms.length ? card('⚠ Restart Storm — 서비스 단위 장애 의심', '<div class="card-body"><table><thead><tr><th>심각도</th><th>워크로드</th><th>Namespace</th><th>영향 Pod</th><th>재시작</th><th>판단</th></tr></thead><tbody>' +
+        storms.map(s => '<tr><td><span class="status ' + (s.severity === 'critical' ? 'error' : 'warn') + '">' + escapeHTML(s.severity) + '</span></td>' +
+          '<td><strong>' + escapeHTML((s.owner_kind || '-') + '/' + (s.owner_name || '-')) + '</strong></td>' +
+          '<td>' + escapeHTML(s.namespace || '-') + '</td>' +
+          '<td>' + fmt(s.affected_pods || 0) + '/' + fmt(s.pod_count || 0) + ' (' + fmt(s.affected_pct || 0) + '%)</td>' +
+          '<td>' + fmt(s.total_restarts || 0) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(s.reason || '') + '</td></tr>').join('') +
+        '</tbody></table></div>') : '';
       view.innerHTML =
-        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        stormCard +
         card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="pod-cluster">' + clusterOpts + '</select><input id="pod-ns" placeholder="namespace" value="' + escapeAttr(ns) + '"><input id="pod-node" placeholder="node" value="' + escapeAttr(params && params.get('node') || '') + '">' +
           '<input id="pod-status" placeholder="status" value="' + escapeAttr(params && params.get('status') || '') + '"><input id="pod-q" placeholder="pod/image 검색" value="' + escapeAttr(params && params.get('q') || '') + '">' +
