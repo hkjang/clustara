@@ -1,5 +1,5 @@
 v0.6.0:
-- **터미널 정책 빌더 (v0.6.0)**: 실제 Pod exec/web terminal 기능을 켜기 전에 role·cluster·namespace·label selector·명령 allow/deny 패턴·승인 필요 여부·세션 시간·감사 저장을 관리하는 정책 API와 운영 설정 UI를 추가했습니다. 내장 위험 명령 차단(`rm -rf`, `dd`, `mkfs`, `curl | sh` 등)과 사전 평가 API(`/admin/k8s/terminal-policies/evaluate`)를 제공합니다.
+- **터미널 정책 빌더 및 Exec 세션 제어 (v0.6.0)**: 실제 Pod exec/web terminal 기능을 켜기 전에 접속 정책(role·cluster·namespace·label·허용/차단 명령·승인 여부·세션 시간)을 수립하는 정책 엔진을 구축했습니다. 정책 평가 결과에 따라 세션 요청을 `ready`, `pending_approval`, `denied` 상태로 감사 관리하는 이력 API를 통합했습니다. (`/admin/k8s/terminal-policies`, `/exec/sessions`)
 - **Pod 로그 오류 분석**: Pod의 현재/이전 로그를 마스킹 처리한 뒤, Exception, OOM, Timeout, DNS, Network, Auth, Probe, Image Pull 등 주요 장애 패턴을 그룹핑하여 근거 라인과 조치 후보를 함께 분석해 주는 지능형 로그 분석 엔드포인트를 추가했습니다. (`/admin/k8s/pods/{namespace}/{pod}/logs/analyze`)
 
 v0.5.0:

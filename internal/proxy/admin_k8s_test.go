@@ -890,6 +890,74 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
 
+	resp = postJSON(t, proxy.URL+"/admin/k8s/terminal-policies", "", map[string]any{
+		"name":                "pod detail read only",
+		"role":                "viewer",
+		"cluster_id":          created.Cluster.ID,
+		"namespace_pattern":   "default",
+		"pod_selector":        "app=api",
+		"command_allowlist":   []string{"ls", "cat *"},
+		"command_denylist":    []string{"rm -rf"},
+		"require_approval":    true,
+		"max_session_minutes": 5,
+		"audit_enabled":       true,
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("terminal policy status=%d body=%s", resp.StatusCode, body)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/exec/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"role":      "viewer",
+		"container": "app",
+		"command":   "ls /app",
+		"reason":    "inspect crashloop files",
+	})
+	defer resp.Body.Close()
+	var execReq struct {
+		Session      store.K8sPodExecSession  `json:"session"`
+		PolicyResult terminalPolicyEvalResult `json:"policy_result"`
+		NextAction   string                   `json:"next_action"`
+		Executed     bool                     `json:"executed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&execReq); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || execReq.Session.Status != "pending_approval" || execReq.Session.Container != "app" || execReq.Session.RiskLevel != "low" || !execReq.PolicyResult.Allowed || execReq.NextAction != "approval_required" || execReq.Executed {
+		t.Fatalf("unexpected exec session request: status=%d body=%+v", resp.StatusCode, execReq)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/exec/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"role":      "viewer",
+		"container": "app",
+		"command":   "rm -rf /",
+	})
+	defer resp.Body.Close()
+	var deniedExec struct {
+		Session      store.K8sPodExecSession  `json:"session"`
+		PolicyResult terminalPolicyEvalResult `json:"policy_result"`
+		NextAction   string                   `json:"next_action"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&deniedExec); err != nil {
+		t.Fatal(err)
+	}
+	if deniedExec.Session.Status != "denied" || deniedExec.Session.RiskLevel != "critical" || deniedExec.PolicyResult.Allowed || deniedExec.NextAction != "blocked" {
+		t.Fatalf("unexpected denied exec request: %+v", deniedExec)
+	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/exec/sessions?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var execList struct {
+		Sessions []store.K8sPodExecSession `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&execList); err != nil {
+		t.Fatal(err)
+	}
+	if len(execList.Sessions) != 2 {
+		t.Fatalf("expected two exec session audit rows, got %+v", execList.Sessions)
+	}
+
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/golden-diff?cluster_id=" + created.Cluster.ID)
 	if err != nil {
 		t.Fatal(err)

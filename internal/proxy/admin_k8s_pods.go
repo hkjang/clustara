@@ -190,6 +190,10 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodHealthReplay(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "exec" && len(parts) > 3 && parts[3] == "sessions" {
+		s.handleK8sPodExecSessions(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "logs" {
 		if len(parts) > 3 && parts[3] == "stream" {
 			if r.Method != http.MethodGet {

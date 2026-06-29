@@ -6200,6 +6200,9 @@ const adminHTML = `<!doctype html>
           '<select id="podlog-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><label style="font-size:12px"><input id="podlog-prev" type="checkbox"> previous</label><input id="podlog-tail" value="200" style="width:70px" title="tail lines"><input id="podlog-since" placeholder="since 예: 5m, 1h" style="width:130px"><input id="podlog-q" placeholder="검색어" style="width:180px"><label style="font-size:12px"><input id="podlog-error" type="checkbox"> 에러만</label>' +
           '<button type="button" onclick="k8sPodLoadLogsFromDetail()">조회</button><button type="button" class="secondary" onclick="k8sPodAnalyzeLogsFromDetail()">분석</button><button type="button" class="secondary" onclick="k8sPodStartStreamFromDetail()">실시간 시작</button><button type="button" class="secondary" onclick="k8sPodStopStream()">중지</button><button type="button" class="secondary" onclick="k8sPodExportLogsFromDetail()">다운로드</button><button type="button" class="secondary" onclick="k8sPodDownloadEvidenceFromDetail()">증적 번들</button></div>' +
           '<div id="podlog-summary" class="muted" style="font-size:11px;margin-top:6px">로그 원문은 저장하지 않고 조회 감사만 남깁니다. token/password/Authorization 등은 응답 전 마스킹됩니다.</div><div id="podlog-analysis" class="muted" style="font-size:12px;margin-top:8px"></div><pre id="podlog-output" style="white-space:pre-wrap;max-height:460px;overflow:auto;margin-top:8px"></pre></div>') +
+        card('터미널 요청', '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<select id="podexec-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><input id="podexec-role" value="viewer" placeholder="role" style="width:110px"><input id="podexec-command" value="ls /" placeholder="명령" style="min-width:220px"><input id="podexec-reason" placeholder="사유" style="min-width:220px">' +
+          '<button type="button" onclick="k8sPodRequestExecFromDetail()">세션 요청</button></div><div id="podexec-result" class="muted" style="font-size:12px;margin-top:8px">Terminal Policy 평가 후 세션 요청과 감사 기록을 생성합니다.</div></div>') +
         card('로그 감사', '<div class="card-body"><table><thead><tr><th>Mode</th><th>Container</th><th>Tail</th><th>Query</th><th>Lines</th><th>Errors</th><th>User</th><th>Time</th></tr></thead><tbody>' + logAudits + '</tbody></table></div>') +
         card('리소스', '<div class="card-body"><table><thead><tr><th>CPU</th><th>Memory</th><th>Observed</th></tr></thead><tbody>' + metrics + '</tbody></table></div>') +
         card('Manifest', '<div class="card-body"><pre style="white-space:pre-wrap;max-height:360px;overflow:auto">' + escapeHTML(JSON.stringify(d.manifest || {}, null, 2)) + '</pre></div>');
@@ -6225,6 +6228,7 @@ const adminHTML = `<!doctype html>
     window.k8sPodDownloadEvidenceFromDetail = () => { const c = podLogContext(); return window.k8sPodDownloadEvidence(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadGoldenDiffFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadGoldenDiff(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadHealthReplayFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadHealthReplay(c.clusterId, c.ns, c.pod); };
+    window.k8sPodRequestExecFromDetail = () => { const c = podLogContext(); return window.k8sPodRequestExec(c.clusterId, c.ns, c.pod); };
     let podLogStreamController = null;
     function podLogLineHTML(line) {
       const color = line.level === 'error' ? 'color:#b91c1c;font-weight:700' : (line.level === 'warn' ? 'color:#b45309' : '');
@@ -6339,6 +6343,28 @@ const adminHTML = `<!doctype html>
           '<tr><td colspan="4" class="muted">표시할 Pod 상태 흐름이 없습니다.</td></tr>';
         out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:8px">entries ' + fmt(summary.total || 0) + ' · event ' + fmt(byCat.event || 0) + ' · metric ' + fmt(byCat.metric || 0) + ' · revision ' + fmt(byCat.revision || 0) + ' · log ' + fmt(byCat.log || 0) + '</div>' +
           '<table><thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Detail</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) {
+        out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sPodRequestExec = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podexec-result');
+      const q = new URLSearchParams({ cluster_id: clusterId || '' });
+      const role = (document.getElementById('podexec-role') && document.getElementById('podexec-role').value || 'viewer').trim();
+      const container = (document.getElementById('podexec-container') && document.getElementById('podexec-container').value || '').trim();
+      const command = (document.getElementById('podexec-command') && document.getElementById('podexec-command').value || '').trim();
+      const reason = (document.getElementById('podexec-reason') && document.getElementById('podexec-reason').value || '').trim();
+      out.innerHTML = '<span class="muted">세션 요청 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/exec/sessions?' + q.toString(), {
+          method: 'POST',
+          body: JSON.stringify({ role, container, command, reason })
+        });
+        const s = d.session || {}; const r = d.policy_result || {};
+        const cls = s.status === 'denied' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
+        out.innerHTML = '<div><span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · risk ' + escapeHTML(s.risk_level || '-') + ' · next ' + escapeHTML(d.next_action || '-') + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(r.reason || s.reason || '') + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">matched policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + '</div>';
       } catch (e) {
         out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
       }
