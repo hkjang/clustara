@@ -36,6 +36,7 @@
 | Terminal Access Mode — read_only/guided/full_tty 3단계 분류, 인터랙티브 셸(full TTY)은 정책 무관 승인 필수 | ✅ |
 | Application Stack 검증(dry-run) — 멀티 문서 매니페스트 적용 전 리소스 목록·정책 위반·승인 필요 변경 분석(클러스터 미적용) | ✅ |
 | Application Stack 저장·리비전 — 검증한 매니페스트를 버전 관리되는 Stack으로 저장(앱 배포 메뉴), 매니페스트 변경 시 리비전 누적 | ✅ |
+| 이미지 사용 현황 — 이미지→워크로드 매핑 + 공급망 위험(mutable :latest·digest 미고정), 보안 화면 노출(REG-REQ-04) | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -59,6 +60,7 @@
 | POST | `/admin/k8s/clusters/{id}/collect` | Kubernetes API에서 라이브 인벤토리·이벤트·메트릭 수집 |
 | POST | `/admin/k8s/snapshot` | 리소스, 이벤트, 메트릭 스냅샷 적재 |
 | GET | `/admin/k8s/inventory` | 리소스 인벤토리 조회 |
+| GET | `/admin/k8s/images` | 이미지→워크로드 사용 현황 + 공급망 위험(mutable :latest / digest 고정) |
 | GET | `/admin/k8s/pods` | Pod 관리 목록: 클러스터·namespace·node·owner·status·risk·검색 필터, restart/warning 요약 |
 | GET | `/admin/k8s/pods/{namespace}/{pod}` | Pod 상세: 상태, 컨테이너 상태, 관련 이벤트, Pod 메트릭, 로그 감사, 마스킹 manifest |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/logs` | Pod 로그 조회: `cluster_id`, `container`, `previous`, `tail_lines`, `since`, `since_time`, `q`, `error_only`, `timestamps` |

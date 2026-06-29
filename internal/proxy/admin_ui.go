@@ -7195,12 +7195,13 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 보안', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, rbacDiff;
+      let clusters, data, rbacDiff, imgs;
       try {
-        [clusters, data, rbacDiff] = await Promise.all([
+        [clusters, data, rbacDiff, imgs] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/security' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/rbac-diff' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ entries: [] })),
+          api('/admin/k8s/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ images: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 보안', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -7243,6 +7244,18 @@ const adminHTML = `<!doctype html>
         findTable('이미지 태그 정책 (SEC-04)', r.images) +
         findTable('NetworkPolicy 공백 (SEC-06)', r.network) +
         findTable('Secret 참조 (SEC-03)', r.secrets) +
+        (function () {
+          const list = (imgs && imgs.images) || [];
+          if (!list.length) return '';
+          const sm = (imgs && imgs.summary) || {};
+          const rows = list.slice(0, 40).map(im =>
+            '<tr><td>' + (im.pinned ? '<span class="status" style="font-size:10px">pinned</span>' : (im.latest ? '<span class="status error" style="font-size:10px">mutable</span>' : '<span class="status warn" style="font-size:10px">tag</span>')) + '</td>' +
+            '<td><strong>' + escapeHTML(im.repository || im.image) + '</strong>' + (im.tag ? ':' + escapeHTML(im.tag) : '') + '<div class="muted" style="font-size:11px">' + escapeHTML(im.registry || '') + '</div></td>' +
+            '<td>' + fmt(im.count || 0) + '</td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML((im.workloads || []).slice(0, 4).join(', ')) + ((im.workloads || []).length > 4 ? ' …' : '') + '</td></tr>').join('');
+          return card('이미지 사용 현황 (REG-REQ-04 · mutable ' + fmt(sm.mutable_tag || 0) + ' / pinned ' + fmt(sm.digest_pinned || 0) + ')',
+            '<div class="card-body"><table><thead><tr><th>고정</th><th>이미지</th><th>워크로드 수</th><th>사용처</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        })() +
         (function () {
           const es = (rbacDiff && rbacDiff.entries) || [];
           const rows = es.length ? es.map(e =>

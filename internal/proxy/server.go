@@ -278,6 +278,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/pods/", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/inventory", s.handleK8sInventory)
+	mux.HandleFunc("/admin/k8s/images", s.handleK8sImages)
 	mux.HandleFunc("/admin/k8s/revisions", s.handleK8sRevisions)
 	mux.HandleFunc("/admin/k8s/diff", s.handleK8sDiff)
 	mux.HandleFunc("/admin/k8s/timeline", s.handleK8sTimeline)
