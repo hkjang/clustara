@@ -1,3 +1,6 @@
+v0.8.7:
+- **Terminal Access Mode — read_only·guided·full_tty 단계화 (v0.8.7)**: exec/터미널 요청을 위험도에 따라 3단계 접근 모드로 분류합니다 — 저위험 단일 명령은 read_only, 위험·셸 메타문자가 있는 명령은 guided(승인), 인터랙티브 셸(`sh`/`bash` 단독·빈 명령)은 full_tty로 분류되어 정책과 무관하게 항상 승인을 요구합니다. 사전에 검증할 수 없는 인터랙티브 세션을 안전 기본값으로 게이트하며, 정책 평가 응답에 `access_mode`와 명령 위험 분석 결과를 함께 노출합니다. 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.8.6:
 - **Pod 실행 컨텍스트 — Env Source Map·Env Change Timeline·Command Risk Parser (v0.8.6)**: Pod에 어떤 설정이 어디서 왔는지 추적하는 Env Source Map을 추가했습니다 — 컨테이너별 선언 env를 출처(literal/ConfigMap/Secret/Downward API)로 분해하고, Secret 값은 절대 노출하지 않으며 민감한 이름의 평문 env는 마스킹·위험 표시합니다. Env Change Timeline은 Pod가 참조하는 ConfigMap/Secret 변경과 Pod 리비전을 시간순으로 병합해 장애 직전 설정 변경을 드러냅니다. Command Risk Parser는 exec 명령을 토큰화해 파이프-셸 실행, 시스템 경로 리다이렉트, 서브셸, 명령 체이닝 등 단순 allow/deny 목록이 놓치는 위험을 탐지하고 터미널 정책 게이트와 연계합니다. 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
