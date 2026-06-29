@@ -7551,6 +7551,11 @@ const adminHTML = `<!doctype html>
           '<textarea id="sim-spec" rows="5" placeholder=\'{"template":{"spec":{"containers":[{"name":"c","image":"x:latest"}]}}}\' style="width:100%"></textarea>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sPolicySimulate()">검증</button></div>' +
           '<div id="sim-pol-out" style="margin-top:8px"></div></div>') +
+        card('Application Stack 검증 (dry-run)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:4px">멀티 문서 매니페스트(YAML/JSON)를 클러스터 적용 전 검증합니다 — 리소스 목록·정책 위반·승인 필요 변경을 미리 봅니다.</div>' +
+          '<textarea id="stack-manifest" rows="8" placeholder="apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: prod\nspec: ...\n---\napiVersion: v1\nkind: Secret\n..." style="width:100%;font-family:monospace"></textarea>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sStackValidate()">dry-run 검증</button></div>' +
+          '<div id="stack-out" style="margin-top:8px"></div></div>') +
         card('컴플라이언스 (현재 인벤토리)', '<div class="card-body"><table><thead><tr><th>액션</th><th>규칙</th><th>리소스</th><th>상세</th></tr></thead><tbody>' + compRows + '</tbody></table></div>') +
         card('Policy as Code (Kyverno / OPA-Rego)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">활성 정책을 Kyverno/Rego로 내보내거나, 기존 Kyverno/Rego 정의를 붙여넣어 Clustara 규칙으로 가져옵니다(가져온 정책은 비활성으로 생성 — 검토 후 활성화).</div>' +
@@ -7599,6 +7604,25 @@ const adminHTML = `<!doctype html>
       if (!confirm('정책을 삭제할까요?')) return;
       try { await api('/admin/k8s/policies/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sPolicy();
+    };
+    window.k8sStackValidate = async () => {
+      const out = document.getElementById('stack-out');
+      const manifest = (document.getElementById('stack-manifest').value || '').trim();
+      if (!manifest) { out.innerHTML = '<span class="status warn">매니페스트를 입력하세요</span>'; return; }
+      out.innerHTML = '<span class="muted">검증 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/validate', { method: 'POST', body: JSON.stringify({ manifest }) });
+        const p = d.plan || {};
+        const decBadge = d.decision === 'deny' ? '<span class="status error">DENY</span>' : (d.decision === 'approval_required' ? '<span class="status warn">승인 필요</span>' : '<span class="status">ALLOW</span>');
+        const resRows = (p.resources || []).map(r => '<tr><td>' + escapeHTML(r.kind) + '</td><td>' + escapeHTML((r.namespace || '-') + '/' + r.name) + '</td><td>' + (r.approval ? '<span class="status warn" style="font-size:10px">' + escapeHTML(r.approval_reason || '승인') + '</span>' : '<span class="muted">-</span>') + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">리소스 없음</td></tr>';
+        const viol = (p.policy_violations || []).map(v => '<li style="font-size:11px"><span class="status ' + (v.action === 'Deny' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(v.action) + '</span> ' + escapeHTML(v.rule_type) + ' — ' + escapeHTML(v.detail || '') + '</li>').join('');
+        const warns = (p.warnings || []).map(wm => '<li class="muted" style="font-size:11px">⚠️ ' + escapeHTML(wm) + '</li>').join('');
+        out.innerHTML = '<div style="margin-bottom:6px">결과: ' + decBadge + ' · 리소스 ' + fmt((p.resources || []).length) + '개</div>' +
+          '<table><thead><tr><th>Kind</th><th>리소스</th><th>승인</th></tr></thead><tbody>' + resRows + '</tbody></table>' +
+          (viol ? '<div style="font-size:11px;margin-top:6px"><strong>정책 위반</strong></div><ul style="margin:0;padding-left:16px">' + viol + '</ul>' : '') +
+          ((p.approval_reasons || []).length ? '<div class="muted" style="font-size:11px;margin-top:4px">승인 필요: ' + escapeHTML((p.approval_reasons || []).join(', ')) + '</div>' : '') +
+          (warns ? '<ul style="margin:6px 0 0;padding-left:16px">' + warns + '</ul>' : '');
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPolicySimulate = async () => {
       const out = document.getElementById('sim-pol-out');

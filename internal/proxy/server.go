@@ -292,6 +292,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/policies", s.handleK8sPolicies)
 	mux.HandleFunc("/admin/k8s/policies/simulate", s.handleK8sPolicySimulate)
 	mux.HandleFunc("/admin/k8s/policies/compliance", s.handleK8sPolicyCompliance)
+	mux.HandleFunc("/admin/k8s/stacks/validate", s.handleK8sStackValidate)
 	mux.HandleFunc("/admin/k8s/policies/export", s.handleK8sPolicyExport)
 	mux.HandleFunc("/admin/k8s/policies/import", s.handleK8sPolicyImport)
 	mux.HandleFunc("/admin/k8s/policies/", s.handleK8sPolicyByID)
