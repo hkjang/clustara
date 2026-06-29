@@ -46,10 +46,10 @@ type NodePacking struct {
 
 // GPUSummary is per-node GPU allocation (SCALE-08).
 type GPUSummary struct {
-	Node      string `json:"node"`
-	Allocatable int  `json:"allocatable_gpu"`
-	Requested   int  `json:"requested_gpu"`
-	Idle        int  `json:"idle_gpu"`
+	Node        string `json:"node"`
+	Allocatable int    `json:"allocatable_gpu"`
+	Requested   int    `json:"requested_gpu"`
+	Idle        int    `json:"idle_gpu"`
 }
 
 // NodeProjection is a linear capacity forecast for a node from its metric history (SCALE-05).
@@ -193,9 +193,9 @@ func allocFinding(pod store.K8sInventoryItem, usageByPod map[string]int) (AllocF
 
 func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSummary) {
 	type nodeAgg struct {
-		allocCPU, reqCPU  int
-		allocGPU, reqGPU  int
-		pods              int
+		allocCPU, reqCPU int
+		allocGPU, reqGPU int
+		pods             int
 	}
 	nodes := map[string]*nodeAgg{}
 	for _, it := range items {

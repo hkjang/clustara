@@ -177,8 +177,8 @@ func podSpecOf(it store.K8sInventoryItem) map[string]any {
 
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
 	res := PodSecurityResult{Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
-	priv := []string{}    // privileged-level violations (worst)
-	baseline := []string{} // baseline-level violations
+	priv := []string{}       // privileged-level violations (worst)
+	baseline := []string{}   // baseline-level violations
 	restricted := []string{} // restricted-level violations
 
 	if asBool(ps["hostNetwork"]) {

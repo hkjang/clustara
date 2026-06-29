@@ -15,9 +15,9 @@ func rsPod(ns, name, cpu, mem string) store.K8sInventoryItem {
 func TestRecommendRightsizing(t *testing.T) {
 	prices := CostPrices{CPUCoreMonthlyKRW: 30000, MemGBMonthlyKRW: 4000}
 	items := []store.K8sInventoryItem{
-		rsPod("p", "over", "1000m", "1Gi"),  // usage 100m → downsize
+		rsPod("p", "over", "1000m", "1Gi"),   // usage 100m → downsize
 		rsPod("p", "under", "100m", "128Mi"), // usage 300m → upsize
-		rsPod("p", "ok", "200m", "256Mi"),     // usage ~150m → well-sized
+		rsPod("p", "ok", "200m", "256Mi"),    // usage ~150m → well-sized
 	}
 	metrics := []store.K8sMetricSample{
 		{ResourceKind: "Pod", Namespace: "p", ResourceName: "over", CPUMillicores: 100, MemoryBytes: 100 << 20},

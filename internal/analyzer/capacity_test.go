@@ -28,7 +28,7 @@ func TestAnalyzeCapacityAllocation(t *testing.T) {
 			Spec: map[string]any{"containers": []any{map[string]any{"name": "c", "resources": map[string]any{"requests": map[string]any{"cpu": reqCPU}}}}}}
 	}
 	items := []store.K8sInventoryItem{
-		pod("hot", "100m"),  // usage 250m > 100m -> under_provisioned
+		pod("hot", "100m"),   // usage 250m > 100m -> under_provisioned
 		pod("cold", "1000m"), // usage 50m << 1000m -> over_provisioned
 		pod("ok", "200m"),    // usage 150m -> fine
 	}

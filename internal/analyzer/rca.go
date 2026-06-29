@@ -170,8 +170,8 @@ func AnalyzePostDeploymentErrors(revisions []store.K8sResourceRevision, events [
 		out = append(out, RCAFinding{
 			ClusterID: d.rev.ClusterID, Namespace: d.rev.Namespace, ResourceKind: d.rev.Kind, ResourceName: d.rev.Name,
 			Condition: "PostDeploymentErrors", Severity: "high",
-			Cause:    "최근 배포(spec 변경) 직후 Warning 이벤트가 발생했습니다 — 배포가 장애를 유발했을 가능성이 있습니다.",
-			Evidence: append([]string{"배포 시각: " + d.rev.ObservedAt}, eventEvidence(errs)...),
+			Cause:          "최근 배포(spec 변경) 직후 Warning 이벤트가 발생했습니다 — 배포가 장애를 유발했을 가능성이 있습니다.",
+			Evidence:       append([]string{"배포 시각: " + d.rev.ObservedAt}, eventEvidence(errs)...),
 			CheckResources: []string{"rollout history", "이전/현재 image", "직전 diff", "배포 후 restart/error 추세"},
 			Actions:        []string{"변경 타임라인에서 배포 전후를 비교합니다.", "필요 시 rollout undo(rollback)를 검토합니다.", "회귀가 확인되면 이전 리비전으로 되돌립니다."},
 		})

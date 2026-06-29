@@ -14,9 +14,9 @@ func costPod(cluster, ns, name, cpu, mem string) store.K8sInventoryItem {
 
 func TestEstimateCost(t *testing.T) {
 	items := []store.K8sInventoryItem{
-		costPod("c1", "payments", "p1", "1", "1Gi"),   // 1 core + 1GB
-		costPod("c1", "payments", "p2", "500m", "0"),  // 0.5 core
-		costPod("c1", "web", "w1", "2", "2Gi"),        // 2 core + 2GB
+		costPod("c1", "payments", "p1", "1", "1Gi"),                  // 1 core + 1GB
+		costPod("c1", "payments", "p2", "500m", "0"),                 // 0.5 core
+		costPod("c1", "web", "w1", "2", "2Gi"),                       // 2 core + 2GB
 		{Kind: "Pod", ClusterID: "c1", Namespace: "x", Name: "norq"}, // no requests -> excluded
 	}
 	prices := CostPrices{CPUCoreMonthlyKRW: 10000, MemGBMonthlyKRW: 1000}

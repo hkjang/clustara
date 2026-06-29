@@ -36,8 +36,9 @@ type CostReport struct {
 
 // EstimateCost estimates monthly cost per Pod from CPU/memory requests and rolls it up by
 // namespace, owning team, cluster group and cost center. The lookup maps are keyed:
-//   nsTeam / nsCostCenter: "<clusterID>|<namespace>" -> value
-//   clusterGroup:          "<clusterID>"            -> group name
+//
+//	nsTeam / nsCostCenter: "<clusterID>|<namespace>" -> value
+//	clusterGroup:          "<clusterID>"            -> group name
 func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsCostCenter, clusterGroup map[string]string) CostReport {
 	if prices.CPUCoreMonthlyKRW == 0 && prices.MemGBMonthlyKRW == 0 {
 		prices = DefaultCostPrices

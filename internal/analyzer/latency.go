@@ -35,7 +35,10 @@ func AnalyzeLatencyRegressions(revisions []store.K8sResourceRevision, metrics []
 		return nil
 	}
 
-	type acc struct{ beforeSum, afterSum float64; beforeN, afterN int }
+	type acc struct {
+		beforeSum, afterSum float64
+		beforeN, afterN     int
+	}
 	stats := map[string]*acc{}
 	for _, m := range metrics {
 		if m.LatencyMS <= 0 {

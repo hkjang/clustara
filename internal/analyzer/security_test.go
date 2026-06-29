@@ -99,8 +99,8 @@ func TestDetectActionAnomalies(t *testing.T) {
 		mk("bob", "critical", "2026-06-24T09:31:00Z"),
 		mk("bob", "high", "2026-06-24T09:32:00Z"),
 		mk("bob", "low", "2026-06-24T09:33:00Z"),    // low → ignored
-		mk("bob", "high", "2026-06-20T09:00:00Z"),    // outside window → ignored
-		mk("alice", "high", "2026-06-24T09:40:00Z"),  // only 1 → below threshold
+		mk("bob", "high", "2026-06-20T09:00:00Z"),   // outside window → ignored
+		mk("alice", "high", "2026-06-24T09:40:00Z"), // only 1 → below threshold
 	}
 	// threshold 3 within 1h: bob has 3 risky → flagged; alice has 1 → not.
 	out := DetectActionAnomalies(actions, now, time.Hour, 3)

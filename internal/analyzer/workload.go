@@ -166,8 +166,8 @@ func cronJobFinding(it store.K8sInventoryItem) (RCAFinding, bool) {
 	return RCAFinding{
 		ClusterID: it.ClusterID, Namespace: it.Namespace, ResourceKind: "CronJob", ResourceName: it.Name,
 		Condition: "CronJobNoSuccess", Severity: "medium",
-		Cause:    "CronJob이 스케줄됐지만 성공 기록이 없습니다.",
-		Evidence: []string{"lastScheduleTime: " + lastSchedule, "lastSuccessfulTime: 없음"},
+		Cause:          "CronJob이 스케줄됐지만 성공 기록이 없습니다.",
+		Evidence:       []string{"lastScheduleTime: " + lastSchedule, "lastSuccessfulTime: 없음"},
 		CheckResources: []string{"최근 Job/Pod 상태", "schedule/suspend", "concurrencyPolicy", "startingDeadlineSeconds"},
 		Actions:        []string{"최근 생성된 Job의 실패 원인을 확인합니다.", "suspend 여부와 스케줄 표현식을 점검합니다."},
 	}, true
