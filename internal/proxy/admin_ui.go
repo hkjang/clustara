@@ -7566,6 +7566,12 @@ const adminHTML = `<!doctype html>
           '<textarea id="sim-spec" rows="5" placeholder=\'{"template":{"spec":{"containers":[{"name":"c","image":"x:latest"}]}}}\' style="width:100%"></textarea>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sPolicySimulate()">검증</button></div>' +
           '<div id="sim-pol-out" style="margin-top:8px"></div></div>') +
+        card('Pull Secret 생성기 (REG-REQ-03)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">사설 레지스트리 imagePullSecret 매니페스트를 생성합니다. 자격증명은 서버에 저장되지 않으며 매니페스트에만 포함됩니다.</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
+          '<input id="ps-name" placeholder="secret 이름(예: regcred)" style="min-width:150px"><input id="ps-ns" placeholder="namespace" style="min-width:110px"><input id="ps-registry" placeholder="registry(예: harbor.corp.io)" style="min-width:180px"></div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px"><input id="ps-user" placeholder="username" style="min-width:140px"><input id="ps-pass" type="password" placeholder="password/token" style="min-width:160px"><input id="ps-email" placeholder="email(선택)" style="min-width:140px"><button type="button" onclick="k8sPullSecretGen()">생성</button></div>' +
+          '<div id="ps-out"></div></div>') +
         card('운영 RBAC 역할·권한 매트릭스 (참조)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">역할별 허용 작업(capability) 참조 모델입니다. 실제 인증 강제는 기존 admin 토큰/스코프를 따릅니다.</div><div id="rbac-matrix"><button type="button" class="secondary" onclick="k8sRBACLoad()">역할 매트릭스 보기</button></div></div>') +
         card('Application Stack 검증 (dry-run)',
@@ -7621,6 +7627,23 @@ const adminHTML = `<!doctype html>
       if (!confirm('정책을 삭제할까요?')) return;
       try { await api('/admin/k8s/policies/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sPolicy();
+    };
+    window.k8sPullSecretGen = async () => {
+      const out = document.getElementById('ps-out');
+      const name = (document.getElementById('ps-name').value || '').trim();
+      const user = (document.getElementById('ps-user').value || '').trim();
+      const pass = document.getElementById('ps-pass').value || '';
+      if (!name || !user || !pass) { out.innerHTML = '<span class="status warn">이름·username·password가 필요합니다</span>'; return; }
+      out.innerHTML = '<span class="muted">생성 중...</span>';
+      try {
+        const d = await api('/admin/k8s/registries/pull-secret', { method: 'POST', body: JSON.stringify({
+          name, namespace: (document.getElementById('ps-ns').value || '').trim(),
+          registry: (document.getElementById('ps-registry').value || '').trim(),
+          username: user, password: pass, email: (document.getElementById('ps-email').value || '').trim() }) });
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">아래 매니페스트를 안전한 경로로 적용하세요(서버 미저장):</div>' +
+          '<pre style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px;font-size:11px;max-height:320px;overflow:auto">' + escapeHTML(d.manifest || '') + '</pre>';
+        document.getElementById('ps-pass').value = '';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sRBACLoad = async () => {
       const out = document.getElementById('rbac-matrix');
