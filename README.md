@@ -20,7 +20,7 @@
 | --- | --- |
 | **운영 홈** | 클러스터 위험 TOP5, 장애 후보 TOP10, 최근 변경 TOP10, 비용 TOP10 |
 | **Pod 관리** | Pod 목록·상세, 컨테이너 상태, 이벤트, 현재/previous 로그 조회, 로그 분석·조치 추천, 실시간 tail, 증적 번들, Golden Pod Diff, Health Replay, 정책 기반 exec 세션 요청, 검색·마스킹·다운로드·감사 |
-| **터미널 정책** | Pod exec/web terminal 사전 정책: role·namespace·label·명령 allow/deny·승인·세션 시간·감사 평가, 세션 요청 이력과 승인함 |
+| **터미널 정책** | Pod exec/web terminal 사전 정책: role·namespace·label·명령 allow/deny·승인·세션 시간·감사 평가, 세션 요청 이력·승인함·상세 리플레이·감사 리포트 |
 | **변경 추적** | 리소스 spec 리비전(append-only), Resource Diff, 변경 타임라인, Manifest Viewer(민감값 마스킹) |
 | **장애 분석(RCA)** | CrashLoop·OOM·ImagePull·Pending·Unavailable + Readiness/Liveness probe·DNS·NodePressure(노드 condition) + 직전 Config 변경·배포 후 오류 연계, 근거 기반 장애 분석 센터 |
 | **연결성 점검** | Service selector↔Endpoint, Ingress backend/host/TLS, PVC, Rollout, Job/CronJob |

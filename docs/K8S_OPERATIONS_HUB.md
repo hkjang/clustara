@@ -53,6 +53,8 @@
 | GET | `/admin/k8s/pods/{namespace}/{pod}/health-replay` | Pod 상태·컨테이너 상태·이벤트·메트릭·리비전·로그 감사·RCA 후보를 시간순으로 재생 |
 | GET/POST | `/admin/k8s/pods/{namespace}/{pod}/exec/sessions` | Pod별 정책 기반 exec 세션 요청/이력: role, container, command, reason, `ready`/`pending_approval`/`denied` |
 | GET | `/admin/k8s/exec/sessions` | 전체 Pod exec 세션 요청 이력 조회: cluster, namespace, pod, status 필터 |
+| GET | `/admin/k8s/exec/sessions/{id}` | 단일 exec 세션 상세 조회: 정책 평가 결과, 요청·승인·실행 리플레이, exit code, 마스킹 출력 샘플 |
+| GET | `/admin/k8s/exec/sessions/{id}/export` | 단일 exec 세션 감사 리포트(Markdown) 다운로드: 대상 Pod, 정책 결과, 리플레이, 마스킹 출력 샘플 |
 | POST | `/admin/k8s/exec/sessions/{id}/approve`, `/reject`, `/execute` | `pending_approval` 세션 승인/반려, `ready` 세션의 단일 제한 명령 실행. 실행 결과는 `completed`/`failed`, exit code, 마스킹 출력 샘플로 감사 기록 |
 | GET/POST | `/admin/k8s/terminal-policies` | Pod web terminal/exec 사전 정책 목록·생성: role, cluster, namespace glob, label selector, allow/deny 명령, 승인·감사 설정 |
 | DELETE | `/admin/k8s/terminal-policies/{id}` | 터미널 정책 삭제 |
@@ -264,7 +266,7 @@ curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/health-replay?clust
 
 `운영 설정` 화면의 Terminal Policy Builder는 실제 Pod exec/web terminal 기능을 켜기 전에 접속 정책을 먼저 정의하는 안전장치입니다. 정책은 role, cluster, namespace glob, Pod label selector, 허용 명령, 차단 명령, 승인 필요 여부, 최대 세션 시간, 감사 저장 여부를 포함합니다. 내장 차단 규칙은 `rm -rf`, `dd`, `mkfs`, `shutdown/reboot`, `curl|sh`, `kubectl delete`, 패키지 설치 명령 등을 기본적으로 차단합니다.
 
-Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다. 운영 설정의 `Exec 세션 승인함`에서 `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`로 전환되고 `decided_by`, `decided_at`, `decision_note`가 남습니다. `ready` 세션은 무입력·무TTY 단일 명령으로만 실행되며, 완료 후 `completed` 또는 `failed`로 닫히고 `executed_by`, `executed_at`, `exit_code`, 마스킹된 출력 샘플이 기록됩니다.
+Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다. 운영 설정의 `Exec 세션 승인함`에서 `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`로 전환되고 `decided_by`, `decided_at`, `decision_note`가 남습니다. `ready` 세션은 무입력·무TTY 단일 명령으로만 실행되며, 완료 후 `completed` 또는 `failed`로 닫히고 `executed_by`, `executed_at`, `exit_code`, 마스킹된 출력 샘플이 기록됩니다. 각 세션의 `상세`는 요청, 승인/반려, 실행 결과를 시간순 리플레이로 보여 주며, `리포트`는 동일 내용을 Markdown 감사 증적으로 내려받습니다.
 
 ```powershell
 curl.exe -X POST "http://localhost:9090/admin/k8s/terminal-policies" `

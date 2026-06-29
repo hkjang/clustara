@@ -338,6 +338,8 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/pods/{namespace}/{pod}/health-replay", []string{"get"}, "k8s", "Replay Pod health timeline from status, events, metrics, revisions, log audit, and RCA evidence", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/exec/sessions", []string{"get", "post"}, "k8s", "List/request policy-gated Pod exec sessions without opening an interactive transport", false},
 	{"/admin/k8s/exec/sessions", []string{"get"}, "k8s", "List policy-gated Pod exec session requests for audit and approval", false},
+	{"/admin/k8s/exec/sessions/{id}", []string{"get"}, "k8s", "Get one Pod exec session with policy result, decision trail, and replay/audit output sample", false},
+	{"/admin/k8s/exec/sessions/{id}/export", []string{"get"}, "k8s", "Download a Markdown audit report for one Pod exec session replay", false},
 	{"/admin/k8s/exec/sessions/{id}/{command}", []string{"post"}, "k8s", "Approve, reject, or execute a policy-gated Pod exec session request", false},
 	{"/admin/k8s/inventory", []string{"get"}, "k8s", "List Kubernetes inventory resources", false},
 	{"/admin/k8s/events", []string{"get"}, "k8s", "List Kubernetes events", false},

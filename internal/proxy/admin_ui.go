@@ -7027,10 +7027,10 @@ const adminHTML = `<!doctype html>
       const execRows = (execs.sessions || []).length ? (execs.sessions || []).map(s => {
         const cls = s.status === 'denied' || s.status === 'rejected' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
         const actions = s.status === 'pending_approval'
-          ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'approve\')">승인</button> <button type="button" class="danger" style="font-size:11px" onclick="k8sExecSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'reject\')">반려</button>'
+          ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionExport(\'' + escapeAttr(s.id || '') + '\')">리포트</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'approve\')">승인</button> <button type="button" class="danger" style="font-size:11px" onclick="k8sExecSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'reject\')">반려</button>'
           : (s.status === 'ready'
-            ? '<button type="button" style="font-size:11px" onclick="k8sExecSessionExecute(\'' + escapeAttr(s.id || '') + '\')">실행</button>'
-            : '<span class="muted" style="font-size:11px">' + escapeHTML(s.executed_by || s.decided_by || s.requested_by || '-') + '</span>');
+            ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionExport(\'' + escapeAttr(s.id || '') + '\')">리포트</button> <button type="button" style="font-size:11px" onclick="k8sExecSessionExecute(\'' + escapeAttr(s.id || '') + '\')">실행</button>'
+            : '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionExport(\'' + escapeAttr(s.id || '') + '\')">리포트</button> <span class="muted" style="font-size:11px">' + escapeHTML(s.executed_by || s.decided_by || s.requested_by || '-') + '</span>');
         return '<tr><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span><div class="muted" style="font-size:10px">' + escapeHTML(s.risk_level || '-') + '</div></td>' +
           '<td><strong>' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || '') + '</div></td>' +
           '<td>' + escapeHTML(s.container || '-') + '</td><td>' + escapeHTML(s.role || '-') + '</td><td style="word-break:break-all">' + escapeHTML(s.command || '-') + '</td>' +
@@ -7072,7 +7072,7 @@ const adminHTML = `<!doctype html>
           '<table><thead><tr><th>상태</th><th>정책</th><th>Role</th><th>Cluster</th><th>Namespace</th><th>Selector</th><th>Allow</th><th>승인</th><th>시간</th><th></th></tr></thead><tbody>' + terminalRows + '</tbody></table></div>') +
         card('Exec 세션 승인함',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 상세의 터미널 요청은 여기서 승인 또는 반려합니다. 승인된 세션은 <code>ready</code> 상태가 되며, 단일 제한 명령 실행 후 <code>completed</code> 또는 <code>failed</code>로 닫힙니다.</div>' +
-          '<table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Role</th><th>Command</th><th>요청자</th><th></th></tr></thead><tbody>' + execRows + '</tbody></table></div>') +
+          '<table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Role</th><th>Command</th><th>요청자</th><th></th></tr></thead><tbody>' + execRows + '</tbody></table><div id="exec-session-detail" style="margin-top:10px"></div></div>') +
         card('터미널 정책 추가',
           '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
           '<input id="tp-name" placeholder="정책 이름" value="운영 읽기 전용">' +
@@ -7136,6 +7136,33 @@ const adminHTML = `<!doctype html>
       const cls = d.executed ? 'status' : 'status error';
       msg.innerHTML = '<div><span class="' + cls + '">' + escapeHTML((d.session || {}).status || '-') + '</span> exit ' + fmt(r.exit_code || 0) + ' · masked output</div>' +
         '<pre style="white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:6px">' + escapeHTML((r.stdout || '') + (r.stderr ? '\n[stderr]\n' + r.stderr : '') + (d.error ? '\n[error]\n' + d.error : '')) + '</pre>';
+    };
+    window.k8sExecSessionDetail = async (id) => {
+      const out = document.getElementById('exec-session-detail') || document.getElementById('set-msg');
+      out.innerHTML = '<span class="muted">세션 상세 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id));
+        const s = d.session || {}; const p = d.policy_result || {};
+        const rows = (d.replay || []).map(e =>
+          '<tr><td class="muted" style="font-size:11px">' + ago(e.at) + '</td><td>' + escapeHTML(e.category || '-') + '</td><td><span class="status ' + ((e.status === 'rejected' || e.status === 'failed' || e.status === 'denied') ? 'error' : (e.status === 'pending_approval' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(e.status || '-') + '</span></td><td><strong>' + escapeHTML(e.title || '-') + '</strong><div class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(e.detail || '') + '</div></td><td class="muted" style="font-size:11px">' + escapeHTML(e.actor || '-') + '</td></tr>').join('');
+        out.innerHTML = '<div class="banner"><strong>' + escapeHTML(s.id || '-') + '</strong> · ' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + ' · <code>' + escapeHTML(s.command || '-') + '</code></div>' +
+          '<div class="kpis" style="margin:8px 0">' + kpi('Status', escapeHTML(s.status || '-')) + kpi('Risk', escapeHTML(s.risk_level || '-')) + kpi('Exit', fmt(s.exit_code || 0)) + kpi('Approval', p.require_approval ? '필요' : '불필요') + '</div>' +
+          '<table><thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Detail</th><th>Actor</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="muted">리플레이 항목이 없습니다.</td></tr>') + '</tbody></table>' +
+          ((s.output_sample || s.error_message) ? '<pre style="white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px">' + escapeHTML((s.output_sample || '') + (s.error_message ? '\n[error]\n' + s.error_message : '')) + '</pre>' : '<div class="muted" style="font-size:11px;margin-top:8px">저장된 실행 출력이 없습니다.</div>');
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sExecSessionExport = async (id) => {
+      try {
+        const res = await fetch('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/export', { headers: headers() });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        downloadBlob(blob, safeFilePart(id) + '_exec_replay.md');
+      } catch (e) {
+        const out = document.getElementById('exec-session-detail') || document.getElementById('set-msg');
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
     };
     window.k8sTerminalPolicyEvaluate = async () => {
       const out = document.getElementById('tp-eval-out');

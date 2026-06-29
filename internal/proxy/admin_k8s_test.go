@@ -1005,6 +1005,52 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if strings.Join(execQuery["command"], " ") != "ls /app" || execQuery.Get("container") != "app" || execQuery.Get("stdin") != "false" || execQuery.Get("stdout") != "true" || execQuery.Get("stderr") != "true" {
 		t.Fatalf("unexpected exec query: %v", execQuery)
 	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/exec/sessions/" + execReq.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var execDetail struct {
+		Session      store.K8sPodExecSession `json:"session"`
+		PolicyResult map[string]any          `json:"policy_result"`
+		Replay       []struct {
+			Category string `json:"category"`
+			Status   string `json:"status"`
+		} `json:"replay"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&execDetail); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || execDetail.Session.Status != "completed" || len(execDetail.Replay) < 3 {
+		t.Fatalf("unexpected exec session detail: status=%d body=%+v", resp.StatusCode, execDetail)
+	}
+	if allowed, _ := execDetail.PolicyResult["allowed"].(bool); !allowed {
+		t.Fatalf("exec detail should include allowed policy result: %+v", execDetail.PolicyResult)
+	}
+	if strings.Contains(execDetail.Session.OutputSample, "supersecret") || strings.Contains(execDetail.Session.OutputSample, "abc.def") || !strings.Contains(execDetail.Session.OutputSample, "***REDACTED***") {
+		t.Fatalf("exec detail output sample should be masked: %q", execDetail.Session.OutputSample)
+	}
+	if execDetail.Replay[0].Category != "request" || execDetail.Replay[1].Status != "approved" || execDetail.Replay[2].Category != "execution" {
+		t.Fatalf("unexpected exec replay: %+v", execDetail.Replay)
+	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/exec/sessions/" + execReq.Session.ID + "/export")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reportBytes, _ := io.ReadAll(resp.Body)
+	report := string(reportBytes)
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/markdown") || !strings.Contains(resp.Header.Get("Content-Disposition"), "_exec_replay.md") {
+		t.Fatalf("unexpected exec report response: status=%d content-type=%q disposition=%q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
+	}
+	for _, want := range []string{"Clustara Pod Exec Session Report", "## Replay", "## Policy Result", "## Execution Output Sample", "***REDACTED***"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("exec report missing %q: %s", want, report)
+		}
+	}
+	if strings.Contains(report, "supersecret") || strings.Contains(report, "abc.def") {
+		t.Fatalf("exec report should keep output sample masked: %s", report)
+	}
 	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+rejectReq.Session.ID+"/reject", "", map[string]any{"note": "duplicate investigation"})
 	defer resp.Body.Close()
 	var rejectedExec struct {

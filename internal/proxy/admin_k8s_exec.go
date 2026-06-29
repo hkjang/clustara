@@ -32,21 +32,12 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}
-	if r.Method != http.MethodPost {
-		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
-		return
-	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/exec/sessions/"), "/"), "/")
-	if len(parts) != 2 || parts[0] == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "session id and command required", "invalid_request_error", "bad_exec_session_path")
+	if len(parts) == 0 || parts[0] == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "session id required", "invalid_request_error", "bad_exec_session_path")
 		return
 	}
 	id, _ := url.PathUnescape(parts[0])
-	command := strings.ToLower(strings.TrimSpace(parts[1]))
-	var payload struct {
-		Note string `json:"note"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&payload)
 	sess, err := s.db.GetK8sPodExecSession(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "exec session not found: "+id, "invalid_request_error", "exec_session_not_found")
@@ -56,6 +47,36 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_exec_session_failed")
 		return
 	}
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		writeK8sExecSessionDetail(w, sess)
+		return
+	}
+	if len(parts) != 2 || parts[1] == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "session id and command required", "invalid_request_error", "bad_exec_session_path")
+		return
+	}
+	command, _ := url.PathUnescape(parts[1])
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "export" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.writeK8sExecSessionExport(w, r, sess)
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var payload struct {
+		Note string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
 	if command == "execute" {
 		s.executeK8sPodExecSession(w, r, sess)
 		return
@@ -91,6 +112,142 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 		"container": updated.Container, "role": updated.Role, "status": updated.Status,
 	}))
 	writeJSON(w, http.StatusOK, map[string]any{"session": updated, "next_action": nextAction})
+}
+
+func writeK8sExecSessionDetail(w http.ResponseWriter, sess store.K8sPodExecSession) {
+	policy := k8sExecSessionPolicy(sess)
+	replay := k8sExecSessionReplay(sess)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session":       sess,
+		"policy_result": policy,
+		"replay":        replay,
+	})
+}
+
+func (s *Server) writeK8sExecSessionExport(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	body := buildK8sExecSessionReport(generatedAt, sess)
+	s.auditAdmin(r, "k8s.pod.exec_session.export", sess.ID, auditJSON(map[string]any{
+		"cluster_id": sess.ClusterID, "namespace": sess.Namespace, "pod": sess.Pod, "status": sess.Status,
+	}))
+	name := sanitizeDownloadName(sess.ID + "_exec_replay.md")
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	_, _ = w.Write([]byte(body))
+}
+
+func k8sExecSessionPolicy(sess store.K8sPodExecSession) map[string]any {
+	policy := map[string]any{}
+	if strings.TrimSpace(sess.PolicyResult) == "" {
+		return policy
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(sess.PolicyResult), &decoded); err == nil {
+		return decoded
+	}
+	policy["raw"] = sess.PolicyResult
+	return policy
+}
+
+func k8sExecSessionReplay(sess store.K8sPodExecSession) []map[string]any {
+	replay := []map[string]any{{
+		"at":       sess.CreatedAt,
+		"category": "request",
+		"status":   "requested",
+		"title":    "exec 세션 요청",
+		"detail":   sess.Role + " · " + sess.Namespace + "/" + sess.Pod + " · " + sess.Command,
+		"actor":    sess.RequestedBy,
+	}}
+	if sess.DecidedAt != "" {
+		replay = append(replay, map[string]any{
+			"at":       sess.DecidedAt,
+			"category": "decision",
+			"status":   decisionStatusLabel(sess.Status),
+			"title":    "승인 결정",
+			"detail":   sess.DecisionNote,
+			"actor":    sess.DecidedBy,
+		})
+	}
+	if sess.ExecutedAt != "" {
+		replay = append(replay, map[string]any{
+			"at":       sess.ExecutedAt,
+			"category": "execution",
+			"status":   sess.Status,
+			"title":    "단일 명령 실행",
+			"detail":   fmt.Sprintf("exit %d", sess.ExitCode),
+			"actor":    sess.ExecutedBy,
+		})
+	}
+	return replay
+}
+
+func buildK8sExecSessionReport(generatedAt string, sess store.K8sPodExecSession) string {
+	policy := k8sExecSessionPolicy(sess)
+	policyJSON, _ := json.MarshalIndent(policy, "", "  ")
+	var b strings.Builder
+	b.WriteString("# Clustara Pod Exec Session Report\n\n")
+	b.WriteString("- Generated: " + markdownTableCell(generatedAt) + "\n")
+	b.WriteString("- Session ID: `" + markdownInlineCode(sess.ID) + "`\n")
+	b.WriteString("- Status: `" + markdownInlineCode(sess.Status) + "`\n\n")
+
+	b.WriteString("## Target\n\n")
+	b.WriteString("| Field | Value |\n| --- | --- |\n")
+	for _, row := range [][2]string{
+		{"Cluster", sess.ClusterID},
+		{"Namespace", sess.Namespace},
+		{"Pod", sess.Pod},
+		{"Container", sess.Container},
+		{"Role", sess.Role},
+		{"Command", sess.Command},
+		{"Reason", sess.Reason},
+		{"Risk", sess.RiskLevel},
+		{"Approval Required", fmt.Sprintf("%t", sess.RequireApproval)},
+		{"Audit Enabled", fmt.Sprintf("%t", sess.AuditEnabled)},
+		{"Max Session Minutes", fmt.Sprintf("%d", sess.MaxSessionMinutes)},
+	} {
+		b.WriteString("| " + markdownTableCell(row[0]) + " | " + markdownTableCell(row[1]) + " |\n")
+	}
+
+	b.WriteString("\n## Replay\n\n")
+	b.WriteString("| Time | Type | Status | Actor | Detail |\n| --- | --- | --- | --- | --- |\n")
+	for _, e := range k8sExecSessionReplay(sess) {
+		detail := strings.TrimSpace(fmt.Sprint(e["title"]) + " · " + fmt.Sprint(e["detail"]))
+		b.WriteString("| " + markdownTableCell(e["at"]) + " | " + markdownTableCell(e["category"]) + " | " + markdownTableCell(e["status"]) + " | " + markdownTableCell(e["actor"]) + " | " + markdownTableCell(detail) + " |\n")
+	}
+
+	b.WriteString("\n## Policy Result\n\n")
+	b.WriteString("```json\n" + string(policyJSON) + "\n```\n")
+
+	b.WriteString("\n## Execution Output Sample\n\n")
+	if strings.TrimSpace(sess.OutputSample) == "" && strings.TrimSpace(sess.ErrorMessage) == "" {
+		b.WriteString("_No execution output was stored._\n")
+	} else {
+		output := sess.OutputSample
+		if strings.TrimSpace(sess.ErrorMessage) != "" {
+			output += "\n[error]\n" + sess.ErrorMessage
+		}
+		b.WriteString("```\n" + strings.ReplaceAll(output, "```", "'''") + "\n```\n")
+	}
+	return b.String()
+}
+
+func markdownTableCell(v any) string {
+	s := strings.TrimSpace(fmt.Sprint(v))
+	if s == "" || s == "<nil>" {
+		return "-"
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
+}
+
+func markdownInlineCode(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	return strings.ReplaceAll(s, "`", "'")
 }
 
 func (s *Server) executeK8sPodExecSession(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
@@ -310,4 +467,15 @@ func execSessionTimeout(maxSessionMinutes int) time.Duration {
 		maxSessionMinutes = 10
 	}
 	return time.Duration(maxSessionMinutes) * time.Minute
+}
+
+func decisionStatusLabel(status string) string {
+	switch status {
+	case "ready", "completed", "failed":
+		return "approved"
+	case "rejected":
+		return "rejected"
+	default:
+		return status
+	}
 }
