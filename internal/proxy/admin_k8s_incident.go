@@ -59,6 +59,21 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
 	drafts := analyzer.BuildIncidents(items, rca, events)
 
+	// Restart storms (POD-RULE-06): a service-wide restart wave opens one workload incident.
+	stormPods := []analyzer.RestartStormPod{}
+	for _, it := range items {
+		if it.Kind != "Pod" {
+			continue
+		}
+		pv := podView(it, events, false)
+		stormPods = append(stormPods, analyzer.RestartStormPod{
+			Namespace: pv.Namespace, Name: pv.Name, OwnerKind: pv.OwnerKind, OwnerName: pv.OwnerName,
+			RestartCount: pv.RestartCount, Unhealthy: pv.HealthBand == "critical",
+		})
+	}
+	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
+	drafts = append(drafts, analyzer.BuildRestartStormIncidents(storms, clusterID)...)
+
 	for _, d := range drafts {
 		_, isNew, err := s.db.UpsertK8sIncidentByKey(ctx, store.K8sIncident{
 			DedupKey: d.Key, ClusterID: d.ClusterID, Namespace: d.Namespace, Kind: d.Kind, Name: d.Name,

@@ -1,6 +1,9 @@
 package analyzer
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDetectRestartStorms(t *testing.T) {
 	pods := []RestartStormPod{
@@ -53,5 +56,27 @@ func TestDetectRestartStorms(t *testing.T) {
 	}
 	if storms2[0].Severity != "critical" {
 		t.Fatalf("critical storm should sort first: %+v", storms2)
+	}
+}
+
+func TestBuildRestartStormIncidents(t *testing.T) {
+	storms := []RestartStorm{
+		{Namespace: "prod", OwnerKind: "ReplicaSet", OwnerName: "web", Severity: "critical", AffectedPods: 3, PodCount: 4, AffectedPct: 75, TotalRestarts: 18, SamplePods: []string{"web-1", "web-2"}, Reason: "service down"},
+		{Namespace: "prod", OwnerKind: "ReplicaSet", OwnerName: "api", Severity: "high", AffectedPods: 2, PodCount: 6, AffectedPct: 33},
+	}
+	drafts := BuildRestartStormIncidents(storms, "c1")
+	if len(drafts) != 1 {
+		t.Fatalf("only the critical storm should become an incident, got %d: %+v", len(drafts), drafts)
+	}
+	d := drafts[0]
+	if d.Condition != "RestartStorm" || d.Severity != "critical" || d.Kind != "ReplicaSet" || d.Name != "web" {
+		t.Fatalf("draft fields wrong: %+v", d)
+	}
+	if d.Key != "c1|prod|ReplicaSet|web|RestartStorm" {
+		t.Fatalf("dedup key wrong: %q", d.Key)
+	}
+	joined := strings.Join(d.Evidence, "\n")
+	if !strings.Contains(joined, "web-1") || !strings.Contains(joined, "18") {
+		t.Fatalf("evidence should include sample pods + restart total: %+v", d.Evidence)
 	}
 }

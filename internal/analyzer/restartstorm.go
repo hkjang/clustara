@@ -120,3 +120,28 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 	})
 	return out
 }
+
+// BuildRestartStormIncidents turns critical restart storms into workload-level incident drafts so a
+// service-wide restart wave opens one incident on the owner (not N pod incidents). High storms stay
+// as list warnings. Deduplicated per workload. Pure builder.
+func BuildRestartStormIncidents(storms []RestartStorm, clusterID string) []IncidentDraft {
+	out := []IncidentDraft{}
+	for _, s := range storms {
+		if s.Severity != "critical" {
+			continue
+		}
+		key := clusterID + "|" + s.Namespace + "|" + s.OwnerKind + "|" + s.OwnerName + "|RestartStorm"
+		ev := []string{s.Reason}
+		if len(s.SamplePods) > 0 {
+			ev = append(ev, "영향 Pod: "+strings.Join(s.SamplePods, ", "))
+		}
+		ev = append(ev, "총 재시작 "+strconv.Itoa(s.TotalRestarts)+"회")
+		out = append(out, IncidentDraft{
+			Key: key, ClusterID: clusterID, Namespace: s.Namespace, Kind: s.OwnerKind, Name: s.OwnerName,
+			Condition: "RestartStorm", Severity: "critical",
+			Title:    "RestartStorm — " + nsName(s.Namespace) + s.OwnerKind + "/" + s.OwnerName,
+			Evidence: ev,
+		})
+	}
+	return out
+}
