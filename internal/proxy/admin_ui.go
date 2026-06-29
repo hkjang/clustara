@@ -6298,7 +6298,7 @@ const adminHTML = `<!doctype html>
       const out = document.getElementById('podlog-analysis'); out.innerHTML = '<span class="muted">프리셋 불러오는 중...</span>';
       try {
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/presets?cluster_id=' + encodeURIComponent(clusterId || ''));
-        out.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + (d.presets || []).map(p => '<button type="button" class="secondary" style="font-size:11px" onclick="document.getElementById(\\'podlog-q\\').value=\\'' + escapeAttr(p.query || '') + '\\';document.getElementById(\\'podlog-error\\').checked=' + (p.error_only ? 'true' : 'false') + '">' + escapeHTML(p.name || '-') + '</button>').join('') + '</div>';
+        out.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + (d.presets || []).map(p => '<button type="button" class="secondary" style="font-size:11px" onclick="document.getElementById(\'podlog-q\').value=\'' + escapeAttr(p.query || '') + '\';document.getElementById(\'podlog-error\').checked=' + (p.error_only ? 'true' : 'false') + '">' + escapeHTML(p.name || '-') + '</button>').join('') + '</div>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPodMaskingReport = async (clusterId, ns, pod) => {
