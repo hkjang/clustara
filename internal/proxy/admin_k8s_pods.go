@@ -194,6 +194,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodCompareMatrix(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "env" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodEnv(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "health-replay" {
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -589,6 +597,22 @@ func (s *Server) handleK8sPodCompareMatrix(w http.ResponseWriter, r *http.Reques
 		"masked":     true,
 		"matrix":     matrix,
 		"note":       "같은 워크로드 Pod를 필드 단위로 비교해 다른 값만 표시하고 소수(outlier) Pod를 표시합니다. 민감값은 마스킹됩니다.",
+	})
+}
+
+// handleK8sPodEnv resolves the Pod's declared env to source (literal/ConfigMap/Secret/Downward)
+// per container + a Secret-hygiene risk scan. Secret values are never resolved. GET .../env
+func (s *Server) handleK8sPodEnv(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, item, ok := s.resolvePodInventory(w, r, namespace, pod)
+	if !ok {
+		return
+	}
+	envMap := analyzer.BuildEnvSourceMap(item)
+	s.recordPodAccess(r, clusterID, namespace, pod, "env", "pod_env")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id": clusterID, "namespace": namespace, "pod": pod,
+		"env": envMap, "masked": true,
+		"note": "선언된 env의 출처(literal/ConfigMap/Secret/Downward)만 표시하며 Secret 값은 노출하지 않습니다. 민감 이름의 평문 env는 마스킹·위험 표시됩니다.",
 	})
 }
 
