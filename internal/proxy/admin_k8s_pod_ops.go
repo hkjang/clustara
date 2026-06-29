@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -661,7 +662,28 @@ func (s *Server) handleK8sPodRunbook(w http.ResponseWriter, r *http.Request, nam
 		{"step": 5, "title": "권장 조치 승인 요청", "action": recommendedRunbookAction(view), "approval_required": true},
 		{"step": 6, "title": "조치 후 Health Replay로 확인", "action": "post_check_health_replay", "approval_required": false},
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cluster_id": clusterID, "namespace": namespace, "pod": pod, "condition": firstNonEmpty(view.RiskLevel, podStatusRisk(view.Status), "normal"), "steps": steps})
+	// Symptom-driven staged orchestration plan (pre-check → diagnose → remediate → post-check → rollback).
+	recentChange := s.podHasRecentChange(r.Context(), clusterID, item)
+	plan := analyzer.BuildRunbookPlan(view.PrimarySymptom, analyzer.RunbookContext{
+		HasOwner: view.OwnerName != "", RecentChange: recentChange,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"cluster_id": clusterID, "namespace": namespace, "pod": pod, "condition": firstNonEmpty(view.RiskLevel, podStatusRisk(view.Status), "normal"), "steps": steps, "plan": plan})
+}
+
+// podHasRecentChange reports whether the pod had an "updated" revision within the last 30 minutes
+// (a recent deploy/config change → rollback becomes a candidate in the runbook plan).
+func (s *Server) podHasRecentChange(ctx context.Context, clusterID string, item store.K8sInventoryItem) bool {
+	revs, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Kind: "Pod", Namespace: item.Namespace, Name: item.Name, Limit: 4})
+	now := time.Now().UTC()
+	for _, rev := range revs {
+		if !strings.EqualFold(rev.ChangeKind, "updated") {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, rev.ObservedAt); err == nil && now.Sub(t) <= 30*time.Minute {
+			return true
+		}
+	}
+	return false
 }
 
 func recommendedRunbookAction(view k8sPodView) string {

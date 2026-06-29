@@ -6395,7 +6395,15 @@ const adminHTML = `<!doctype html>
       try {
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/runbook?cluster_id=' + encodeURIComponent(clusterId || ''));
         const rows = (d.steps || []).map(s => '<tr><td>' + fmt(s.step || 0) + '</td><td><strong>' + escapeHTML(s.title || '-') + '</strong></td><td>' + escapeHTML(s.action || '-') + '</td><td>' + (s.approval_required ? '<span class="status warn">승인</span>' : '<span class="muted">-</span>') + '</td></tr>').join('');
-        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:6px">condition ' + escapeHTML(d.condition || '-') + '</div><table><thead><tr><th>#</th><th>Step</th><th>Action</th><th>Gate</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        const plan = d.plan || {};
+        const phaseLabel = { precheck: '사전점검', diagnose: '진단', remediate: '조치', postcheck: '확인', rollback: '롤백' };
+        const planRows = (plan.steps || []).map(s => {
+          const ph = phaseLabel[s.phase] || s.phase;
+          const phCls = s.phase === 'remediate' ? 'warn' : (s.phase === 'rollback' ? 'error' : '');
+          return '<tr><td>' + fmt(s.order || 0) + '</td><td><span class="status ' + phCls + '" style="font-size:10px">' + escapeHTML(ph) + '</span></td><td><strong>' + escapeHTML(s.title || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.detail || '') + '</div></td><td>' + escapeHTML(s.action || '-') + '</td><td>' + (s.requires_approval ? '<span class="status warn">승인</span>' : '<span class="muted">-</span>') + '</td></tr>';
+        }).join('');
+        const planHTML = (plan.steps || []).length ? '<div style="margin-top:12px"><div style="font-size:12px;margin-bottom:4px"><strong>오케스트레이션 플랜</strong> — ' + escapeHTML(plan.summary || '') + '</div><table><thead><tr><th>#</th><th>단계</th><th>작업</th><th>Action</th><th>Gate</th></tr></thead><tbody>' + planRows + '</tbody></table></div>' : '';
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:6px">condition ' + escapeHTML(d.condition || '-') + ' · 증상 ' + escapeHTML(plan.symptom || '-') + '</div><table><thead><tr><th>#</th><th>Step</th><th>Action</th><th>Gate</th></tr></thead><tbody>' + rows + '</tbody></table>' + planHTML;
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPodLogPresets = async (clusterId, ns, pod) => {

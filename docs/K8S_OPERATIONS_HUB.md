@@ -28,6 +28,7 @@
 | Pod Compare Matrix — 같은 워크로드 Pod를 필드 단위 비교, 다른 값·소수(outlier) Pod 강조 | ✅ |
 | Pod Watch List — 중요 namespace/워크로드 감시 등록, 현재 위험 상태(밴드·위험 Pod·증상) 집계 | ✅ |
 | K8s MCP Toolset — `/mcp/gateway`에 read-only 운영 도구(`k8s_list_clusters`·`k8s_list_incidents`·`k8s_pod_health`) 노출, admin:read 게이트 | ✅ |
+| Runbook Orchestrator — 증상별 단계형 플랜(사전점검→진단→조치(승인)→확인→롤백), 최근 변경 시 롤백 후보 노출 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -66,7 +67,7 @@
 | GET | `/admin/k8s/pods/{namespace}/{pod}/health-replay` | Pod 상태·컨테이너 상태·이벤트·메트릭·리비전·로그 감사·RCA 후보를 시간순으로 재생 |
 | POST | `/admin/k8s/pods/{namespace}/{pod}/bookmark` | 운영자 Pod 북마크 저장 |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/action-safety` | delete/evict/restart/scale/debug 전 owner, replica, HPA, PDB, 최근 이벤트 기반 안전성 점검 |
-| GET | `/admin/k8s/pods/{namespace}/{pod}/runbook` | CrashLoop/OOM/ImagePull/Pending 등 상태 기반 표준 대응 플레이북 |
+| GET | `/admin/k8s/pods/{namespace}/{pod}/runbook` | 표준 대응 플레이북 + 증상별 오케스트레이션 플랜(`plan`: 사전점검→진단→조치(승인)→확인→롤백) |
 | GET/POST | `/admin/k8s/pods/{namespace}/{pod}/exec/sessions` | Pod별 정책 기반 exec 세션 요청/이력: role, container, command, reason, `ready`/`pending_approval`/`denied` |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/exec/briefing` | 터미널 접속 전 대상 Pod 중요도, 최근 이벤트, 명령 위험도, 정책 경고 요약 |
 | GET/POST | `/admin/k8s/pods/{namespace}/{pod}/debug/sessions` | Ephemeral debug container 요청/이력. 실제 주입 전 승인·이미지 allowlist·권한 제한을 적용 |
