@@ -7566,6 +7566,8 @@ const adminHTML = `<!doctype html>
           '<textarea id="sim-spec" rows="5" placeholder=\'{"template":{"spec":{"containers":[{"name":"c","image":"x:latest"}]}}}\' style="width:100%"></textarea>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sPolicySimulate()">검증</button></div>' +
           '<div id="sim-pol-out" style="margin-top:8px"></div></div>') +
+        card('운영 RBAC 역할·권한 매트릭스 (참조)',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">역할별 허용 작업(capability) 참조 모델입니다. 실제 인증 강제는 기존 admin 토큰/스코프를 따릅니다.</div><div id="rbac-matrix"><button type="button" class="secondary" onclick="k8sRBACLoad()">역할 매트릭스 보기</button></div></div>') +
         card('Application Stack 검증 (dry-run)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:4px">멀티 문서 매니페스트(YAML/JSON)를 클러스터 적용 전 검증합니다 — 리소스 목록·정책 위반·승인 필요 변경을 미리 봅니다.</div>' +
           '<textarea id="stack-manifest" rows="8" placeholder="apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: prod\nspec: ...\n---\napiVersion: v1\nkind: Secret\n..." style="width:100%;font-family:monospace"></textarea>' +
@@ -7619,6 +7621,23 @@ const adminHTML = `<!doctype html>
       if (!confirm('정책을 삭제할까요?')) return;
       try { await api('/admin/k8s/policies/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sPolicy();
+    };
+    window.k8sRBACLoad = async () => {
+      const out = document.getElementById('rbac-matrix');
+      out.innerHTML = '<span class="muted">불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/rbac');
+        const caps = d.capabilities || [];
+        const roles = d.roles || [];
+        const matrix = d.matrix || {};
+        const riskCls = (r) => r === 'admin' ? 'error' : (r === 'approve' ? 'warn' : (r === 'write' ? 'warn' : ''));
+        const head = '<tr><th>Capability</th>' + roles.map(r => '<th style="font-size:10px">' + escapeHTML(r) + '</th>').join('') + '</tr>';
+        const rows = caps.map(c => {
+          const cells = roles.map(role => (matrix[role] || []).indexOf(c.key) >= 0 ? '<td style="text-align:center;color:var(--accent)">✓</td>' : '<td style="text-align:center" class="muted">·</td>').join('');
+          return '<tr><td><strong>' + escapeHTML(c.key) + '</strong> <span class="status ' + riskCls(c.risk) + '" style="font-size:9px">' + escapeHTML(c.risk) + '</span><div class="muted" style="font-size:11px">' + escapeHTML(c.label) + '</div></td>' + cells + '</tr>';
+        }).join('');
+        out.innerHTML = '<div style="overflow-x:auto"><table><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sStackValidate = async () => {
       const out = document.getElementById('stack-out');
