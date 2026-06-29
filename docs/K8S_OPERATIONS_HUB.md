@@ -29,6 +29,7 @@
 | Pod Watch List — 중요 namespace/워크로드 감시 등록, 현재 위험 상태(밴드·위험 Pod·증상) 집계 | ✅ |
 | K8s MCP Toolset — `/mcp/gateway`에 read-only 운영 도구(`k8s_list_clusters`·`k8s_list_incidents`·`k8s_pod_health`) 노출, admin:read 게이트 | ✅ |
 | Runbook Orchestrator — 증상별 단계형 플랜(사전점검→진단→조치(승인)→확인→롤백), 최근 변경 시 롤백 후보 노출 | ✅ |
+| 리포트 자동 발송 — 운영 다이제스트를 주기(interval)로 Mattermost 채널에 자동 발송 + 즉시 발송 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -40,6 +41,8 @@
 | GET | `/admin/k8s/overview` | 클러스터, 인벤토리, warning event, finding, action 요약 |
 | GET | `/admin/k8s/home` | 운영 홈 집계: 클러스터 위험 TOP5, 장애 후보 TOP10, 최근 변경 TOP10, 비용 증가 TOP10 |
 | GET | `/admin/k8s/reports` | 리포트 센터: 일간 장애·주간 비용·월간 안정성(SLO) 요약 (로컬 데이터) |
+| GET/POST | `/admin/k8s/report-schedules` | 리포트 자동 발송 예약 목록/생성: `cluster_id`·`interval`(예 24h)·`channel` |
+| DELETE/POST | `/admin/k8s/report-schedules/{id}` `/{id}/send` | 예약 삭제 / 즉시 발송(Mattermost) |
 | GET/POST | `/admin/k8s/incidents` | 장애 워룸: 목록 / (POST)현재 high·critical RCA를 incident로 스캔·묶기 |
 | GET | `/admin/k8s/incidents/{id}` | 장애 상세 워크스페이스: RCA 근거, 관련 이벤트·리비전·finding·액션, 영향도 그래프, `POST /{id}/resolve` 해결 처리 |
 | GET/POST | `/admin/k8s/clusters` | 클러스터 목록/등록 (`group_id`로 그룹 지정 가능) |

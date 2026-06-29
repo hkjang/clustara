@@ -7817,13 +7817,14 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 리포트 센터', '<div class="empty">불러오는 중...</div>');
-      let clusters, rep, dw;
+      let clusters, rep, dw, sched;
       try {
         const cq = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
-        [clusters, rep, dw] = await Promise.all([
+        [clusters, rep, dw, sched] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/reports' + cq),
           api('/admin/k8s/dw/report?kind=cost' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ available: false })),
+          api('/admin/k8s/report-schedules').catch(() => ({ schedules: [] })),
         ]);
       } catch (e) { view.innerHTML = section('K8s 리포트 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -7856,8 +7857,46 @@ const adminHTML = `<!doctype html>
           const rows = (dw.data || []).slice(-30).map(r => '<tr><td>' + escapeHTML(String(r.day)) + '</td><td>' + escapeHTML(String(r.name || '-')) + '</td><td>' + fmt(Math.round(r.value || 0)) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">데이터 없음</td></tr>';
           return card('장기 추세 — namespace별 일별 비용 (ClickHouse)', '<div class="card-body"><table><thead><tr><th>날짜</th><th>Namespace</th><th>월 추정 KRW</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
+        (function () {
+          const list = (sched && sched.schedules) || [];
+          const rows = list.length ? list.map(x =>
+            '<tr><td>' + (x.enabled ? '<span class="status">on</span>' : '<span class="muted">off</span>') + '</td>' +
+            '<td>' + escapeHTML(x.cluster_id || '전체') + '</td><td>' + escapeHTML(x.interval || '수동') + '</td>' +
+            '<td>' + escapeHTML(x.channel || '기본') + '</td><td class="muted" style="font-size:11px">' + (x.last_run_at ? ago(x.last_run_at) : '미발송') + '</td>' +
+            '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sReportSendNow(\'' + escapeAttr(x.id) + '\')">지금 발송</button> ' +
+            '<button type="button" class="secondary" style="font-size:11px" onclick="k8sReportSchedDelete(\'' + escapeAttr(x.id) + '\')">삭제</button></td></tr>').join('')
+            : '<tr><td colspan="6" class="muted">예약된 리포트 발송이 없습니다.</td></tr>';
+          return card('리포트 자동 발송 (Mattermost)',
+            '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">운영 리포트 다이제스트를 주기적으로 Mattermost 채널에 발송합니다(Mattermost 설정·k8s_failure 카테고리 필요).</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">' +
+            '<input id="rsched-cluster" placeholder="cluster_id(전체=빈값)" style="min-width:160px" value="' + escapeAttr(clusterId) + '"><input id="rsched-interval" placeholder="주기 예: 24h" style="width:120px"><input id="rsched-channel" placeholder="채널(선택)" style="min-width:120px"><button type="button" onclick="k8sReportSchedAdd()">예약 추가</button></div>' +
+            '<table><thead><tr><th>상태</th><th>클러스터</th><th>주기</th><th>채널</th><th>마지막 발송</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="rsched-msg" class="muted" style="font-size:11px;margin-top:4px"></div></div>');
+        })() +
         card('', '<div class="card-body"><div class="muted" style="font-size:11px">' + escapeHTML(rep.note || '') + '</div></div>');
     }
+    window.k8sReportSchedAdd = async () => {
+      const msg = document.getElementById('rsched-msg');
+      try {
+        await api('/admin/k8s/report-schedules', { method: 'POST', body: JSON.stringify({
+          cluster_id: (document.getElementById('rsched-cluster').value || '').trim(),
+          interval: (document.getElementById('rsched-interval').value || '').trim(),
+          channel: (document.getElementById('rsched-channel').value || '').trim() }) });
+        await renderK8sReports(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sReportSendNow = async (id) => {
+      const msg = document.getElementById('rsched-msg');
+      if (msg) msg.innerHTML = '발송 중...';
+      try {
+        const d = await api('/admin/k8s/report-schedules/' + encodeURIComponent(id) + '/send', { method: 'POST', body: '{}' });
+        if (msg) msg.innerHTML = '<span class="status">발송됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((d.preview || '').slice(0, 80)) + '…</span>';
+      } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sReportSchedDelete = async (id) => {
+      if (!confirm('이 예약을 삭제할까요?')) return;
+      try { await api('/admin/k8s/report-schedules/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
+      await renderK8sReports(new URLSearchParams(location.hash.split('?')[1] || ''));
+    };
     window.k8sReportsGo = () => {
       const cl = document.getElementById('k8srep-cluster').value;
       location.hash = '#/k8s-reports' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');

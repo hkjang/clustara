@@ -159,6 +159,8 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 	// Background scheduler for due saved Text2SQL reports (self-disables without an
 	// execute DB).
 	go server.text2sqlReportScheduler()
+	// Background scheduler for due K8s operations report deliveries (Mattermost).
+	go server.k8sReportScheduler()
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)
@@ -299,6 +301,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/cost/trend", s.handleK8sCostTrend)
 	mux.HandleFunc("/admin/k8s/cost/recommendations", s.handleK8sCostRecommendations)
 	mux.HandleFunc("/admin/k8s/reports", s.handleK8sReports)
+	mux.HandleFunc("/admin/k8s/report-schedules", s.handleK8sReportSchedules)
+	mux.HandleFunc("/admin/k8s/report-schedules/", s.handleK8sReportScheduleByID)
 	mux.HandleFunc("/admin/k8s/slo", s.handleK8sSLO)
 	mux.HandleFunc("/admin/k8s/incidents", s.handleK8sIncidents)
 	mux.HandleFunc("/admin/k8s/incidents/", s.handleK8sIncidentByID)
