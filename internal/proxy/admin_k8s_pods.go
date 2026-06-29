@@ -355,15 +355,7 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
-	workloadPods := make([]analyzer.WorkloadPod, 0, len(views))
-	for _, p := range views {
-		workloadPods = append(workloadPods, analyzer.WorkloadPod{
-			Namespace: p.Namespace, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, Name: p.Name,
-			HealthScore: p.HealthScore, HealthBand: p.HealthBand, PrimarySymptom: p.PrimarySymptom,
-			RestartCount: p.RestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
-		})
-	}
-	workloads := analyzer.BuildWorkloadGroups(workloadPods)
+	workloads := analyzer.BuildWorkloadGroups(podViewsToWorkloadPods(views))
 	bookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 20})
 	autoBookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: "system:auto", ClusterID: clusterID, Limit: 20})
 	recentAccess, _ := s.db.ListK8sPodAccesses(r.Context(), store.K8sPodAccessFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 12})
@@ -380,6 +372,34 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 			"restart_storms": len(storms),
 		},
 	})
+}
+
+// podViewsToWorkloadPods maps pod views onto the analyzer's workload-grouping input.
+func podViewsToWorkloadPods(views []k8sPodView) []analyzer.WorkloadPod {
+	out := make([]analyzer.WorkloadPod, 0, len(views))
+	for _, p := range views {
+		out = append(out, analyzer.WorkloadPod{
+			Namespace: p.Namespace, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, Name: p.Name,
+			HealthScore: p.HealthScore, HealthBand: p.HealthBand, PrimarySymptom: p.PrimarySymptom,
+			RestartCount: p.RestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
+		})
+	}
+	return out
+}
+
+// workloadGroupsForCluster builds the current workload health roll-up for a cluster (used by the
+// pod list and the watch list).
+func (s *Server) workloadGroupsForCluster(ctx context.Context, clusterID string) []analyzer.WorkloadGroup {
+	items, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: clusterID, Kind: "Pod", Limit: 4000})
+	if err != nil {
+		return nil
+	}
+	events, _ := s.db.ListK8sEvents(ctx, clusterID, 1000)
+	views := make([]k8sPodView, 0, len(items))
+	for _, it := range items {
+		views = append(views, podView(it, events, false))
+	}
+	return analyzer.BuildWorkloadGroups(podViewsToWorkloadPods(views))
 }
 
 func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, namespace, pod string) {

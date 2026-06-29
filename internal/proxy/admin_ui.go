@@ -6145,8 +6145,8 @@ const adminHTML = `<!doctype html>
       const q = new URLSearchParams();
       ['cluster_id','namespace','node','status','owner','risk','q'].forEach(k => { const v = params && params.get(k); if (v) q.set(k, v); });
       q.set('limit', (params && params.get('limit')) || '300');
-      let clusters, d;
-      try { [clusters, d] = await Promise.all([api('/admin/k8s/clusters'), api('/admin/k8s/pods?' + q.toString())]); }
+      let clusters, d, watch;
+      try { [clusters, d, watch] = await Promise.all([api('/admin/k8s/clusters'), api('/admin/k8s/pods?' + q.toString()), api('/admin/k8s/pod-watches' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ statuses: [] }))]); }
       catch (e) { view.innerHTML = section('Pod 관리', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(c =>
         '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
@@ -6197,8 +6197,26 @@ const adminHTML = `<!doctype html>
             '<td class="muted" style="font-size:11px">' + escapeHTML(w.worst_symptom || '-') + '</td>' +
             '<td>' + fmt(w.total_restarts || 0) + '</td></tr>';
         }).join('') + '</tbody></table></div>') : '';
+      const wStatuses = (watch && watch.statuses) || [];
+      const watchRows = wStatuses.length ? wStatuses.map(s => {
+        const cls = s.band === 'critical' ? 'error' : (s.band === 'warning' ? 'warn' : (s.band === 'unknown' ? '' : ''));
+        const target = (s.owner_name ? (s.owner_kind || '') + '/' + s.owner_name : s.namespace + ' (전체)');
+        return '<tr><td><span class="status ' + cls + '">' + escapeHTML(s.band || 'unknown') + '</span></td>' +
+          '<td><strong>' + escapeHTML(target) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || '') + (s.note ? ' · ' + escapeHTML(s.note) : '') + '</div></td>' +
+          '<td>' + escapeHTML(s.namespace || '-') + '</td>' +
+          '<td>' + fmt(s.matched_workloads || 0) + ' wl / ' + fmt(s.pod_count || 0) + ' pod</td>' +
+          '<td>' + fmt(s.critical_pods || 0) + ' / ' + fmt(s.warning_pods || 0) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(s.worst_symptom || '-') + '</td>' +
+          '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodWatchDelete(\'' + escapeAttr(s.id) + '\')">삭제</button></td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">감시 중인 워크로드가 없습니다.</td></tr>';
+      const watchCard = card('감시 목록 (Watch List)', '<div class="card-body">' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">' +
+        '<input id="watch-ns" placeholder="namespace" style="min-width:120px"><input id="watch-owner-kind" placeholder="owner kind(선택)" style="min-width:120px"><input id="watch-owner-name" placeholder="owner name(선택)" style="min-width:140px"><input id="watch-note" placeholder="메모" style="min-width:140px"><button type="button" onclick="k8sPodWatchAdd()">감시 추가</button>' +
+        '<span class="muted" style="font-size:11px">현재 클러스터: ' + escapeHTML(clusterId || '(필터에서 선택)') + '</span></div>' +
+        '<table><thead><tr><th>상태</th><th>대상</th><th>Namespace</th><th>매칭</th><th>위험/주의 Pod</th><th>증상</th><th></th></tr></thead><tbody>' + watchRows + '</tbody></table></div>');
       view.innerHTML =
-        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('감시 위험', fmt((watch && watch.summary && watch.summary.critical) || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        watchCard +
         stormCard +
         wlCard +
         card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
@@ -6214,6 +6232,25 @@ const adminHTML = `<!doctype html>
       const add = (id, key) => { const el = document.getElementById(id); const v = (el && el.value || '').trim(); if (v) q.set(key, v); };
       add('pod-cluster', 'cluster_id'); add('pod-ns', 'namespace'); add('pod-node', 'node'); add('pod-status', 'status'); add('pod-q', 'q'); add('pod-risk', 'risk');
       location.hash = '#/k8s-pods' + (q.toString() ? '?' + q.toString() : '');
+    };
+    window.k8sPodWatchAdd = async () => {
+      const cl = (document.getElementById('pod-cluster') || {}).value || (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '';
+      const ns = (document.getElementById('watch-ns').value || '').trim();
+      if (!cl) { alert('필터에서 클러스터를 먼저 선택하세요.'); return; }
+      if (!ns) { alert('namespace를 입력하세요.'); return; }
+      try {
+        await api('/admin/k8s/pod-watches', { method: 'POST', body: JSON.stringify({
+          cluster_id: cl, namespace: ns,
+          owner_kind: (document.getElementById('watch-owner-kind').value || '').trim(),
+          owner_name: (document.getElementById('watch-owner-name').value || '').trim(),
+          note: (document.getElementById('watch-note').value || '').trim() }) });
+        await renderK8sPods(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { alert(e.message); }
+    };
+    window.k8sPodWatchDelete = async (id) => {
+      if (!confirm('이 감시를 삭제할까요?')) return;
+      try { await api('/admin/k8s/pod-watches/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
+      await renderK8sPods(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
     async function renderK8sPodDetail(clusterId, ns, pod) {
       const view = document.getElementById('view');

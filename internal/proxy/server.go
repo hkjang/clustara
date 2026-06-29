@@ -313,6 +313,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/exec/sessions/", s.handleK8sExecSessionByID)
 	mux.HandleFunc("/admin/k8s/pod-bookmarks", s.handleK8sPodBookmarks)
 	mux.HandleFunc("/admin/k8s/pod-bookmarks/", s.handleK8sPodBookmarkByID)
+	mux.HandleFunc("/admin/k8s/pod-watches", s.handleK8sPodWatches)
+	mux.HandleFunc("/admin/k8s/pod-watches/", s.handleK8sPodWatchByID)
 	mux.HandleFunc("/admin/k8s/pod-accesses", s.handleK8sPodAccesses)
 	mux.HandleFunc("/admin/k8s/debug/catalog", s.handleK8sDebugCatalog)
 	mux.HandleFunc("/admin/k8s/debug/sessions", s.handleK8sDebugSessions)
