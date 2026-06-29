@@ -1,3 +1,6 @@
+v0.8.3:
+- **Pod 진단 워크벤치 — One-Page 진단 요약·워크로드 묶음 보기 (v0.8.3)**: Pod 상세 상단에 규칙 기반 One-Page 진단 요약을 추가해 "이 Pod가 왜 위험한지·가장 가능성 높은 원인·먼저 볼 것"을 한 화면에 합성합니다. 증상별(CrashLoopBackOff·OOMKilled·ImagePullBackOff·Pending·ProbeFailing 등) 원인 후보와 우선 점검 항목을 제시하고, 장애 직전 배포/설정 변경이 있으면 최상단에 노출해 롤백 검토를 유도합니다(변경 타임라인·Diff 연계). Pod 목록에는 워크로드 묶음 보기를 추가해 owner(ReplicaSet/StatefulSet/DaemonSet) 단위로 Pod 수·Ready·정상/주의/위험 분포·최저 Health·최악 증상·재시작 합계를 집계하고 위험한 워크로드를 상단에 정렬합니다. 신규 분석 로직은 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.8.2:
 - **Pod 운영 워크벤치 — Health Score·문제 유형 자동 태깅·Restart Storm (v0.8.2)**: Pod 목록을 "보는 기능"에서 "어디부터 봐야 하는지 판단"으로 전환했습니다. 각 Pod에 0~100 Health Score와 대표 증상(OOMKilled·CrashLoopBackOff·ImagePullBackOff·CreateContainerError·Evicted·Pending·Terminating·ProbeFailing)을 자동 태깅하고 목록을 Health 낮은 순으로 정렬합니다. 같은 owner 워크로드의 다수 Pod가 동시에 재시작/비정상이면 단일 Pod가 아닌 서비스 단위 장애(Restart Storm, POD-RULE-06)로 묶어 경고하며, critical storm은 워크로드 단위 incident로 장애 워룸에 자동 등록됩니다(수동 스캔·realtime agent 수신 양쪽). 모든 신규 분석 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
