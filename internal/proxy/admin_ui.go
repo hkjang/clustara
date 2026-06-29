@@ -6244,6 +6244,7 @@ const adminHTML = `<!doctype html>
         })() +
         card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
+        card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
@@ -6280,6 +6281,30 @@ const adminHTML = `<!doctype html>
     window.k8sPodDownloadEvidenceFromDetail = () => { const c = podLogContext(); return window.k8sPodDownloadEvidence(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadGoldenDiffFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadGoldenDiff(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadHealthReplayFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadHealthReplay(c.clusterId, c.ns, c.pod); };
+    window.k8sPodLoadCompareMatrixFromDetail = async () => {
+      const c = podLogContext();
+      const out = document.getElementById('pod-compare-matrix');
+      out.innerHTML = '<span class="muted">비교 중...</span>';
+      try {
+        const qs = new URLSearchParams({ cluster_id: c.clusterId || '' });
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(c.ns) + '/' + encodeURIComponent(c.pod) + '/compare-matrix?' + qs.toString());
+        const m = d.matrix || {};
+        const pods = m.pods || [];
+        if (!pods.length) { out.innerHTML = '<span class="muted">비교할 Pod가 없습니다.</span>'; return; }
+        if (!(m.rows || []).length) { out.innerHTML = '<span class="status">차이 없음 — ' + fmt(m.pod_count || 0) + '개 Pod의 비교 필드가 모두 동일합니다.</span>'; return; }
+        const head = '<tr><th>필드</th>' + pods.map(p => '<th>' + escapeHTML(p) + '</th>').join('') + '</tr>';
+        const rows = (m.rows || []).slice(0, 60).map(r => {
+          const cells = pods.map(p => {
+            const v = (r.values || {})[p];
+            const isOut = (r.outliers || []).indexOf(p) >= 0;
+            return '<td' + (isOut ? ' style="background:var(--bad-bg,#fee2e2);font-weight:700"' : '') + '>' + escapeHTML(v == null || v === '' ? '∅' : v) + '</td>';
+          }).join('');
+          return '<tr><td><strong>' + escapeHTML(r.field) + '</strong></td>' + cells + '</tr>';
+        }).join('');
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">' + fmt(m.diff_fields || 0) + '개 필드가 다릅니다 · 빨강 = outlier(소수 값) · ∅ = 값 없음</div>' +
+          '<div style="overflow-x:auto"><table><thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sPodRequestExecFromDetail = () => { const c = podLogContext(); return window.k8sPodRequestExec(c.clusterId, c.ns, c.pod); };
     window.k8sPodBookmarkFromDetail = () => { const c = podLogContext(); return window.k8sPodBookmark(c.clusterId, c.ns, c.pod); };
     window.k8sPodActionSafetyFromDetail = () => { const c = podLogContext(); return window.k8sPodActionSafety(c.clusterId, c.ns, c.pod); };

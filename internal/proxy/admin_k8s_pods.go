@@ -186,6 +186,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodGoldenDiff(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "compare-matrix" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodCompareMatrix(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "health-replay" {
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -531,6 +539,36 @@ func (s *Server) handleK8sPodGoldenDiff(w http.ResponseWriter, r *http.Request, 
 		"summary":        summary,
 		"changes":        changes,
 		"selection_note": goldenSelectionNote(targetView, goldenView, autoSelected),
+	})
+}
+
+// handleK8sPodCompareMatrix compares all pods of the target's workload field-by-field, surfacing
+// only differing fields and flagging outlier pods. GET /admin/k8s/pods/{ns}/{pod}/compare-matrix
+func (s *Server) handleK8sPodCompareMatrix(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, target, ok := s.resolvePodInventory(w, r, namespace, pod)
+	if !ok {
+		return
+	}
+	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 1000)
+	targetView := podView(target, events, true)
+	items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Kind: "Pod", Namespace: namespace, Limit: 2000})
+	comparePods := []analyzer.ComparePod{}
+	for _, it := range items {
+		if it.Name != target.Name && !samePodWorkload(target, it) {
+			continue
+		}
+		pv := podView(it, events, true)
+		comparePods = append(comparePods, analyzer.ComparePod{Name: pv.Name, Fields: podCompareFields(pv)})
+	}
+	matrix := analyzer.BuildCompareMatrix(comparePods)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id": clusterID,
+		"namespace":  namespace,
+		"target":     targetView.Name,
+		"owner":      map[string]string{"kind": targetView.OwnerKind, "name": targetView.OwnerName},
+		"masked":     true,
+		"matrix":     matrix,
+		"note":       "같은 워크로드 Pod를 필드 단위로 비교해 다른 값만 표시하고 소수(outlier) Pod를 표시합니다. 민감값은 마스킹됩니다.",
 	})
 }
 
