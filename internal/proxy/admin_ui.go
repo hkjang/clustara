@@ -6184,9 +6184,23 @@ const adminHTML = `<!doctype html>
           '<td>' + fmt(s.total_restarts || 0) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(s.reason || '') + '</td></tr>').join('') +
         '</tbody></table></div>') : '';
+      const workloads = d.workloads || [];
+      const wlCard = workloads.length ? card('워크로드 묶음 (owner 단위 · 위험 순)', '<div class="card-body"><table><thead><tr><th>상태</th><th>워크로드</th><th>Namespace</th><th>Pod(Ready)</th><th>정상/주의/위험</th><th>최저 Health</th><th>증상</th><th>재시작</th></tr></thead><tbody>' +
+        workloads.slice(0, 50).map(w => {
+          const cls = w.band === 'critical' ? 'error' : (w.band === 'warning' ? 'warn' : '');
+          return '<tr><td><span class="status ' + cls + '">' + escapeHTML(w.band || 'healthy') + '</span></td>' +
+            '<td><strong>' + escapeHTML((w.owner_kind || '-') + '/' + (w.owner_name || '-')) + '</strong></td>' +
+            '<td>' + escapeHTML(w.namespace || '-') + '</td>' +
+            '<td>' + fmt(w.ready_pods || 0) + '/' + fmt(w.pod_count || 0) + '</td>' +
+            '<td>' + fmt(w.healthy_pods || 0) + ' / ' + fmt(w.warning_pods || 0) + ' / ' + fmt(w.critical_pods || 0) + '</td>' +
+            '<td>' + fmt(w.min_health || 0) + '</td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML(w.worst_symptom || '-') + '</td>' +
+            '<td>' + fmt(w.total_restarts || 0) + '</td></tr>';
+        }).join('') + '</tbody></table></div>') : '';
       view.innerHTML =
-        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
         stormCard +
+        wlCard +
         card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="pod-cluster">' + clusterOpts + '</select><input id="pod-ns" placeholder="namespace" value="' + escapeAttr(ns) + '"><input id="pod-node" placeholder="node" value="' + escapeAttr(params && params.get('node') || '') + '">' +
           '<input id="pod-status" placeholder="status" value="' + escapeAttr(params && params.get('status') || '') + '"><input id="pod-q" placeholder="pod/image 검색" value="' + escapeAttr(params && params.get('q') || '') + '">' +

@@ -347,12 +347,22 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
+	workloadPods := make([]analyzer.WorkloadPod, 0, len(views))
+	for _, p := range views {
+		workloadPods = append(workloadPods, analyzer.WorkloadPod{
+			Namespace: p.Namespace, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, Name: p.Name,
+			HealthScore: p.HealthScore, HealthBand: p.HealthBand, PrimarySymptom: p.PrimarySymptom,
+			RestartCount: p.RestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
+		})
+	}
+	workloads := analyzer.BuildWorkloadGroups(workloadPods)
 	bookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 20})
 	autoBookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: "system:auto", ClusterID: clusterID, Limit: 20})
 	recentAccess, _ := s.db.ListK8sPodAccesses(r.Context(), store.K8sPodAccessFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 12})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pods":           views,
 		"restart_storms": storms,
+		"workloads":      workloads,
 		"bookmarks":      bookmarks,
 		"auto_bookmarks": autoBookmarks,
 		"recent_access":  recentAccess,
