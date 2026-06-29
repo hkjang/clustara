@@ -107,7 +107,11 @@ func (c *HTTPClient) podLogRequest(ctx context.Context, namespace, pod string, o
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Accept", "text/plain")
+	// The /log subresource streams text/plain, but the apiserver's content
+	// negotiation only matches its registered serializers (json/yaml/protobuf).
+	// Sending "Accept: text/plain" makes negotiation fail with 406 NotAcceptable
+	// on stricter apiserver versions, so accept anything and let it stream.
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	if c.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)

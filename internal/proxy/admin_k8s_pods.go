@@ -686,6 +686,20 @@ func (s *Server) handleK8sPodHealthReplay(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// friendlyPodLogError rewrites the apiserver's raw 400 for "previous" log
+// requests into a message that explains the Pod simply has no prior instance.
+// Kubernetes returns this whenever previous=true is used on a container that
+// has never restarted (restartCount == 0), which is expected, not a failure.
+func friendlyPodLogError(opts kube.PodLogOptions, err error) error {
+	if err == nil {
+		return nil
+	}
+	if opts.Previous && strings.Contains(err.Error(), "previous terminated container") {
+		return fmt.Errorf("이전 컨테이너 인스턴스가 없습니다 — 이 Pod는 재시작 이력이 없어 previous 로그가 존재하지 않습니다 (restartCount=0)")
+	}
+	return err
+}
+
 func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, pod string) (k8sPodLogResponse, error) {
 	clusterID, item, ok := s.resolvePodInventory(nil, r, namespace, pod)
 	if !ok {
@@ -717,7 +731,7 @@ func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, po
 	}
 	raw, err := reader.PodLogs(ctx, namespace, pod, opts)
 	if err != nil {
-		return k8sPodLogResponse{}, err
+		return k8sPodLogResponse{}, friendlyPodLogError(opts, err)
 	}
 	processed := processPodLogs(raw, strings.TrimSpace(q.Get("q")), parseBool(q.Get("error_only")))
 	if opts.Container == "" {
@@ -814,7 +828,7 @@ func (s *Server) analyzePodLogs(ctx context.Context, r *http.Request, namespace,
 				return k8sPodLogAnalysisResponse{}, err
 			}
 		} else {
-			previousErr = err.Error()
+			previousErr = friendlyPodLogError(prevOpts, err).Error()
 		}
 	}
 
