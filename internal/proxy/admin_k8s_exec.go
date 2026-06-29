@@ -439,6 +439,7 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		"cluster_id": clusterID, "namespace": namespace, "pod": pod, "container": container,
 		"role": role, "status": status, "risk": result.RiskLevel, "matched_policies": result.MatchedPolicies,
 	}))
+	s.recordPodAccess(r, clusterID, namespace, pod, "exec_request", command)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session":       session,
 		"policy_result": result,

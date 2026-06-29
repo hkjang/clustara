@@ -807,6 +807,9 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 			logQuery = r.URL.RawQuery
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte("info ok\nException password=supersecret Authorization: Bearer abc.def\nwarn retry\n"))
+		case "/api/v1/namespaces/default/pods/api-2/log":
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("info api-2 ok\nwarn sibling retry\n"))
 		case "/api/v1/namespaces/default/pods/api-1/exec":
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 				http.Error(w, "websocket disabled in test", http.StatusBadRequest)
@@ -865,6 +868,7 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 			OwnerKind    string   `json:"owner_kind"`
 			Images       []string `json:"images"`
 		} `json:"pods"`
+		AutoBookmarks []store.K8sPodBookmark `json:"auto_bookmarks"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 		t.Fatal(err)
@@ -880,6 +884,9 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if len(list.Pods) != 2 || !api1Found {
 		t.Fatalf("unexpected pod list: %+v", list.Pods)
+	}
+	if len(list.AutoBookmarks) == 0 || list.AutoBookmarks[0].Pod == "" {
+		t.Fatalf("risky/restarted Pod should create auto bookmarks: %+v", list.AutoBookmarks)
 	}
 
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1?cluster_id=" + created.Cluster.ID)
@@ -899,6 +906,63 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if detail.Pod.Ready != "0/1" || len(detail.Events) != 1 || detail.Events[0].Reason != "BackOff" {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/bookmark?cluster_id="+created.Cluster.ID, "", map[string]any{"note": "watch canary"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("bookmark status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pod-bookmarks?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var bookmarks struct {
+		Bookmarks []store.K8sPodBookmark `json:"bookmarks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&bookmarks); err != nil {
+		t.Fatal(err)
+	}
+	if len(bookmarks.Bookmarks) == 0 || bookmarks.Bookmarks[0].Pod != "api-1" {
+		t.Fatalf("manual bookmark missing: %+v", bookmarks)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/action-safety?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var safety struct {
+		ReadySiblings int      `json:"ready_siblings"`
+		Warnings      []string `json:"warnings"`
+		Actions       []struct {
+			Action    string `json:"action"`
+			Preferred bool   `json:"preferred"`
+		} `json:"actions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&safety); err != nil {
+		t.Fatal(err)
+	}
+	if safety.ReadySiblings != 1 || len(safety.Actions) == 0 {
+		t.Fatalf("unexpected action safety: %+v", safety)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/runbook?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var runbook struct {
+		Steps []struct {
+			Action string `json:"action"`
+		} `json:"steps"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&runbook); err != nil {
+		t.Fatal(err)
+	}
+	if len(runbook.Steps) < 5 || runbook.Steps[0].Action != "evidence_bundle" {
+		t.Fatalf("unexpected runbook: %+v", runbook)
+	}
 
 	resp = postJSON(t, proxy.URL+"/admin/k8s/terminal-policies", "", map[string]any{
 		"name":                "pod detail read only",
@@ -916,6 +980,81 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("terminal policy status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/exec/briefing?cluster_id=" + created.Cluster.ID + "&role=viewer&command=ls%20%2Fapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var briefing struct {
+		Risk struct {
+			Level string `json:"level"`
+		} `json:"risk"`
+		PolicyResult terminalPolicyEvalResult `json:"policy_result"`
+		Templates    []map[string]any         `json:"templates"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&briefing); err != nil {
+		t.Fatal(err)
+	}
+	if briefing.Risk.Level != "low" || !briefing.PolicyResult.Allowed || len(briefing.Templates) == 0 {
+		t.Fatalf("unexpected exec briefing: %+v", briefing)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/debug/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var debugCatalog struct {
+		Images []map[string]any `json:"images"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&debugCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(debugCatalog.Images) == 0 {
+		t.Fatalf("debug catalog should include allowed images")
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/debug/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"target_container": "app",
+		"debug_image":      "nicolaka/netshoot:latest",
+		"template":         "DNS 점검",
+		"reason":           "dns check",
+	})
+	defer resp.Body.Close()
+	var debugReq struct {
+		Session store.K8sDebugSession `json:"session"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&debugReq); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || debugReq.Session.Status != "pending_approval" || debugReq.Session.RiskLevel != "medium" || !strings.Contains(debugReq.Session.ManifestPreview, "ephemeralContainers") {
+		t.Fatalf("unexpected debug session request: status=%d body=%+v", resp.StatusCode, debugReq)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/debug/sessions/"+debugReq.Session.ID+"/approve", "", map[string]any{"note": "approved debug utility"})
+	defer resp.Body.Close()
+	var debugApproved struct {
+		Session    store.K8sDebugSession `json:"session"`
+		NextAction string                `json:"next_action"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&debugApproved); err != nil {
+		t.Fatal(err)
+	}
+	if debugApproved.Session.Status != "ready" || debugApproved.NextAction != "manual_ephemeral_container_apply" {
+		t.Fatalf("unexpected debug approval: %+v", debugApproved)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/debug/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"debug_image": "evil/debug:latest",
+		"reason":      "not allowed",
+	})
+	defer resp.Body.Close()
+	var debugBlocked struct {
+		Session store.K8sDebugSession `json:"session"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&debugBlocked); err != nil {
+		t.Fatal(err)
+	}
+	if debugBlocked.Session.Status != "blocked" || debugBlocked.Session.RiskLevel != "critical" {
+		t.Fatalf("unexpected blocked debug session: %+v", debugBlocked)
 	}
 	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/exec/sessions?cluster_id="+created.Cluster.ID, "", map[string]any{
 		"role":      "viewer",
@@ -1082,6 +1221,26 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	if len(execList.Sessions) != 3 {
 		t.Fatalf("expected three exec session audit rows, got %+v", execList.Sessions)
 	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pod-accesses?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var accesses struct {
+		Accesses []store.K8sPodAccess `json:"accesses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&accesses); err != nil {
+		t.Fatal(err)
+	}
+	seenAccess := map[string]bool{}
+	for _, a := range accesses.Accesses {
+		seenAccess[a.Action] = true
+	}
+	for _, want := range []string{"detail", "exec_request", "debug_request"} {
+		if !seenAccess[want] {
+			t.Fatalf("pod access history missing %s: %+v", want, accesses.Accesses)
+		}
+	}
 
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/golden-diff?cluster_id=" + created.Cluster.ID)
 	if err != nil {
@@ -1154,6 +1313,86 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if len(audit) != 1 || !audit[0].Previous || audit[0].Container != "app" || audit[0].Query != "Exception" || audit[0].ErrorCount != 1 {
 		t.Fatalf("unexpected pod log audit: %+v", audit)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs/presets?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var presets struct {
+		Presets []map[string]any `json:"presets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&presets); err != nil {
+		t.Fatal(err)
+	}
+	if len(presets.Presets) < 4 {
+		t.Fatalf("expected log presets, got %+v", presets)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/logs/masking-report?cluster_id="+created.Cluster.ID, "", map[string]any{
+		"text": "Authorization: Bearer abc.def password=supersecret token=secret-token",
+	})
+	defer resp.Body.Close()
+	var maskReport struct {
+		Findings []struct {
+			Type  string `json:"type"`
+			Count int    `json:"count"`
+		} `json:"findings"`
+		Preview struct {
+			After string `json:"after"`
+		} `json:"preview"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&maskReport); err != nil {
+		t.Fatal(err)
+	}
+	if len(maskReport.Findings) < 2 || strings.Contains(maskReport.Preview.After, "supersecret") || !strings.Contains(maskReport.Preview.After, "***REDACTED***") {
+		t.Fatalf("unexpected masking report: %+v", maskReport)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/pods/default/api-1/logs/snapshot?cluster_id="+created.Cluster.ID+"&container=app&tail_lines=20", "", map[string]any{"reason": "incident evidence"})
+	defer resp.Body.Close()
+	var snapshotResp struct {
+		Snapshot store.K8sPodLogSnapshot `json:"snapshot"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snapshotResp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || snapshotResp.Snapshot.ID == "" || strings.Contains(snapshotResp.Snapshot.Text, "supersecret") {
+		t.Fatalf("unexpected log snapshot: status=%d body=%+v", resp.StatusCode, snapshotResp)
+	}
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs/snapshots?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var snapshots struct {
+		Snapshots []store.K8sPodLogSnapshot `json:"snapshots"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots.Snapshots) == 0 || snapshots.Snapshots[0].Reason != "incident evidence" {
+		t.Fatalf("snapshot list missing: %+v", snapshots)
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/logs/merge?cluster_id=" + created.Cluster.ID + "&container=app&tail_lines=20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var merged struct {
+		Streams []map[string]any `json:"streams"`
+		Lines   []struct {
+			Pod  string `json:"pod"`
+			Text string `json:"text"`
+		} `json:"merged_lines"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&merged); err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Streams) < 2 || len(merged.Lines) == 0 {
+		t.Fatalf("expected merged sibling logs: %+v", merged)
 	}
 
 	resp, err = http.Post(proxy.URL+"/admin/k8s/pods/default/api-1/logs/analyze?cluster_id="+created.Cluster.ID+"&container=app&tail_lines=50", "application/json", strings.NewReader("{}"))
@@ -1259,7 +1498,7 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 			foundStreamAudit = true
 		}
 	}
-	if len(audit) != 4 || !foundStreamAudit {
+	if len(audit) < 5 || !foundStreamAudit {
 		t.Fatalf("unexpected stream audit: %+v", audit)
 	}
 

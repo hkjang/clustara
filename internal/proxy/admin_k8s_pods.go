@@ -190,11 +190,87 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodHealthReplay(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "bookmark" {
+		if r.Method != http.MethodPost {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodBookmark(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "action-safety" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodActionSafety(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "runbook" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodRunbook(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "debug" && len(parts) > 3 && parts[3] == "sessions" {
+		s.handleK8sPodDebugSessions(w, r, namespace, pod)
+		return
+	}
+	if parts[2] == "exec" && len(parts) > 3 && parts[3] == "briefing" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodExecBriefing(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "exec" && len(parts) > 3 && parts[3] == "sessions" {
 		s.handleK8sPodExecSessions(w, r, namespace, pod)
 		return
 	}
 	if parts[2] == "logs" {
+		if len(parts) > 3 && parts[3] == "presets" {
+			if r.Method != http.MethodGet {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogPresets(w, r)
+			return
+		}
+		if len(parts) > 3 && parts[3] == "masking-report" {
+			if r.Method != http.MethodPost {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogMaskingReport(w, r, namespace, pod)
+			return
+		}
+		if len(parts) > 3 && parts[3] == "snapshot" {
+			if r.Method != http.MethodPost {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogSnapshot(w, r, namespace, pod)
+			return
+		}
+		if len(parts) > 3 && parts[3] == "snapshots" {
+			if r.Method != http.MethodGet {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogSnapshots(w, r, namespace, pod)
+			return
+		}
+		if len(parts) > 3 && parts[3] == "merge" {
+			if r.Method != http.MethodGet {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogMerge(w, r, namespace, pod)
+			return
+		}
 		if len(parts) > 3 && parts[3] == "stream" {
 			if r.Method != http.MethodGet {
 				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -248,16 +324,24 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 	}
 	critical, warning, restarts := 0, 0, 0
 	for _, p := range views {
-		if p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" {
+		if p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" || p.RestartCount > 0 || p.WarningEvents > 0 {
 			critical++
+			_ = s.upsertPodBookmark(r, p.ClusterID, p, true, "장애 Pod 자동 북마크", firstNonEmpty(p.RiskLevel, podStatusRisk(p.Status), "risky"))
 		}
 		if p.WarningEvents > 0 {
 			warning++
 		}
 		restarts += p.RestartCount
 	}
+	bookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 20})
+	autoBookmarks, _ := s.db.ListK8sPodBookmarks(r.Context(), store.K8sPodBookmarkFilter{UserID: "system:auto", ClusterID: clusterID, Limit: 20})
+	recentAccess, _ := s.db.ListK8sPodAccesses(r.Context(), store.K8sPodAccessFilter{UserID: adminID(r), ClusterID: clusterID, Limit: 12})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"pods": views,
+		"pods":           views,
+		"bookmarks":      bookmarks,
+		"auto_bookmarks": autoBookmarks,
+		"recent_access":  recentAccess,
+		"log_presets":    podLogFilterPresets(),
 		"summary": map[string]int{
 			"total": len(views), "risky": critical, "with_warning_events": warning, "restarts": restarts,
 		},
@@ -291,6 +375,7 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 			}
 		}
 	}
+	s.recordPodAccess(r, clusterID, namespace, pod, "detail", "pod_detail")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pod":         podView(item, events, true),
 		"events":      relatedEvents,
@@ -482,6 +567,7 @@ func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, po
 		"cluster_id": clusterID, "namespace": namespace, "pod": pod, "container": opts.Container,
 		"previous": opts.Previous, "tail_lines": opts.TailLines, "query": strings.TrimSpace(q.Get("q")),
 	}))
+	s.recordPodAccess(r, clusterID, namespace, pod, "logs", firstNonEmpty(strings.TrimSpace(q.Get("q")), "tail"))
 	processed.ClusterID = clusterID
 	processed.Namespace = namespace
 	processed.Pod = pod

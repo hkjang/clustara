@@ -6161,6 +6161,14 @@ const adminHTML = `<!doctype html>
           '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td><td>' + fmt(p.restart_count || 0) + '</td>' +
           '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td><td>' + fmt(p.warning_events || 0) + '</td></tr>';
       }).join('') : '<tr><td colspan="9" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
+      const bmRows = ((d.bookmarks || []).concat(d.auto_bookmarks || [])).slice(0, 10).map(b => {
+        const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: b.cluster_id || '', namespace: b.namespace || '', pod: b.pod || '' }).toString();
+        return '<tr><td>' + (b.auto ? '<span class="status warn" style="font-size:10px">auto</span>' : '<span class="status" style="font-size:10px">manual</span>') + '</td><td><a href="' + escapeAttr(href) + '">' + escapeHTML((b.namespace || '-') + '/' + (b.pod || '-')) + '</a><div class="muted" style="font-size:11px">' + escapeHTML(b.reason || b.note || '') + '</div></td><td class="muted" style="font-size:11px">' + ago(b.updated_at) + '</td></tr>';
+      }).join('') || '<tr><td colspan="3" class="muted">북마크가 없습니다.</td></tr>';
+      const accessRows = (d.recent_access || []).slice(0, 10).map(a => {
+        const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: a.cluster_id || '', namespace: a.namespace || '', pod: a.pod || '' }).toString();
+        return '<tr><td><a href="' + escapeAttr(href) + '">' + escapeHTML((a.namespace || '-') + '/' + (a.pod || '-')) + '</a></td><td>' + escapeHTML(a.action || '-') + '</td><td>' + fmt(a.count || 0) + '</td><td class="muted" style="font-size:11px">' + ago(a.last_seen) + '</td></tr>';
+      }).join('') || '<tr><td colspan="4" class="muted">최근 접속 이력이 없습니다.</td></tr>';
       view.innerHTML =
         section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Warning 이벤트', fmt((d.summary || {}).with_warning_events || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
         card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
@@ -6168,6 +6176,7 @@ const adminHTML = `<!doctype html>
           '<input id="pod-status" placeholder="status" value="' + escapeAttr(params && params.get('status') || '') + '"><input id="pod-q" placeholder="pod/image 검색" value="' + escapeAttr(params && params.get('q') || '') + '">' +
           '<select id="pod-risk"><option value="">risk 전체</option><option value="high"' + ((params && params.get('risk')) === 'high' ? ' selected' : '') + '>high</option><option value="medium"' + ((params && params.get('risk')) === 'medium' ? ' selected' : '') + '>medium</option></select>' +
           '<button type="button" onclick="k8sPodFilter()">적용</button></div>') +
+        card('북마크와 최근 이력', '<div class="grid2"><div class="card-body"><h4 style="margin-top:0">Pod 북마크</h4><table><thead><tr><th>Type</th><th>Pod</th><th>Updated</th></tr></thead><tbody>' + bmRows + '</tbody></table></div><div class="card-body"><h4 style="margin-top:0">최근 접속 Pod</h4><table><thead><tr><th>Pod</th><th>Action</th><th>Count</th><th>Last</th></tr></thead><tbody>' + accessRows + '</tbody></table></div></div>') +
         card('Pod 목록', '<div class="card-body"><table><thead><tr><th>Risk</th><th>Pod</th><th>Namespace</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node</th><th>Owner</th><th>Warn</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     window.k8sPodFilter = () => {
@@ -6191,18 +6200,19 @@ const adminHTML = `<!doctype html>
       const logAudits = (d.log_queries || []).length ? (d.log_queries || []).map(q => '<tr><td>' + escapeHTML(q.stream ? 'stream' : (q.previous ? 'previous' : 'current')) + '</td><td>' + escapeHTML(q.container || '-') + '</td><td>' + fmt(q.tail_lines || 0) + '</td><td>' + escapeHTML(q.query || '-') + '</td><td>' + fmt(q.line_count || 0) + '</td><td>' + fmt(q.error_count || 0) + '</td><td>' + escapeHTML(q.requested_by || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(q.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="8" class="muted">최근 로그 조회 이력이 없습니다.</td></tr>';
       view.innerHTML =
         section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0)) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
-        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a></div></div>') +
+        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
         card('로그', '<div class="card-body"><div id="podlog-context" data-cluster="' + escapeHTML(clusterId || '') + '" data-ns="' + escapeHTML(ns || '') + '" data-pod="' + escapeHTML(pod || '') + '" style="display:none"></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="podlog-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><label style="font-size:12px"><input id="podlog-prev" type="checkbox"> previous</label><input id="podlog-tail" value="200" style="width:70px" title="tail lines"><input id="podlog-since" placeholder="since 예: 5m, 1h" style="width:130px"><input id="podlog-q" placeholder="검색어" style="width:180px"><label style="font-size:12px"><input id="podlog-error" type="checkbox"> 에러만</label>' +
-          '<button type="button" onclick="k8sPodLoadLogsFromDetail()">조회</button><button type="button" class="secondary" onclick="k8sPodAnalyzeLogsFromDetail()">분석</button><button type="button" class="secondary" onclick="k8sPodStartStreamFromDetail()">실시간 시작</button><button type="button" class="secondary" onclick="k8sPodStopStream()">중지</button><button type="button" class="secondary" onclick="k8sPodExportLogsFromDetail()">다운로드</button><button type="button" class="secondary" onclick="k8sPodDownloadEvidenceFromDetail()">증적 번들</button></div>' +
+          '<button type="button" onclick="k8sPodLoadLogsFromDetail()">조회</button><button type="button" class="secondary" onclick="k8sPodAnalyzeLogsFromDetail()">분석</button><button type="button" class="secondary" onclick="k8sPodLogPresetsFromDetail()">프리셋</button><button type="button" class="secondary" onclick="k8sPodMaskingReportFromDetail()">마스킹 리포트</button><button type="button" class="secondary" onclick="k8sPodSnapshotFromDetail()">스냅샷</button><button type="button" class="secondary" onclick="k8sPodSnapshotsFromDetail()">스냅샷 목록</button><button type="button" class="secondary" onclick="k8sPodMergeLogsFromDetail()">동일 Workload 병합</button><button type="button" class="secondary" onclick="k8sPodStartStreamFromDetail()">실시간 시작</button><button type="button" class="secondary" onclick="k8sPodStopStream()">중지</button><button type="button" class="secondary" onclick="k8sPodExportLogsFromDetail()">다운로드</button><button type="button" class="secondary" onclick="k8sPodDownloadEvidenceFromDetail()">증적 번들</button></div>' +
           '<div id="podlog-summary" class="muted" style="font-size:11px;margin-top:6px">로그 원문은 저장하지 않고 조회 감사만 남깁니다. token/password/Authorization 등은 응답 전 마스킹됩니다.</div><div id="podlog-analysis" class="muted" style="font-size:12px;margin-top:8px"></div><pre id="podlog-output" style="white-space:pre-wrap;max-height:460px;overflow:auto;margin-top:8px"></pre></div>') +
         card('터미널 요청', '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="podexec-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><input id="podexec-role" value="viewer" placeholder="role" style="width:110px"><input id="podexec-command" value="ls /" placeholder="명령" style="min-width:220px"><input id="podexec-reason" placeholder="사유" style="min-width:220px">' +
-          '<button type="button" onclick="k8sPodRequestExecFromDetail()">세션 요청</button></div><div id="podexec-result" class="muted" style="font-size:12px;margin-top:8px">Terminal Policy 평가 후 세션 요청과 감사 기록을 생성합니다.</div></div>') +
+          '<button type="button" class="secondary" onclick="k8sPodExecBriefingFromDetail()">Risk Briefing</button><button type="button" onclick="k8sPodRequestExecFromDetail()">세션 요청</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(\'ps aux\')">ps</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(\'env\')">env</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(\'df -h\')">df</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(\'nslookup kubernetes.default\')">dns</button></div><div id="podexec-result" class="muted" style="font-size:12px;margin-top:8px">Terminal Policy 평가 후 세션 요청과 감사 기록을 생성합니다.</div></div>') +
+        card('Debug Container 요청', '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="poddebug-image"><option value="busybox:1.36">busybox</option><option value="curlimages/curl:8.8.0">curl</option><option value="nicolaka/netshoot:latest">netshoot</option><option value="postgres:16-alpine">postgres-client</option><option value="redis:7-alpine">redis-cli</option></select><select id="poddebug-target"><option value="">기본 컨테이너</option>' + containerOpts + '</select><input id="poddebug-template" placeholder="템플릿 예: DNS 점검" style="min-width:160px"><input id="poddebug-reason" placeholder="사유" style="min-width:220px"><button type="button" onclick="k8sPodDebugRequestFromDetail()">Debug 요청</button><button type="button" class="secondary" onclick="k8sPodDebugSessionsFromDetail()">이력</button></div><div id="poddebug-result" class="muted" style="font-size:12px;margin-top:8px">허용된 debug image만 승인 요청으로 저장합니다. privileged/hostPID/hostNetwork는 기본 차단됩니다.</div></div>') +
         card('로그 감사', '<div class="card-body"><table><thead><tr><th>Mode</th><th>Container</th><th>Tail</th><th>Query</th><th>Lines</th><th>Errors</th><th>User</th><th>Time</th></tr></thead><tbody>' + logAudits + '</tbody></table></div>') +
         card('리소스', '<div class="card-body"><table><thead><tr><th>CPU</th><th>Memory</th><th>Observed</th></tr></thead><tbody>' + metrics + '</tbody></table></div>') +
         card('Manifest', '<div class="card-body"><pre style="white-space:pre-wrap;max-height:360px;overflow:auto">' + escapeHTML(JSON.stringify(d.manifest || {}, null, 2)) + '</pre></div>');
@@ -6229,6 +6239,18 @@ const adminHTML = `<!doctype html>
     window.k8sPodLoadGoldenDiffFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadGoldenDiff(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadHealthReplayFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadHealthReplay(c.clusterId, c.ns, c.pod); };
     window.k8sPodRequestExecFromDetail = () => { const c = podLogContext(); return window.k8sPodRequestExec(c.clusterId, c.ns, c.pod); };
+    window.k8sPodBookmarkFromDetail = () => { const c = podLogContext(); return window.k8sPodBookmark(c.clusterId, c.ns, c.pod); };
+    window.k8sPodActionSafetyFromDetail = () => { const c = podLogContext(); return window.k8sPodActionSafety(c.clusterId, c.ns, c.pod); };
+    window.k8sPodRunbookFromDetail = () => { const c = podLogContext(); return window.k8sPodRunbook(c.clusterId, c.ns, c.pod); };
+    window.k8sPodLogPresetsFromDetail = () => { const c = podLogContext(); return window.k8sPodLogPresets(c.clusterId, c.ns, c.pod); };
+    window.k8sPodMaskingReportFromDetail = () => { const c = podLogContext(); return window.k8sPodMaskingReport(c.clusterId, c.ns, c.pod); };
+    window.k8sPodSnapshotFromDetail = () => { const c = podLogContext(); return window.k8sPodSnapshot(c.clusterId, c.ns, c.pod); };
+    window.k8sPodSnapshotsFromDetail = () => { const c = podLogContext(); return window.k8sPodSnapshots(c.clusterId, c.ns, c.pod); };
+    window.k8sPodMergeLogsFromDetail = () => { const c = podLogContext(); return window.k8sPodMergeLogs(c.clusterId, c.ns, c.pod); };
+    window.k8sPodExecBriefingFromDetail = () => { const c = podLogContext(); return window.k8sPodExecBriefing(c.clusterId, c.ns, c.pod); };
+    window.k8sPodDebugRequestFromDetail = () => { const c = podLogContext(); return window.k8sPodDebugRequest(c.clusterId, c.ns, c.pod); };
+    window.k8sPodDebugSessionsFromDetail = () => { const c = podLogContext(); return window.k8sPodDebugSessions(c.clusterId, c.ns, c.pod); };
+    window.k8sPodExecTemplate = (cmd) => { const el = document.getElementById('podexec-command'); if (el) el.value = cmd; };
     let podLogStreamController = null;
     function podLogLineHTML(line) {
       const color = line.level === 'error' ? 'color:#b91c1c;font-weight:700' : (line.level === 'warn' ? 'color:#b45309' : '');
@@ -6245,6 +6267,112 @@ const adminHTML = `<!doctype html>
       else if (event === 'error') sum.textContent = '실시간 로그 오류: ' + (payload.message || 'unknown');
       else if (event === 'done') sum.textContent = '실시간 로그 종료 · lines seen ' + fmt(payload.lines_seen || 0);
     }
+    window.k8sPodBookmark = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-ops-output');
+      const note = prompt('북마크 메모(선택):', '자주 확인하는 Pod') || '';
+      try {
+        await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/bookmark?cluster_id=' + encodeURIComponent(clusterId || ''), { method: 'POST', body: JSON.stringify({ note }) });
+        out.innerHTML = '<span class="status">북마크 저장됨</span>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodActionSafety = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-ops-output'); out.innerHTML = '<span class="muted">조치 안전성 계산 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/action-safety?cluster_id=' + encodeURIComponent(clusterId || ''));
+        const blockers = (d.blockers || []).map(x => '<li>' + escapeHTML(x) + '</li>').join('') || '<li class="muted">blocker 없음</li>';
+        const warnings = (d.warnings || []).map(x => '<li>' + escapeHTML(x) + '</li>').join('') || '<li class="muted">warning 없음</li>';
+        const rows = (d.actions || []).map(a => '<tr><td>' + (a.preferred ? '<span class="status">권장</span>' : '<span class="muted">-</span>') + '</td><td>' + escapeHTML(a.action || '-') + '</td><td>' + escapeHTML(a.risk || '-') + '</td><td>' + (a.approval_required ? '필요' : '불필요') + '</td><td class="muted">' + escapeHTML(a.reason || '') + '</td></tr>').join('');
+        out.innerHTML = '<div class="grid2"><div><strong>Blockers</strong><ul>' + blockers + '</ul></div><div><strong>Warnings</strong><ul>' + warnings + '</ul></div></div>' +
+          '<table style="margin-top:8px"><thead><tr><th></th><th>Action</th><th>Risk</th><th>Approval</th><th>Reason</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodRunbook = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-ops-output'); out.innerHTML = '<span class="muted">플레이북 생성 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/runbook?cluster_id=' + encodeURIComponent(clusterId || ''));
+        const rows = (d.steps || []).map(s => '<tr><td>' + fmt(s.step || 0) + '</td><td><strong>' + escapeHTML(s.title || '-') + '</strong></td><td>' + escapeHTML(s.action || '-') + '</td><td>' + (s.approval_required ? '<span class="status warn">승인</span>' : '<span class="muted">-</span>') + '</td></tr>').join('');
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:6px">condition ' + escapeHTML(d.condition || '-') + '</div><table><thead><tr><th>#</th><th>Step</th><th>Action</th><th>Gate</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodLogPresets = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podlog-analysis'); out.innerHTML = '<span class="muted">프리셋 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/presets?cluster_id=' + encodeURIComponent(clusterId || ''));
+        out.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + (d.presets || []).map(p => '<button type="button" class="secondary" style="font-size:11px" onclick="document.getElementById(\\'podlog-q\\').value=\\'' + escapeAttr(p.query || '') + '\\';document.getElementById(\\'podlog-error\\').checked=' + (p.error_only ? 'true' : 'false') + '">' + escapeHTML(p.name || '-') + '</button>').join('') + '</div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodMaskingReport = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podlog-analysis');
+      const text = document.getElementById('podlog-output') ? document.getElementById('podlog-output').textContent : '';
+      out.innerHTML = '<span class="muted">마스킹 리포트 생성 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/masking-report?cluster_id=' + encodeURIComponent(clusterId || ''), { method: 'POST', body: JSON.stringify({ text }) });
+        const rows = (d.findings || []).map(f => '<tr><td>' + escapeHTML(f.type || '-') + '</td><td>' + fmt(f.count || 0) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((f.samples || []).join(' · ')) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">민감정보 패턴이 발견되지 않았습니다.</td></tr>';
+        out.innerHTML = '<table><thead><tr><th>Type</th><th>Count</th><th>Masked samples</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<div class="grid2" style="margin-top:8px"><pre style="white-space:pre-wrap;max-height:180px;overflow:auto">' + escapeHTML((d.preview || {}).before || '') + '</pre><pre style="white-space:pre-wrap;max-height:180px;overflow:auto">' + escapeHTML((d.preview || {}).after || '') + '</pre></div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodSnapshot = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podlog-analysis');
+      const q = podLogQuery(); q.set('cluster_id', clusterId);
+      const reason = prompt('로그 스냅샷 사유:', 'incident evidence') || 'incident evidence';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/snapshot?' + q.toString(), { method: 'POST', body: JSON.stringify({ reason }) });
+        out.innerHTML = '<span class="status">스냅샷 저장됨</span> <span class="muted">' + escapeHTML((d.snapshot || {}).id || '') + '</span>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodSnapshots = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podlog-analysis'); out.innerHTML = '<span class="muted">스냅샷 목록 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/snapshots?cluster_id=' + encodeURIComponent(clusterId || ''));
+        const rows = (d.snapshots || []).map(s => '<tr><td>' + escapeHTML(s.id || '-') + '</td><td>' + escapeHTML(s.container || '-') + '</td><td>' + (s.previous ? 'previous' : 'current') + '</td><td>' + escapeHTML(s.reason || '-') + '</td><td class="muted">' + ago(s.created_at) + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">저장된 스냅샷이 없습니다.</td></tr>';
+        out.innerHTML = '<table><thead><tr><th>ID</th><th>Container</th><th>Mode</th><th>Reason</th><th>Time</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodMergeLogs = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podlog-analysis'); const q = podLogQuery(); q.set('cluster_id', clusterId); q.delete('previous');
+      out.innerHTML = '<span class="muted">동일 workload 로그 병합 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/merge?' + q.toString());
+        const streams = (d.streams || []).map(s => '<span class="pill">' + escapeHTML(s.pod || '-') + '</span>').join(' ');
+        const lines = (d.merged_lines || []).slice(-300).map(l => '<span class="muted">[' + escapeHTML(l.pod || '-') + ':' + fmt(l.number || 0) + ']</span> ' + podLogLineHTML(l)).join('\\n');
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:6px">' + streams + '</div><pre style="white-space:pre-wrap;max-height:320px;overflow:auto">' + lines + '</pre>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodExecBriefing = async (clusterId, ns, pod) => {
+      const out = document.getElementById('podexec-result');
+      const q = new URLSearchParams({ cluster_id: clusterId || '', role: (document.getElementById('podexec-role').value || 'viewer').trim(), command: (document.getElementById('podexec-command').value || '').trim() });
+      out.innerHTML = '<span class="muted">Risk briefing 계산 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/exec/briefing?' + q.toString());
+        const p = d.policy_result || {}; const risk = d.risk || {};
+        out.innerHTML = '<div class="banner"><strong>risk ' + escapeHTML(risk.level || '-') + '</strong> · policy ' + (p.allowed ? 'allowed' : 'blocked') + ' · approval ' + (p.require_approval ? '필요' : '불필요') + '<br><span class="muted">' + escapeHTML(risk.reason || p.reason || '') + '</span></div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + (d.templates || []).map(t => '<button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(\\'' + escapeAttr(t.command || '') + '\\')">' + escapeHTML(t.name || '-') + '</button>').join('') + '</div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodDebugRequest = async (clusterId, ns, pod) => {
+      const out = document.getElementById('poddebug-result');
+      const payload = {
+        debug_image: (document.getElementById('poddebug-image').value || '').trim(),
+        target_container: (document.getElementById('poddebug-target').value || '').trim(),
+        template: (document.getElementById('poddebug-template').value || '').trim(),
+        reason: (document.getElementById('poddebug-reason').value || '').trim()
+      };
+      out.innerHTML = '<span class="muted">debug session 요청 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/debug/sessions?cluster_id=' + encodeURIComponent(clusterId || ''), { method: 'POST', body: JSON.stringify(payload) });
+        const s = d.session || {}; const cls = s.status === 'blocked' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
+        out.innerHTML = '<span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · image ' + escapeHTML(s.debug_image || '-') + ' · risk ' + escapeHTML(s.risk_level || '-');
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodDebugSessions = async (clusterId, ns, pod) => {
+      const out = document.getElementById('poddebug-result'); out.innerHTML = '<span class="muted">debug 이력 조회 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/debug/sessions?cluster_id=' + encodeURIComponent(clusterId || ''));
+        const rows = (d.sessions || []).map(s => '<tr><td><span class="status ' + (s.status === 'blocked' || s.status === 'rejected' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '')) + '">' + escapeHTML(s.status || '-') + '</span></td><td>' + escapeHTML(s.debug_image || '-') + '</td><td>' + escapeHTML(s.target_container || '-') + '</td><td>' + escapeHTML(s.requested_by || '-') + '</td><td class="muted">' + ago(s.created_at) + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">debug 요청 이력이 없습니다.</td></tr>';
+        out.innerHTML = '<table><thead><tr><th>Status</th><th>Image</th><th>Target</th><th>User</th><th>Time</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sPodLoadLogs = async (clusterId, ns, pod) => {
       window.k8sPodStopStream();
       const out = document.getElementById('podlog-output'); const sum = document.getElementById('podlog-summary'); const q = podLogQuery(); q.set('cluster_id', clusterId);

@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.7.0"
+const AppVersion = "v0.8.0"
 
 type Server struct {
 	cfg            config.Config
@@ -301,6 +301,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/latency/config", s.handleK8sLatencyConfig)
 	mux.HandleFunc("/admin/k8s/exec/sessions", s.handleK8sExecSessions)
 	mux.HandleFunc("/admin/k8s/exec/sessions/", s.handleK8sExecSessionByID)
+	mux.HandleFunc("/admin/k8s/pod-bookmarks", s.handleK8sPodBookmarks)
+	mux.HandleFunc("/admin/k8s/pod-bookmarks/", s.handleK8sPodBookmarkByID)
+	mux.HandleFunc("/admin/k8s/pod-accesses", s.handleK8sPodAccesses)
+	mux.HandleFunc("/admin/k8s/debug/catalog", s.handleK8sDebugCatalog)
+	mux.HandleFunc("/admin/k8s/debug/sessions", s.handleK8sDebugSessions)
+	mux.HandleFunc("/admin/k8s/debug/sessions/", s.handleK8sDebugSessionByID)
+	mux.HandleFunc("/admin/k8s/terminal/templates", s.handleK8sTerminalTemplates)
 	mux.HandleFunc("/admin/k8s/terminal-policies", s.handleK8sTerminalPolicies)
 	mux.HandleFunc("/admin/k8s/terminal-policies/", s.handleK8sTerminalPolicyByID)
 	mux.HandleFunc("/admin/k8s/groups", s.handleK8sGroups)

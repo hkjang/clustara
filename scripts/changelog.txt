@@ -1,3 +1,6 @@
+v0.8.0:
+- **Pod 운영 편의·로그 지능화·Debug 요청 (v0.8.0)**: Pod 목록에 사용자 북마크, 위험 Pod 자동 북마크, 최근 접근 이력을 추가하고 Pod 상세에서 조치 안전성, 대응 플레이북, 로그 프리셋, 민감정보 마스킹 리포트, 로그 스냅샷, 동일 workload 로그 병합을 제공합니다. 터미널 접속 전 Risk Briefing과 읽기 전용 명령 템플릿을 추가했으며, 허용 이미지 catalog 기반 Debug Container 요청·승인·manifest preview 감사 흐름을 구축했습니다. (`/pod-bookmarks`, `/pod-accesses`, `/logs/presets`, `/logs/masking-report`, `/logs/snapshot`, `/logs/merge`, `/action-safety`, `/runbook`, `/exec/briefing`, `/debug/catalog`, `/debug/sessions`)
+
 v0.7.0:
 - **Pod Exec 세션 상세 리플레이 및 감사 리포트 (v0.7.0)**: Exec 세션 상세 조회와 상태 변화 리플레이 타임라인을 제공합니다. 또한 실행 명령어, 승인 세션 정보, 실행 및 감사 로그, 마스킹된 출력 샘플을 포함하는 Markdown 감사 리포트 내보내기(/export) 엔드포인트와 UI 동작을 통합했습니다. (`/admin/k8s/exec/sessions/{id}`, `/export`)
 - **배포 하네스 자동화 고도화**: 빌드 및 배포 게이트웨이 테스트(`go test ./...`)에 `AppVersion`과 `changelog.txt` 내 최신 버전 정보의 일치 여부를 자동으로 검증하는 `TestAppVersionMatchesChangelog` 테스트 하네스를 추가하여 릴리즈 정합성을 보장합니다.
