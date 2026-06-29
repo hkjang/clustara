@@ -202,6 +202,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodEnv(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "env-timeline" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodEnvTimeline(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "health-replay" {
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -613,6 +621,34 @@ func (s *Server) handleK8sPodEnv(w http.ResponseWriter, r *http.Request, namespa
 		"cluster_id": clusterID, "namespace": namespace, "pod": pod,
 		"env": envMap, "masked": true,
 		"note": "선언된 env의 출처(literal/ConfigMap/Secret/Downward)만 표시하며 Secret 값은 노출하지 않습니다. 민감 이름의 평문 env는 마스킹·위험 표시됩니다.",
+	})
+}
+
+// handleK8sPodEnvTimeline merges the revisions of the ConfigMaps/Secrets the Pod consumes with the
+// Pod's own revisions into one time-ordered view (장애 직전 설정 변경 탐지). GET .../env-timeline
+func (s *Server) handleK8sPodEnvTimeline(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID, item, ok := s.resolvePodInventory(w, r, namespace, pod)
+	if !ok {
+		return
+	}
+	envMap := analyzer.BuildEnvSourceMap(item)
+	configMaps, secrets := analyzer.EnvReferencedSources(envMap)
+	sourceRevs := []store.K8sResourceRevision{}
+	gather := func(kind string, names []string) {
+		for _, n := range names {
+			revs, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Kind: kind, Namespace: namespace, Name: n, Limit: 10})
+			sourceRevs = append(sourceRevs, revs...)
+		}
+	}
+	gather("ConfigMap", configMaps)
+	gather("Secret", secrets)
+	podRevs, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Kind: "Pod", Namespace: namespace, Name: pod, Limit: 20})
+	timeline := analyzer.BuildEnvChangeTimeline(analyzer.EnvTimelineInput{PodRevisions: podRevs, SourceRevisions: sourceRevs})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id": clusterID, "namespace": namespace, "pod": pod,
+		"referenced": map[string]any{"config_maps": configMaps, "secrets": secrets},
+		"timeline":   timeline,
+		"note":       "Pod가 참조하는 ConfigMap/Secret 변경과 Pod 리비전을 시간순으로 병합합니다. 장애 발생 직전 설정 변경이 있는지 확인하세요.",
 	})
 }
 

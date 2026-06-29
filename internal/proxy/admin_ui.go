@@ -6281,7 +6281,7 @@ const adminHTML = `<!doctype html>
         })() +
         card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
-        card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
+        card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
@@ -6339,6 +6339,23 @@ const adminHTML = `<!doctype html>
         out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">literal ' + fmt(cnt.literal || 0) + ' · ConfigMap ' + fmt(cnt.configmap || 0) + ' · Secret ' + fmt(cnt.secret || 0) + ' · 기타 ' + fmt(cnt.other || 0) + '</div>' +
           '<table><thead><tr><th>컨테이너</th><th>이름</th><th>출처</th><th>참조</th><th>값</th></tr></thead><tbody>' + rows + '</tbody></table>' +
           (risks ? '<div style="font-size:11px;margin-top:6px"><strong>Secret 위생 점검</strong></div><ul style="margin:0;padding-left:16px">' + risks + '</ul>' : '');
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodLoadEnvTimelineFromDetail = async () => {
+      const c = podLogContext();
+      const out = document.getElementById('pod-env-timeline');
+      out.innerHTML = '<span class="muted">불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(c.ns) + '/' + encodeURIComponent(c.pod) + '/env-timeline?cluster_id=' + encodeURIComponent(c.clusterId || ''));
+        const tl = d.timeline || [];
+        const typeBadge = (t) => {
+          const cls = t === 'secret_change' ? 'error' : (t === 'configmap_change' ? 'warn' : '');
+          return '<span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(t) + '</span>';
+        };
+        const rows = tl.length ? tl.map(e => '<tr><td class="muted" style="font-size:11px">' + ago(e.at) + '</td><td>' + typeBadge(e.type) + '</td><td>' + escapeHTML((e.kind || '') + '/' + (e.name || '')) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.detail || e.change || '') + '</td></tr>').join('') : '<tr><td colspan="4" class="muted">참조 ConfigMap/Secret 변경 이력이 없습니다.</td></tr>';
+        const ref = d.referenced || {};
+        out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">참조: ConfigMap ' + ((ref.config_maps || []).join(', ') || '없음') + ' · Secret ' + ((ref.secrets || []).join(', ') || '없음') + '</div>' +
+          '<table><thead><tr><th>시점</th><th>유형</th><th>리소스</th><th>변경</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPodLoadCompareMatrixFromDetail = async () => {
