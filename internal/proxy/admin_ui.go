@@ -352,6 +352,7 @@ const adminHTML = `<!doctype html>
         <button class="nav-group-toggle" type="button">모니터링</button>
         <div class="nav-group-menu">
           <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
+      <a href="#/k8s-stacks" data-tab="k8s-stacks">앱 배포</a>
           <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
           <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
           <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
@@ -1200,6 +1201,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-reports': await renderK8sReports(params); break;
           case 'k8s-slo': await renderK8sSLO(params); break;
           case 'k8s-collector': await renderK8sCollector(params); break;
+          case 'k8s-stacks': await renderK8sStacks(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
@@ -8029,6 +8031,62 @@ const adminHTML = `<!doctype html>
       const t = document.getElementById('slo-target').value || '99.9';
       const d = document.getElementById('slo-days').value || '30';
       location.hash = '#/k8s-slo?days=' + encodeURIComponent(d) + '&target=' + encodeURIComponent(t) + (cl ? '&cluster_id=' + encodeURIComponent(cl) : '');
+    };
+
+    // ---------- K8s 앱 배포 (Application Stack) ----------
+    async function renderK8sStacks(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('앱 배포 (Application Stack)', '<div class="empty">불러오는 중...</div>');
+      let clusters, d;
+      try { [clusters, d] = await Promise.all([api('/admin/k8s/clusters'), api('/admin/k8s/stacks' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : ''))]); }
+      catch (e) { view.innerHTML = section('앱 배포 (Application Stack)', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const clusterOpts = '<option value="">클러스터 선택</option>' + (clusters.clusters || []).map(c =>
+        '<option value="' + escapeAttr(c.id) + '">' + escapeHTML(c.name || c.id) + '</option>').join('');
+      const rows = (d.stacks || []).length ? (d.stacks || []).map(s =>
+        '<tr><td><strong>' + escapeHTML(s.name) + '</strong></td><td>' + escapeHTML((s.cluster_id || '-') + '/' + (s.namespace || '-')) + '</td>' +
+        '<td>rev ' + fmt(s.revision_no || 0) + '</td><td>' + escapeHTML(s.status || '-') + '</td><td>' + escapeHTML(s.sync_policy || 'manual') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(s.updated_at) + '</td>' +
+        '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sStackView(\'' + escapeAttr(s.id) + '\')">리비전</button> ' +
+        '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDelete(\'' + escapeAttr(s.id) + '\')">삭제</button></td></tr>').join('')
+        : '<tr><td colspan="7" class="muted">저장된 Stack이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('앱 배포 (Application Stack)', '<div class="muted" style="font-size:12px;padding:0 4px">매니페스트를 검증·저장하면 리비전이 관리됩니다. 실제 클러스터 적용은 승인/executor 흐름으로 이어집니다(후속).</div>') +
+        card('Stack 저장 (검증 후 버전 관리)',
+          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
+          '<input id="stk-name" placeholder="Stack 이름" style="min-width:160px"><select id="stk-cluster">' + clusterOpts + '</select><input id="stk-ns" placeholder="namespace" style="min-width:120px"></div>' +
+          '<textarea id="stk-manifest" rows="9" placeholder="apiVersion: apps/v1\nkind: Deployment\n..." style="width:100%;font-family:monospace"></textarea>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sStackSave()">검증 후 저장</button></div>' +
+          '<div id="stk-save-out" style="margin-top:8px"></div></div>') +
+        card('Stack 목록', '<div class="card-body"><table><thead><tr><th>이름</th><th>대상</th><th>리비전</th><th>상태</th><th>Sync</th><th>수정</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="stk-detail" style="margin-top:8px"></div></div>');
+    }
+    window.k8sStackSave = async () => {
+      const out = document.getElementById('stk-save-out');
+      const name = (document.getElementById('stk-name').value || '').trim();
+      const manifest = (document.getElementById('stk-manifest').value || '').trim();
+      if (!name || !manifest) { out.innerHTML = '<span class="status warn">이름과 매니페스트가 필요합니다</span>'; return; }
+      out.innerHTML = '<span class="muted">검증·저장 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks', { method: 'POST', body: JSON.stringify({
+          name, cluster_id: document.getElementById('stk-cluster').value, namespace: (document.getElementById('stk-ns').value || '').trim(), manifest }) });
+        const p = d.plan || {};
+        out.innerHTML = '<span class="status">저장됨 (rev ' + fmt((d.stack || {}).revision_no || 0) + ')</span> <span class="muted" style="font-size:11px">리소스 ' + fmt((p.resources || []).length) + '개 · 정책위반 ' + fmt((p.policy_violations || []).length) + '건' + (p.requires_approval ? ' · 승인 필요' : '') + '</span>';
+        await renderK8sStacks(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackView = async (id) => {
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id));
+        const revs = (d.revisions || []).map(r => '<tr><td>rev ' + fmt(r.revision_no) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((r.manifest_hash || '').slice(0, 12)) + '</td><td class="muted" style="font-size:11px">' + ago(r.created_at) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">리비전 없음</td></tr>';
+        out.innerHTML = '<div style="font-size:12px;margin-bottom:4px"><strong>' + escapeHTML((d.stack || {}).name || '') + '</strong> 리비전</div><table><thead><tr><th>Rev</th><th>Hash</th><th>생성</th></tr></thead><tbody>' + revs + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackDelete = async (id) => {
+      if (!confirm('이 Stack과 모든 리비전을 삭제할까요?')) return;
+      try { await api('/admin/k8s/stacks/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
+      await renderK8sStacks(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
     // ---------- K8s Collector 상태 (Realtime Agent) ----------

@@ -35,6 +35,7 @@
 | Command Risk Parser — exec 명령 토큰화 위험도 분석(파이프-셸·시스템경로 리다이렉트·서브셸·체이닝·파괴적 명령), 터미널 정책 게이트 연계 | ✅ |
 | Terminal Access Mode — read_only/guided/full_tty 3단계 분류, 인터랙티브 셸(full TTY)은 정책 무관 승인 필수 | ✅ |
 | Application Stack 검증(dry-run) — 멀티 문서 매니페스트 적용 전 리소스 목록·정책 위반·승인 필요 변경 분석(클러스터 미적용) | ✅ |
+| Application Stack 저장·리비전 — 검증한 매니페스트를 버전 관리되는 Stack으로 저장(앱 배포 메뉴), 매니페스트 변경 시 리비전 누적 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -106,6 +107,8 @@
 | GET | `/admin/k8s/capacity` | HPA 현황·확장한계, 과소/과다 할당, 노드 bin-packing, GPU, 노드 용량 예측(SCALE-05) |
 | GET | `/admin/k8s/capacity/simulate` | replica 시뮬레이션 (SCALE-06): `kind`,`namespace`,`name`,`replicas` |
 | GET | `/admin/k8s/rbac-diff` | Role/ClusterRole 권한 확대 추적 (SEC-08, 리비전 기반) |
+| GET/POST | `/admin/k8s/stacks` | Application Stack 목록/저장(검증 후 버전 관리, 매니페스트 변경 시 리비전 누적) |
+| GET/DELETE | `/admin/k8s/stacks/{id}` | Stack 상세(+리비전 이력)/삭제 |
 | POST | `/admin/k8s/stacks/validate` | Application Stack dry-run: 멀티 문서 매니페스트(YAML/JSON) 리소스·정책 위반·승인 필요 분석(미적용) |
 | GET/POST | `/admin/k8s/policies` | 정책 팩 목록/생성 (SEC-10), `DELETE /policies/{id}` |
 | POST | `/admin/k8s/policies/simulate` | manifest 적용 전 정책 위반 검증 (SEC-05 Admission 시뮬레이터) |

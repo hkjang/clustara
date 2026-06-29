@@ -2117,6 +2117,35 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			UNIQUE(user_id, cluster_id, namespace, owner_kind, owner_name)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_watches_user ON k8s_pod_watches(user_id, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_application_stacks (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			cluster_id TEXT NOT NULL DEFAULT '',
+			namespace TEXT NOT NULL DEFAULT '',
+			source_type TEXT NOT NULL DEFAULT 'manifest',
+			manifest TEXT NOT NULL DEFAULT '',
+			manifest_hash TEXT NOT NULL DEFAULT '',
+			git_repo TEXT NOT NULL DEFAULT '',
+			git_branch TEXT NOT NULL DEFAULT '',
+			git_path TEXT NOT NULL DEFAULT '',
+			sync_policy TEXT NOT NULL DEFAULT 'manual',
+			status TEXT NOT NULL DEFAULT 'saved',
+			revision_no INTEGER NOT NULL DEFAULT 0,
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_stack_revisions (
+			id TEXT PRIMARY KEY,
+			stack_id TEXT NOT NULL,
+			revision_no INTEGER NOT NULL,
+			manifest_hash TEXT NOT NULL DEFAULT '',
+			manifest TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_stack_revisions_stack ON k8s_stack_revisions(stack_id, revision_no)`,
 		`CREATE TABLE IF NOT EXISTS k8s_report_schedules (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL DEFAULT '',
