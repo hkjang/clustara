@@ -1,3 +1,6 @@
+v0.8.4:
+- **Pod 비교·감시 워크벤치 — Compare Matrix·Watch List (v0.8.4)**: 같은 워크로드의 Pod들을 필드 단위로 비교하는 Compare Matrix를 추가해 "정상 Pod와 무엇이 다른가"를 한 표로 보여줍니다 — image·env·resource·probe·node·label 등에서 값이 다른 필드만 추려 소수(outlier) Pod를 강조합니다. 또한 Watch List를 추가해 중요 namespace/워크로드를 감시 목록에 등록하면 현재 위험 상태(밴드·위험 Pod 수·최저 Health·대표 증상)를 한눈에 집계해, 전체 Pod 목록을 뒤지지 않고도 핵심 서비스의 건강을 추적할 수 있습니다. 신규 분석 로직은 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.8.3:
 - **Pod 진단 워크벤치 — One-Page 진단 요약·워크로드 묶음 보기 (v0.8.3)**: Pod 상세 상단에 규칙 기반 One-Page 진단 요약을 추가해 "이 Pod가 왜 위험한지·가장 가능성 높은 원인·먼저 볼 것"을 한 화면에 합성합니다. 증상별(CrashLoopBackOff·OOMKilled·ImagePullBackOff·Pending·ProbeFailing 등) 원인 후보와 우선 점검 항목을 제시하고, 장애 직전 배포/설정 변경이 있으면 최상단에 노출해 롤백 검토를 유도합니다(변경 타임라인·Diff 연계). Pod 목록에는 워크로드 묶음 보기를 추가해 owner(ReplicaSet/StatefulSet/DaemonSet) 단위로 Pod 수·Ready·정상/주의/위험 분포·최저 Health·최악 증상·재시작 합계를 집계하고 위험한 워크로드를 상단에 정렬합니다. 신규 분석 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
