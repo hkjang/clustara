@@ -1,3 +1,6 @@
+v0.8.5:
+- **운영 자동화 — K8s MCP Toolset·Runbook Orchestrator·리포트 자동 발송 (v0.8.5)**: Claude Code/Cursor 등 외부 에이전트가 표준 MCP로 Clustara 운영 데이터를 조회하도록 `/mcp/gateway`에 read-only 도구(`k8s_list_clusters`·`k8s_list_incidents`·`k8s_pod_health`)를 추가했습니다(admin:read 게이트). Runbook Orchestrator는 증상별 대응을 사전점검→진단→조치(승인 게이트)→확인→롤백의 단계형 플랜으로 구조화하고, 장애 직전 변경이 있으면 롤백 후보를 노출합니다(실행은 기존 승인/executor 흐름 유지). 리포트 자동 발송은 운영 다이제스트(워크로드·장애·보안·비용·SLO 위반)를 예약 주기로 Mattermost 채널에 자동 발송하며 즉시 발송도 지원합니다. 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.8.4:
 - **Pod 비교·감시 워크벤치 — Compare Matrix·Watch List (v0.8.4)**: 같은 워크로드의 Pod들을 필드 단위로 비교하는 Compare Matrix를 추가해 "정상 Pod와 무엇이 다른가"를 한 표로 보여줍니다 — image·env·resource·probe·node·label 등에서 값이 다른 필드만 추려 소수(outlier) Pod를 강조합니다. 또한 Watch List를 추가해 중요 namespace/워크로드를 감시 목록에 등록하면 현재 위험 상태(밴드·위험 Pod 수·최저 Health·대표 증상)를 한눈에 집계해, 전체 Pod 목록을 뒤지지 않고도 핵심 서비스의 건강을 추적할 수 있습니다. 신규 분석 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
