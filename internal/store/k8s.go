@@ -39,22 +39,22 @@ type K8sClusterCredential struct {
 }
 
 type K8sInventoryItem struct {
-	ID          string            `json:"id"`
-	ClusterID   string            `json:"cluster_id"`
-	Kind        string            `json:"kind"`
-	Namespace   string            `json:"namespace"`
-	Name        string            `json:"name"`
-	UID         string            `json:"uid"`
-	APIVersion  string            `json:"api_version"`
-	Status      string            `json:"status"`
-	HealthScore int               `json:"health_score"`
-	RiskLevel   string            `json:"risk_level"`
-	Spec        map[string]any    `json:"spec"`
-	StatusObject map[string]any   `json:"status_object"` // raw .status (rollout/job/node conditions); kept out of Spec so it never churns the revision hash
-	Labels      map[string]string `json:"labels"`
-	Annotations map[string]string `json:"annotations"`
-	ObservedAt  string            `json:"observed_at"`
-	UpdatedAt   string            `json:"updated_at"`
+	ID           string            `json:"id"`
+	ClusterID    string            `json:"cluster_id"`
+	Kind         string            `json:"kind"`
+	Namespace    string            `json:"namespace"`
+	Name         string            `json:"name"`
+	UID          string            `json:"uid"`
+	APIVersion   string            `json:"api_version"`
+	Status       string            `json:"status"`
+	HealthScore  int               `json:"health_score"`
+	RiskLevel    string            `json:"risk_level"`
+	Spec         map[string]any    `json:"spec"`
+	StatusObject map[string]any    `json:"status_object"` // raw .status (rollout/job/node conditions); kept out of Spec so it never churns the revision hash
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	ObservedAt   string            `json:"observed_at"`
+	UpdatedAt    string            `json:"updated_at"`
 }
 
 type K8sInventoryFilter struct {
@@ -117,24 +117,28 @@ type K8sFindingFilter struct {
 }
 
 type K8sActionRequest struct {
-	ID           string         `json:"id"`
-	ClusterID    string         `json:"cluster_id"`
-	Namespace    string         `json:"namespace"`
-	ResourceKind string         `json:"resource_kind"`
-	ResourceName string         `json:"resource_name"`
-	Action       string         `json:"action"`
-	Parameters   map[string]any `json:"parameters"`
-	RiskLevel    string         `json:"risk_level"`
-	Status       string         `json:"status"`
-	RequestedBy  string         `json:"requested_by"`
-	ApprovedBy   string         `json:"approved_by"`
-	ExecutedBy   string         `json:"executed_by"`
-	Result       string         `json:"result"`
-	DryRunDiff   string         `json:"dry_run_diff"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
-	ApprovedAt   string         `json:"approved_at"`
-	ExecutedAt   string         `json:"executed_at"`
+	ID                    string         `json:"id"`
+	ClusterID             string         `json:"cluster_id"`
+	Namespace             string         `json:"namespace"`
+	ResourceKind          string         `json:"resource_kind"`
+	ResourceName          string         `json:"resource_name"`
+	Action                string         `json:"action"`
+	Parameters            map[string]any `json:"parameters"`
+	RiskLevel             string         `json:"risk_level"`
+	Status                string         `json:"status"`
+	RequestedBy           string         `json:"requested_by"`
+	ApprovedBy            string         `json:"approved_by"`
+	ExecutedBy            string         `json:"executed_by"`
+	Result                string         `json:"result"`
+	DryRunDiff            string         `json:"dry_run_diff"`
+	IdempotencyKey        string         `json:"idempotency_key"`
+	TargetUID             string         `json:"target_uid"`
+	TargetResourceVersion string         `json:"target_resource_version"`
+	CommandHash           string         `json:"command_hash"`
+	CreatedAt             string         `json:"created_at"`
+	UpdatedAt             string         `json:"updated_at"`
+	ApprovedAt            string         `json:"approved_at"`
+	ExecutedAt            string         `json:"executed_at"`
 }
 
 type K8sActionFilter struct {
@@ -553,17 +557,21 @@ func (s *SQLStore) InsertK8sActionRequest(ctx context.Context, a K8sActionReques
 	}
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_action_requests
 		(id, cluster_id, namespace, resource_kind, resource_name, action, parameters_json, risk_level, status,
-		requested_by, approved_by, executed_by, result, dry_run_diff, created_at, updated_at, approved_at, executed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		requested_by, approved_by, executed_by, result, dry_run_diff, idempotency_key, target_uid, target_resource_version,
+		command_hash, created_at, updated_at, approved_at, executed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		a.ID, a.ClusterID, a.Namespace, a.ResourceKind, a.ResourceName, a.Action, encodeAnyMap(a.Parameters),
 		a.RiskLevel, a.Status, a.RequestedBy, a.ApprovedBy, a.ExecutedBy, a.Result, a.DryRunDiff,
+		a.IdempotencyKey, a.TargetUID, a.TargetResourceVersion, a.CommandHash,
 		a.CreatedAt, a.UpdatedAt, a.ApprovedAt, a.ExecutedAt)
 	return err
 }
 
 func (s *SQLStore) ListK8sActionRequests(ctx context.Context, f K8sActionFilter) ([]K8sActionRequest, error) {
 	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, action, parameters_json,
-		risk_level, status, requested_by, approved_by, executed_by, result, dry_run_diff, created_at,
+		risk_level, status, requested_by, approved_by, executed_by, result, dry_run_diff,
+		COALESCE(idempotency_key, ''), COALESCE(target_uid, ''), COALESCE(target_resource_version, ''), COALESCE(command_hash, ''),
+		created_at,
 		updated_at, approved_at, executed_at FROM k8s_action_requests WHERE 1=1`
 	args := []any{}
 	if f.ClusterID != "" {
@@ -595,7 +603,23 @@ func (s *SQLStore) ListK8sActionRequests(ctx context.Context, f K8sActionFilter)
 func (s *SQLStore) GetK8sActionRequest(ctx context.Context, id string) (K8sActionRequest, error) {
 	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id, cluster_id, namespace, resource_kind, resource_name, action,
 		parameters_json, risk_level, status, requested_by, approved_by, executed_by, result, dry_run_diff,
+		COALESCE(idempotency_key, ''), COALESCE(target_uid, ''), COALESCE(target_resource_version, ''), COALESCE(command_hash, ''),
 		created_at, updated_at, approved_at, executed_at FROM k8s_action_requests WHERE id = ?`), id)
+	a, err := scanK8sAction(row)
+	if err == sql.ErrNoRows {
+		return K8sActionRequest{}, ErrNotFound
+	}
+	return a, err
+}
+
+func (s *SQLStore) GetK8sActionRequestByIdempotencyKey(ctx context.Context, key string) (K8sActionRequest, error) {
+	if key == "" {
+		return K8sActionRequest{}, ErrNotFound
+	}
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id, cluster_id, namespace, resource_kind, resource_name, action,
+		parameters_json, risk_level, status, requested_by, approved_by, executed_by, result, dry_run_diff,
+		COALESCE(idempotency_key, ''), COALESCE(target_uid, ''), COALESCE(target_resource_version, ''), COALESCE(command_hash, ''),
+		created_at, updated_at, approved_at, executed_at FROM k8s_action_requests WHERE idempotency_key = ?`), key)
 	a, err := scanK8sAction(row)
 	if err == sql.ErrNoRows {
 		return K8sActionRequest{}, ErrNotFound
@@ -607,15 +631,26 @@ func (s *SQLStore) UpdateK8sActionStatus(ctx context.Context, id, status, actor,
 	now := nowString()
 	query := `UPDATE k8s_action_requests SET status = ?, updated_at = ?, result = ?`
 	args := []any{status, now, result}
+	allowedWhere := ""
 	switch status {
 	case "approved":
 		query += `, approved_by = ?, approved_at = ?`
 		args = append(args, actor, now)
+		allowedWhere = ` AND status IN ('pending', 'approval_required')`
+	case "rejected":
+		allowedWhere = ` AND status IN ('pending', 'approval_required')`
+	case "running":
+		query += `, executed_by = ?, executed_at = ?`
+		args = append(args, actor, now)
+		allowedWhere = ` AND status = 'approved'`
 	case "executed", "failed":
 		query += `, executed_by = ?, executed_at = ?`
 		args = append(args, actor, now)
+		allowedWhere = ` AND status = 'running'`
+	default:
+		return ErrInvalidTransition
 	}
-	query += ` WHERE id = ?`
+	query += ` WHERE id = ?` + allowedWhere
 	args = append(args, id)
 	res, err := s.db.ExecContext(ctx, s.bind(query), args...)
 	if err != nil {
@@ -623,6 +658,9 @@ func (s *SQLStore) UpdateK8sActionStatus(ctx context.Context, id, status, actor,
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n == 0 {
+		if _, getErr := s.GetK8sActionRequest(ctx, id); getErr == nil {
+			return ErrInvalidTransition
+		}
 		return ErrNotFound
 	}
 	return nil
@@ -673,7 +711,7 @@ func (s *SQLStore) K8sOverview(ctx context.Context) (K8sOverview, error) {
 	since := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
 	_ = s.db.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM k8s_events WHERE lower(type) = 'warning' AND last_seen >= ?`), since).Scan(&out.WarningEvents24)
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_security_findings WHERE status = 'open'`).Scan(&out.OpenFindings)
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_action_requests WHERE status IN ('pending', 'approval_required', 'approved')`).Scan(&out.PendingActions)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM k8s_action_requests WHERE status IN ('pending', 'approval_required', 'approved', 'running')`).Scan(&out.PendingActions)
 	return out, nil
 }
 
@@ -712,7 +750,8 @@ func scanK8sAction(rows k8sClusterScanner) (K8sActionRequest, error) {
 	var params string
 	if err := rows.Scan(&a.ID, &a.ClusterID, &a.Namespace, &a.ResourceKind, &a.ResourceName, &a.Action,
 		&params, &a.RiskLevel, &a.Status, &a.RequestedBy, &a.ApprovedBy, &a.ExecutedBy, &a.Result,
-		&a.DryRunDiff, &a.CreatedAt, &a.UpdatedAt, &a.ApprovedAt, &a.ExecutedAt); err != nil {
+		&a.DryRunDiff, &a.IdempotencyKey, &a.TargetUID, &a.TargetResourceVersion, &a.CommandHash,
+		&a.CreatedAt, &a.UpdatedAt, &a.ApprovedAt, &a.ExecutedAt); err != nil {
 		return K8sActionRequest{}, err
 	}
 	a.Parameters = decodeAnyMap(params)

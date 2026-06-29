@@ -49,6 +49,7 @@ func main() {
 	}
 
 	alerts := proxy.NewAlertWorker(db, srv.MetricsHandle(), 60*time.Second)
+	srv.AttachAlertWorker(alerts)
 	alerts.Start()
 	defer alerts.Stop()
 

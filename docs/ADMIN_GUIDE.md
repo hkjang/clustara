@@ -54,7 +54,7 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 - **Health Replay**: Pod 상태, 컨테이너 상태, 이벤트, 메트릭, 리비전, 로그 조회 감사, RCA 후보를 시간순으로 묶어 장애 전후 흐름을 확인합니다.
 - **조치 안전성/플레이북**: delete pod, evict, owner restart, scale, debug 요청 전 replica 여유, owner/HPA, 최근 Warning, restart 횟수를 점검하고 CrashLoop/OOM/ImagePull/Pending 유형별 대응 절차를 표시합니다.
 - **터미널 요청**: container, role, command, reason을 Terminal Policy로 평가하고 세션 요청을 `ready`/`pending_approval`/`denied` 상태로 감사 기록합니다. 승인이 필요한 요청은 운영 설정의 Exec 세션 승인함에서 `ready` 또는 `rejected`로 결정하고, `ready` 세션은 단일 제한 명령으로 실행해 `completed` 또는 `failed`로 닫습니다. 세션 상세에서는 정책 결과, 요청·승인·실행 리플레이, 마스킹 출력 샘플을 확인하고 Markdown 감사 리포트로 내려받습니다. Risk Briefing과 명령 템플릿으로 접속 전 위험도를 확인할 수 있습니다.
-- **Debug Container 요청**: catalog에 등록된 debug image만 선택하고 target container, template, 사유를 남깁니다. v0.7.0에서는 실제 주입 전 요청·승인·manifest preview·감사 이력을 우선 제공합니다.
+- **Debug Container 요청**: catalog에 등록된 debug image만 선택하고 target container, template, 사유를 남깁니다. v0.8.0에서는 실제 주입 전 요청·승인·manifest preview·감사 이력을 우선 제공합니다.
 - 운영망 전용 ServiceAccount는 `pods/log`의 `get` 권한이 필요합니다.
 - API: `GET /admin/k8s/pods`, `GET /admin/k8s/pods/{namespace}/{pod}`, `GET /admin/k8s/pods/{namespace}/{pod}/logs`, `POST /admin/k8s/pods/{namespace}/{pod}/logs/analyze`, `GET /admin/k8s/pods/{namespace}/{pod}/logs/stream`, `GET /admin/k8s/pods/{namespace}/{pod}/logs/presets`, `POST /admin/k8s/pods/{namespace}/{pod}/logs/masking-report`, `POST /admin/k8s/pods/{namespace}/{pod}/logs/snapshot`, `GET /admin/k8s/pods/{namespace}/{pod}/logs/merge`, `POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle`, `GET /admin/k8s/pods/{namespace}/{pod}/golden-diff`, `GET /admin/k8s/pods/{namespace}/{pod}/health-replay`, `GET /admin/k8s/pods/{namespace}/{pod}/action-safety`, `GET /admin/k8s/pods/{namespace}/{pod}/runbook`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`, `GET /admin/k8s/pods/{namespace}/{pod}/exec/briefing`, `GET/POST /admin/k8s/pods/{namespace}/{pod}/debug/sessions`, `GET /admin/k8s/exec/sessions/{id}`, `GET /admin/k8s/exec/sessions/{id}/export`
 
@@ -100,7 +100,8 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 위험 작업의 **요청 → 영향도 → 승인 → 실행** 워크플로우.
 
 - 요청 생성 시 영향도가 자동 산출되어 `dry_run_diff`에 기록되고, blocker(standalone Pod 삭제·drain·허용 외 patch 필드 등)가 있으면 자동으로 **승인 필수**로 격상됩니다.
-- **승인**된 액션은 **실행** 버튼으로 실클러스터에 반영: `scale`/`rollout_restart`/`cordon`/`uncordon`/`delete_pod`. drain은 수동.
+- 요청에는 `idempotency_key`, `target_uid`, `target_resource_version`, `command_hash`가 저장됩니다. 같은 idempotency key로 재시도하면 기존 요청을 반환합니다.
+- **승인**된 액션은 `approved -> running -> executed|failed` 전이만 허용되며 **실행** 버튼으로 실클러스터에 반영합니다: `scale`/`rollout_restart`/`cordon`/`uncordon`/`delete_pod`. 같은 승인 건의 중복 실행은 차단되고 drain은 수동입니다.
 - API: `GET/POST /admin/k8s/actions`, `POST /admin/k8s/actions/{id}/approve|reject|execute`
 
 ## 11. 용량·자동확장 (`#/k8s-capacity`)
@@ -149,10 +150,10 @@ namespace/service 단위 SLO와 에러버짓을 확인합니다. 현재는 incid
 비용 단가(KRW/vCPU·월, KRW/GB·월), 알림(조용한 시간 `HH-HH`, 팀→Mattermost 채널 매핑 JSON), latency 분석, ChatOps, Terminal Policy Builder, Debug Container 요청 정책을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정(설정 메뉴)을 따릅니다.
 
 - Terminal Policy Builder: role, cluster, namespace glob, Pod label selector, 허용·차단 명령, 승인 필요, 최대 세션 시간, 감사 저장 여부를 설정합니다. Pod 상세의 터미널 요청은 이 정책 평가를 통과한 뒤 세션 요청 이력과 Exec 세션 승인함으로 연결됩니다.
-- Exec 세션 승인함: `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`가 되며 승인자·시각·메모가 남습니다. `ready` 세션의 실행 결과는 exit code, 실행자, 실행 시각, 마스킹 출력 샘플로 기록됩니다. `상세` 버튼은 정책 평가, 요청, 승인/반려, 실행 결과를 리플레이 타임라인으로 보여주고 `리포트` 버튼은 같은 내용을 Markdown 파일로 다운로드합니다.
+- Exec 세션 승인함: `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`가 되며 승인자·시각·메모가 남습니다. 실행은 `ready -> running -> completed|failed` 전이만 허용되므로 같은 세션을 두 번 실행할 수 없습니다. `상세` 버튼은 정책 평가, 요청, 승인/반려, 실행 결과를 리플레이 타임라인으로 보여주고 `리포트` 버튼은 같은 내용을 Markdown 파일로 다운로드합니다.
 - Debug Container 요청: 허용된 debug image catalog 안에서만 요청할 수 있으며 privileged, hostPID, hostNetwork는 기본 차단됩니다. 요청은 승인/반려 이력, manifest preview, 요청 사유와 함께 `k8s_debug_sessions`에 감사 기록으로 남습니다.
 - API: `GET/POST /admin/k8s/cost/config`, `/admin/k8s/notify/config`, `/admin/k8s/latency/config`, `/admin/notifications/mattermost`
-- 터미널·디버그 API: `GET/POST /admin/k8s/terminal-policies`, `DELETE /admin/k8s/terminal-policies/{id}`, `POST /admin/k8s/terminal-policies/evaluate`, `GET /admin/k8s/terminal/templates`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`, `GET /admin/k8s/pods/{namespace}/{pod}/exec/briefing`, `GET /admin/k8s/exec/sessions`, `GET /admin/k8s/exec/sessions/{id}`, `GET /admin/k8s/exec/sessions/{id}/export`, `POST /admin/k8s/exec/sessions/{id}/approve|reject|execute`, `GET /admin/k8s/debug/catalog`, `GET /admin/k8s/debug/sessions`, `POST /admin/k8s/debug/sessions/{id}/approve|reject`
+- 터미널·디버그 API: `GET/POST /admin/k8s/terminal-policies`, `DELETE /admin/k8s/terminal-policies/{id}`, `POST /admin/k8s/terminal-policies/evaluate`, `GET /admin/k8s/terminal/templates`, `POST /admin/k8s/pods/{namespace}/{pod}/exec/sessions`, `GET /admin/k8s/pods/{namespace}/{pod}/exec/briefing`, `GET /admin/k8s/exec/sessions`, `GET /admin/k8s/exec/sessions/{id}`, `GET /admin/k8s/exec/sessions/{id}/export`, `POST /admin/k8s/exec/sessions/{id}/approve|reject|execute`, `GET /admin/k8s/debug/catalog`, `GET /admin/k8s/debug/sessions`, `POST /admin/k8s/debug/sessions/{id}/approve|reject`, `GET /admin/ops/workers`, `GET /admin/workers`
 
 ---
 

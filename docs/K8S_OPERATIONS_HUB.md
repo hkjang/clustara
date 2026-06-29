@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.7.0** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.8.1** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.7.0)
+## 기능 상태 (v0.8.1)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -71,7 +71,7 @@
 | POST | `/admin/k8s/exec/sessions/{id}/approve`, `/reject`, `/execute` | `pending_approval` 세션 승인/반려, `ready` 세션의 단일 제한 명령 실행. 실행 결과는 `completed`/`failed`, exit code, 마스킹 출력 샘플로 감사 기록 |
 | GET | `/admin/k8s/debug/catalog` | 허용된 debug image 카탈로그와 상황별 추천 템플릿 |
 | GET | `/admin/k8s/debug/sessions` | 전체 debug container 요청 이력 |
-| POST | `/admin/k8s/debug/sessions/{id}/approve`, `/reject` | debug container 요청 승인/반려. v0.7.0에서는 감사 가능한 요청·manifest preview까지 관리 |
+| POST | `/admin/k8s/debug/sessions/{id}/approve`, `/reject` | debug container 요청 승인/반려. v0.8.0에서는 감사 가능한 요청·manifest preview까지 관리 |
 | GET | `/admin/k8s/terminal/templates` | 읽기 전용 확인 명령 템플릿(ps/env/df/DNS/HTTP 등) |
 | GET/POST | `/admin/k8s/terminal-policies` | Pod web terminal/exec 사전 정책 목록·생성: role, cluster, namespace glob, label selector, allow/deny 명령, 승인·감사 설정 |
 | DELETE | `/admin/k8s/terminal-policies/{id}` | 터미널 정책 삭제 |
@@ -100,6 +100,7 @@
 | POST | `/admin/k8s/dw/sink` | K8s fact(change/event/health/security/cost/action/metric)를 ClickHouse 적재 (미구성 시 no-op) |
 | POST | `/admin/k8s/dw/bootstrap` | ClickHouse에 K8s fact 테이블 생성 (미구성 시 no-op) |
 | POST | `/admin/k8s/actions/{id}/execute` | 승인된 액션을 실클러스터에 실행 (scale/rollout_restart/cordon/uncordon/delete_pod) |
+| GET | `/healthz`, `/readyz`, `/admin/ops/workers`, `/admin/workers` | liveness/readiness와 background worker 상태(queue depth, last success, last error, error count, lag seconds) |
 | POST | `/admin/k8s/notify/scan` | 현재 high/critical 장애·보안을 평가해 Mattermost 알림(중복제거·조용한시간·담당팀 라우팅·딥링크) |
 | GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` HH-HH) + 팀→채널 매핑(`team_channels` JSON) |
 | GET/POST | `/admin/notifications/mattermost` | Mattermost 알림 설정(webhook/channel/events) + ChatOps slash 검증 토큰(`slash_token`) |
@@ -111,8 +112,8 @@
 | POST | `/admin/k8s/latency/collect` | Prometheus에서 워크로드 latency 수집·적재 (RCA-10 latency, `PROMETHEUS_URL` 필요) |
 | GET/POST | `/admin/k8s/latency/config` | latency PromQL + 라벨 매핑(namespace/workload) 설정 |
 | GET | `/admin/k8s/connectivity` | Service selector↔Pod endpoint, Ingress backend/host/TLS, PVC Pending 점검 |
-| GET/POST | `/admin/k8s/actions` | 액션 요청 목록/생성 |
-| POST | `/admin/k8s/actions/{id}/approve` | 액션 승인 (요청 생성 시 영향도 자동 산출 → dry_run_diff, blocker 시 승인 강제) |
+| GET/POST | `/admin/k8s/actions` | 액션 요청 목록/생성. 생성 시 `idempotency_key`, `target_uid`, `target_resource_version`, `command_hash` 저장 |
+| POST | `/admin/k8s/actions/{id}/approve` | 액션 승인 (요청 생성 시 영향도 자동 산출 → dry_run_diff, blocker 시 승인 강제). 허용 전이: `pending|approval_required -> approved` |
 | POST | `/admin/k8s/actions/{id}/reject` | 액션 반려 |
 
 ## 클러스터 등록
@@ -266,7 +267,7 @@ curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 
 상세에서는 ready, restart, node, owner, QoS, Pod IP, 컨테이너별 상태, 관련 이벤트, 최근 메트릭, 최근 로그 감사, 마스킹 manifest를 확인합니다. `Golden Pod Diff`는 같은 owner 또는 label workload 안에서 Running/Ready 상태가 좋고 restart/warning이 적은 Pod를 자동 기준으로 골라 장애 Pod와 비교합니다. `Pod Health Replay`는 상태 스냅샷, 컨테이너 상태, 이벤트, 메트릭, 리비전, 로그 조회 감사, RCA 후보를 하나의 시간축으로 묶어 장애 흐름을 재생합니다. `조치 안전성`은 delete/evict/restart/scale/debug 전에 owner 존재 여부, replica 여유, HPA, 최근 Warning 이벤트, restart 횟수를 함께 계산하고, `플레이북`은 Pod 상태와 이벤트에 맞는 확인·조치 순서를 제안합니다.
 
-로그 조회와 실시간 tail은 Kubernetes API의 `pods/log` subresource를 사용합니다. minikube처럼 관리자 kubeconfig를 등록한 경우 바로 사용할 수 있고, 운영망 전용 ServiceAccount를 쓰는 경우 위 RBAC 예시처럼 `pods/log`의 `get` 권한이 필요합니다. 로그 응답과 증적 번들 안의 로그는 서버에서 token, password, Authorization, 주민등록번호, 카드번호 등 민감 패턴을 마스킹한 뒤 반환합니다. 로그 분석은 current/previous 로그를 함께 읽어 Exception, OOM, timeout, DNS, network, auth, probe, image pull 계열 패턴을 그룹핑하고 근거 라인과 조치 후보를 반환합니다. v0.7.0부터는 로그 검색 프리셋, 마스킹 리포트/미리보기, 장애 시점 로그 스냅샷, 같은 workload의 다중 Pod 로그 병합도 제공합니다.
+로그 조회와 실시간 tail은 Kubernetes API의 `pods/log` subresource를 사용합니다. minikube처럼 관리자 kubeconfig를 등록한 경우 바로 사용할 수 있고, 운영망 전용 ServiceAccount를 쓰는 경우 위 RBAC 예시처럼 `pods/log`의 `get` 권한이 필요합니다. 로그 응답과 증적 번들 안의 로그는 서버에서 token, password, Authorization, 주민등록번호, 카드번호 등 민감 패턴을 마스킹한 뒤 반환합니다. 로그 분석은 current/previous 로그를 함께 읽어 Exception, OOM, timeout, DNS, network, auth, probe, image pull 계열 패턴을 그룹핑하고 근거 라인과 조치 후보를 반환합니다. v0.8.0부터는 로그 검색 프리셋, 마스킹 리포트/미리보기, 장애 시점 로그 스냅샷, 같은 workload의 다중 Pod 로그 병합도 제공합니다.
 
 ```powershell
 curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/logs?cluster_id=k8scl_...&container=nginx&tail_lines=200"
@@ -294,9 +295,9 @@ curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/runbook?cluster_id=
 
 `운영 설정` 화면의 Terminal Policy Builder는 실제 Pod exec/web terminal 기능을 켜기 전에 접속 정책을 먼저 정의하는 안전장치입니다. 정책은 role, cluster, namespace glob, Pod label selector, 허용 명령, 차단 명령, 승인 필요 여부, 최대 세션 시간, 감사 저장 여부를 포함합니다. 내장 차단 규칙은 `rm -rf`, `dd`, `mkfs`, `shutdown/reboot`, `curl|sh`, `kubectl delete`, 패키지 설치 명령 등을 기본적으로 차단합니다.
 
-Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다. 운영 설정의 `Exec 세션 승인함`에서 `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`로 전환되고 `decided_by`, `decided_at`, `decision_note`가 남습니다. `ready` 세션은 무입력·무TTY 단일 명령으로만 실행되며, 완료 후 `completed` 또는 `failed`로 닫히고 `executed_by`, `executed_at`, `exit_code`, 마스킹된 출력 샘플이 기록됩니다. 각 세션의 `상세`는 요청, 승인/반려, 실행 결과를 시간순 리플레이로 보여 주며, `리포트`는 동일 내용을 Markdown 감사 증적으로 내려받습니다. `Risk Briefing`은 exec 요청 전 대상 Pod의 namespace, node, owner, 최근 Warning 이벤트, 명령 위험도, 정책 차단 가능성을 요약합니다. `터미널 명령 템플릿`은 ps/env/df/DNS/HTTP 등 읽기 전용 진단 명령을 버튼으로 제공합니다.
+Pod 상세 화면의 `터미널 요청`은 이 정책을 통과한 단일 명령 요청을 `k8s_pod_exec_sessions`에 저장합니다. 정책이 허용하고 승인이 필요 없으면 `ready`, 승인이 필요하면 `pending_approval`, 내장 차단 또는 정책 미일치면 `denied`가 됩니다. 운영 설정의 `Exec 세션 승인함`에서 `pending_approval` 요청을 승인하면 `ready`, 반려하면 `rejected`로 전환되고 `decided_by`, `decided_at`, `decision_note`가 남습니다. `ready` 세션은 실행 직전 `running`으로 선점된 뒤 무입력·무TTY 단일 명령으로만 실행되며, 완료 후 `completed` 또는 `failed`로 닫히고 `executed_by`, `executed_at`, `exit_code`, 마스킹된 출력 샘플이 기록됩니다. 허용 상태 전이는 `pending_approval -> ready|rejected`, `ready -> running`, `running -> completed|failed`뿐이며, 중복 승인·중복 실행은 DB와 API에서 409로 차단됩니다. 각 세션의 `상세`는 요청, 승인/반려, 실행 결과를 시간순 리플레이로 보여 주며, `리포트`는 동일 내용을 Markdown 감사 증적으로 내려받습니다. `Risk Briefing`은 exec 요청 전 대상 Pod의 namespace, node, owner, 최근 Warning 이벤트, 명령 위험도, 정책 차단 가능성을 요약합니다. `터미널 명령 템플릿`은 ps/env/df/DNS/HTTP 등 읽기 전용 진단 명령을 버튼으로 제공합니다.
 
-Debug Container 기능은 운영망에서 위험도가 높으므로 v0.7.0에서는 “요청·승인·감사·manifest preview” 흐름을 먼저 제공합니다. 허용 이미지는 catalog에 고정하고, privileged/hostPID/hostNetwork는 기본 차단합니다. 승인된 요청은 누가, 어떤 Pod/target container에, 어떤 debug image와 사유로 요청했는지 `k8s_debug_sessions`에 기록됩니다. 실제 ephemeral container 주입 executor는 별도 운영 정책과 함께 확장할 수 있도록 분리되어 있습니다.
+Debug Container 기능은 운영망에서 위험도가 높으므로 v0.8.0에서는 “요청·승인·감사·manifest preview” 흐름을 먼저 제공합니다. 허용 이미지는 catalog에 고정하고, privileged/hostPID/hostNetwork는 기본 차단합니다. 승인된 요청은 누가, 어떤 Pod/target container에, 어떤 debug image와 사유로 요청했는지 `k8s_debug_sessions`에 기록됩니다. 실제 ephemeral container 주입 executor는 별도 운영 정책과 함께 확장할 수 있도록 분리되어 있습니다.
 
 ```powershell
 curl.exe -X POST "http://localhost:9090/admin/k8s/terminal-policies" `

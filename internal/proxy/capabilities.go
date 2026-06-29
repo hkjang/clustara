@@ -164,10 +164,11 @@ var capabilityRegistry = []Capability{
 	},
 	{
 		Key: "ops_visibility", Name: "운영 가시성", Group: "ops",
-		Description: "Flow Map·MCP Agentic Timeline·운영 홈·워커 상태판으로 요청·워커·우선순위를 한눈에.",
-		APIs:        []string{"GET /admin/flow-map", "GET /admin/ops/home", "GET /admin/ops/workers", "GET /admin/capabilities"},
+		Description: "Flow Map·MCP Agentic Timeline·운영 홈·워커 상태판으로 요청·워커·우선순위를 한눈에. 워커 상태판은 queue depth, last success, last error, error count, lag seconds를 노출합니다.",
+		APIs:        []string{"GET /admin/flow-map", "GET /admin/ops/home", "GET /admin/ops/workers", "GET /admin/workers", "GET /healthz", "GET /readyz", "GET /admin/capabilities"},
 		UITabs:      []string{"ops-home"},
 		Scopes:      []string{"admin:read"},
+		Workers:     []string{"async_logger", "retention", "alert_worker", "clickhouse_fact_queue", "clickhouse_sink", "text2sql_report_scheduler"},
 	},
 }
 

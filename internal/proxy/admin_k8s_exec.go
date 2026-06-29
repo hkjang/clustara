@@ -103,6 +103,10 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusNotFound, "exec session not found: "+id, "invalid_request_error", "exec_session_not_found")
 		return
 	}
+	if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "exec session cannot transition from current state", "invalid_request_error", "exec_session_bad_state")
+		return
+	}
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_exec_session_decide_failed")
 		return
@@ -271,10 +275,23 @@ func (s *Server) executeK8sPodExecSession(w http.ResponseWriter, r *http.Request
 	}
 	execClient, ok := client.(kube.PodCommandExecutor)
 	if !ok {
-		updated, _ := s.db.UpdateK8sPodExecSessionExecution(r.Context(), sess.ID, "failed", adminID(r), "", "cluster client does not support Pod exec", 1)
-		writeJSON(w, http.StatusOK, map[string]any{"session": updated, "executed": false, "error": "cluster client does not support Pod exec"})
+		writeOpenAIError(w, http.StatusNotImplemented, "cluster client does not support Pod exec", "invalid_request_error", "exec_unsupported")
 		return
 	}
+	running, err := s.db.MarkK8sPodExecSessionRunning(r.Context(), sess.ID, adminID(r))
+	if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "exec session is already running or closed", "invalid_request_error", "exec_session_bad_state")
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "exec session not found: "+sess.ID, "invalid_request_error", "exec_session_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_exec_session_running_failed")
+		return
+	}
+	sess = running
 	timeout := execSessionTimeout(sess.MaxSessionMinutes)
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
@@ -304,6 +321,10 @@ func (s *Server) executeK8sPodExecSession(w http.ResponseWriter, r *http.Request
 	updated, err := s.db.UpdateK8sPodExecSessionExecution(r.Context(), sess.ID, status, adminID(r), outputSample, truncateRunes(errMsg, 2000), exitCode)
 	if errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "exec session not found: "+sess.ID, "invalid_request_error", "exec_session_not_found")
+		return
+	}
+	if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "exec session finalization was already applied", "invalid_request_error", "exec_session_bad_state")
 		return
 	}
 	if err != nil {

@@ -128,30 +128,60 @@ func (s *SQLStore) GetK8sPodExecSession(ctx context.Context, id string) (K8sPodE
 }
 
 func (s *SQLStore) UpdateK8sPodExecSessionDecision(ctx context.Context, id, status, actor, note string) (K8sPodExecSession, error) {
+	if status != "ready" && status != "rejected" {
+		return K8sPodExecSession{}, ErrInvalidTransition
+	}
 	now := nowString()
 	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_pod_exec_sessions
 		SET status = ?, decided_by = ?, decided_at = ?, decision_note = ?, updated_at = ?
-		WHERE id = ?`), status, actor, now, note, now, id)
+		WHERE id = ? AND status = 'pending_approval'`), status, actor, now, note, now, id)
 	if err != nil {
 		return K8sPodExecSession{}, err
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n == 0 {
+		if _, getErr := s.GetK8sPodExecSession(ctx, id); getErr == nil {
+			return K8sPodExecSession{}, ErrInvalidTransition
+		}
+		return K8sPodExecSession{}, ErrNotFound
+	}
+	return s.GetK8sPodExecSession(ctx, id)
+}
+
+func (s *SQLStore) MarkK8sPodExecSessionRunning(ctx context.Context, id, actor string) (K8sPodExecSession, error) {
+	now := nowString()
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_pod_exec_sessions
+		SET status = 'running', executed_by = ?, executed_at = ?, updated_at = ?
+		WHERE id = ? AND status = 'ready'`), actor, now, now, id)
+	if err != nil {
+		return K8sPodExecSession{}, err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		if _, getErr := s.GetK8sPodExecSession(ctx, id); getErr == nil {
+			return K8sPodExecSession{}, ErrInvalidTransition
+		}
 		return K8sPodExecSession{}, ErrNotFound
 	}
 	return s.GetK8sPodExecSession(ctx, id)
 }
 
 func (s *SQLStore) UpdateK8sPodExecSessionExecution(ctx context.Context, id, status, actor, outputSample, errorMessage string, exitCode int) (K8sPodExecSession, error) {
+	if status != "completed" && status != "failed" {
+		return K8sPodExecSession{}, ErrInvalidTransition
+	}
 	now := nowString()
 	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_pod_exec_sessions
 		SET status = ?, executed_by = ?, executed_at = ?, output_sample = ?, error_message = ?, exit_code = ?, updated_at = ?
-		WHERE id = ?`), status, actor, now, outputSample, errorMessage, exitCode, now, id)
+		WHERE id = ? AND status = 'running'`), status, actor, now, outputSample, errorMessage, exitCode, now, id)
 	if err != nil {
 		return K8sPodExecSession{}, err
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n == 0 {
+		if _, getErr := s.GetK8sPodExecSession(ctx, id); getErr == nil {
+			return K8sPodExecSession{}, ErrInvalidTransition
+		}
 		return K8sPodExecSession{}, ErrNotFound
 	}
 	return s.GetK8sPodExecSession(ctx, id)

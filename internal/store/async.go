@@ -23,6 +23,9 @@ type AsyncLogger struct {
 	fallbackMu   sync.Mutex
 	dropped      atomic.Uint64
 	written      atomic.Uint64
+	failed       atomic.Uint64
+	lastSuccess  atomic.Value // string RFC3339Nano
+	lastError    atomic.Value // string
 }
 
 type FallbackStats struct {
@@ -43,12 +46,15 @@ type FallbackReplayResult struct {
 }
 
 func NewAsyncLogger(store *SQLStore, queueSize int, fallbackPath string) *AsyncLogger {
-	return &AsyncLogger{
+	l := &AsyncLogger{
 		store:        store,
 		ch:           make(chan LogRecord, queueSize),
 		fallbackPath: fallbackPath,
 		done:         make(chan struct{}),
 	}
+	l.lastSuccess.Store("")
+	l.lastError.Store("")
+	return l
 }
 
 func (l *AsyncLogger) Start() {
@@ -82,12 +88,34 @@ func (l *AsyncLogger) QueueDepth() int {
 	return len(l.ch)
 }
 
+func (l *AsyncLogger) QueueCapacity() int {
+	return cap(l.ch)
+}
+
 func (l *AsyncLogger) Dropped() uint64 {
 	return l.dropped.Load()
 }
 
 func (l *AsyncLogger) Written() uint64 {
 	return l.written.Load()
+}
+
+func (l *AsyncLogger) Failed() uint64 {
+	return l.failed.Load()
+}
+
+func (l *AsyncLogger) LastSuccess() string {
+	if v, ok := l.lastSuccess.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+func (l *AsyncLogger) LastError() string {
+	if v, ok := l.lastError.Load().(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (l *AsyncLogger) FallbackStats() (FallbackStats, error) {
@@ -225,11 +253,15 @@ func (l *AsyncLogger) write(record LogRecord) {
 	defer cancel()
 	if err := l.store.InsertLogRecord(ctx, record); err != nil {
 		slog.Warn("write audit log failed", "error", err)
+		l.failed.Add(1)
+		l.lastError.Store(err.Error())
 		l.writeFallback(record)
 		_ = l.store.InsertSystemError(ctx, "async_logger", "Write audit log failed: "+err.Error())
 		return
 	}
 	l.written.Add(1)
+	l.lastSuccess.Store(time.Now().UTC().Format(time.RFC3339Nano))
+	l.lastError.Store("")
 }
 
 func (l *AsyncLogger) writeFallback(record LogRecord) {

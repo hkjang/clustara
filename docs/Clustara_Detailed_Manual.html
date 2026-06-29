@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Clustara Detailed User Manual</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.6;
+            color: #1f2937;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background-color: #f9fafb;
+        }
+
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            color: #111827;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        h2 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #0f172a;
+            margin-top: 50px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+            page-break-before: always;
+        }
+
+        h3 {
+            font-size: 18px;
+            font-weight: 500;
+            color: #334155;
+            margin-top: 20px;
+        }
+
+        p {
+            margin-bottom: 16px;
+            color: #475569;
+        }
+
+        ul {
+            margin-bottom: 20px;
+            padding-left: 25px;
+            color: #475569;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        code {
+            font-family: Consolas, Monaco, monospace;
+            background-color: #f1f5f9;
+            color: #0f172a;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 90%;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            margin: 20px 0;
+            display: block;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background-color: #f8fafc;
+            font-weight: 600;
+            color: #1e293b;
+            width: 30%;
+        }
+
+        td {
+            color: #334155;
+        }
+
+        .toc {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px 30px;
+            margin-bottom: 40px;
+        }
+
+        .toc ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+
+        .toc li {
+            margin-bottom: 10px;
+        }
+
+        .toc a {
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        @media print {
+            body {
+                padding: 0;
+                background-color: #ffffff;
+            }
+            h2 {
+                page-break-before: always;
+            }
+            table {
+                box-shadow: none;
+                border: 1px solid #e2e8f0;
+            }
+            img {
+                box-shadow: none;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Clustara Kubernetes Operations Hub<br>상세 사용자 매뉴얼</h1>
+
+    <div class="toc">
+        <h3>매뉴얼 목차</h3>
+        <ul>
+            <li>0. <a href="#tab0">로그인 화면 (Login Screen)</a></li>
+            <li>1. <a href="#tab1">운영 홈 (Dashboard)</a></li>
+            <li>2. <a href="#tab2">수집 상태 (Collector Status)</a></li>
+            <li>3. <a href="#tab3">리소스 인벤토리 (Inventory)</a></li>
+            <li>4. <a href="#tab4">Pod 관리 및 분석 (Pod Management)</a></li>
+            <li>5. <a href="#tab5">변경 타임라인 (Timeline)</a></li>
+            <li>6. <a href="#tab6">장애 분석 (RCA)</a></li>
+            <li>7. <a href="#tab7">장애 워룸 (Incidents)</a></li>
+            <li>8. <a href="#tab8">리소스 그래프 (Resource Graph)</a></li>
+            <li>9. <a href="#tab9">연결성 점검 (Connectivity)</a></li>
+            <li>10. <a href="#tab10">액션 승인함 (Actions)</a></li>
+            <li>11. <a href="#tab11">용량 및 자동확장 (Capacity)</a></li>
+            <li>12. <a href="#tab12">그룹 및 오너십 (Metadata)</a></li>
+            <li>13. <a href="#tab13">AI 운영 분석 (AI Assistant)</a></li>
+            <li>14. <a href="#tab14">비용 센터 (Cost)</a></li>
+            <li>15. <a href="#tab15">보안 센터 (Security)</a></li>
+            <li>16. <a href="#tab16">정책 센터 (Policy)</a></li>
+            <li>17. <a href="#tab17">SLO 센터 (SLO)</a></li>
+            <li>18. <a href="#tab18">운영 설정 (Settings)</a></li>
+        </ul>
+    </div>
+
+    <h2 id="tab0">0. 로그인 화면 (Login Screen)</h2>
+    <p><strong>접속 경로</strong>: <code>http://localhost:9090/admin</code></p>
+    <p>Clustara 운영 콘솔에 접근하기 위한 사용자 인증 화면입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>이메일/비밀번호 인증</strong>: 관리자가 지정한 계정 정보로 로그인합니다.</li>
+        <li><strong>부트스트랩 계정</strong>: 시스템 최초 기동 시 환경 변수(<code>AUTH_ADMIN_BOOTSTRAP_EMAIL</code>, <code>AUTH_ADMIN_BOOTSTRAP_PASSWORD</code>)로 지정된 마스터 계정 정보를 통해 초기 접근 권한을 획득할 수 있습니다.</li>
+        <li><strong>인증 방식</strong>: 로그인 성공 시 서버로부터 JWT(Access Token 및 Refresh Token)를 발급받아 세션 스토리지에 보관하며, 이후 모든 API 요청 헤더에 Bearer 토큰으로 자동 서명되어 전송됩니다.</li>
+    </ul>
+    <img src="images/00_login.png" alt="로그인 화면">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>POST /auth/login</code>, <code>POST /auth/refresh</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_users</code> (또는 인메모리 부트스트랩 처리), <code>k8s_audit_events</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab1">1. 운영 홈 (Dashboard)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-home</code></p>
+    <p>클러스터 전체의 건강 상태와 실시간으로 감지된 위험 요소를 한눈에 파악할 수 있는 종합 관제 대시보드입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>위험 클러스터 TOP 5</strong>: 경고 이벤트 및 장애 발생 빈도가 높은 클러스터 목록을 나열합니다.</li>
+        <li><strong>RCA 장애 후보 요약</strong>: 현재 즉각 조치가 필요한 장애 후보군(CrashLoop, OOM 등)의 수를 표시합니다.</li>
+        <li><strong>최근 변경 이력</strong>: 지난 24시간 동안 발생한 Kubernetes 리소스 리비전 변경 사항을 요약합니다.</li>
+        <li><strong>비용 TOP 5</strong>: 리소스 사용량 기준 가장 비용이 많이 발생하는 네임스페이스 및 클러스터를 보여줍니다.</li>
+    </ul>
+    <img src="images/01_dashboard.png" alt="운영 홈">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/inventory</code>, <code>GET /admin/k8s/findings</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_clusters</code>, <code>k8s_inventory</code>, <code>k8s_events</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab2">2. 수집 상태 (Collector Status)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-collector</code></p>
+    <p>인클러스터 에이전트(<code>clustara-agent</code>)의 실시간 하트비트와 데이터 수집 지연(Lag) 상태를 모니터링합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>에이전트 하트비트</strong>: 각 클러스터에 배포된 에이전트의 생존 여부 및 마지막 통신 시각을 추적합니다.</li>
+        <li><strong>Watch Lag 및 Offset</strong>: API Server로부터의 실시간 리소스 변경 이벤트 수신 지연 시간을 메트릭으로 시각화합니다.</li>
+        <li><strong>체크포인트 상태</strong>: 데이터 유실 방지를 위한 <code>resourceVersion</code> 저장 상태를 제공합니다.</li>
+    </ul>
+    <img src="images/02_collector_status.png" alt="수집 상태">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/agent/status</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_agent_heartbeats</code>, <code>k8s_collector_offsets</code>, <code>k8s_collector_status</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab3">3. 리소스 인벤토리 (Inventory)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s</code></p>
+    <p>연결된 모든 Kubernetes 클러스터의 네임스페이스, 노드, 워크로드(Deployment, StatefulSet, DaemonSet, Pod)의 자산 목록을 논리적 구조로 통합 제공합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>자원 필터링</strong>: 클러스터 그룹 및 네임스페이스 기준으로 전체 리소스 수량을 동적 필터링합니다.</li>
+        <li><strong>QoS 및 상태 요약</strong>: 각 워크로드의 CPU/메모리 Request 및 사용률 메트릭을 요약 제공합니다.</li>
+    </ul>
+    <img src="images/03_inventory.png" alt="리소스 인벤토리">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/inventory</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab4">4. Pod 관리 및 분석 (Pod Management)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-pods</code></p>
+    <p>특정 Pod의 상세 상태 분석, 실시간 로그 스트리밍, 자가 진단 및 디버깅 도구를 통합 제공하는 클러스터라의 핵심 메뉴입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>지능형 로그 분석</strong>: 에러 패턴(Exception, OOM 등)을 AI/규칙 기반으로 그룹핑하여 근거 라인과 조치법을 제시합니다.</li>
+        <li><strong>Golden Pod Diff</strong>: 동일 Workload 내 가장 건강한 Pod를 자동으로 선별하여 장애 Pod의 스펙(env, image 등) 차이점을 대조 분석합니다.</li>
+        <li><strong>Health Replay</strong>: 이벤트, 메트릭, 변경 리비전, 로그 조회 기록을 단일 시간축으로 정렬하여 장애 시점의 전후 흐름을 재생합니다.</li>
+        <li><strong>증적 번들 다운로드</strong>: 문제 발생 Pod의 로그, 이벤트, Manifest, 메트릭을 하나의 ZIP 파일로 즉시 패키징하여 다운로드합니다.</li>
+    </ul>
+    <img src="images/04_pod_management.png" alt="Pod 관리 및 분석">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/pods</code>, <code>GET /admin/k8s/pods/{namespace}/{pod}</code>, <code>GET /admin/k8s/pods/{namespace}/{pod}/logs</code>, <code>POST /admin/k8s/pods/{namespace}/{pod}/logs/analyze</code>, <code>POST /admin/k8s/pods/{namespace}/{pod}/evidence-bundle</code>, <code>GET /admin/k8s/pods/{namespace}/{pod}/golden-diff</code>, <code>GET /admin/k8s/pods/{namespace}/{pod}/health-replay</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_events</code>, <code>k8s_pod_log_queries</code>, <code>k8s_pod_log_snapshots</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab5">5. 변경 타임라인 (Timeline)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-timeline</code></p>
+    <p>특정 리소스의 탄생부터 현재까지의 Manifest 변경(스펙 리비전) 및 K8s 이벤트를 결합하여 시간순 타임라인을 제공합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>리소스 Diff 엔진</strong>: 이전 버전과 현재 버전의 YAML 코드를 라인 단위로 대조하여 변경된 필드(replicas, image 등)를 하이라이트합니다. (암호 및 토큰 등 민감 정보는 자동 마스킹 처리됩니다.)</li>
+    </ul>
+    <img src="images/05_timeline.png" alt="변경 타임라인">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/revisions</code>, <code>GET /admin/k8s/diff</code>, <code>GET /admin/k8s/timeline</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_resource_revisions</code>, <code>k8s_events</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab6">6. 장애 분석 (RCA)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-rca</code></p>
+    <p>수집된 경고 이벤트와 변경 이력을 기반으로 장애의 근본 원인(RCA-01~RCA-10)을 자체 엔진으로 진단하여 원인 후보와 안전한 조치 방안을 추천합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>장애 유형별 진단</strong>: CrashLoop, OOMKilled, ImagePullBackOff, Pending(PVC 누락 등), NodePressure 상태를 즉각 식별합니다.</li>
+        <li><strong>조치 방안 제시</strong>: 스케일 아웃, 롤아웃 재시작, 노드 Cordon 등 안전한 대응 조치 가이드를 함께 제공합니다.</li>
+    </ul>
+    <img src="images/06_rca.png" alt="장애 분석">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/rca</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_events</code>, <code>k8s_resource_revisions</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab7">7. 장애 워룸 (Incidents)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-incidents</code></p>
+    <p>감지된 High/Critical RCA 장애 후보를 지능적으로 그룹화하여 수명주기(Open/Resolved)를 관리하고 공동 대응을 지원하는 장애 워룸 워크스페이스입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>인시던트 상세 관리</strong>: 인시던트 연관 리소스 구조(리소스 그래프), 실시간 탐지 근거, 관련 이벤트 및 변경 타임라인을 통합 제공합니다.</li>
+        <li><strong>수동 종료 및 AI 요약</strong>: 대응 완료 후 조치 사유를 입력하여 Resolved 상태로 전환하고 대응 이력을 보관합니다.</li>
+    </ul>
+    <img src="images/07_incidents.png" alt="장애 워룸">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET/POST /admin/k8s/incidents</code>, <code>GET /admin/k8s/incidents/{id}</code>, <code>POST /admin/k8s/incidents/{id}/resolve</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_incidents</code>, <code>k8s_incident_logs</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab8">8. 리소스 그래프 (Resource Graph)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-graph</code></p>
+    <p>Ingress ↔ Service ↔ Endpoint ↔ Workload(Pod) ↔ PVC ↔ ConfigMap/Secret 간의 토폴로지 관계를 분석하여 장애 전파 범위(Blast Radius)를 시각적인 그래프로 조립합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>의존성 트랙킹</strong>: 특정 노드나 Pod 장애 시, 이와 연결된 상위 서비스 및 수신 트래픽 경로 상의 영향 범위를 하이라이트합니다.</li>
+        <li><strong>오너십 연계</strong>: 그래프 노드 선택 시 담당 팀 및 비용 센터 정보를 즉각 오버레이합니다.</li>
+    </ul>
+    <img src="images/08_resource_graph.png" alt="리소스 그래프">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/resource-graph</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab9">9. 연결성 점검 (Connectivity)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-conn</code></p>
+    <p>네트워크 수신(Ingress)부터 백엔드 서비스(Service, Endpoint) 및 스토리지(PVC, PV) 매핑 상태를 주기적으로 검증하여 연결 고리가 끊어진 지점을 진단합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>진단 항목</strong>: Endpoint 미연결 Service, TLS 인증서가 누락된 Ingress, FailedMount 상태의 PVC 등을 자동 탐지합니다.</li>
+    </ul>
+    <img src="images/09_connectivity.png" alt="연결성 점검">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/connectivity</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_events</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab10">10. 액션 승인함 (Actions)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-actions</code></p>
+    <p>클러스터에 물리적인 변경을 가하는 위험 조치 작업(스케일, 재시작, 노드 제어 등)의 사전 영향도를 평가하고, 관리자 승인 단계를 거쳐 안전하게 실행하는 실클러스터 제어 엔진입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>실행 가능 액션</strong>: <code>scale</code>, <code>rollout_restart</code>, <code>cordon</code>, <code>uncordon</code>, <code>delete_pod</code>를 지원합니다.</li>
+        <li><strong>승인 워크플로우</strong>: 승인 권한자가 영향도 요약을 검토 후 승인/반려 처리를 수행하며, 모든 실행 결과는 감사 로그에 상세히 기록됩니다.</li>
+    </ul>
+    <img src="images/10_actions.png" alt="액션 승인함">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET/POST /admin/k8s/actions</code>, <code>POST /admin/k8s/actions/{id}/approve|reject|execute</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_action_requests</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab11">11. 용량 및 자동확장 (Capacity)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-capacity</code></p>
+    <p>클러스터 노드 자원의 요청률(Bin Packing)과 GPU 사용률, HPA 임계치 한계 도달 여부 등을 종합 분석하여 자원 고갈 위험 및 오토스케일링 정체 상태를 조기 진단합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>노드 소진일 예측</strong>: 메트릭 추세를 기반으로 자원 소진 예상일을 산출합니다.</li>
+        <li><strong>복제본 시뮬레이터</strong>: 타겟 복제본 수(Replica) 변경 시 추가로 필요한 총 리소스 요구량을 미리 시뮬레이션합니다.</li>
+    </ul>
+    <img src="images/11_capacity.png" alt="용량 및 자동확장">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/capacity</code>, <code>POST /admin/k8s/capacity/simulate</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_metrics</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab12">12. 그룹 및 오너십 (Metadata)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-meta</code></p>
+    <p>물리적 클러스터들을 논리적인 업무망 단위(운영망, 개발망, DMZ 등)로 그룹핑하고 네임스페이스 단위의 담당 팀, 담당자, 중요도 및 비용 센터 정보를 구성하는 관리 도구입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>그룹 및 메타데이터 관리</strong>: 알림 라우팅 정책(Mattermost) 및 네임스페이스별 비용 집계의 기초 자료로 활용됩니다.</li>
+    </ul>
+    <img src="images/12_metadata.png" alt="그룹 및 오너십">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET/POST /admin/k8s/groups</code>, <code>GET/POST /admin/k8s/ownership</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_cluster_groups</code>, <code>k8s_namespace_ownership</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab13">13. AI 운영 분석 (AI Assistant)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-ai</code></p>
+    <p>수집된 실시간 RCA 분석 정보, Warning 이벤트, 그리고 소스 리비전 변경 Diff 정보만을 신뢰할 수 있는 소스(Grounding Source)로 삼아 자연어 형태의 장애 해결법 및 일일/주간 운영 종합 보고서를 작성해 주는 AI 비서 기능입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>근거 기반 질의</strong>: Grounding 데이터가 부족한 경우 환각(Hallucination) 방지를 위해 추측 답변을 거부하고 관련 수집 지표를 우선 반환합니다.</li>
+    </ul>
+    <img src="images/13_ai_assistant.png" alt="AI 운영 분석">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>POST /admin/k8s/ai/ask</code>, <code>POST /admin/k8s/ai/report</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_events</code>, <code>k8s_incidents</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab14">14. 비용 센터 (Cost)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-cost</code></p>
+    <p>vCPU 및 메모리당 단가 설정을 기준으로 네임스페이스, 비용 센터, 클러스터 그룹별 월 추정 비용을 정산하고 비용 절감을 위한 Rightsizing 가이드를 제공합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>FinOps Rightsizing</strong>: Pod의 자원 할당량(Request) 대비 실제 사용량 메트릭을 추적하여 <code>usage x 1.3</code> 기준의 적정 자원 스펙 권장값을 산출하고, 다운사이징 시 예상되는 월간 절감액(KRW)을 표기합니다.</li>
+    </ul>
+    <img src="images/14_cost_center.png" alt="비용 센터">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/cost</code>, <code>GET/POST /admin/k8s/cost/config</code>, <code>GET /admin/k8s/cost/recommendations</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_inventory</code>, <code>k8s_metrics</code>, <code>k8s_cost_configs</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab15">15. 보안 센터 (Security)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-security</code></p>
+    <p>이미지 태그 정책 위반, TLS 인증서 만료 임박, Secret 무단 참조, 과도한 권한의 RBAC 정책 등 클러스터의 전반적인 보안 위협을 실시간 스캔하여 보안 점수(Security Score)를 산출합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>인증서 만료 스캔</strong>: Secret 내 x509 인증서의 만료 예정일을 실시간 파싱하여 사전 경고를 제공합니다.</li>
+        <li><strong>RBAC 변경 추적</strong>: 관리자 권한(<code>cluster-admin</code>)이 부여된 룰의 변경 내역을 대조 분석합니다.</li>
+    </ul>
+    <img src="images/15_security.png" alt="보안 센터">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/security</code>, <code>GET /admin/k8s/rbac-diff</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_security_findings</code>, <code>k8s_inventory</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab16">16. 정책 센터 (Policy)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-policy</code></p>
+    <p>Admission Controller의 안전장치를 시뮬레이션하고, 클러스터의 정책 컴플라이언스 기준(Pod Security Standards) 부합 여부를 사전 진단하는 정책 거버넌스 도구입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>Admission 시뮬레이터</strong>: 적용 예정인 YAML Manifest를 올려 사전에 수립된 보안 정책(privileged 금지, hostPath 제한 등)에 통과하는지 미리 시뮬레이션(Allow/Deny)합니다.</li>
+    </ul>
+    <img src="images/16_policy.png" alt="정책 센터">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET/POST /admin/k8s/policies</code>, <code>POST /admin/k8s/policies/simulate</code>, <code>GET /admin/k8s/policies/compliance</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_terminal_policies</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab17">17. SLO 센터 (SLO)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-slo</code></p>
+    <p>네임스페이스 및 서비스 단위로 설정한 가용성 목표값(기본 99.9%) 대비 현재의 에러 버짓 잔여율과 가용 시간, 그리고 복구 시간(MTTR)을 실시간 산출하여 신뢰성을 관리합니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>E러 버짓 트랙킹</strong>: 발생한 인시던트의 지속 시간(Downtime Proxy)을 집계하여 소진된 가용성 예산을 정밀 계산합니다.</li>
+    </ul>
+    <img src="images/17_slo_center.png" alt="SLO 센터">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET /admin/k8s/slo</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_incidents</code></td>
+        </tr>
+    </table>
+
+    <h2 id="tab18">18. 운영 설정 (Settings)</h2>
+    <p><strong>메뉴 경로</strong>: <code>#/k8s-settings</code></p>
+    <p>단가 기준, 알림 정책(조용한 시간, 팀별 채널 매핑), 그리고 안전한 터미널 접속을 통제하는 Terminal Policy Builder 설정을 한 곳에서 관리하는 메뉴입니다.</p>
+    <h3>주요 기능:</h3>
+    <ul>
+        <li><strong>Terminal Policy Builder</strong>: 실제 Pod에 접속하여 명령을 내리기 전, 접속 역할(Role), 대상 네임스페이스, 금지 명령어 패턴(rm, dd, mkfs, kubectl delete 등 기본 차단), 세션 최대 제한 시간, 관리자 승인 여부를 사전에 정의하고 강제하는 게이트웨이 역할을 수행합니다.</li>
+    </ul>
+    <img src="images/18_settings.png" alt="운영 설정">
+    <table>
+        <tr>
+            <th>연동 API</th>
+            <td><code>GET/POST /admin/k8s/terminal-policies</code>, <code>POST /admin/k8s/terminal-policies/evaluate</code></td>
+        </tr>
+        <tr>
+            <th>관련 테이블</th>
+            <td><code>k8s_terminal_policies</code>, <code>k8s_pod_exec_sessions</code></td>
+        </tr>
+    </table>
+
+</body>
+</html>

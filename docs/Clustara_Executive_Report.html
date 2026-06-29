@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Clustara - 임원 보고용 플랫폼 사업 가치 보고서</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+        
+        body {
+            font-family: 'Inter', 'Noto Sans KR', sans-serif;
+            line-height: 1.7;
+            color: #1e293b;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 50px 30px;
+            background-color: #ffffff;
+            word-break: keep-all;
+        }
+
+        .cover-page {
+            height: 95vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            page-break-after: always;
+            border-left: 8px solid #0f172a;
+            padding-left: 40px;
+            margin-bottom: 50px;
+        }
+
+        .cover-title-group {
+            margin-top: 20vh;
+        }
+
+        .cover-subtitle {
+            font-size: 18px;
+            font-weight: 500;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+
+        .cover-title {
+            font-size: 38px;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.3;
+            margin: 0 0 20px 0;
+            word-break: keep-all;
+        }
+
+        .cover-desc {
+            font-size: 16px;
+            color: #64748b;
+            max-width: 600px;
+        }
+
+        .cover-meta {
+            margin-bottom: 5vh;
+            font-size: 14px;
+            color: #475569;
+        }
+
+        .cover-meta p {
+            margin: 5px 0;
+        }
+
+        h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-top: 60px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #0f172a;
+            padding-bottom: 8px;
+            page-break-before: always;
+        }
+
+        h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-top: 30px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        p {
+            margin-bottom: 16px;
+            color: #334155;
+            text-align: justify;
+        }
+
+        .highlight-box {
+            background-color: #f8fafc;
+            border-left: 4px solid #3b82f6;
+            padding: 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 25px 0;
+        }
+
+        .highlight-box h4 {
+            margin: 0 0 8px 0;
+            color: #1e3a8a;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .highlight-box p {
+            margin: 0;
+            font-size: 14px;
+            color: #475569;
+        }
+
+        ul {
+            margin-bottom: 20px;
+            padding-left: 20px;
+            color: #334155;
+        }
+
+        li {
+            margin-bottom: 8px;
+            font-size: 15px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-card .num {
+            font-size: 32px;
+            font-weight: 700;
+            color: #2563eb;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 14px;
+            color: #475569;
+            font-weight: 500;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: block;
+            page-break-inside: avoid;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 14px;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            font-weight: 600;
+            color: #0f172a;
+            width: 25%;
+        }
+
+        td {
+            color: #334155;
+        }
+
+        @media print {
+            body {
+                padding: 0;
+            }
+            .cover-page {
+                height: 100vh;
+            }
+            h2 {
+                page-break-before: always;
+            }
+            img {
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 표지 -->
+    <div class="cover-page">
+        <div class="cover-title-group">
+            <div class="cover-subtitle">Clustara Enterprise Report</div>
+            <h1 class="cover-title">Clustara Kubernetes Operations Hub<br>플랫폼 도입 가치 및 비즈니스 효과 보고서</h1>
+            <div class="cover-desc">
+                본 보고서는 멀티 클러스터 환경의 운영 효율성 극대화, 자원 비용 최적화(FinOps), 그리고 서비스 신뢰성(SLO) 통제를 달성하기 위한 Clustara 플랫폼의 기술적 가치와 도입 효과를 요약 설명합니다.
+            </div>
+        </div>
+        <div class="cover-meta">
+            <p><strong>작성일자:</strong> 2026년 6월 29일</p>
+            <p><strong>대상:</strong> 경영진 및 운영 의사결정권자</p>
+            <p><strong>작성부서:</strong> AI 인프라실</p>
+        </div>
+    </div>
+
+    <!-- 1. 추진 배경 -->
+    <h2>1. 추진 배경 및 필요성</h2>
+    <p>
+        기업의 핵심 서비스들이 마이크로서비스 아키텍처(MSA)와 Kubernetes 기반으로 전환됨에 따라, 인프라의 복잡성은 기하급수적으로 증가하고 있습니다. 다중 클러스터(Multi-Cluster) 및 멀티 테넌시 환경에서 발생한 장애는 원인 분석이 어렵고 전파 범위(Blast Radius)를 즉각 파악하기 힘들어 비즈니스 영속성에 심각한 위협이 되고 있습니다.
+    </p>
+    <p>
+        또한, 개발팀 중심의 자원 할당으로 인해 실제 사용량 대비 과도한 자원이 요청(Over-provisioning)되어 인프라 비용이 낭비되는 비효율성이 상존하고 있습니다. 이에 따라 <strong>장애 관제 통합, 정밀한 자원 Rightsizing(FinOps), 그리고 비즈니스 신뢰성(SLO) 지표의 중앙 통제</strong>가 가능한 고도화된 통합 플랫폼 도입이 시급히 요구됩니다.
+    </p>
+
+    <div class="highlight-box">
+        <h4>핵심 극복 과제</h4>
+        <p>
+            • <strong>장애 인지 및 해결 지연 (MTTR 장기화)</strong>: 인프라-워크로드 간 의존성 파악 지연으로 인한 서비스 장애 지속.<br>
+            • <strong>인프라 비용의 지속적 상승</strong>: 실제 사용량 메트릭과 무관하게 설정된 리소스 Request 값으로 인한 유휴 자원 방치.<br>
+            • <strong>보안 및 거버넌스 부재</strong>: 운영망 환경에서의 무단 명령어 실행(rm, dd 등) 제어 및 변경 이력 추적(Audit) 불가.
+        </p>
+    </div>
+
+    <!-- 2. 플랫폼 개요 -->
+    <h2>2. Clustara 플랫폼 개요 및 핵심 가치</h2>
+    <p>
+        Clustara는 Kubernetes 운영망의 자가 진단 및 자율 제어를 구현하는 <strong>비즈니스 지향형 운영 통제 플랫폼</strong>입니다. 인클러스터 수집 에이전트와 지능형 게이트웨이의 결합을 통해 실시간 메트릭, K8s 이벤트, 소스 변경 리비전을 결합 분석하여 단순 모니터링을 넘어선 '행동 가능한 통찰(Actionable Insight)'을 제공합니다.
+    </p>
+
+    <div class="grid-2">
+        <div class="stat-card">
+            <div class="num">70%</div>
+            <div class="label">장애 진단 시간 (MTTD/MTTR) 단축</div>
+        </div>
+        <div class="stat-card">
+            <div class="num">25%+</div>
+            <div class="label">클라우드 인프라 월 비용 절감</div>
+        </div>
+    </div>
+
+    <h3>플랫폼 4대 핵심 가치:</h3>
+    <ul>
+        <li><strong>신속한 자가 장애 진단 (Self-Healing & RCA)</strong>: 지능형 로그 분석 및 Golden Pod 비교를 통한 즉각적인 근본 원인 도출.</li>
+        <li><strong>FinOps 기반 비용 최적화 (Rightsizing)</strong>: 실측 메트릭 기반 다운사이징 권장안 제시 및 월간 절감액 가시화.</li>
+        <li><strong>컴플라이언스 및 보안 (Governance)</strong>: Admission 제어 시뮬레이터 및 역할(Role) 기반 터미널 접속 차단 정책 자동화.</li>
+        <li><strong>서비스 신뢰성 통제 (SLO & Error Budget)</strong>: 비즈니스 관점의 서비스 수준 목표 설정 및 가용 예산 실시간 추적.</li>
+    </ul>
+
+    <!-- 3. 영역별 주요 기능 및 기술 가치 -->
+    <h2>3. 영역별 주요 기능 및 비즈니스 가치</h2>
+
+    <h3>3.1. 통합 운영 관제 및 신속한 장애 대응</h3>
+    <p>
+        Clustara는 장애 발생 시 시스템 관리자가 여러 모니터링 도구를 헤매지 않고, 단일 화면에서 장애 탐지 근거, 이벤트, 그리고 연관 리소스 구조를 파악하도록 돕습니다.
+    </p>
+    <img src="images/01_dashboard.png" alt="종합 관제 대시보드">
+    <p>
+        특히, **장애 워룸(Incident Workspace)**과 **리소스 그래프(Resource Graph)**는 서비스 의존성을 토폴로지로 시각화하여 특정 Pod의 장애가 상위 서비스 트래픽에 미치는 영향 범위(Blast Radius)를 즉각 보여줌으로써 의사결정 속도를 획기적으로 향상시킵니다.
+    </p>
+    <img src="images/08_resource_graph.png" alt="리소스 그래프 및 영향 범위 시각화">
+
+    <h3>3.2. 정밀한 자원 최적화 (FinOps & Rightsizing)</h3>
+    <p>
+        개발 환경 및 운영 환경의 모든 워크로드에 대해 실제 사용률 메트릭을 추적하여 과다 할당된 CPU/메모리 자원을 식별합니다. 사용량의 1.3배수 수준을 적정 스펙(Request)으로 권장하며, 이를 반영할 경우 절감되는 월 추정 비용을 한화(KRW)로 산출하여 경영진에게 구체적인 재무 가치를 제시합니다.
+    </p>
+    <img src="images/14_cost_center.png" alt="비용 센터 및 자원 최적화 권장안">
+
+    <h3>3.3. 내부 보안 통제 및 컴플라이언스 강화</h3>
+    <p>
+        운영망 Pod에 직접 접속하여 작업을 수행하는 위험을 최소화하기 위해 **Terminal Policy Builder**를 제공합니다. 역할별 접근 권한 설정, `rm -rf`, `dd` 등 내장 차단 규칙 강제, 관리자 승인 절차를 연계하여 무단 명령 실행을 원천 차단하며, 승인된 세션의 상세 명령 내역 및 마스킹된 출력 결과를 감사 증적으로 완벽히 보관합니다.
+    </p>
+    <img src="images/18_settings.png" alt="터미널 정책 및 보안 설정">
+
+    <h3>3.4. 비즈니스 신뢰성 관리 (SLO Center)</h3>
+    <p>
+        시스템 가동률(Uptime) 수준의 단순 지표를 벗어나, 고객이 체감하는 서비스 가용성을 관리합니다. 서비스 단위의 가용성 목표(예: 99.9%)를 설정하고, 장애 인시던트 발생에 따른 다운타임을 집계하여 잔여 에러 버짓(Error Budget) 비율을 가시화함으로써 비즈니스의 안정적 릴리즈 시점을 정량적으로 조율할 수 있습니다.
+    </p>
+    <img src="images/17_slo_center.png" alt="SLO 및 에러 버짓 관리">
+
+    <!-- 4. 기대 효과 -->
+    <h2>4. 기대 효과 (ROI Analysis)</h2>
+    <p>
+        Clustara 플랫폼 도입을 통해 달성할 수 있는 정량적/정성적 효과는 다음과 같습니다.
+    </p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>구분</th>
+                <th>도입 전</th>
+                <th>도입 후 (Clustara 적용)</th>
+                <th>기대 효과</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th>장애 복구 시간 (MTTR)</th>
+                <td>평균 120분 (로그 검색, YAML 수동 대조 등)</td>
+                <td>평균 15분 내외 (RCA 자동 진단 및 Golden Pod Diff 제공)</td>
+                <td><strong>장애 다운타임 87% 감소</strong></td>
+            </tr>
+            <tr>
+                <th>클라우드 리소스 비용</th>
+                <td>자원 과다 할당으로 유휴 CPU/메모리 비용 방치</td>
+                <td>Rightsizing 가이드를 통한 주기적 스펙 다운사이징 적용</td>
+                <td><strong>인프라 비용 최소 25% 절감</strong></td>
+            </tr>
+            <tr>
+                <th>운영 보안 및 가시성</th>
+                <td>접속 이력 불분명 및 위험 명령 통제 불가</td>
+                <td>터미널 실행 제어, 승인 프로세스 및 감사 증적 보관</td>
+                <td><strong>내부 컴플라이언스 100% 충족</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- 5. 결론 및 추진 로드맵 -->
+    <h2>5. 결론 및 향후 추진 로드맵</h2>
+    <p>
+        Clustara는 단순한 모니터링 시스템이 아닌, <strong>인프라의 안정성 확보, IT 비용 절감, 그리고 내부 통제 강화</strong>를 통합 달성하는 핵심 플랫폼입니다. 본 플랫폼의 성공적인 안착을 기반으로 향후 인공지능(LLM) 기반의 장애 자율 분석 기능을 고도화하고, 멀티 클라우드 환경으로의 통합 비용 정산 확장을 추진하여 엔터프라이즈 하이브리드 클라우드 운영의 표준 모델로 발전시켜 나갈 것입니다.
+    </p>
+
+</body>
+</html>

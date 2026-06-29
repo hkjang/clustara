@@ -7,6 +7,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrInvalidTransition = errors.New("invalid state transition")
 
 type PromptSearch struct {
 	Keyword  string

@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.8.0"
+const AppVersion = "v0.8.1"
 
 type Server struct {
 	cfg            config.Config
@@ -73,6 +73,7 @@ type Server struct {
 	keycloakCfg    atomic.Pointer[config.KeycloakConfig]   // DB-backed Keycloak provider overlay over cfg.Keycloak (secret decrypted)
 	chFactQueue    chan store.LogRecord                    // async per-request fact ingest queue (bounded)
 	chFactDropped  atomic.Int64                            // requests dropped when the fact queue was full
+	alertWorker    atomic.Pointer[AlertWorker]             // optional alert worker attached by cmd/clustara
 	dwCache        *dwQueryCache                           // short-TTL cache for DW dashboard ClickHouse reads
 	sessions       *sessionInferer
 	sessionGCAt    atomic.Int64
@@ -81,6 +82,13 @@ type Server struct {
 	mcpTools       atomic.Pointer[mcpToolsSnapshot]
 	lastReloadNano atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
 	lastReloadTok  atomic.Pointer[string] // admin_settings change token this pod last applied
+}
+
+func (s *Server) AttachAlertWorker(worker *AlertWorker) {
+	if s == nil || worker == nil {
+		return
+	}
+	s.alertWorker.Store(worker)
 }
 
 type atomicKillState struct {
@@ -195,7 +203,9 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/favicon.ico", s.handleFavicon)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/ready", s.handleReady)
+	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/openapi.json", s.handleOpenAPISpec)
 	mux.HandleFunc("/swagger", s.handleSwaggerUI)
@@ -386,6 +396,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/remediation/apply", s.handleRemediationApply)
 	mux.HandleFunc("/admin/ops/home", s.handleOpsHome)
 	mux.HandleFunc("/admin/ops/workers", s.handleOpsWorkers)
+	mux.HandleFunc("/admin/workers", s.handleOpsWorkers)
 	mux.HandleFunc("/admin/ops/preflight", s.handleOpsPreflight)
 	mux.HandleFunc("/admin/flow-map", s.handleFlowMap)
 	mux.HandleFunc("/admin/mcp/agentic-runs", s.handleMCPAgenticRuns)

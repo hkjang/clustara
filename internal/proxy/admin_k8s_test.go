@@ -178,11 +178,12 @@ func TestK8sAdminFlowRegistersClusterAndIngestsSnapshot(t *testing.T) {
 	}
 
 	resp = postJSON(t, proxy.URL+"/admin/k8s/actions", "", map[string]any{
-		"cluster_id":    created.Cluster.ID,
-		"namespace":     "default",
-		"resource_kind": "Pod",
-		"resource_name": "api-123",
-		"action":        "delete_pod",
+		"cluster_id":      created.Cluster.ID,
+		"namespace":       "default",
+		"resource_kind":   "Pod",
+		"resource_name":   "api-123",
+		"action":          "delete_pod",
+		"idempotency_key": "delete-api-123-once",
 	})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
@@ -197,6 +198,40 @@ func TestK8sAdminFlowRegistersClusterAndIngestsSnapshot(t *testing.T) {
 	}
 	if actionResp.Action.Status != "approval_required" || actionResp.Action.RiskLevel != "high" {
 		t.Fatalf("delete_pod should require high-risk approval: %+v", actionResp.Action)
+	}
+	if actionResp.Action.IdempotencyKey != "delete-api-123-once" || actionResp.Action.CommandHash == "" {
+		t.Fatalf("action should persist idempotency metadata: %+v", actionResp.Action)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/actions", "", map[string]any{
+		"cluster_id":      created.Cluster.ID,
+		"namespace":       "default",
+		"resource_kind":   "Pod",
+		"resource_name":   "api-123",
+		"action":          "delete_pod",
+		"idempotency_key": "delete-api-123-once",
+	})
+	defer resp.Body.Close()
+	var replayResp struct {
+		Action           store.K8sActionRequest `json:"action"`
+		IdempotentReplay bool                   `json:"idempotent_replay"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&replayResp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !replayResp.IdempotentReplay || replayResp.Action.ID != actionResp.Action.ID {
+		t.Fatalf("duplicate idempotency key should replay original action: status=%d body=%+v", resp.StatusCode, replayResp)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/actions/"+actionResp.Action.ID+"/approve", "", map[string]any{"result": "approved once"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("first approval should pass, status=%d body=%s", resp.StatusCode, body)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/actions/"+actionResp.Action.ID+"/approve", "", map[string]any{"result": "second approval"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("second approval should be blocked by action FSM, status=%d body=%s", resp.StatusCode, body)
 	}
 }
 
@@ -1140,6 +1175,12 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 	}
 	if strings.Contains(executedExec.Result.Stdout, "supersecret") || strings.Contains(executedExec.Result.Stdout, "abc.def") || !strings.Contains(executedExec.Result.Stdout, "***REDACTED***") {
 		t.Fatalf("exec stdout should be masked: %q", executedExec.Result.Stdout)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/exec/sessions/"+execReq.Session.ID+"/execute", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("second exec execute should be blocked by exec FSM, status=%d body=%s", resp.StatusCode, body)
 	}
 	if strings.Join(execQuery["command"], " ") != "ls /app" || execQuery.Get("container") != "app" || execQuery.Get("stdin") != "false" || execQuery.Get("stdout") != "true" || execQuery.Get("stderr") != "true" {
 		t.Fatalf("unexpected exec query: %v", execQuery)

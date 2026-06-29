@@ -2,18 +2,24 @@ package proxy
 
 import (
 	"net/http"
+	"strings"
+	"time"
 )
 
 // workerStatus is one background worker's observable health.
 type workerStatus struct {
-	Name       string `json:"name"`
-	Running    bool   `json:"running"`
-	Status     string `json:"status"` // ok | warn | critical | idle
-	QueueDepth int    `json:"queue_depth"`
-	Capacity   int    `json:"capacity"`
-	Dropped    int64  `json:"dropped"`
-	LastRun    string `json:"last_run,omitempty"`
-	Detail     string `json:"detail"`
+	Name        string `json:"name"`
+	Running     bool   `json:"running"`
+	Status      string `json:"status"` // ok | warn | critical | idle
+	QueueDepth  int    `json:"queue_depth"`
+	Capacity    int    `json:"capacity"`
+	Dropped     int64  `json:"dropped"`
+	LastRun     string `json:"last_run"`
+	LastSuccess string `json:"last_success"`
+	LastError   string `json:"last_error"`
+	ErrorCount  uint64 `json:"error_count"`
+	LagSeconds  int64  `json:"lag_seconds"`
+	Detail      string `json:"detail"`
 }
 
 // handleOpsWorkers reports the runtime state of the gateway's background workers (async logger,
@@ -30,12 +36,19 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 	if s.logger != nil {
 		depth := s.logger.QueueDepth()
 		dropped := int64(s.logger.Dropped())
-		ws := workerStatus{Name: "async_logger", Running: true, Status: "ok", QueueDepth: depth, Dropped: dropped,
+		ws := workerStatus{Name: "async_logger", Running: true, Status: "ok", QueueDepth: depth, Capacity: s.logger.QueueCapacity(), Dropped: dropped,
+			LastSuccess: s.logger.LastSuccess(), LastError: s.logger.LastError(), ErrorCount: s.logger.Failed(),
 			Detail: "written=" + itoaProxy(int(s.logger.Written()))}
 		if dropped > 0 {
 			ws.Status = "warn"
 		}
-		if depth > 5000 {
+		if ws.LastError != "" {
+			ws.Status = worseStatus(ws.Status, "warn")
+		}
+		if ws.Capacity > 0 && depth >= ws.Capacity*9/10 {
+			ws.Status = "critical"
+			ws.Detail = "audit queue near capacity"
+		} else if depth > 5000 {
 			ws.Status = "critical"
 		}
 		workers = append(workers, ws)
@@ -97,11 +110,34 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 	if s.retention != nil {
 		cfg := s.retention.Config()
 		ws := workerStatus{Name: "retention", Running: cfg.Interval > 0, Status: "ok", LastRun: s.retention.LastRun(),
+			LastSuccess: s.retention.LastRun(), LagSeconds: secondsSinceRFC3339(s.retention.LastRun()),
 			Detail: "interval=" + cfg.Interval.String() + " requests=" + itoaProxy(cfg.RequestDays) + "d"}
 		if cfg.Interval <= 0 {
 			ws.Status, ws.Detail = "idle", "보존 주기 비활성(Interval=0)"
+		} else if ws.LastRun == "" {
+			ws.Status = "warn"
+			ws.Detail += " · 아직 실행 이력 없음"
+		} else if cfg.Interval > 0 && time.Duration(ws.LagSeconds)*time.Second > cfg.Interval*3 {
+			ws.Status = "warn"
+			ws.Detail += " · 최근 실행 지연"
 		}
 		workers = append(workers, ws)
+	}
+
+	if aw := s.alertWorker.Load(); aw != nil {
+		st := aw.Status()
+		ws := workerStatus{Name: "alert_worker", Running: st.Running, Status: "ok",
+			LastRun: st.LastRun, LastSuccess: st.LastSuccess, LastError: st.LastError, ErrorCount: st.ErrorCount,
+			LagSeconds: secondsSinceRFC3339(st.LastSuccess), Detail: "interval=" + st.Interval + " fired=" + itoaProxy(int(st.FiredCount))}
+		if !st.Running {
+			ws.Status = "idle"
+		}
+		if st.LastError != "" {
+			ws.Status = worseStatus(ws.Status, "warn")
+		}
+		workers = append(workers, ws)
+	} else {
+		workers = append(workers, workerStatus{Name: "alert_worker", Running: false, Status: "idle", Detail: "alert worker not attached"})
 	}
 
 	// Text2SQL saved-report scheduler (self-disables without an execute DB).
@@ -113,4 +149,22 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 		overall = worseStatus(overall, ws.Status)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"overall": overall, "workers": workers})
+}
+
+func secondsSinceRFC3339(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		ts, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return 0
+		}
+	}
+	if ts.IsZero() {
+		return 0
+	}
+	return int64(time.Since(ts).Seconds())
 }

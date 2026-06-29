@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"clustara/internal/config"
 	"clustara/internal/store"
@@ -67,5 +68,72 @@ func TestOpsStatusReportsConfigAndDisk(t *testing.T) {
 	}
 	if got.GeneratedAt == "" {
 		t.Error("expected generated_at timestamp")
+	}
+}
+
+func TestOpsWorkersExposeWorkerHealthAndAliases(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	cfg := testConfig("http://upstream.invalid", "secret")
+	retention := store.NewRetentionWorker(db, config.RetentionConfig{RequestDays: 7})
+	server, err := NewServer(cfg, db, logger, retention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alerts := NewAlertWorker(db, server.MetricsHandle(), time.Second)
+	server.AttachAlertWorker(alerts)
+	alerts.Start()
+	defer alerts.Stop()
+
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		resp, err := http.Get(proxy.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("%s expected 200, got %d: %s", path, resp.StatusCode, body)
+		}
+		resp.Body.Close()
+	}
+
+	for _, path := range []string{"/admin/ops/workers", "/admin/workers"} {
+		resp, err := http.Get(proxy.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s expected 200, got %d: %s", path, resp.StatusCode, body)
+		}
+		var got struct {
+			Overall string         `json:"overall"`
+			Workers []workerStatus `json:"workers"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]workerStatus{}
+		for _, w := range got.Workers {
+			seen[w.Name] = w
+		}
+		if seen["async_logger"].Capacity != 32 {
+			t.Fatalf("async_logger capacity not exposed: %+v", seen["async_logger"])
+		}
+		if !seen["alert_worker"].Running {
+			t.Fatalf("alert_worker should be attached and running: %+v", seen["alert_worker"])
+		}
+		if _, ok := seen["clickhouse_fact_queue"]; !ok {
+			t.Fatalf("clickhouse_fact_queue missing from workers: %+v", got.Workers)
+		}
 	}
 }

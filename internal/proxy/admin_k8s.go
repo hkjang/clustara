@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -496,13 +499,14 @@ func (s *Server) handleK8sConnectivity(w http.ResponseWriter, r *http.Request) {
 }
 
 type k8sActionPayload struct {
-	ClusterID    string         `json:"cluster_id"`
-	Namespace    string         `json:"namespace"`
-	ResourceKind string         `json:"resource_kind"`
-	ResourceName string         `json:"resource_name"`
-	Action       string         `json:"action"`
-	Parameters   map[string]any `json:"parameters"`
-	DryRunDiff   string         `json:"dry_run_diff"`
+	ClusterID      string         `json:"cluster_id"`
+	Namespace      string         `json:"namespace"`
+	ResourceKind   string         `json:"resource_kind"`
+	ResourceName   string         `json:"resource_name"`
+	Action         string         `json:"action"`
+	Parameters     map[string]any `json:"parameters"`
+	DryRunDiff     string         `json:"dry_run_diff"`
+	IdempotencyKey string         `json:"idempotency_key"`
 }
 
 func (s *Server) handleK8sActions(w http.ResponseWriter, r *http.Request) {
@@ -532,6 +536,18 @@ func (s *Server) handleK8sActions(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(p.ClusterID) == "" || strings.TrimSpace(p.ResourceKind) == "" || strings.TrimSpace(p.ResourceName) == "" || strings.TrimSpace(p.Action) == "" {
 			writeOpenAIError(w, http.StatusBadRequest, "cluster_id, resource_kind, resource_name and action are required", "invalid_request_error", "missing_fields")
 			return
+		}
+		idempotencyKey := strings.TrimSpace(firstNonEmpty(p.IdempotencyKey, r.Header.Get("Idempotency-Key")))
+		if idempotencyKey != "" {
+			existing, err := s.db.GetK8sActionRequestByIdempotencyKey(r.Context(), idempotencyKey)
+			if err == nil {
+				writeJSON(w, http.StatusOK, map[string]any{"action": existing, "idempotent_replay": true})
+				return
+			}
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_idempotency_lookup_failed")
+				return
+			}
 		}
 		if _, err := s.db.GetK8sCluster(r.Context(), p.ClusterID); errors.Is(err, store.ErrNotFound) {
 			writeOpenAIError(w, http.StatusNotFound, "cluster not found: "+p.ClusterID, "invalid_request_error", "cluster_not_found")
@@ -563,18 +579,22 @@ func (s *Server) handleK8sActions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		req := store.K8sActionRequest{
-			ID:           newID("k8sact"),
-			ClusterID:    strings.TrimSpace(p.ClusterID),
-			Namespace:    strings.TrimSpace(p.Namespace),
-			ResourceKind: strings.TrimSpace(p.ResourceKind),
-			ResourceName: strings.TrimSpace(p.ResourceName),
-			Action:       strings.TrimSpace(p.Action),
-			Parameters:   p.Parameters,
-			RiskLevel:    decision.RiskLevel,
-			Status:       status,
-			RequestedBy:  adminID(r),
-			DryRunDiff:   diff,
-			Result:       decision.Reason,
+			ID:                    newID("k8sact"),
+			ClusterID:             strings.TrimSpace(p.ClusterID),
+			Namespace:             strings.TrimSpace(p.Namespace),
+			ResourceKind:          strings.TrimSpace(p.ResourceKind),
+			ResourceName:          strings.TrimSpace(p.ResourceName),
+			Action:                strings.TrimSpace(p.Action),
+			Parameters:            p.Parameters,
+			RiskLevel:             decision.RiskLevel,
+			Status:                status,
+			RequestedBy:           adminID(r),
+			DryRunDiff:            diff,
+			Result:                decision.Reason,
+			IdempotencyKey:        firstNonEmpty(idempotencyKey, newID("idem")),
+			TargetUID:             target.UID,
+			TargetResourceVersion: k8sActionTargetResourceVersion(target),
+			CommandHash:           k8sActionCommandHash(strings.TrimSpace(p.ClusterID), strings.TrimSpace(p.Namespace), strings.TrimSpace(p.ResourceKind), strings.TrimSpace(p.ResourceName), strings.TrimSpace(p.Action), p.Parameters),
 		}
 		if err := s.db.InsertK8sActionRequest(r.Context(), req); err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_save_failed")
@@ -622,6 +642,9 @@ func (s *Server) handleK8sActionByID(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.UpdateK8sActionStatus(r.Context(), id, status, adminID(r), payload.Result); errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "action request not found: "+id, "invalid_request_error", "action_not_found")
 		return
+	} else if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "action cannot transition from current state", "invalid_request_error", "action_bad_state")
+		return
 	} else if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_update_failed")
 		return
@@ -662,6 +685,20 @@ func (s *Server) executeK8sAction(w http.ResponseWriter, r *http.Request, id str
 		writeOpenAIError(w, http.StatusNotImplemented, "이 클러스터 클라이언트는 실행을 지원하지 않습니다.", "invalid_request_error", "executor_unsupported")
 		return
 	}
+	if !k8sActionExecutable(act.Action) {
+		writeOpenAIError(w, http.StatusBadRequest, "실행 가능한 액션이 아닙니다: "+act.Action+" (drain 등은 수동 처리)", "invalid_request_error", "action_not_executable")
+		return
+	}
+	if err := s.db.UpdateK8sActionStatus(r.Context(), id, "running", adminID(r), "실행 중"); errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "action is already running or closed", "invalid_request_error", "action_bad_state")
+		return
+	} else if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "action request not found: "+id, "invalid_request_error", "action_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed")
+		return
+	}
 
 	var execErr error
 	switch strings.ToLower(act.Action) {
@@ -681,21 +718,35 @@ func (s *Server) executeK8sAction(w http.ResponseWriter, r *http.Request, id str
 	case "delete_pod":
 		execErr = exec.DeletePod(r.Context(), act.Namespace, act.ResourceName)
 	default:
-		writeOpenAIError(w, http.StatusBadRequest, "실행 가능한 액션이 아닙니다: "+act.Action+" (drain 등은 수동 처리)", "invalid_request_error", "action_not_executable")
-		return
+		execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
 	}
 
 	resultStatus, resultMsg := "executed", "실행 완료"
 	if execErr != nil {
 		resultStatus, resultMsg = "failed", "실행 실패: "+execErr.Error()
 	}
-	_ = s.db.UpdateK8sActionStatus(r.Context(), id, resultStatus, adminID(r), resultMsg)
+	if err := s.db.UpdateK8sActionStatus(r.Context(), id, resultStatus, adminID(r), resultMsg); errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "action finalization was already applied", "invalid_request_error", "action_bad_state")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed")
+		return
+	}
 	s.auditAdmin(r, "k8s.action.execute", "", auditJSON(map[string]any{"id": id, "action": act.Action, "status": resultStatus}))
 	if execErr != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"id": id, "status": resultStatus, "error": resultMsg})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": resultStatus, "result": resultMsg})
+}
+
+func k8sActionExecutable(actionName string) bool {
+	switch strings.ToLower(strings.TrimSpace(actionName)) {
+	case "scale", "rollout_restart", "cordon", "uncordon", "delete_pod":
+		return true
+	default:
+		return false
+	}
 }
 
 func intFromParams(params map[string]any, key string, fallback int) int {
@@ -713,6 +764,62 @@ func intFromParams(params map[string]any, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func k8sActionTargetResourceVersion(target store.K8sInventoryItem) string {
+	for _, source := range []map[string]any{target.Spec, target.StatusObject} {
+		if source == nil {
+			continue
+		}
+		if v := strings.TrimSpace(k8sActionString(source["resourceVersion"])); v != "" {
+			return v
+		}
+		if meta, ok := source["metadata"].(map[string]any); ok {
+			if v := strings.TrimSpace(k8sActionString(meta["resourceVersion"])); v != "" {
+				return v
+			}
+		}
+	}
+	return strings.TrimSpace(firstNonEmpty(target.ObservedAt, target.UpdatedAt))
+}
+
+func k8sActionCommandHash(clusterID, namespace, kind, name, actionName string, params map[string]any) string {
+	payload := map[string]any{
+		"cluster_id":    clusterID,
+		"namespace":     namespace,
+		"resource_kind": kind,
+		"resource_name": name,
+		"action":        actionName,
+		"parameters":    k8sActionNonNilMap(params),
+	}
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func k8sActionNonNilMap(params map[string]any) map[string]any {
+	if params == nil {
+		return map[string]any{}
+	}
+	return params
+}
+
+func k8sActionString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	default:
+		if t == nil {
+			return ""
+		}
+		return strings.TrimSpace(strings.Trim(fmt.Sprint(t), `"`))
+	}
 }
 
 func intParam(raw string, fallback int) int {

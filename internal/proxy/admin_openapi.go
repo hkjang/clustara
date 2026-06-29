@@ -23,7 +23,9 @@ type apiEndpoint struct {
 var apiEndpoints = []apiEndpoint{
 	// ---- ops / docs (public) ----
 	{"/health", []string{"get"}, "ops", "Liveness probe", true},
+	{"/healthz", []string{"get"}, "ops", "Liveness probe alias", true},
 	{"/ready", []string{"get"}, "ops", "Readiness probe", true},
+	{"/readyz", []string{"get"}, "ops", "Readiness probe alias", true},
 	{"/metrics", []string{"get"}, "ops", "Prometheus metrics", true},
 	{"/openapi.json", []string{"get"}, "ops", "This OpenAPI document", true},
 	{"/swagger", []string{"get"}, "ops", "Swagger UI", true},
@@ -318,6 +320,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/capabilities/{key}", []string{"get"}, "ops", "One capability's detail", false},
 	{"/admin/ops/home", []string{"get"}, "ops", "Operations home overview", false},
 	{"/admin/ops/workers", []string{"get"}, "ops", "Background worker status board", false},
+	{"/admin/workers", []string{"get"}, "ops", "Background worker status board alias", false},
 	{"/admin/ops/preflight", []string{"get"}, "ops", "Pre-deploy readiness checks", false},
 	{"/admin/k8s/overview", []string{"get"}, "k8s", "Kubernetes operations overview", false},
 	{"/admin/k8s/clusters", []string{"get", "post"}, "k8s", "List/register Kubernetes clusters", false},
