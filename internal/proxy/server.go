@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.4.0"
+const AppVersion = "v0.6.0"
 
 type Server struct {
 	cfg            config.Config
@@ -299,6 +299,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/dw/report", s.handleK8sDWReport)
 	mux.HandleFunc("/admin/k8s/latency/collect", s.handleK8sLatencyCollect)
 	mux.HandleFunc("/admin/k8s/latency/config", s.handleK8sLatencyConfig)
+	mux.HandleFunc("/admin/k8s/terminal-policies", s.handleK8sTerminalPolicies)
+	mux.HandleFunc("/admin/k8s/terminal-policies/", s.handleK8sTerminalPolicyByID)
 	mux.HandleFunc("/admin/k8s/groups", s.handleK8sGroups)
 	mux.HandleFunc("/admin/k8s/groups/", s.handleK8sGroupByID)
 	mux.HandleFunc("/admin/k8s/ownership", s.handleK8sOwnership)

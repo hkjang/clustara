@@ -6198,8 +6198,8 @@ const adminHTML = `<!doctype html>
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
         card('로그', '<div class="card-body"><div id="podlog-context" data-cluster="' + escapeHTML(clusterId || '') + '" data-ns="' + escapeHTML(ns || '') + '" data-pod="' + escapeHTML(pod || '') + '" style="display:none"></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="podlog-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><label style="font-size:12px"><input id="podlog-prev" type="checkbox"> previous</label><input id="podlog-tail" value="200" style="width:70px" title="tail lines"><input id="podlog-since" placeholder="since 예: 5m, 1h" style="width:130px"><input id="podlog-q" placeholder="검색어" style="width:180px"><label style="font-size:12px"><input id="podlog-error" type="checkbox"> 에러만</label>' +
-          '<button type="button" onclick="k8sPodLoadLogsFromDetail()">조회</button><button type="button" class="secondary" onclick="k8sPodStartStreamFromDetail()">실시간 시작</button><button type="button" class="secondary" onclick="k8sPodStopStream()">중지</button><button type="button" class="secondary" onclick="k8sPodExportLogsFromDetail()">다운로드</button><button type="button" class="secondary" onclick="k8sPodDownloadEvidenceFromDetail()">증적 번들</button></div>' +
-          '<div id="podlog-summary" class="muted" style="font-size:11px;margin-top:6px">로그 원문은 저장하지 않고 조회 감사만 남깁니다. token/password/Authorization 등은 응답 전 마스킹됩니다.</div><pre id="podlog-output" style="white-space:pre-wrap;max-height:460px;overflow:auto;margin-top:8px"></pre></div>') +
+          '<button type="button" onclick="k8sPodLoadLogsFromDetail()">조회</button><button type="button" class="secondary" onclick="k8sPodAnalyzeLogsFromDetail()">분석</button><button type="button" class="secondary" onclick="k8sPodStartStreamFromDetail()">실시간 시작</button><button type="button" class="secondary" onclick="k8sPodStopStream()">중지</button><button type="button" class="secondary" onclick="k8sPodExportLogsFromDetail()">다운로드</button><button type="button" class="secondary" onclick="k8sPodDownloadEvidenceFromDetail()">증적 번들</button></div>' +
+          '<div id="podlog-summary" class="muted" style="font-size:11px;margin-top:6px">로그 원문은 저장하지 않고 조회 감사만 남깁니다. token/password/Authorization 등은 응답 전 마스킹됩니다.</div><div id="podlog-analysis" class="muted" style="font-size:12px;margin-top:8px"></div><pre id="podlog-output" style="white-space:pre-wrap;max-height:460px;overflow:auto;margin-top:8px"></pre></div>') +
         card('로그 감사', '<div class="card-body"><table><thead><tr><th>Mode</th><th>Container</th><th>Tail</th><th>Query</th><th>Lines</th><th>Errors</th><th>User</th><th>Time</th></tr></thead><tbody>' + logAudits + '</tbody></table></div>') +
         card('리소스', '<div class="card-body"><table><thead><tr><th>CPU</th><th>Memory</th><th>Observed</th></tr></thead><tbody>' + metrics + '</tbody></table></div>') +
         card('Manifest', '<div class="card-body"><pre style="white-space:pre-wrap;max-height:360px;overflow:auto">' + escapeHTML(JSON.stringify(d.manifest || {}, null, 2)) + '</pre></div>');
@@ -6219,6 +6219,7 @@ const adminHTML = `<!doctype html>
       return { clusterId: el && el.dataset.cluster || '', ns: el && el.dataset.ns || '', pod: el && el.dataset.pod || '' };
     }
     window.k8sPodLoadLogsFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadLogs(c.clusterId, c.ns, c.pod); };
+    window.k8sPodAnalyzeLogsFromDetail = () => { const c = podLogContext(); return window.k8sPodAnalyzeLogs(c.clusterId, c.ns, c.pod); };
     window.k8sPodStartStreamFromDetail = () => { const c = podLogContext(); return window.k8sPodStartStream(c.clusterId, c.ns, c.pod); };
     window.k8sPodExportLogsFromDetail = () => { const c = podLogContext(); return window.k8sPodExportLogs(c.clusterId, c.ns, c.pod); };
     window.k8sPodDownloadEvidenceFromDetail = () => { const c = podLogContext(); return window.k8sPodDownloadEvidence(c.clusterId, c.ns, c.pod); };
@@ -6249,6 +6250,21 @@ const adminHTML = `<!doctype html>
         sum.innerHTML = 'lines ' + fmt((d.summary || {}).lines || 0) + ' · error ' + fmt((d.summary || {}).error || 0) + ' · warn ' + fmt((d.summary || {}).warn || 0) + ' · masked';
         out.innerHTML = (d.lines || []).map(podLogLineHTML).join('\\n');
       } catch (e) { out.textContent = e.message; }
+    };
+    window.k8sPodAnalyzeLogs = async (clusterId, ns, pod) => {
+      window.k8sPodStopStream();
+      const out = document.getElementById('podlog-analysis'); const q = podLogQuery(); q.set('cluster_id', clusterId); q.delete('q'); q.delete('error_only'); q.delete('previous'); q.set('include_previous', 'true');
+      out.innerHTML = '<span class="muted">로그 패턴 분석 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/analyze?' + q.toString(), { method: 'POST', body: '{}' });
+        const sev = (s) => '<span class="status ' + (s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(s || 'low') + '</span>';
+        const insightRows = (d.insights || []).map(i => '<tr><td>' + sev(i.severity) + '</td><td>' + escapeHTML(i.condition || '-') + '</td><td><strong>' + escapeHTML(i.cause || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((i.evidence || []).join(' · ')) + '</div><div style="font-size:11px;margin-top:4px">' + escapeHTML((i.actions || []).join(' / ')) + '</div></td></tr>').join('') || '<tr><td colspan="3" class="muted">추천할 로그 인사이트가 없습니다.</td></tr>';
+        const patternRows = (d.patterns || []).map(p => '<tr><td>' + sev(p.severity) + '</td><td>' + escapeHTML(p.category || '-') + '</td><td>' + fmt(p.count || 0) + '</td><td>' + fmt(p.first_line || 0) + '-' + fmt(p.last_line || 0) + '</td><td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(p.message || '-') + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">그룹핑된 에러/경고 패턴이 없습니다.</td></tr>';
+        out.innerHTML = '<div class="kpis" style="margin-bottom:8px">' + kpi('Current errors', fmt((d.current || {}).error || 0)) + kpi('Previous errors', fmt((d.previous || {}).error || 0)) + kpi('Patterns', fmt((d.patterns || []).length)) + kpi('Insights', fmt((d.insights || []).length)) + '</div>' +
+          '<table><thead><tr><th>Severity</th><th>Condition</th><th>근거와 조치 후보</th></tr></thead><tbody>' + insightRows + '</tbody></table>' +
+          '<table style="margin-top:8px"><thead><tr><th>Severity</th><th>Category</th><th>Count</th><th>Lines</th><th>Pattern</th></tr></thead><tbody>' + patternRows + '</tbody></table>' +
+          (d.previous_error ? '<div class="muted" style="font-size:11px;margin-top:6px">previous 로그 조회 실패: ' + escapeHTML(d.previous_error) + '</div>' : '');
+      } catch (e) { out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPodStartStream = async (clusterId, ns, pod) => {
       window.k8sPodStopStream();
@@ -6954,13 +6970,32 @@ const adminHTML = `<!doctype html>
     async function renderK8sSettings() {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 설정', '<div class="empty">불러오는 중...</div>');
-      let cost, noti, lat, mm;
+      let cost, noti, lat, mm, term, roles;
       try {
-        [cost, noti, lat, mm] = await Promise.all([api('/admin/k8s/cost/config'), api('/admin/k8s/notify/config'), api('/admin/k8s/latency/config').catch(() => ({})), api('/admin/notifications/mattermost').catch(() => ({}))]);
+        [cost, noti, lat, mm, term, roles] = await Promise.all([
+          api('/admin/k8s/cost/config'),
+          api('/admin/k8s/notify/config'),
+          api('/admin/k8s/latency/config').catch(() => ({})),
+          api('/admin/notifications/mattermost').catch(() => ({})),
+          api('/admin/k8s/terminal-policies').catch(() => ({ policies: [], command_presets: {}, default_denylist: [] })),
+          api('/admin/roles').catch(() => ({ roles: [] })),
+        ]);
       } catch (e) { view.innerHTML = section('K8s 운영 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const pr = (cost && cost.prices) || {};
       lat = lat || {};
       mm = mm || {};
+      term = term || { policies: [], command_presets: {}, default_denylist: [] };
+      const roleOpts = '<option value="*">전체 역할</option>' + (roles.roles || []).map(r => '<option value="' + escapeAttr(r.role || '') + '">' + escapeHTML(r.role || '') + '</option>').join('');
+      const presetReadOnly = (((term.command_presets || {}).read_only || []).join('\n') || 'ls\npwd\ncat\nhead\ntail\ngrep\nenv\nps\ndf\ndate\nid\nwhoami');
+      const defaultDeny = ((term.default_denylist || []).join('\n') || 'rm -rf\nmkfs\ndd if=\nshutdown\nreboot\nkubectl delete\ncurl * | sh');
+      const terminalRows = (term.policies || []).length ? (term.policies || []).map(p =>
+        '<tr><td>' + (p.enabled ? '<span class="status" style="font-size:10px">on</span>' : '<span class="status warn" style="font-size:10px">off</span>') + '</td>' +
+        '<td><strong>' + escapeHTML(p.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(p.id || '') + '</div></td>' +
+        '<td>' + escapeHTML(p.role || '*') + '</td><td>' + escapeHTML(p.cluster_id || '*') + '</td><td>' + escapeHTML(p.namespace_pattern || '*') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(p.pod_selector || '-') + '</td>' +
+        '<td>' + fmt((p.command_allowlist || []).length) + '</td><td>' + (p.require_approval ? '필요' : '불필요') + '</td><td>' + fmt(p.max_session_minutes || 0) + '분</td>' +
+        '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sTerminalPolicyDelete(\'' + escapeAttr(p.id || '') + '\')">삭제</button></td></tr>').join('')
+        : '<tr><td colspan="10" class="muted">터미널 정책이 없습니다. 실제 exec 기능을 켜기 전에 정책을 먼저 등록하세요.</td></tr>';
       view.innerHTML =
         section('K8s 운영 설정', '<div class="muted" style="font-size:12px;padding:0 4px">비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.</div>') +
         card('비용 단가',
@@ -6992,8 +7027,77 @@ const adminHTML = `<!doctype html>
           (mm.slash_token_set ? '<span class="pill">토큰 설정됨</span>' : '<span class="muted" style="font-size:11px">미설정 — ChatOps 비활성</span>') +
           '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:6px">지원 명령: <code>incidents</code> · <code>rca [namespace]</code> · <code>slo [목표] [일수]</code> · <code>cost</code> · <code>help</code></div></div>') +
+        card('Terminal Policy Builder',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod exec/web terminal은 아직 별도 실행 권한으로 분리됩니다. 이 정책은 role·cluster·namespace·label·명령 패턴 기준으로 접속 전 허용/승인/감사를 판정합니다.</div>' +
+          '<table><thead><tr><th>상태</th><th>정책</th><th>Role</th><th>Cluster</th><th>Namespace</th><th>Selector</th><th>Allow</th><th>승인</th><th>시간</th><th></th></tr></thead><tbody>' + terminalRows + '</tbody></table></div>') +
+        card('터미널 정책 추가',
+          '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          '<input id="tp-name" placeholder="정책 이름" value="운영 읽기 전용">' +
+          '<select id="tp-role">' + roleOpts + '</select>' +
+          '<input id="tp-cluster" placeholder="cluster_id (비우면 전체)">' +
+          '<input id="tp-ns" placeholder="namespace glob" value="prod-*">' +
+          '<input id="tp-selector" placeholder="label selector 예: app=api" style="grid-column:span 2">' +
+          '<input id="tp-min" type="number" value="10" min="1" max="240" title="최대 세션 시간(분)">' +
+          '<label style="font-size:12px;align-self:center"><input id="tp-approval" type="checkbox" checked> 승인 필요</label>' +
+          '</div>' +
+          '<div class="grid2" style="margin-top:0"><div><div class="muted" style="font-size:11px;margin-bottom:4px">허용 명령 패턴</div><textarea id="tp-allow" rows="8" style="width:100%">' + escapeHTML(presetReadOnly) + '</textarea></div>' +
+          '<div><div class="muted" style="font-size:11px;margin-bottom:4px">차단 명령 패턴</div><textarea id="tp-deny" rows="8" style="width:100%">' + escapeHTML(defaultDeny) + '</textarea></div></div>' +
+          '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><label style="font-size:12px"><input id="tp-audit" type="checkbox" checked> 감사 저장</label><label style="font-size:12px"><input id="tp-enabled" type="checkbox" checked> 활성</label><button type="button" onclick="k8sTerminalPolicySave()">저장</button></div></div>') +
+        card('터미널 정책 평가',
+          '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          '<select id="tpe-role">' + roleOpts + '</select><input id="tpe-cluster" placeholder="cluster_id"><input id="tpe-ns" placeholder="namespace" value="prod-api"><input id="tpe-pod" placeholder="pod" value="api-1">' +
+          '<input id="tpe-labels" placeholder=\'labels JSON 예: {"app":"api"}\' style="grid-column:span 2" value=\'{"app":"api"}\'><input id="tpe-command" placeholder="명령" value="ls /app" style="grid-column:span 2"></div>' +
+          '<button type="button" onclick="k8sTerminalPolicyEvaluate()">평가</button><div id="tp-eval-out" style="margin-top:8px"></div></div>') +
         '<div id="set-msg" class="muted" style="font-size:12px;padding:4px"></div>';
     }
+    function terminalPolicyLines(id) {
+      return (document.getElementById(id).value || '').split(/\n|,/).map(s => s.trim()).filter(Boolean);
+    }
+    window.k8sTerminalPolicySave = async () => {
+      const msg = document.getElementById('set-msg');
+      try {
+        await api('/admin/k8s/terminal-policies', { method: 'POST', body: JSON.stringify({
+          name: document.getElementById('tp-name').value.trim(),
+          role: document.getElementById('tp-role').value,
+          cluster_id: document.getElementById('tp-cluster').value.trim(),
+          namespace_pattern: document.getElementById('tp-ns').value.trim(),
+          pod_selector: document.getElementById('tp-selector').value.trim(),
+          command_allowlist: terminalPolicyLines('tp-allow'),
+          command_denylist: terminalPolicyLines('tp-deny'),
+          require_approval: document.getElementById('tp-approval').checked,
+          max_session_minutes: parseInt(document.getElementById('tp-min').value || '10', 10),
+          audit_enabled: document.getElementById('tp-audit').checked,
+          enabled: document.getElementById('tp-enabled').checked,
+        }) });
+        msg.innerHTML = '<span class="status">터미널 정책 저장됨</span>';
+        await renderK8sSettings();
+      } catch (e) { msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sTerminalPolicyDelete = async (id) => {
+      if (!confirm('터미널 정책을 삭제할까요?')) return;
+      await api('/admin/k8s/terminal-policies/' + encodeURIComponent(id), { method: 'DELETE' });
+      await renderK8sSettings();
+    };
+    window.k8sTerminalPolicyEvaluate = async () => {
+      const out = document.getElementById('tp-eval-out');
+      let labels = {};
+      try { labels = JSON.parse(document.getElementById('tpe-labels').value || '{}'); } catch (e) { out.innerHTML = '<span class="status error">labels JSON 오류</span>'; return; }
+      try {
+        const d = await api('/admin/k8s/terminal-policies/evaluate', { method: 'POST', body: JSON.stringify({
+          role: document.getElementById('tpe-role').value,
+          cluster_id: document.getElementById('tpe-cluster').value.trim(),
+          namespace: document.getElementById('tpe-ns').value.trim(),
+          pod: document.getElementById('tpe-pod').value.trim(),
+          pod_labels: labels,
+          command: document.getElementById('tpe-command').value.trim(),
+        }) });
+        const r = d.result || {};
+        const cls = r.allowed ? (r.require_approval ? 'warn' : '') : 'error';
+        out.innerHTML = '<div class="banner ' + (cls === 'error' ? 'error' : (cls === 'warn' ? 'warn' : '')) + '">' +
+          '<strong>' + (r.allowed ? '허용' : '차단') + '</strong> · risk ' + escapeHTML(r.risk_level || '-') + ' · approval ' + (r.require_approval ? '필요' : '불필요') + ' · max ' + fmt(r.max_session_minutes || 0) + '분<br>' +
+          escapeHTML(r.reason || '') + '<br><span class="muted">policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + ' · rules: ' + escapeHTML((r.matched_rules || []).join(', ') || '-') + '</span></div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sSettingsSaveSlash = async () => {
       const msg = document.getElementById('set-msg');
       const v = document.getElementById('set-slashtoken').value.trim();

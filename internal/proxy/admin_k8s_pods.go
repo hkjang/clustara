@@ -75,6 +75,41 @@ type k8sPodLogResponse struct {
 	Text         string              `json:"text"`
 }
 
+type k8sPodLogAnalysisPattern struct {
+	Key       string          `json:"key"`
+	Category  string          `json:"category"`
+	Severity  string          `json:"severity"`
+	Message   string          `json:"message"`
+	Count     int             `json:"count"`
+	FirstLine int             `json:"first_line"`
+	LastLine  int             `json:"last_line"`
+	Samples   []k8sPodLogLine `json:"samples"`
+}
+
+type k8sPodLogInsight struct {
+	Condition string   `json:"condition"`
+	Severity  string   `json:"severity"`
+	Cause     string   `json:"cause"`
+	Evidence  []string `json:"evidence"`
+	Actions   []string `json:"actions"`
+}
+
+type k8sPodLogAnalysisResponse struct {
+	ClusterID     string                     `json:"cluster_id"`
+	Namespace     string                     `json:"namespace"`
+	Pod           string                     `json:"pod"`
+	Container     string                     `json:"container"`
+	TailLines     int                        `json:"tail_lines"`
+	SinceSeconds  int                        `json:"since_seconds"`
+	SinceTime     string                     `json:"since_time"`
+	Masked        bool                       `json:"masked"`
+	Current       analyzer.LogSummary        `json:"current"`
+	Previous      analyzer.LogSummary        `json:"previous"`
+	PreviousError string                     `json:"previous_error,omitempty"`
+	Patterns      []k8sPodLogAnalysisPattern `json:"patterns"`
+	Insights      []k8sPodLogInsight         `json:"insights"`
+}
+
 type k8sPodGoldenDiffChange struct {
 	Field    string `json:"field"`
 	Category string `json:"category"`
@@ -162,6 +197,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.handleK8sPodLogStream(w, r, namespace, pod)
+			return
+		}
+		if len(parts) > 3 && parts[3] == "analyze" {
+			if r.Method != http.MethodPost {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sPodLogAnalyze(w, r, namespace, pod)
 			return
 		}
 		if len(parts) > 3 && parts[3] == "export" {
@@ -278,6 +321,15 @@ func (s *Server) handleK8sPodLogExport(w http.ResponseWriter, r *http.Request, n
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	_, _ = w.Write([]byte(resp.Text))
+}
+
+func (s *Server) handleK8sPodLogAnalyze(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	resp, err := s.analyzePodLogs(r.Context(), r, namespace, pod)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "k8s_pod_logs_analyze_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleK8sPodEvidenceBundle(w http.ResponseWriter, r *http.Request, namespace, pod string) {
@@ -438,6 +490,97 @@ func (s *Server) readPodLogs(ctx context.Context, r *http.Request, namespace, po
 	processed.ErrorOnly = parseBool(q.Get("error_only"))
 	processed.Masked = true
 	return processed, nil
+}
+
+func (s *Server) analyzePodLogs(ctx context.Context, r *http.Request, namespace, pod string) (k8sPodLogAnalysisResponse, error) {
+	clusterID, item, ok := s.resolvePodInventory(nil, r, namespace, pod)
+	if !ok {
+		return k8sPodLogAnalysisResponse{}, fmt.Errorf("pod not found or cluster_id is missing")
+	}
+	cluster, err := s.db.GetK8sCluster(ctx, clusterID)
+	if err != nil {
+		return k8sPodLogAnalysisResponse{}, err
+	}
+	client, err := s.k8sClientForCluster(ctx, cluster)
+	if err != nil {
+		return k8sPodLogAnalysisResponse{}, err
+	}
+	reader, ok := client.(podLogReader)
+	if !ok {
+		return k8sPodLogAnalysisResponse{}, fmt.Errorf("cluster client does not support Pod logs")
+	}
+	q := r.URL.Query()
+	opts := kube.PodLogOptions{
+		Container:    strings.TrimSpace(q.Get("container")),
+		TailLines:    boundedInt(q.Get("tail_lines"), 500, 20, 5000),
+		SinceSeconds: parseSinceSeconds(q.Get("since")),
+		SinceTime:    strings.TrimSpace(q.Get("since_time")),
+		Timestamps:   parseBool(q.Get("timestamps")),
+		LimitBytes:   boundedInt(q.Get("limit_bytes"), 4*1024*1024, 4096, 20*1024*1024),
+	}
+	if opts.Container == "" {
+		opts.Container = defaultContainerName(item)
+	}
+	currentRaw, err := reader.PodLogs(ctx, namespace, pod, opts)
+	if err != nil {
+		return k8sPodLogAnalysisResponse{}, err
+	}
+	current := processPodLogs(currentRaw, "", false)
+	if err := s.insertPodLogAnalysisAudit(ctx, r, clusterID, namespace, pod, opts, false, current.Summary); err != nil {
+		return k8sPodLogAnalysisResponse{}, err
+	}
+
+	previous := k8sPodLogResponse{}
+	previousErr := ""
+	includePrevious := true
+	if raw := strings.TrimSpace(q.Get("include_previous")); raw != "" {
+		includePrevious = parseBool(raw)
+	}
+	if includePrevious {
+		prevOpts := opts
+		prevOpts.Previous = true
+		if previousRaw, err := reader.PodLogs(ctx, namespace, pod, prevOpts); err == nil {
+			previous = processPodLogs(previousRaw, "", false)
+			if err := s.insertPodLogAnalysisAudit(ctx, r, clusterID, namespace, pod, prevOpts, true, previous.Summary); err != nil {
+				return k8sPodLogAnalysisResponse{}, err
+			}
+		} else {
+			previousErr = err.Error()
+		}
+	}
+
+	patterns := analyzeLogPatterns(current.Lines, previous.Lines)
+	insights := logInsightsFromPatterns(patterns, podView(item, nil, true))
+	s.auditAdmin(r, "k8s.pod.logs.analyze", "", auditJSON(map[string]any{
+		"cluster_id": clusterID, "namespace": namespace, "pod": pod, "container": opts.Container,
+		"tail_lines": opts.TailLines, "patterns": len(patterns), "insights": len(insights), "include_previous": includePrevious,
+	}))
+	return k8sPodLogAnalysisResponse{
+		ClusterID: clusterID, Namespace: namespace, Pod: pod, Container: opts.Container,
+		TailLines: opts.TailLines, SinceSeconds: opts.SinceSeconds, SinceTime: opts.SinceTime,
+		Masked: true, Current: current.Summary, Previous: previous.Summary, PreviousError: previousErr,
+		Patterns: patterns, Insights: insights,
+	}, nil
+}
+
+func (s *Server) insertPodLogAnalysisAudit(ctx context.Context, r *http.Request, clusterID, namespace, pod string, opts kube.PodLogOptions, previous bool, summary analyzer.LogSummary) error {
+	return s.db.InsertK8sPodLogQuery(ctx, store.K8sPodLogQuery{
+		ID:           newID("k8splog"),
+		ClusterID:    clusterID,
+		Namespace:    namespace,
+		Pod:          pod,
+		Container:    opts.Container,
+		Previous:     previous,
+		TailLines:    opts.TailLines,
+		SinceSeconds: opts.SinceSeconds,
+		SinceTime:    opts.SinceTime,
+		Query:        "log_analyze",
+		RequestedBy:  adminID(r),
+		Masked:       true,
+		LineCount:    summary.Lines,
+		ErrorCount:   summary.Error,
+		WarnCount:    summary.Warn,
+	})
 }
 
 func (s *Server) streamPodLogs(w http.ResponseWriter, r *http.Request, namespace, pod string) error {
@@ -1569,6 +1712,198 @@ func processPodLogs(raw, query string, errorOnly bool) k8sPodLogResponse {
 	}
 	text := strings.Join(textLines, "\n")
 	return k8sPodLogResponse{Lines: lines, Text: text, Summary: analyzer.SummarizeLog(text)}
+}
+
+func analyzeLogPatterns(current, previous []k8sPodLogLine) []k8sPodLogAnalysisPattern {
+	type bucket struct {
+		pattern k8sPodLogAnalysisPattern
+	}
+	buckets := map[string]*bucket{}
+	add := func(line k8sPodLogLine) {
+		if line.Level == string(analyzer.LogInfo) || strings.TrimSpace(line.Text) == "" {
+			return
+		}
+		category := classifyLogPatternCategory(line.Text)
+		key := category + ":" + normalizeLogPattern(line.Text)
+		b, ok := buckets[key]
+		if !ok {
+			message := strings.TrimSpace(line.Text)
+			if len(message) > 220 {
+				message = message[:220] + "..."
+			}
+			b = &bucket{pattern: k8sPodLogAnalysisPattern{
+				Key: key, Category: category, Severity: logPatternSeverity(category, line.Level),
+				Message: message, FirstLine: line.Number,
+			}}
+			buckets[key] = b
+		}
+		b.pattern.Count++
+		b.pattern.LastLine = line.Number
+		if b.pattern.FirstLine == 0 || line.Number < b.pattern.FirstLine {
+			b.pattern.FirstLine = line.Number
+		}
+		if len(b.pattern.Samples) < 3 {
+			b.pattern.Samples = append(b.pattern.Samples, line)
+		}
+	}
+	for _, line := range current {
+		add(line)
+	}
+	for _, line := range previous {
+		add(line)
+	}
+	out := make([]k8sPodLogAnalysisPattern, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, b.pattern)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if podLogSeverityRank(out[i].Severity) != podLogSeverityRank(out[j].Severity) {
+			return podLogSeverityRank(out[i].Severity) > podLogSeverityRank(out[j].Severity)
+		}
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].FirstLine < out[j].FirstLine
+	})
+	if len(out) > 20 {
+		out = out[:20]
+	}
+	return out
+}
+
+func normalizeLogPattern(line string) string {
+	line = strings.ToLower(strings.TrimSpace(line))
+	line = strings.Join(strings.Fields(line), " ")
+	var b strings.Builder
+	prevHash := false
+	for _, r := range line {
+		switch {
+		case r >= '0' && r <= '9':
+			if !prevHash {
+				b.WriteRune('#')
+				prevHash = true
+			}
+		default:
+			prevHash = false
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) > 180 {
+		out = out[:180]
+	}
+	return out
+}
+
+func classifyLogPatternCategory(line string) string {
+	l := strings.ToLower(line)
+	switch {
+	case strings.Contains(l, "out of memory") || strings.Contains(l, "oom") || strings.Contains(l, "killed"):
+		return "oom"
+	case strings.Contains(l, "connection refused") || strings.Contains(l, "connection reset") || strings.Contains(l, "no route") || strings.Contains(l, "broken pipe"):
+		return "network"
+	case strings.Contains(l, "timeout") || strings.Contains(l, "deadline exceeded") || strings.Contains(l, "timed out"):
+		return "timeout"
+	case strings.Contains(l, "no such host") || strings.Contains(l, "name resolution") || strings.Contains(l, "dns") || strings.Contains(l, "nxdomain"):
+		return "dns"
+	case strings.Contains(l, "unauthorized") || strings.Contains(l, "forbidden") || strings.Contains(l, "permission denied") || strings.Contains(l, "access denied"):
+		return "auth"
+	case strings.Contains(l, "readiness") || strings.Contains(l, "liveness") || strings.Contains(l, "probe"):
+		return "probe"
+	case strings.Contains(l, "imagepull") || strings.Contains(l, "errimagepull") || strings.Contains(l, "pull image"):
+		return "image"
+	case strings.Contains(l, "exception") || strings.Contains(l, "traceback") || strings.Contains(l, "stacktrace") || strings.Contains(l, "panic") || strings.Contains(l, "fatal"):
+		return "exception"
+	case strings.Contains(l, "retry") || strings.Contains(l, "throttl") || strings.Contains(l, "degraded"):
+		return "warning"
+	default:
+		return "error"
+	}
+}
+
+func logPatternSeverity(category, level string) string {
+	switch category {
+	case "oom", "exception", "image":
+		return "high"
+	case "timeout", "dns", "network", "auth", "probe":
+		return "medium"
+	default:
+		if level == string(analyzer.LogError) {
+			return "medium"
+		}
+		return "low"
+	}
+}
+
+func logInsightsFromPatterns(patterns []k8sPodLogAnalysisPattern, pod k8sPodView) []k8sPodLogInsight {
+	seen := map[string]bool{}
+	out := []k8sPodLogInsight{}
+	add := func(condition, severity, cause string, evidence, actions []string) {
+		if seen[condition] {
+			return
+		}
+		seen[condition] = true
+		out = append(out, k8sPodLogInsight{Condition: condition, Severity: severity, Cause: cause, Evidence: evidence, Actions: actions})
+	}
+	for _, p := range patterns {
+		evidence := []string{fmt.Sprintf("log:%s lines %d-%d count %d", p.Category, p.FirstLine, p.LastLine, p.Count)}
+		if len(p.Samples) > 0 {
+			evidence = append(evidence, fmt.Sprintf("sample line %d: %s", p.Samples[0].Number, p.Samples[0].Text))
+		}
+		switch p.Category {
+		case "oom":
+			add("LogOOMSignal", "high", "로그에 OOM 또는 메모리 부족 신호가 있습니다.", evidence,
+				[]string{"Pod 리소스 탭에서 memory usage와 limit을 비교합니다.", "Rightsizing 권장값을 확인합니다.", "최근 배포/traffic 증가와 함께 memory leak 가능성을 점검합니다."})
+		case "exception":
+			add("ApplicationException", "high", "애플리케이션 예외 또는 panic/stacktrace가 반복됩니다.", evidence,
+				[]string{"previous 로그의 첫 예외와 stacktrace 최상단 원인을 확인합니다.", "Golden Pod Diff에서 image/env/config 차이를 비교합니다.", "최근 리비전 diff와 배포 시점을 대조합니다."})
+		case "image":
+			add("ImagePullLogSignal", "high", "이미지 pull 또는 registry 관련 오류가 로그에 보입니다.", evidence,
+				[]string{"image tag와 registry 경로를 확인합니다.", "imagePullSecret 만료와 ServiceAccount 연결을 점검합니다.", "노드에서 registry 접근 가능 여부를 확인합니다."})
+		case "timeout":
+			add("TimeoutSpike", "medium", "timeout/deadline 오류가 감지되었습니다.", evidence,
+				[]string{"대상 dependency의 Service/Endpoint 상태를 확인합니다.", "최근 배포 이후 timeout 증가 여부를 Health Replay에서 확인합니다.", "readiness probe timeout과 애플리케이션 timeout 설정을 비교합니다."})
+		case "dns":
+			add("DNSResolutionFailure", "medium", "DNS 또는 name resolution 실패 가능성이 있습니다.", evidence,
+				[]string{"Service 이름과 namespace를 확인합니다.", "CoreDNS Pod와 kube-dns Service 이벤트를 확인합니다.", "같은 namespace의 정상 Pod와 env/service 설정을 비교합니다."})
+		case "network":
+			add("NetworkConnectivityFailure", "medium", "connection refused/reset/no route 계열 네트워크 오류가 보입니다.", evidence,
+				[]string{"대상 Service Endpoint가 존재하는지 확인합니다.", "NetworkPolicy와 port 설정을 점검합니다.", "Pod가 올라간 node의 네트워크 이벤트를 확인합니다."})
+		case "auth":
+			add("AuthorizationFailure", "medium", "권한/인증 실패 로그가 반복됩니다.", evidence,
+				[]string{"ServiceAccount, Secret, token 만료 여부를 점검합니다.", "최근 Secret/ConfigMap 변경 리비전을 확인합니다.", "외부 API credential rotation 이력을 확인합니다."})
+		case "probe":
+			add("ProbeFailureSignal", "medium", "readiness/liveness probe 관련 로그가 보입니다.", evidence,
+				[]string{"probe path, port, initialDelaySeconds, timeoutSeconds를 확인합니다.", "애플리케이션 시작 시간과 probe 시작 시점을 비교합니다.", "Endpoint 제외 여부와 서비스 영향도를 확인합니다."})
+		}
+	}
+	if pod.RestartCount > 0 && !seen["RestartCorrelatedLogs"] {
+		add("RestartCorrelatedLogs", "medium", "Pod restart와 로그 오류가 같은 분석 범위에 있습니다.",
+			[]string{fmt.Sprintf("pod restarts: %d", pod.RestartCount)},
+			[]string{"previous 로그를 우선 확인합니다.", "컨테이너 last state와 exit code를 확인합니다.", "반복 재시작이면 Evidence Bundle을 생성해 장애 증적을 고정합니다."})
+	}
+	if len(out) == 0 {
+		add("NoStrongLogSignal", "low", "분석 범위에서 강한 에러 패턴은 발견되지 않았습니다.",
+			[]string{"log summary has no grouped error/warn pattern"},
+			[]string{"tail_lines 또는 since 범위를 넓혀 다시 분석합니다.", "Kubernetes 이벤트와 Health Replay에서 상태 변화를 확인합니다.", "Golden Pod Diff로 설정 차이를 비교합니다."})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return podLogSeverityRank(out[i].Severity) > podLogSeverityRank(out[j].Severity)
+	})
+	return out
+}
+
+func podLogSeverityRank(sev string) int {
+	switch strings.ToLower(sev) {
+	case "critical", "high":
+		return 3
+	case "warning", "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func parseSinceSeconds(raw string) int {

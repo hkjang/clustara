@@ -2023,6 +2023,23 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		)`,
 		`ALTER TABLE k8s_pod_log_queries ADD COLUMN stream INTEGER NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_log_queries_target ON k8s_pod_log_queries(cluster_id, namespace, pod, created_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_terminal_policies (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT '',
+			cluster_id TEXT NOT NULL DEFAULT '',
+			namespace_pattern TEXT NOT NULL DEFAULT '*',
+			pod_selector TEXT NOT NULL DEFAULT '',
+			command_allowlist TEXT NOT NULL DEFAULT '',
+			command_denylist TEXT NOT NULL DEFAULT '',
+			require_approval INTEGER NOT NULL DEFAULT 1,
+			max_session_minutes INTEGER NOT NULL DEFAULT 10,
+			audit_enabled INTEGER NOT NULL DEFAULT 1,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_terminal_policies_scope ON k8s_terminal_policies(role, cluster_id, namespace_pattern, enabled)`,
 	}
 
 	for _, statement := range statements {

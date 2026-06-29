@@ -963,6 +963,49 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 		t.Fatalf("unexpected pod log audit: %+v", audit)
 	}
 
+	resp, err = http.Post(proxy.URL+"/admin/k8s/pods/default/api-1/logs/analyze?cluster_id="+created.Cluster.ID+"&container=app&tail_lines=50", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var logAnalysis struct {
+		Current struct {
+			Error int `json:"error"`
+		} `json:"current"`
+		Patterns []struct {
+			Category string `json:"category"`
+			Severity string `json:"severity"`
+			Message  string `json:"message"`
+			Count    int    `json:"count"`
+		} `json:"patterns"`
+		Insights []struct {
+			Condition string   `json:"condition"`
+			Severity  string   `json:"severity"`
+			Evidence  []string `json:"evidence"`
+			Actions   []string `json:"actions"`
+		} `json:"insights"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&logAnalysis); err != nil {
+		t.Fatal(err)
+	}
+	if logAnalysis.Current.Error == 0 || len(logAnalysis.Patterns) == 0 || len(logAnalysis.Insights) == 0 {
+		t.Fatalf("expected log analysis patterns and insights: %+v", logAnalysis)
+	}
+	foundExceptionPattern, foundExceptionInsight := false, false
+	for _, p := range logAnalysis.Patterns {
+		if p.Category == "exception" && p.Severity == "high" && p.Count > 0 && !strings.Contains(p.Message, "supersecret") {
+			foundExceptionPattern = true
+		}
+	}
+	for _, insight := range logAnalysis.Insights {
+		if insight.Condition == "ApplicationException" && insight.Severity == "high" && len(insight.Actions) > 0 {
+			foundExceptionInsight = true
+		}
+	}
+	if !foundExceptionPattern || !foundExceptionInsight {
+		t.Fatalf("expected exception pattern and insight: %+v", logAnalysis)
+	}
+
 	resp, err = http.Get(proxy.URL + "/admin/k8s/pods/default/api-1/health-replay?cluster_id=" + created.Cluster.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1023,7 +1066,7 @@ func TestK8sPodManagementAndLogs(t *testing.T) {
 			foundStreamAudit = true
 		}
 	}
-	if len(audit) != 2 || !foundStreamAudit {
+	if len(audit) != 4 || !foundStreamAudit {
 		t.Fatalf("unexpected stream audit: %+v", audit)
 	}
 
