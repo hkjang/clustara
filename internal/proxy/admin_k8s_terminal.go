@@ -54,6 +54,7 @@ func (s *Server) handleK8sTerminalPolicies(w http.ResponseWriter, r *http.Reques
 			"policies":         policies,
 			"default_denylist": builtinTerminalDenylist(),
 			"command_presets":  terminalCommandPresets(),
+			"templates":        terminalPolicyTemplates(),
 		})
 	case http.MethodPost:
 		var in struct {
@@ -194,7 +195,7 @@ func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sT
 	accessMode := analyzer.ClassifyTerminalAccessMode(req.Command)
 	result := terminalPolicyEvalResult{
 		Allowed: false, RequireApproval: true, AuditEnabled: true, MaxSessionMinutes: 10,
-		RiskLevel: commandRisk, Reason: "no enabled terminal policy matched this role/cluster/namespace/selector",
+		RiskLevel: commandRisk, Reason: "no enabled terminal policy matched this role/cluster/namespace/selector — register and enable a terminal policy covering this scope (Admin → 터미널 정책, or POST /admin/k8s/terminal-policies) whose command_allowlist includes this command",
 		CommandRisk: parsed.Findings, AccessMode: accessMode.Mode,
 	}
 	if commandRisk == "critical" {
@@ -391,6 +392,62 @@ func terminalCommandPresets() map[string][]string {
 		"read_only": []string{"ls", "pwd", "cat", "head", "tail", "grep", "env", "printenv", "ps", "df", "du", "date", "id", "whoami"},
 		"network":   []string{"curl", "wget", "nslookup", "dig", "nc", "netstat", "ss"},
 		"runtime":   []string{"ps", "top", "free", "df", "du", "jcmd", "jstack"},
+	}
+}
+
+// terminalPolicyTemplate is a ready-made bundle the Policy Center can apply with
+// one click to stand up an enabled terminal policy for a common scope. Scope
+// fields (cluster_id, namespace) are filled in at apply time in the UI.
+type terminalPolicyTemplate struct {
+	Key               string   `json:"key"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	Role              string   `json:"role"`
+	NamespacePattern  string   `json:"namespace_pattern"`
+	PodSelector       string   `json:"pod_selector"`
+	CommandAllowlist  []string `json:"command_allowlist"`
+	CommandDenylist   []string `json:"command_denylist"`
+	RequireApproval   bool     `json:"require_approval"`
+	MaxSessionMinutes int      `json:"max_session_minutes"`
+}
+
+// terminalPolicyTemplates returns the curated starter policies surfaced in the
+// Policy Center. Allowlists are derived from the shared command presets so the
+// builder form and the templates stay in sync.
+func terminalPolicyTemplates() []terminalPolicyTemplate {
+	presets := terminalCommandPresets()
+	merge := func(keys ...string) []string {
+		out := []string{}
+		for _, k := range keys {
+			out = append(out, presets[k]...)
+		}
+		return uniqueStrings(out)
+	}
+	return []terminalPolicyTemplate{
+		{
+			Key: "read_only_all", Name: "운영 읽기 전용 (전체 네임스페이스)",
+			Description: "모든 네임스페이스에서 읽기 전용 진단 명령만 허용. 승인 필요, 세션 10분.",
+			Role: "*", NamespacePattern: "*",
+			CommandAllowlist: merge("read_only"), RequireApproval: true, MaxSessionMinutes: 10,
+		},
+		{
+			Key: "network_diag", Name: "네트워크 진단",
+			Description: "읽기 명령 + DNS·연결성 진단(curl·dig·nslookup·nc·ss). 승인 필요, 세션 15분.",
+			Role: "*", NamespacePattern: "*",
+			CommandAllowlist: merge("read_only", "network"), RequireApproval: true, MaxSessionMinutes: 15,
+		},
+		{
+			Key: "runtime_diag", Name: "런타임·JVM 진단",
+			Description: "읽기 명령 + 프로세스·메모리·JVM 스택 덤프(top·free·jstack·jcmd). 승인 필요, 세션 15분.",
+			Role: "*", NamespacePattern: "*",
+			CommandAllowlist: merge("read_only", "runtime"), RequireApproval: true, MaxSessionMinutes: 15,
+		},
+		{
+			Key: "nonprod_relaxed", Name: "비프로덕션 자유 진단 (dev/staging)",
+			Description: "읽기+네트워크+런타임 명령을 비프로덕션 네임스페이스에서 허용. 승인 불필요, 세션 30분. (적용 시 namespace를 dev-* / staging-* 등으로 조정하세요.)",
+			Role: "*", NamespacePattern: "dev-*",
+			CommandAllowlist: merge("read_only", "network", "runtime"), RequireApproval: false, MaxSessionMinutes: 30,
+		},
 	}
 }
 
