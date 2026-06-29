@@ -392,12 +392,47 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 		}
 	}
 	s.recordPodAccess(r, clusterID, namespace, pod, "detail", "pod_detail")
+	pv := podView(item, events, true)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"pod":         podView(item, events, true),
+		"pod":         pv,
+		"briefing":    s.buildPodBriefing(r.Context(), clusterID, item, pv, relatedEvents),
 		"events":      relatedEvents,
 		"metrics":     relatedMetrics,
 		"log_queries": relatedLogQueries,
 		"manifest":    assembleManifest(item),
+	})
+}
+
+// buildPodBriefing assembles the one-page diagnosis from the pod view, a recent revision (recent
+// change signal) and the top warning event.
+func (s *Server) buildPodBriefing(ctx context.Context, clusterID string, item store.K8sInventoryItem, pv k8sPodView, events []store.K8sEvent) analyzer.PodBriefing {
+	recentChange, changeSummary := false, ""
+	revs, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Kind: "Pod", Namespace: item.Namespace, Name: item.Name, Limit: 4})
+	now := time.Now().UTC()
+	for _, rev := range revs {
+		if !strings.EqualFold(rev.ChangeKind, "updated") {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, rev.ObservedAt); err == nil && now.Sub(t) <= 30*time.Minute {
+			recentChange = true
+			if rev.ImageSet != "" {
+				changeSummary = "image " + rev.ImageSet
+			}
+			break
+		}
+	}
+	topEvent := ""
+	for _, e := range events {
+		if strings.EqualFold(e.Type, "Warning") {
+			topEvent = strings.TrimSpace(e.Reason)
+			break
+		}
+	}
+	health := analyzer.PodHealth{Score: pv.HealthScore, Band: pv.HealthBand, PrimarySymptom: pv.PrimarySymptom, Symptoms: pv.Symptoms}
+	return analyzer.BuildPodBriefing(analyzer.PodBriefingInput{
+		Health: health, RestartCount: pv.RestartCount, WarningEvents: pv.WarningEvents,
+		RecentChange: recentChange, ChangeSummary: changeSummary, TopEventReason: topEvent,
+		OwnerKind: pv.OwnerKind, OwnerName: pv.OwnerName,
 	})
 }
 
