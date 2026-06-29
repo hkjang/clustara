@@ -8061,6 +8061,7 @@ const adminHTML = `<!doctype html>
         '<td>rev ' + fmt(s.revision_no || 0) + '</td><td>' + escapeHTML(s.status || '-') + '</td><td>' + escapeHTML(s.sync_policy || 'manual') + '</td>' +
         '<td class="muted" style="font-size:11px">' + ago(s.updated_at) + '</td>' +
         '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sStackView(\'' + escapeAttr(s.id) + '\')">리비전</button> ' +
+        '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDrift(\'' + escapeAttr(s.id) + '\')">드리프트</button> ' +
         '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDelete(\'' + escapeAttr(s.id) + '\')">삭제</button></td></tr>').join('')
         : '<tr><td colspan="7" class="muted">저장된 Stack이 없습니다.</td></tr>';
       view.innerHTML =
@@ -8094,6 +8095,18 @@ const adminHTML = `<!doctype html>
         const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id));
         const revs = (d.revisions || []).map(r => '<tr><td>rev ' + fmt(r.revision_no) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((r.manifest_hash || '').slice(0, 12)) + '</td><td class="muted" style="font-size:11px">' + ago(r.created_at) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">리비전 없음</td></tr>';
         out.innerHTML = '<div style="font-size:12px;margin-bottom:4px"><strong>' + escapeHTML((d.stack || {}).name || '') + '</strong> 리비전</div><table><thead><tr><th>Rev</th><th>Hash</th><th>생성</th></tr></thead><tbody>' + revs + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackDrift = async (id) => {
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">드리프트 점검 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/drift');
+        const dr = d.drift || {};
+        const badge = dr.synced ? '<span class="status">SYNCED</span>' : '<span class="status warn">DRIFT · 누락 ' + fmt(dr.missing || 0) + '</span>';
+        const rows = (dr.entries || []).map(e => '<tr><td>' + (e.status === 'missing' ? '<span class="status error" style="font-size:10px">missing</span>' : '<span class="status" style="font-size:10px">present</span>') + '</td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">선언 리소스 없음</td></tr>';
+        out.innerHTML = '<div style="margin-bottom:4px">드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(dr.declared || 0) + ' · 존재 ' + fmt(dr.present || 0) + '</span></div>' +
+          '<table><thead><tr><th>상태</th><th>Kind</th><th>리소스</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sStackDelete = async (id) => {

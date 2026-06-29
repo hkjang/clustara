@@ -86,9 +86,19 @@ func (s *Server) handleK8sStackByID(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/stacks/"), "/")
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/stacks/"), "/")
+	parts := strings.Split(rest, "/")
+	id := parts[0]
 	if id == "" || id == "validate" {
 		writeOpenAIError(w, http.StatusBadRequest, "stack id required", "invalid_request_error", "missing_stack_id")
+		return
+	}
+	if len(parts) > 1 && parts[1] == "drift" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sStackDrift(w, r, id)
 		return
 	}
 	switch r.Method {
@@ -113,6 +123,31 @@ func (s *Server) handleK8sStackByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
+}
+
+// handleK8sStackDrift compares a saved stack's declared resources against the live inventory.
+// GET /admin/k8s/stacks/{id}/drift
+func (s *Server) handleK8sStackDrift(w http.ResponseWriter, r *http.Request, id string) {
+	st, err := s.db.GetK8sStack(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "stack not found", "invalid_request_error", "stack_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_stack_failed")
+		return
+	}
+	docs, perr := decodeManifestDocs(st.Manifest)
+	if perr != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "stored manifest parse error: "+perr.Error(), "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	plan := analyzer.AnalyzeStackManifest(docs, nil) // resources only; policies not needed for drift
+	inventory, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: st.ClusterID, Limit: 5000})
+	report := analyzer.DetectStackDrift(plan.Resources, st.Namespace, inventory)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stack_id": id, "cluster_id": st.ClusterID, "drift": report,
+		"note": "선언된 리소스가 클러스터 인벤토리에 존재하는지(존재/누락) 비교합니다. 필드 단위 diff는 변경 타임라인/Diff를 참고하세요.",
+	})
 }
 
 func coalesceStr(a, b string) string {
