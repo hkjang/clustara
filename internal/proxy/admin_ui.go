@@ -6642,7 +6642,8 @@ const adminHTML = `<!doctype html>
         });
         const s = d.session || {}; const r = d.policy_result || {};
         const cls = s.status === 'denied' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
-        out.innerHTML = '<div><span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · risk ' + escapeHTML(s.risk_level || '-') + ' · next ' + escapeHTML(d.next_action || '-') + '</div>' +
+        const amBadge = r.access_mode ? ' · <span class="status ' + (r.access_mode === 'full_tty' ? 'error' : (r.access_mode === 'guided' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(r.access_mode) + '</span>' : '';
+        out.innerHTML = '<div><span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · risk ' + escapeHTML(s.risk_level || '-') + amBadge + ' · next ' + escapeHTML(d.next_action || '-') + '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(r.reason || s.reason || '') + '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:4px">matched policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + '</div>';
       } catch (e) {

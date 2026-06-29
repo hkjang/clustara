@@ -31,6 +31,7 @@ type terminalPolicyEvalResult struct {
 	MatchedPolicies   []string `json:"matched_policies"`
 	MatchedRules      []string `json:"matched_rules"`
 	CommandRisk       []analyzer.CommandRiskFinding `json:"command_risk_findings,omitempty"`
+	AccessMode        string   `json:"access_mode"` // read_only | guided | full_tty
 }
 
 func (s *Server) handleK8sTerminalPolicies(w http.ResponseWriter, r *http.Request) {
@@ -190,10 +191,11 @@ func terminalPolicyFromInput(id, name, role, clusterID, namespacePattern, podSel
 func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sTerminalPolicy) terminalPolicyEvalResult {
 	parsed := analyzer.ParseCommandRisk(req.Command)
 	commandRisk, commandRiskReason := parsed.Risk, analyzer.CommandRiskReason(parsed)
+	accessMode := analyzer.ClassifyTerminalAccessMode(req.Command)
 	result := terminalPolicyEvalResult{
 		Allowed: false, RequireApproval: true, AuditEnabled: true, MaxSessionMinutes: 10,
 		RiskLevel: commandRisk, Reason: "no enabled terminal policy matched this role/cluster/namespace/selector",
-		CommandRisk: parsed.Findings,
+		CommandRisk: parsed.Findings, AccessMode: accessMode.Mode,
 	}
 	if commandRisk == "critical" {
 		result.Reason = commandRiskReason
@@ -253,8 +255,17 @@ func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sT
 			result.MaxSessionMinutes = p.MaxSessionMinutes
 		}
 	}
+	// A full TTY (interactive shell) always gates on approval regardless of policy, since the exact
+	// commands cannot be pre-checked.
+	if accessMode.RequiresApproval {
+		result.RequireApproval = true
+		result.AuditEnabled = true
+	}
 	result.RiskLevel = commandRisk
 	result.Reason = "command allowed by terminal policy"
+	if accessMode.Mode == analyzer.TermModeFullTTY {
+		result.Reason += " · full TTY → 승인 필수"
+	}
 	if commandRiskReason != "" {
 		result.Reason += " · " + commandRiskReason
 	}
