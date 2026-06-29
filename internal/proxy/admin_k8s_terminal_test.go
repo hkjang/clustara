@@ -93,7 +93,7 @@ func TestK8sTerminalPoliciesCRUDAndEvaluate(t *testing.T) {
 		t.Fatalf("safe command should be allowed with approval: %+v", allowed)
 	}
 	denied := eval("rm -rf /", map[string]string{"app": "api"})
-	if denied.Allowed || denied.RiskLevel != "critical" || !strings.Contains(denied.Reason, "critical") {
+	if denied.Allowed || denied.RiskLevel != "critical" || denied.Reason == "" {
 		t.Fatalf("dangerous command should be blocked: %+v", denied)
 	}
 	noSelector := eval("ls /app", map[string]string{"app": "other"})

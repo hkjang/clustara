@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -29,6 +30,7 @@ type terminalPolicyEvalResult struct {
 	Reason            string   `json:"reason"`
 	MatchedPolicies   []string `json:"matched_policies"`
 	MatchedRules      []string `json:"matched_rules"`
+	CommandRisk       []analyzer.CommandRiskFinding `json:"command_risk_findings,omitempty"`
 }
 
 func (s *Server) handleK8sTerminalPolicies(w http.ResponseWriter, r *http.Request) {
@@ -186,10 +188,12 @@ func terminalPolicyFromInput(id, name, role, clusterID, namespacePattern, podSel
 }
 
 func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sTerminalPolicy) terminalPolicyEvalResult {
-	commandRisk, commandRiskReason := classifyTerminalCommandRisk(req.Command)
+	parsed := analyzer.ParseCommandRisk(req.Command)
+	commandRisk, commandRiskReason := parsed.Risk, analyzer.CommandRiskReason(parsed)
 	result := terminalPolicyEvalResult{
 		Allowed: false, RequireApproval: true, AuditEnabled: true, MaxSessionMinutes: 10,
 		RiskLevel: commandRisk, Reason: "no enabled terminal policy matched this role/cluster/namespace/selector",
+		CommandRisk: parsed.Findings,
 	}
 	if commandRisk == "critical" {
 		result.Reason = commandRiskReason
@@ -282,30 +286,12 @@ func terminalAllowlistMatches(patterns []string, command string) bool {
 	return false
 }
 
+// classifyTerminalCommandRisk delegates to the analyzer's tokenizing Command Risk Parser, which
+// also catches shell metacharacters (pipe-to-shell, redirect to system paths, subshell, chaining)
+// that the old substring lists missed. Signature preserved for existing call sites.
 func classifyTerminalCommandRisk(command string) (string, string) {
-	c := strings.ToLower(strings.TrimSpace(command))
-	if c == "" {
-		return "high", "empty command"
-	}
-	critical := []string{"rm -rf /", "mkfs", "dd if=", "dd of=", "shutdown", "reboot", "halt", ":(){", "curl *| sh", "curl * | sh", "wget *| sh", "wget * | sh"}
-	for _, pattern := range critical {
-		if terminalCommandMatches(pattern, c) {
-			return "critical", "built-in critical command block: " + pattern
-		}
-	}
-	high := []string{"rm -rf", "kubectl delete", "chmod 777 /", "chown -r", "apt-get install", "apt install", "yum install", "dnf install", "apk add"}
-	for _, pattern := range high {
-		if terminalCommandMatches(pattern, c) {
-			return "high", "high-risk command: " + pattern
-		}
-	}
-	medium := []string{"kill", "chmod", "chown", "curl", "wget", "nc ", "netcat", "ssh", "scp", "tar ", "base64 "}
-	for _, pattern := range medium {
-		if terminalCommandMatches(pattern, c) {
-			return "medium", "medium-risk command: " + strings.TrimSpace(pattern)
-		}
-	}
-	return "low", ""
+	r := analyzer.ParseCommandRisk(command)
+	return r.Risk, analyzer.CommandRiskReason(r)
 }
 
 func terminalCommandMatches(pattern, command string) bool {

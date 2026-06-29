@@ -32,6 +32,7 @@
 | 리포트 자동 발송 — 운영 다이제스트를 주기(interval)로 Mattermost 채널에 자동 발송 + 즉시 발송 | ✅ |
 | Env Source Map — Pod 선언 env의 출처(literal/ConfigMap/Secret/Downward) 추적 + Secret 위생 점검(값 미노출·민감 평문 마스킹) | ✅ |
 | Env Change Timeline — Pod가 참조하는 ConfigMap/Secret 변경 + Pod 리비전을 시간순 병합(장애 직전 설정 변경 탐지) | ✅ |
+| Command Risk Parser — exec 명령 토큰화 위험도 분석(파이프-셸·시스템경로 리다이렉트·서브셸·체이닝·파괴적 명령), 터미널 정책 게이트 연계 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
