@@ -1,3 +1,6 @@
+v0.9.0:
+- **운영 RBAC 참조 모델 + Portainer식 운영 콘솔 마일스톤 (v0.9.0)**: 운영 역할 분리를 위한 capability 카탈로그와 역할(viewer/developer/operator/approver/security/finops/admin)↔권한 매트릭스, preflight 점검(`GET /admin/k8s/rbac`, `/rbac/check`)을 추가했습니다 — 어떤 역할이 어떤 작업을 할 수 있는지 정의·점검하는 참조 레이어로, 실제 인증 강제는 기존 admin 토큰/스코프를 유지합니다(비파괴). 이 릴리스는 v0.8 시리즈에서 누적한 Pod 운영 워크벤치(Health Score·Restart Storm·진단 요약·Compare Matrix·Watch List·실행 컨텍스트·터미널 안전 모델)와 Portainer식 앱 배포 기반(Application Stack 검증·저장·리비전·드리프트, 이미지 사용 현황)을 마무리하는 마일스톤입니다. 모든 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.8.9:
 - **Stack Drift 탐지 — 선언 상태 vs 클러스터 실제 상태 (v0.8.9)**: 저장된 Application Stack이 선언한 리소스가 클러스터에 실제 존재하는지(존재/누락) 비교하는 드리프트 탐지를 추가했습니다 — GitOps 동기화의 핵심 신호로, 네트워크 polling 없이 저장된 매니페스트와 수집된 인벤토리만으로 산출합니다. namespace를 생략한 리소스는 Stack 기본 namespace로 해석하며, 누락 리소스를 상단에 정렬하고 전체 동기화 여부(SYNCED/DRIFT)를 표시합니다. 앱 배포 화면에서 Stack별 "드리프트" 점검을 제공합니다. 필드 단위 diff는 변경 타임라인/Diff로 보완합니다. 순수 함수 + 단위 테스트로 검증했습니다.
 
