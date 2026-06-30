@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.20** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.21** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.20)
+## 기능 상태 (v0.9.21)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -60,6 +60,7 @@
 | Service Impact Home — 워크로드 중심 카드(Pod 헬스 + Service/Ingress 노출 + HPA + 최근 변경 + 미해결 incident)로 서비스 blast radius를 위험 순으로 표시(`/admin/k8s/service-impact`, CLU-REQ-07) | ✅ (v0.9.18) |
 | Adaptive Collection Policy — agent 생존에 더해 클러스터 우선순위(label priority)·미해결 incident·watch 등록을 반영해 수집 주기 자동 조정(incident 시 강제 단축, 하한 15s, `/admin/k8s/collect-config` cadences, CLU-REQ-04) | ✅ (v0.9.19) |
 | Collection Cost Guard — 클러스터별 수집 저장 footprint(행 수×테이블별 평균 크기) 추정 + 수집 주기 기반 월 증가 예측 + 예산 초과 경고(`/admin/k8s/collection-cost`, CLU-REQ-11) | ✅ (v0.9.20) |
+| Release Quality Gate 2.0 — AppVersion↔changelog↔문서 헤더/기능 상태 일치, changelog 중복·정렬·자기 버전 언급을 `go test`에서 강제하는 영구 게이트(CLU-REQ-13) | ✅ (v0.9.21) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
