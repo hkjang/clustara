@@ -6524,11 +6524,12 @@ const adminHTML = `<!doctype html>
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
       const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
-      let wsResp = null, expResp = null, secResp = null;
+      let wsResp = null, expResp = null, secResp = null, imgResp = null;
       if (wsClusterId) {
         try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; }
         try { expResp = await api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { expResp = null; }
         try { secResp = await api('/admin/k8s/runtime-security?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { secResp = null; }
+        try { imgResp = await api('/admin/k8s/image-ledger?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { imgResp = null; }
       }
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
@@ -6581,6 +6582,7 @@ const adminHTML = `<!doctype html>
         renderWorkspaceCard(wsResp, clusterList, wsClusterId) +
         renderExposureCard(expResp) +
         renderRuntimeSecurityCard(secResp) +
+        renderImageLedgerCard(imgResp) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
         card('장애 후보 TOP 10',
@@ -6672,6 +6674,31 @@ const adminHTML = `<!doctype html>
         '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(secResp.note || '') + '</div>' +
         '<table><thead><tr><th>위험</th><th>Pod</th><th>프로파일</th><th>위험 설정</th></tr></thead><tbody>' +
         (rows || '<tr><td colspan="4" class="muted">위험 Pod 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Image Stream Ledger (CLU-OCP-04): digest ledger + mutable-tag + tag-drift (ImageStream style).
+    function renderImageLedgerCard(imgResp) {
+      const l = imgResp && imgResp.ledger;
+      if (!l || !l.total_images) return '';
+      const kpis = '<div class="kpis">' +
+        kpi('이미지', fmt(l.total_images || 0)) + kpi('mutable 태그', fmt(l.mutable_count || 0)) +
+        kpi('digest 고정', fmt(l.digest_pinned_count || 0)) + kpi('tag drift', fmt(l.tag_drift_count || 0)) + '</div>';
+      const drift = (l.tag_drifts || []).length
+        ? '<h4 style="margin:10px 0 4px"><span class="status error" style="font-size:9px">tag drift</span> 같은 태그·다른 digest</h4>' +
+          '<table><thead><tr><th>repository:tag</th><th>digest 수</th><th>워크로드</th></tr></thead><tbody>' +
+          (l.tag_drifts || []).map(d => '<tr><td><strong>' + escapeHTML(d.repository + ':' + d.tag) + '</strong></td>' +
+            '<td><span class="status error" style="font-size:10px">' + fmt((d.digests || []).length) + '</span></td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML((d.workloads || []).join(', ')) + '</td></tr>').join('') + '</tbody></table>'
+        : '';
+      const entries = (l.entries || []).slice(0, 40).map(e =>
+        '<tr><td>' + (e.mutable ? '<span class="status warn" style="font-size:9px">mutable</span>' : (e.pinned_digest ? '<span class="status" style="font-size:9px">pinned</span>' : '')) + '</td>' +
+        '<td style="font-size:11px"><strong>' + escapeHTML(e.image) + '</strong></td>' +
+        '<td class="muted" style="font-size:10px">' + escapeHTML(e.digest ? e.digest.slice(0, 19) : '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((e.workloads || []).join(', ')) + '</td></tr>').join('');
+      return card('이미지 원장 (Image Stream Ledger · OpenShift ImageStream 스타일)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(imgResp.note || '') + '</div>' + drift +
+        '<h4 style="margin:10px 0 4px">이미지 목록</h4><table><thead><tr><th></th><th>image</th><th>digest</th><th>워크로드</th></tr></thead><tbody>' +
+        (entries || '<tr><td colspan="4" class="muted">이미지 없음</td></tr>') + '</tbody></table></div>');
     }
     function k8sRegisterGuideHTML() {
       return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">' +

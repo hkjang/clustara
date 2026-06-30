@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.27** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.28** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.27)
+## 기능 상태 (v0.9.28)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -68,6 +68,7 @@
 | Workspace Center — namespace를 업무 Workspace로 묶어 Pod 헬스·미해결 incident·Quota·외부 노출·런타임 보안 위험을 합산한 0~100 Health Score(OpenShift Project 스타일, 운영 홈, `/admin/k8s/workspaces`, CLU-OCP-01) | ✅ (v0.9.26) |
 | Exposure Center — Ingress·LoadBalancer/NodePort Service 외부 노출 + TLS 미적용·wildcard·민감 경로 위험 분석(OpenShift Route 스타일, `/admin/k8s/exposures`, CLU-OCP-02) | ✅ (v0.9.27) |
 | Runtime Security Profile — Pod의 privileged·host namespace·hostPath·위험 capability·root·privesc 점수화 + Pod Security 프로파일(restricted/baseline/privileged) 분류(OpenShift SCC 스타일, `/admin/k8s/runtime-security`, CLU-OCP-03) | ✅ (v0.9.27) |
+| Image Stream Ledger — 워크로드별 이미지 digest 원장 + mutable 태그 위험 + tag drift(같은 repo:tag·다른 digest) 탐지(OpenShift ImageStream 스타일, `/admin/k8s/image-ledger`, CLU-OCP-04) | ✅ (v0.9.28) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
