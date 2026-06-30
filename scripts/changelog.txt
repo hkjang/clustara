@@ -1,3 +1,6 @@
+v0.9.5:
+- **Floating Ops Agent LLM 호출 401 수정 (v0.9.5)**: 업스트림 프로바이더를 정상 설정했는데도 플로팅 에이전트가 "LLM 미구성/호출 실패 — chat failed: HTTP 401"로 떨어지던 문제를 고쳤습니다. 원인은 에이전트(및 워크플로우)의 내부 LLM 호출이 관리자 토큰/세션을 그대로 `/v1` 파이프라인에 재생하면서, 인증 단계가 이를 Proxy API Key로 간주해 거부한 것이었습니다(프로바이더 키 문제가 아님). chat-test 콘솔이 쓰던 신뢰 컨텍스트 주입(`chatTestAuthContextKey`) 방식을 재사용해, 관리자 인증된 내부 호출에 한해 super_admin 컨텍스트를 주입하도록 `runGatewayChat`에 공통 처리했습니다. 이제 내부 호출이 인증을 통과하고 업스트림에는 설정된 프로바이더 키로 도달합니다. Proxy API Key로 인증하는 MCP 게이트웨이 경로는 영향이 없습니다. 모의 업스트림으로 라이브 검증했습니다.
+
 v0.9.4:
 - **Floating Ops Agent 완성 — 화면 내장 운영 보조 에이전트 (v0.9.4)**: 모든 운영 화면 우측 하단에 뜨는 플로팅 에이전트를 완성했습니다. 현재 화면 맥락(cluster·namespace·pod·incident·stack)을 자동으로 수집(Page Context SDK)해 사용자가 다시 입력하지 않아도 되며, 화면 이동 시 맥락이 갱신됩니다. 질문 intent에 맞는 read-only 도구 호출 계획(Tool Planner)을 세우고, 기존 AI-ask 근거(RCA·이벤트)로 답하며, 어떤 도구로 답했는지 함께 노출합니다. 변경 작업은 직접 실행하지 않고 승인용 Action Card로 제안해 Action Center 승인 흐름으로 연결합니다. 추천 질문 원클릭, 근거 접이식 패널을 제공합니다. (`/admin/agent/suggestions`·`/sessions`·`/messages`·`/action-cards`) 신규 로직은 순수 함수 + 단위 테스트로 검증하고 통합 동작을 라이브로 확인했습니다.
 

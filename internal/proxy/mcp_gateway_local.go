@@ -560,6 +560,17 @@ func (s *Server) runGatewayChat(r *http.Request, body map[string]any, extraHeade
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
+	// Admin-authorized callers (workflows, floating Ops Agent, chat-test console)
+	// authenticate via admin token/session, not a proxy API key. Replaying that token
+	// through the /v1 pipeline's auth step would fail with HTTP 401. When the context
+	// doesn't already carry an injected auth (the chat-test console sets its own) and
+	// the original request is admin-authorized, inject a trusted internal super_admin
+	// context so the in-process call is accepted. Proxy-key callers (MCP gateway tools)
+	// are unaffected: they carry a valid key and authorizeAdmin is false for them.
+	if _, injected := injectedChatTestAuth(req.Context()); !injected && s.authorizeAdmin(r) {
+		authCtx := s.internalAdminAuthContext(r, "admin_internal")
+		req = req.WithContext(context.WithValue(req.Context(), chatTestAuthContextKey{}, chatTestInjectedAuth{APIKeyID: authCtx.APIKeyID, AuthCtx: authCtx}))
+	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)

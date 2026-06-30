@@ -557,20 +557,31 @@ func (s *Server) handleChatTestStream(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
+// internalAdminAuthContext builds a trusted super_admin AuthContext for in-process
+// chat calls made by admin-authorized features (chat-test console, workflows, the
+// floating Ops Agent). These features authenticate via admin token/session — NOT a
+// proxy API key — so replaying their request straight through the /v1 pipeline would
+// be rejected by the proxy-key auth step. Injecting this context (under
+// chatTestAuthContextKey) lets stepAuth accept the call. apiKeyID labels the synthetic
+// identity for audit/quota attribution.
+func (s *Server) internalAdminAuthContext(r *http.Request, apiKeyID string) *store.AuthContext {
+	authCtx := &store.AuthContext{
+		Role:     "super_admin",
+		Scopes:   []string{"chat:completion", "models:read", "mcp:use", "routing:read", "observability:read"},
+		APIKeyID: apiKeyID,
+	}
+	if claims, ok := s.currentAccessClaims(r); ok {
+		authCtx.UserID = claims.Subject
+		authCtx.TeamID = claims.TeamID
+		authCtx.Role = firstNonEmpty(claims.Role, authCtx.Role)
+	}
+	return authCtx
+}
+
 func (s *Server) chatTestInjectedAuthContext(w http.ResponseWriter, r *http.Request, apiKeyID string) (*store.AuthContext, string, bool) {
 	apiKeyID = strings.TrimSpace(apiKeyID)
 	if apiKeyID == "" {
-		authCtx := &store.AuthContext{
-			Role:     "super_admin",
-			Scopes:   []string{"chat:completion", "models:read", "mcp:use", "routing:read", "observability:read"},
-			APIKeyID: "admin_chat_test",
-		}
-		if claims, ok := s.currentAccessClaims(r); ok {
-			authCtx.UserID = claims.Subject
-			authCtx.TeamID = claims.TeamID
-			authCtx.Role = firstNonEmpty(claims.Role, authCtx.Role)
-		}
-		return authCtx, "admin_chat_test", true
+		return s.internalAdminAuthContext(r, "admin_chat_test"), "admin_chat_test", true
 	}
 	key, found, err := s.db.GetAPIKey(r.Context(), apiKeyID)
 	if err != nil {
