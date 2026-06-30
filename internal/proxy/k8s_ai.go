@@ -134,7 +134,7 @@ func (s *Server) handleK8sAIAsk(w http.ResponseWriter, r *http.Request) {
 	evidence := gatherK8sEvidence(p.Namespace, p.Name, rca, events, diff)
 	prompt := composeK8sAIPrompt(p.Question, evidence)
 
-	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 4096, nil)
+	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 16384, nil)
 	resp := map[string]any{"evidence": evidence, "grounded": true}
 	if llmErr != nil || strings.TrimSpace(answer) == "" {
 		resp["answer"] = ""
@@ -182,7 +182,7 @@ func (s *Server) handleK8sAIReport(w http.ResponseWriter, r *http.Request) {
 	}
 	prompt := composeK8sAIPrompt("이 클러스터의 운영 상태를 경영진 보고용으로 요약하고, 우선 조치 3가지를 제안하세요.", evidence)
 
-	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 8192, nil)
+	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 16384, nil)
 	resp := map[string]any{"evidence": evidence}
 	if llmErr != nil || strings.TrimSpace(answer) == "" {
 		resp["report"] = ""

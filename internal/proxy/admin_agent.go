@@ -135,7 +135,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 			"model":      "clustara/auto",
 			"messages":   []json.RawMessage{msg},
 			"stream":     true,
-			"max_tokens": 4096,
+			"max_tokens": 16384,
 		}
 		enc, _ := json.Marshal(bodyMap)
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(enc))
@@ -193,7 +193,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-streaming fallback (unchanged behavior)
-	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 4096, nil)
+	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 16384, nil)
 	llmOK := llmErr == nil && strings.TrimSpace(answer) != ""
 	note := ""
 	if !llmOK {
