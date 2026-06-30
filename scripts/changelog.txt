@@ -1,3 +1,6 @@
+v0.9.22:
+- **Domain Module Map (v0.9.22, CLU-REQ-12)**: `internal/proxy`(203 파일)·`internal/store`(121 파일)가 커지면서 이후 충돌·회귀 위험을 줄이기 위한 점진 분리(incremental split)의 경계와 계획을 문서화했습니다(`docs/ARCHITECTURE_MODULES.md`). 단일 바이너리 구조상 핸들러가 `*Server` 메서드라 빅뱅 패키지 분리는 회귀 위험이 크고 기능 가치가 없어(리뷰도 P2·점진 분리로 규정), 대신 목표 도메인(core·gateway·k8sops·agentops·mcpops·finops·governance·observability)과 현재 파일 매핑, 추출 순서(헬퍼 안정화→store 먼저→analyzer 유지→handler 마지막), 신규 코드 배치 규칙을 정의했습니다. analyzer 계층이 이미 순수 함수로 잘 분리돼 있다는 점을 활용해 신규 로직을 analyzer에 두는 관례를 명문화했습니다.
+
 v0.9.21:
 - **Release Quality Gate 2.0 (v0.9.21, CLU-REQ-13)**: 빠른 v0.9.x 릴리즈 속도에서도 버전 정합성이 어긋나지 않도록, `go test`(=릴리즈)에서 실패하는 영구 게이트 테스트를 추가했습니다. 기존 AppVersion↔changelog 검증에 더해 (1) 운영 문서 헤더(`**버전: vX**`)와 기능 상태 헤딩(`기능 상태 (vX)`)이 AppVersion과 일치하는지, (2) changelog에 중복 버전 항목이 없고 newest-first로 정렬돼 있는지, (3) 최상단 changelog 항목 본문이 자기 버전을 언급하는지(복붙 bump 누락 방지)를 검증합니다. 신규 기능/엔드포인트가 아니라 릴리즈 신뢰성을 강제하는 테스트 게이트입니다.
 
