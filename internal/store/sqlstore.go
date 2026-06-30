@@ -2134,6 +2134,36 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			collected_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_api_discovery_snapshots_cluster ON k8s_api_discovery_snapshots(cluster_id, collected_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_security_exceptions (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL,
+			namespace TEXT NOT NULL DEFAULT '',
+			workload TEXT NOT NULL DEFAULT '',
+			finding TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			requested_by TEXT NOT NULL DEFAULT '',
+			approved_by TEXT NOT NULL DEFAULT '',
+			expires_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_security_exceptions_cluster ON k8s_security_exceptions(cluster_id, status)`,
+		`CREATE TABLE IF NOT EXISTS k8s_image_promotions (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL DEFAULT '',
+			repository TEXT NOT NULL DEFAULT '',
+			digest TEXT NOT NULL DEFAULT '',
+			source_env TEXT NOT NULL DEFAULT '',
+			target_env TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			requested_by TEXT NOT NULL DEFAULT '',
+			approved_by TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_image_promotions_cluster ON k8s_image_promotions(cluster_id, status)`,
 		`CREATE TABLE IF NOT EXISTS k8s_agent_regression_baselines (
 			id TEXT PRIMARY KEY,
 			version TEXT NOT NULL DEFAULT '',

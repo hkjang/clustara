@@ -6526,14 +6526,17 @@ const adminHTML = `<!doctype html>
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
       const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
-      let wsResp = null, expResp = null, secResp = null, imgResp = null, lifeResp = null;
+      let wsResp = null, expResp = null, secResp = null, imgResp = null, lifeResp = null, secxResp = null, promoResp = null;
       if (wsClusterId) {
         try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; }
         try { expResp = await api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { expResp = null; }
         try { secResp = await api('/admin/k8s/runtime-security?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { secResp = null; }
         try { imgResp = await api('/admin/k8s/image-ledger?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { imgResp = null; }
         try { lifeResp = await api('/admin/k8s/lifecycle?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { lifeResp = null; }
+        try { secxResp = await api('/admin/k8s/security-exceptions?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { secxResp = null; }
+        try { promoResp = await api('/admin/k8s/image-promotions?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { promoResp = null; }
       }
+      window._devClusterId = wsClusterId;
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
       const freshness = d.data_freshness || {};
@@ -6587,6 +6590,7 @@ const adminHTML = `<!doctype html>
         renderRuntimeSecurityCard(secResp) +
         renderImageLedgerCard(imgResp) +
         renderLifecycleCard(lifeResp) +
+        renderGovernanceCard(secxResp, promoResp, wsClusterId) +
         renderObservabilityCard(wsClusterId) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
@@ -6704,6 +6708,52 @@ const adminHTML = `<!doctype html>
         '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(imgResp.note || '') + '</div>' + drift +
         '<h4 style="margin:10px 0 4px">이미지 목록</h4><table><thead><tr><th></th><th>image</th><th>digest</th><th>워크로드</th></tr></thead><tbody>' +
         (entries || '<tr><td colspan="4" class="muted">이미지 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Governance workflows (CLU-NEXT-12/13): security exceptions + image promotions.
+    window.k8sSecxCreate = async (cid) => {
+      const out = document.getElementById('gov-out');
+      const body = { cluster_id: cid, namespace: (document.getElementById('secx-ns').value || '').trim(), workload: (document.getElementById('secx-wl').value || '').trim(), finding: (document.getElementById('secx-finding').value || '').trim(), reason: (document.getElementById('secx-reason').value || '').trim(), expires_at: (document.getElementById('secx-exp').value || '').trim() };
+      try { await api('/admin/k8s/security-exceptions', { method: 'POST', body: JSON.stringify(body) }); renderK8sHome(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { if (out) out.textContent = '실패: ' + e.message; }
+    };
+    window.k8sSecxStatus = async (id, st) => {
+      try { await api('/admin/k8s/security-exceptions/' + encodeURIComponent(id) + '/status', { method: 'POST', body: JSON.stringify({ status: st }) }); renderK8sHome(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('실패: ' + e.message); }
+    };
+    window.k8sPromoCreate = async (cid) => {
+      const out = document.getElementById('gov-out');
+      const body = { cluster_id: cid, repository: (document.getElementById('promo-repo').value || '').trim(), digest: (document.getElementById('promo-digest').value || '').trim(), source_env: (document.getElementById('promo-src').value || '').trim(), target_env: (document.getElementById('promo-tgt').value || '').trim(), reason: (document.getElementById('promo-reason').value || '').trim() };
+      try { await api('/admin/k8s/image-promotions', { method: 'POST', body: JSON.stringify(body) }); renderK8sHome(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { if (out) out.textContent = '실패: ' + e.message; }
+    };
+    window.k8sPromoStatus = async (id, st) => {
+      try { await api('/admin/k8s/image-promotions/' + encodeURIComponent(id) + '/status', { method: 'POST', body: JSON.stringify({ status: st }) }); renderK8sHome(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('실패: ' + e.message); }
+    };
+    function govStatusBadge(s) {
+      const c = s === 'approved' || s === 'promoted' ? '' : (s === 'rejected' || s === 'expired' ? 'error' : 'warn');
+      return '<span class="status ' + c + '" style="font-size:10px">' + escapeHTML(s) + '</span>';
+    }
+    function renderGovernanceCard(secx, promo, cid) {
+      if (!cid) return '';
+      const ex = (secx && secx.exceptions) || [];
+      const pr = (promo && promo.promotions) || [];
+      const actBtns = (id, kind) => {
+        const fn = kind === 'secx' ? 'k8sSecxStatus' : 'k8sPromoStatus';
+        const extra = kind === 'promo' ? '<button type="button" class="secondary" style="font-size:10px;padding:1px 5px" onclick="' + fn + '(\'' + id + '\',\'promoted\')">promoted</button>' : '';
+        return '<button type="button" class="secondary" style="font-size:10px;padding:1px 5px" onclick="' + fn + '(\'' + id + '\',\'approved\')">승인</button>' +
+          '<button type="button" class="secondary" style="font-size:10px;padding:1px 5px" onclick="' + fn + '(\'' + id + '\',\'rejected\')">반려</button>' + extra;
+      };
+      const exRows = ex.slice(0, 20).map(e => '<tr><td>' + govStatusBadge(e.status) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.workload) + '</td><td>' + escapeHTML(e.finding || '') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.expires_at || '') + '</td><td>' + (e.status === 'pending' ? actBtns(e.id, 'secx') : '') + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">보안 예외 없음</td></tr>';
+      const prRows = pr.slice(0, 20).map(p => '<tr><td>' + govStatusBadge(p.status) + '</td><td>' + escapeHTML(p.repository) + '</td><td class="muted" style="font-size:10px">' + escapeHTML((p.digest || '').slice(0, 19)) + '</td><td>' + escapeHTML((p.source_env || '?') + '→' + p.target_env) + '</td><td>' + (p.status === 'pending' || p.status === 'approved' ? actBtns(p.id, 'promo') : '') + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">이미지 승격 요청 없음</td></tr>';
+      return card('거버넌스 워크플로우 (보안 예외 · 이미지 승격)',
+        '<div class="card-body"><h4 style="margin:0 0 4px">런타임 보안 예외 (CLU-NEXT-12)</h4>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"><input id="secx-ns" placeholder="namespace" style="width:110px"><input id="secx-wl" placeholder="workload" style="width:130px"><input id="secx-finding" placeholder="finding(privileged 등)" style="width:140px"><input id="secx-exp" placeholder="만료(RFC3339)" style="width:160px"><input id="secx-reason" placeholder="사유" style="width:120px"><button type="button" onclick="k8sSecxCreate(\'' + escapeAttr(cid) + '\')">예외 요청</button></div>' +
+        '<table><thead><tr><th>상태</th><th>워크로드</th><th>finding</th><th>만료</th><th></th></tr></thead><tbody>' + exRows + '</tbody></table>' +
+        '<h4 style="margin:12px 0 4px">이미지 승격 (CLU-NEXT-13)</h4>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"><input id="promo-repo" placeholder="repository" style="width:150px"><input id="promo-digest" placeholder="sha256:..." style="width:160px"><input id="promo-src" placeholder="source env" style="width:90px"><input id="promo-tgt" placeholder="target env" style="width:90px"><input id="promo-reason" placeholder="사유" style="width:110px"><button type="button" onclick="k8sPromoCreate(\'' + escapeAttr(cid) + '\')">승격 요청</button></div>' +
+        '<table><thead><tr><th>상태</th><th>repository</th><th>digest</th><th>env</th><th></th></tr></thead><tbody>' + prRows + '</tbody></table>' +
+        '<div id="gov-out" class="muted" style="font-size:11px;margin-top:6px"></div></div>');
     }
     // Platform Lifecycle Center (CLU-OCP-08): upgrade readiness (OpenShift ClusterVersion style).
     function renderLifecycleCard(lifeResp) {

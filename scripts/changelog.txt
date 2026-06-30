@@ -1,3 +1,6 @@
+v0.9.33:
+- **Security Exception Workflow + Image Promotion (v0.9.33, CLU-NEXT-12·13)**: 분석을 거버넌스로 잇는 두 영속 승인 워크플로우를 추가했습니다. (1) Runtime Security 예외: 위험 Pod/워크로드(privileged 등)에 대해 사유·만료일과 함께 예외를 요청하고 승인/반려하며, 만료일이 지난 승인 예외는 자동으로 expired 처리합니다(`GET/POST /admin/k8s/security-exceptions`, `/{id}/status`). (2) 이미지 승격: 환경 간(dev→stage→prod) 승격을 mutable 태그가 아닌 고정 digest(sha256)로만 요청하고 승인 후 promoted로 기록합니다 — mutable 태그 승격은 거부합니다(`GET/POST /admin/k8s/image-promotions`, `/{id}/status`). 운영 홈에 거버넌스 워크플로우 카드(생성·승인/반려)를 추가했습니다. lifecycle 전이는 store 테스트로, 생성→승인·태그 거부·digest 승격 전 구간은 라이브로 검증했습니다. 어느 경로도 클러스터를 직접 변경하지 않습니다.
+
 v0.9.32:
 - **Developer Self-Service Request Center (v0.9.32, CLU-NEXT-01·02)**: 개발자 뷰를 단순 조회에서 안전한 셀프서비스 포털로 확장했습니다. 개발자가 재시작·스케일·롤백·cordon/uncordon·Config 변경·로그 조회 요청을 만들면, 새 승인 체계가 아니라 기존 흐름으로 연결됩니다 — action 계열은 Action Center에 pending_approval 요청으로 등록되어 운영자 승인 후 기존 실클러스터 executor가 실행하고, Config 변경은 Config Change Control Center로 브리지(영향도·승인·검증), 로그 조회는 읽기 전용이라 승인 없이 마스킹 로그 링크를 반환합니다. 자동 실행기가 없는 작업(rollback)은 수동 처리 요청으로 등록됩니다. 요청 유형별 흐름·위험·승인 여부 매핑은 순수 함수(`PlanDevRequest`)로 단위 테스트했고, 개발자 뷰에 '요청 생성' 패널을 추가했습니다(`GET/POST /admin/k8s/dev-requests`). Clustara는 이 경로에서 클러스터를 직접 변경하지 않습니다.
 
