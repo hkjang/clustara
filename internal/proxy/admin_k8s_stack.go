@@ -93,13 +93,28 @@ func (s *Server) handleK8sStackByID(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "stack id required", "invalid_request_error", "missing_stack_id")
 		return
 	}
-	if len(parts) > 1 && parts[1] == "drift" {
-		if r.Method != http.MethodGet {
-			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "drift":
+			if r.Method != http.MethodGet {
+				writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+				return
+			}
+			s.handleK8sStackDrift(w, r, id)
+			return
+		case "apply":
+			s.handleK8sStackApply(w, r, id)
+			return
+		case "promote":
+			s.handleK8sStackPromote(w, r, id)
+			return
+		case "rollback":
+			s.handleK8sStackRollback(w, r, id)
+			return
+		case "history":
+			s.handleK8sStackHistory(w, r, id)
 			return
 		}
-		s.handleK8sStackDrift(w, r, id)
-		return
 	}
 	switch r.Method {
 	case http.MethodGet:
@@ -143,10 +158,19 @@ func (s *Server) handleK8sStackDrift(w http.ResponseWriter, r *http.Request, id 
 	}
 	plan := analyzer.AnalyzeStackManifest(docs, nil) // resources only; policies not needed for drift
 	inventory, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: st.ClusterID, Limit: 5000})
+	if r.URL.Query().Get("fields") == "true" {
+		// Field-level drift (CLU-REQ-07): image, replicas, env, resources, probes, labels, annotations.
+		fieldReport := analyzer.DetectStackFieldDrift(docs, st.Namespace, inventory)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"stack_id": id, "cluster_id": st.ClusterID, "field_drift": fieldReport,
+			"note": "선언된 매니페스트와 실제 클러스터 객체를 필드 단위(image·replicas·env·resources·probe·label·annotation)로 비교합니다.",
+		})
+		return
+	}
 	report := analyzer.DetectStackDrift(plan.Resources, st.Namespace, inventory)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stack_id": id, "cluster_id": st.ClusterID, "drift": report,
-		"note": "선언된 리소스가 클러스터 인벤토리에 존재하는지(존재/누락) 비교합니다. 필드 단위 diff는 변경 타임라인/Diff를 참고하세요.",
+		"note": "선언된 리소스가 클러스터 인벤토리에 존재하는지(존재/누락) 비교합니다. 필드 단위 diff는 ?fields=true 또는 변경 타임라인/Diff를 참고하세요.",
 	})
 }
 

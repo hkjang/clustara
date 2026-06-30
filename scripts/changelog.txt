@@ -1,3 +1,6 @@
+v0.9.10:
+- **운영 품질·배포·통제 3종 묶음 (v0.9.10)**: (1) Ops Agent 평가 센터를 추가해 플로팅 에이전트의 답변마다 intent·도구 계획·사용 API·응답시간·폴백 여부·근거 점수(인용·근거 수·도구 계획·폴백 가중)·👍/👎 피드백·Action Card 채택을 저장하고 intent별 품질 대시보드(`/admin/agent/evaluations`·`/evaluations/feedback`)로 집계합니다. Action Card는 제안→승인대기→승인→실행→실패→롤백/재발의 lifecycle로 영속화됩니다(`/admin/agent/action-cards`·`/{id}/status`). (2) Application Stack에 필드 단위 드리프트(image·replicas·env·resources·probe·label·annotation, `?fields=true`)와 Server-Side Apply 기반 적용(정책 Deny 차단·승인 게이트·dry-run), 환경 간 승격(diff+새 revision), 이전 revision 롤백, 배포 이력(`/apply`·`/promote`·`/rollback`·`/history`)을 추가했습니다. (3) 런타임 설정 롤백 센터(특정 시점 값 복원 + 멀티 파드 수렴 상태)와 MCP 도구 스코프 강제(도구별 role·namespace·cluster 허용목록·masking level·approval rule, opt-in)를 추가했습니다(`/admin/mcp/tool-scopes`). 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
+
 v0.9.9:
 - **Ops Agent `<think>` 파서와 접두어 헤더 파서 간 간섭 버그 수정 (v0.9.9)**: `<think>` 태그가 수신된 스트림의 경우, 태그 제거 이후 남은 본문 텍스트가 접두어 헤더(예: `Thinking Process:`, `Thinking:`)로 오인되어 추론 영역으로 재흡입 및 오작동(본문 내용 누락 및 접힘)이 일어나지 않도록 예외 처리 조건을 보완했습니다.
 

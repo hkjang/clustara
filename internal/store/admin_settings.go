@@ -182,6 +182,23 @@ func (s *SQLStore) DeleteAdminSetting(ctx context.Context, key, changedBy, reaso
 	return tx.Commit()
 }
 
+// GetAdminSettingHistoryEntry fetches one change-history row by id (for point-in-time rollback to a
+// specific past value rather than just the immediately-previous one).
+func (s *SQLStore) GetAdminSettingHistoryEntry(ctx context.Context, id string) (AdminSettingHistory, error) {
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id, key, COALESCE(old_value_json, ''), COALESCE(new_value_json, ''), is_secret, COALESCE(changed_by, ''), COALESCE(reason, ''), changed_at
+		FROM admin_setting_history WHERE id = ?`), id)
+	var h AdminSettingHistory
+	var isSecret int
+	if err := row.Scan(&h.ID, &h.Key, &h.OldValueJSON, &h.NewValueJSON, &isSecret, &h.ChangedBy, &h.Reason, &h.ChangedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return AdminSettingHistory{}, ErrNotFound
+		}
+		return AdminSettingHistory{}, err
+	}
+	h.IsSecret = isSecret == 1
+	return h, nil
+}
+
 // ListAdminSettingHistory returns change history, optionally filtered by key, newest-first.
 func (s *SQLStore) ListAdminSettingHistory(ctx context.Context, key string, limit int) ([]AdminSettingHistory, error) {
 	if limit <= 0 || limit > 500 {

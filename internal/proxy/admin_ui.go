@@ -373,6 +373,7 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
           <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
           <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
+          <a href="#/k8s-agentops" data-tab="k8s-agentops">에이전트 품질</a>
         </div>
       </div>
       <div class="nav-group">
@@ -388,6 +389,7 @@ const adminHTML = `<!doctype html>
         <div class="nav-group-menu">
           <a href="#/k8s-settings" data-tab="k8s-settings">운영 설정</a>
           <a href="#/settings" data-tab="settings">설정</a>
+          <a href="#/k8s-configrollback" data-tab="k8s-configrollback">설정 롤백 센터</a>
         </div>
       </div>
     </nav>
@@ -1239,6 +1241,8 @@ const adminHTML = `<!doctype html>
           case 'k8s-graph': await renderK8sResourceGraph(params); break;
           case 'k8s-conn': await renderK8sConnectivity(params); break;
           case 'k8s-actions': await renderK8sActions(params); break;
+          case 'k8s-agentops': await renderK8sAgentOps(params); break;
+          case 'k8s-configrollback': await renderK8sConfigRollback(params); break;
           case 'k8s-meta': await renderK8sMeta(params); break;
           case 'k8s-capacity': await renderK8sCapacity(params); break;
           case 'k8s-cost': await renderK8sCost(params); break;
@@ -2402,6 +2406,190 @@ const adminHTML = `<!doctype html>
     }
 
     // ---------- Agent Performance Analytics ----------
+    // Ops Agent Evaluation Center (CLU-REQ-02/03/04): quality, grounding scores and Action Card
+    // lifecycle for the floating Ops Agent.
+    function groundingBadge(score, grade) {
+      const cls = grade === 'A' ? '' : (grade === 'B' ? '' : (grade === 'C' ? 'warn' : 'error'));
+      return '<span class="status ' + cls + '">' + (score || 0).toFixed(1) + ' (' + (grade || '-') + ')</span>';
+    }
+    function cardStatusBadge(st) {
+      const map = { proposed: '', pending_approval: 'warn', approved: 'warn', executed: '', failed: 'error', rolled_back: 'warn', rejected: 'error', dismissed: '' };
+      return '<span class="status ' + (map[st] || '') + '">' + escapeHTML(st || '') + '</span>';
+    }
+    const agentCardNext = {
+      proposed: ['pending_approval', 'dismissed'],
+      pending_approval: ['approved', 'rejected', 'dismissed'],
+      approved: ['executed', 'failed'],
+      failed: ['pending_approval', 'rolled_back', 'dismissed'],
+      executed: ['rolled_back', 'recurred'],
+      rejected: ['dismissed'],
+    };
+    window.agentCardAdvance = async (id, to) => {
+      try {
+        await api('/admin/agent/action-cards/' + encodeURIComponent(id) + '/status', { method: 'POST', body: JSON.stringify({ status: to }) });
+        renderK8sAgentOps();
+      } catch (e) { alert('전이 실패: ' + e.message); }
+    };
+    window.agentEvalFeedback = async (id, fb) => {
+      try {
+        await api('/admin/agent/evaluations/feedback', { method: 'POST', body: JSON.stringify({ id: id, feedback: fb }) });
+        renderK8sAgentOps();
+      } catch (e) { alert('피드백 실패: ' + e.message); }
+    };
+    async function renderK8sAgentOps() {
+      const view = document.getElementById('view');
+      view.innerHTML = '<div class="empty">불러오는 중…</div>';
+      let statsResp = {}, evalsResp = {}, cardsResp = {};
+      try {
+        [statsResp, evalsResp, cardsResp] = await Promise.all([
+          api('/admin/agent/evaluations?stats=true'),
+          api('/admin/agent/evaluations'),
+          api('/admin/agent/action-cards'),
+        ]);
+      } catch (e) { view.innerHTML = '<div class="empty">' + escapeHTML(e.message) + '</div>'; return; }
+      const st = statsResp.stats || {};
+      const byIntent = statsResp.by_intent || [];
+      const evals = evalsResp.evaluations || [];
+      const cards = cardsResp.action_cards || [];
+
+      const kpis = '<div class="kpis">' +
+        kpi('총 답변', fmt(st.total || 0)) +
+        kpi('LLM 답변', fmt(st.llm_answers || 0)) +
+        kpi('폴백', fmt(st.fallbacks || 0)) +
+        kpi('평균 근거점수', (st.avg_grounding || 0).toFixed(1)) +
+        kpi('👍 / 👎', fmt(st.thumbs_up || 0) + ' / ' + fmt(st.thumbs_down || 0)) +
+        kpi('평균 응답', Math.round(st.avg_response_ms || 0) + ' ms') +
+      '</div>';
+
+      const intentTable = byIntent.length ? (
+        '<table><thead><tr><th data-sort="str">Intent</th><th data-sort="num">답변 수</th>' +
+        '<th data-sort="num">평균 근거점수</th><th data-sort="num">👍</th><th data-sort="num">👎</th></tr></thead><tbody>' +
+        byIntent.map(r => '<tr>' +
+          '<td><strong>' + escapeHTML(r.intent || '-') + '</strong></td>' +
+          '<td data-num="' + (r.count || 0) + '">' + fmt(r.count) + '</td>' +
+          '<td data-num="' + (r.avg_grounding || 0) + '">' + (r.avg_grounding || 0).toFixed(1) + '</td>' +
+          '<td data-num="' + (r.thumbs_up || 0) + '">' + fmt(r.thumbs_up) + '</td>' +
+          '<td data-num="' + (r.thumbs_down || 0) + '">' + fmt(r.thumbs_down) + '</td>' +
+        '</tr>').join('') + '</tbody></table>'
+      ) : '<div class="empty">아직 평가 데이터가 없습니다. 플로팅 에이전트에 질문하면 쌓입니다.</div>';
+
+      const evalRows = evals.slice(0, 100).map(e => {
+        const det = (() => { try { return JSON.parse(e.grounding_detail || '{}'); } catch (_) { return {}; } })();
+        const fb = e.feedback === 'up' ? '👍' : (e.feedback === 'down' ? '👎' : '—');
+        return '<tr>' +
+          '<td>' + escapeHTML(e.intent || '-') + '</td>' +
+          '<td data-num="' + (e.grounding_score || 0) + '">' + groundingBadge(e.grounding_score, det.grade) + '</td>' +
+          '<td data-num="' + (e.evidence_count || 0) + '">' + fmt(e.evidence_count) + '</td>' +
+          '<td data-num="' + (e.response_ms || 0) + '">' + fmt(e.response_ms) + ' ms</td>' +
+          '<td>' + (e.fallback ? '<span class="status error">폴백</span>' : '<span class="status">정상</span>') + '</td>' +
+          '<td>' + fb + ' <button type="button" class="secondary" style="font-size:10px;padding:1px 5px" onclick="agentEvalFeedback(' + JSON.stringify(e.id) + ',\'up\')">👍</button>' +
+          '<button type="button" class="secondary" style="font-size:10px;padding:1px 5px" onclick="agentEvalFeedback(' + JSON.stringify(e.id) + ',\'down\')">👎</button></td>' +
+          '<td>' + ago(e.created_at) + '</td>' +
+        '</tr>';
+      }).join('');
+      const evalTable = evals.length ? (
+        '<table><thead><tr><th data-sort="str">Intent</th><th data-sort="num">근거점수</th>' +
+        '<th data-sort="num">근거 수</th><th data-sort="num">응답</th><th data-sort="str">상태</th>' +
+        '<th data-sort="str">피드백</th><th data-sort="str">시각</th></tr></thead><tbody>' + evalRows + '</tbody></table>'
+      ) : '<div class="empty">평가 기록 없음</div>';
+
+      const cardRows = cards.slice(0, 100).map(c => {
+        const next = agentCardNext[c.status] || [];
+        const btns = next.map(to => '<button type="button" class="secondary" style="font-size:10px;padding:1px 6px;margin:1px" onclick="agentCardAdvance(' + JSON.stringify(c.id) + ',' + JSON.stringify(to) + ')">' + escapeHTML(to) + '</button>').join('');
+        return '<tr>' +
+          '<td><strong>' + escapeHTML(c.action || '') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((c.namespace || '') + '/' + (c.kind || '') + '/' + (c.name || '')) + '</div></td>' +
+          '<td>' + escapeHTML(c.risk || '') + '</td>' +
+          '<td>' + cardStatusBadge(c.status) + (c.recurred ? ' <span class="status error">재발</span>' : '') + '</td>' +
+          '<td>' + (c.action_request_id ? escapeHTML(c.action_request_id) : '<span class="muted">-</span>') + '</td>' +
+          '<td>' + btns + '</td>' +
+          '<td>' + ago(c.created_at) + '</td>' +
+        '</tr>';
+      }).join('');
+      const cardTable = cards.length ? (
+        '<table><thead><tr><th data-sort="str">조치</th><th data-sort="str">위험도</th><th data-sort="str">상태</th>' +
+        '<th data-sort="str">Action 요청</th><th>전이</th><th data-sort="str">제안 시각</th></tr></thead><tbody>' + cardRows + '</tbody></table>'
+      ) : '<div class="empty">제안된 Action Card 없음</div>';
+
+      view.innerHTML =
+        section('Ops Agent 평가 센터 (Evaluation Center)',
+          '<div class="muted" style="font-size:12px;padding:0 14px 8px">플로팅 운영 에이전트의 답변 품질·근거 점수·채택률을 측정합니다. 근거 점수는 근거 인용·근거 수·도구 계획·폴백 여부로 산정합니다(A≥80·B≥60·C≥40·D).</div>' +
+          kpis +
+          '<h4 style="margin:12px 14px 4px">Intent별 품질</h4>' + intentTable) +
+        section('최근 답변 평가', evalTable) +
+        section('Action Card Lifecycle', cardTable);
+      makeSortable('#view', 'agentops');
+    }
+
+    // Runtime Config Rollback Center (CLU-REQ-06): unified change history + per-key rollback
+    // (previous or point-in-time) + multi-pod convergence state for runtime settings.
+    window.configRollback = async (key, historyId) => {
+      const label = historyId ? '이 시점 값으로' : '직전 값으로';
+      if (!confirm(key + ' 설정을 ' + label + ' 롤백할까요?')) return;
+      try {
+        const body = { key: key, reason: 'rollback center' };
+        if (historyId) body.history_id = historyId;
+        await api('/admin/settings/rollback', { method: 'POST', body: JSON.stringify(body) });
+        renderK8sConfigRollback();
+      } catch (e) { alert('롤백 실패: ' + e.message); }
+    };
+    async function renderK8sConfigRollback() {
+      const view = document.getElementById('view');
+      view.innerHTML = '<div class="empty">불러오는 중…</div>';
+      let histResp = {}, podsResp = {};
+      try {
+        [histResp, podsResp] = await Promise.all([
+          api('/admin/settings/history'),
+          api('/admin/pods'),
+        ]);
+      } catch (e) { view.innerHTML = '<div class="empty">' + escapeHTML(e.message) + '</div>'; return; }
+      const hist = histResp.history || [];
+      const pods = podsResp.pods || [];
+      const sum = podsResp.summary || {};
+
+      const podRows = pods.map(p => '<tr>' +
+        '<td>' + (p.stale ? '<span class="status error" style="font-size:10px">stale</span>' : '<span class="status" style="font-size:10px">live</span>') + '</td>' +
+        '<td>' + escapeHTML(p.hostname || '-') + '</td>' +
+        '<td>' + escapeHTML(p.build_version || '-') + '</td>' +
+        '<td>' + (p.up_to_date ? '<span class="status" style="font-size:10px">수렴</span>' : '<span class="status warn" style="font-size:10px">미적용</span>') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(p.last_seen) + '</td>' +
+      '</tr>').join('') || '<tr><td colspan="5" class="muted">등록된 파드 없음</td></tr>';
+
+      const histRows = hist.map(h => {
+        const oldV = h.is_secret ? '(secret)' : (h.old_value_json || '∅');
+        const newV = h.is_secret ? '(secret)' : (h.new_value_json || '∅');
+        const btns = h.is_secret ? '<span class="muted" style="font-size:10px">secret</span>' :
+          '<button type="button" class="secondary" style="font-size:10px;padding:1px 6px" onclick="configRollback(' + JSON.stringify(h.key) + ',' + JSON.stringify(h.id) + ')">이 시점으로</button>';
+        return '<tr>' +
+          '<td><code style="font-size:11px">' + escapeHTML(h.key) + '</code></td>' +
+          '<td class="muted" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis">' + escapeHTML(String(oldV)) + ' → ' + escapeHTML(String(newV)) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(h.changed_by || '-') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(h.reason || '') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + ago(h.changed_at) + '</td>' +
+          '<td>' + btns + '</td>' +
+        '</tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">변경 이력 없음</td></tr>';
+
+      // Distinct keys for quick "rollback to previous".
+      const keys = [...new Set(hist.filter(h => !h.is_secret).map(h => h.key))];
+      const keyBtns = keys.map(k => '<button type="button" class="secondary" style="font-size:11px;margin:2px" onclick="configRollback(' + JSON.stringify(k) + ',null)">' + escapeHTML(k) + ' ↩ 직전</button>').join('') || '<span class="muted">롤백 가능한 키 없음</span>';
+
+      view.innerHTML =
+        section('런타임 설정 롤백 센터 (Config Rollback Center)',
+          '<div class="muted" style="font-size:12px;padding:0 14px 8px">설정 변경 이력·변경자·이전 값을 확인하고, 직전 값 또는 특정 시점 값으로 롤백합니다. 변경은 DB 토큰 폴링으로 모든 파드에 전파됩니다(아래 수렴 상태).</div>' +
+          '<div class="kpis">' +
+            kpi('파드 수', fmt(sum.total || 0)) +
+            kpi('live', fmt(sum.live || 0)) +
+            kpi('수렴 완료', fmt(sum.converged || 0)) +
+            kpi('미적용', fmt((sum.total || 0) - (sum.converged || 0))) +
+          '</div>' +
+          '<h4 style="margin:12px 14px 4px">직전 값으로 빠른 롤백</h4><div style="padding:0 14px 8px">' + keyBtns + '</div>') +
+        section('파드 수렴 상태 (Multi-Pod Convergence)',
+          '<table><thead><tr><th>상태</th><th>호스트</th><th>빌드</th><th>설정 수렴</th><th>최근 하트비트</th></tr></thead><tbody>' + podRows + '</tbody></table>') +
+        section('설정 변경 이력 (Change History)',
+          '<table><thead><tr><th>키</th><th>이전 → 이후</th><th>변경자</th><th>사유</th><th>시각</th><th>롤백</th></tr></thead><tbody>' + histRows + '</tbody></table>');
+      makeSortable('#view', 'configrollback');
+    }
+
     const agentsState = { window: sessionStorage.getItem('agentsWindow') || '7d' };
     async function renderAgents(initial) {
       if (initial && initial.get('window')) agentsState.window = initial.get('window');
@@ -8694,10 +8882,13 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + ago(s.updated_at) + '</td>' +
         '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sStackView(\'' + escapeAttr(s.id) + '\')">리비전</button> ' +
         '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDrift(\'' + escapeAttr(s.id) + '\')">드리프트</button> ' +
+        '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackApply(\'' + escapeAttr(s.id) + '\')">적용</button> ' +
+        '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackPromote(\'' + escapeAttr(s.id) + '\')">승격</button> ' +
+        '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackHistory(\'' + escapeAttr(s.id) + '\')">이력</button> ' +
         '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDelete(\'' + escapeAttr(s.id) + '\')">삭제</button></td></tr>').join('')
         : '<tr><td colspan="7" class="muted">저장된 Stack이 없습니다.</td></tr>';
       view.innerHTML =
-        section('앱 배포 (Application Stack)', '<div class="muted" style="font-size:12px;padding:0 4px">매니페스트를 검증·저장하면 리비전이 관리됩니다. 실제 클러스터 적용은 승인/executor 흐름으로 이어집니다(후속).</div>') +
+        section('앱 배포 (Application Stack)', '<div class="muted" style="font-size:12px;padding:0 4px">매니페스트를 검증·저장하면 리비전이 관리됩니다. <strong>적용</strong>은 Server-Side Apply(정책 Deny 차단·승인 게이트)로 클러스터에 반영하고, <strong>승격</strong>은 다른 환경 스택으로, <strong>롤백</strong>은 이전 리비전으로 복원합니다. 드리프트는 존재 여부와 필드 단위(image·replicas·env·resource·probe·label) 비교를 제공합니다.</div>') +
         card('Stack 저장 (검증 후 버전 관리)',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
           '<input id="stk-name" placeholder="Stack 이름" style="min-width:160px"><select id="stk-cluster">' + clusterOpts + '</select><input id="stk-ns" placeholder="namespace" style="min-width:120px"></div>' +
@@ -8725,8 +8916,8 @@ const adminHTML = `<!doctype html>
       out.innerHTML = '<span class="muted">불러오는 중...</span>';
       try {
         const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id));
-        const revs = (d.revisions || []).map(r => '<tr><td>rev ' + fmt(r.revision_no) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((r.manifest_hash || '').slice(0, 12)) + '</td><td class="muted" style="font-size:11px">' + ago(r.created_at) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">리비전 없음</td></tr>';
-        out.innerHTML = '<div style="font-size:12px;margin-bottom:4px"><strong>' + escapeHTML((d.stack || {}).name || '') + '</strong> 리비전</div><table><thead><tr><th>Rev</th><th>Hash</th><th>생성</th></tr></thead><tbody>' + revs + '</tbody></table>';
+        const revs = (d.revisions || []).map(r => '<tr><td>rev ' + fmt(r.revision_no) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((r.manifest_hash || '').slice(0, 12)) + '</td><td class="muted" style="font-size:11px">' + ago(r.created_at) + '</td><td><button type="button" class="secondary" style="font-size:10px" onclick="k8sStackRollback(\'' + escapeAttr(id) + '\',' + fmt(r.revision_no) + ')">롤백</button></td></tr>').join('') || '<tr><td colspan="4" class="muted">리비전 없음</td></tr>';
+        out.innerHTML = '<div style="font-size:12px;margin-bottom:4px"><strong>' + escapeHTML((d.stack || {}).name || '') + '</strong> 리비전</div><table><thead><tr><th>Rev</th><th>Hash</th><th>생성</th><th></th></tr></thead><tbody>' + revs + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sStackDrift = async (id) => {
@@ -8737,8 +8928,77 @@ const adminHTML = `<!doctype html>
         const dr = d.drift || {};
         const badge = dr.synced ? '<span class="status">SYNCED</span>' : '<span class="status warn">DRIFT · 누락 ' + fmt(dr.missing || 0) + '</span>';
         const rows = (dr.entries || []).map(e => '<tr><td>' + (e.status === 'missing' ? '<span class="status error" style="font-size:10px">missing</span>' : '<span class="status" style="font-size:10px">present</span>') + '</td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">선언 리소스 없음</td></tr>';
-        out.innerHTML = '<div style="margin-bottom:4px">드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(dr.declared || 0) + ' · 존재 ' + fmt(dr.present || 0) + '</span></div>' +
+        out.innerHTML = '<div style="margin-bottom:4px">드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(dr.declared || 0) + ' · 존재 ' + fmt(dr.present || 0) + '</span> ' +
+          '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackFieldDrift(\'' + escapeAttr(id) + '\')">필드 드리프트</button></div>' +
           '<table><thead><tr><th>상태</th><th>Kind</th><th>리소스</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackFieldDrift = async (id) => {
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">필드 드리프트 분석 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/drift?fields=true');
+        const fd = d.field_drift || {};
+        const badge = fd.synced ? '<span class="status">SYNCED</span>' : '<span class="status warn">DRIFT · 변경 ' + fmt(fd.drifted || 0) + ' · 누락 ' + fmt(fd.missing || 0) + '</span>';
+        const rows = (fd.entries || []).map(e => {
+          if (e.status === 'missing') return '<tr><td><span class="status error" style="font-size:10px">missing</span></td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td><td class="muted">클러스터에 없음</td></tr>';
+          if (!(e.diffs || []).length) return '<tr><td><span class="status" style="font-size:10px">synced</span></td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td><td class="muted">일치</td></tr>';
+          const diffHtml = (e.diffs || []).map(df => '<div style="font-size:11px"><code>' + escapeHTML(df.path) + '</code>: <span class="status warn" style="font-size:10px">' + escapeHTML(df.declared || '∅') + '</span> → <span class="status error" style="font-size:10px">' + escapeHTML(df.live || '∅') + '</span></div>').join('');
+          return '<tr><td><span class="status warn" style="font-size:10px">drift</span></td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td><td>' + diffHtml + '</td></tr>';
+        }).join('') || '<tr><td colspan="4" class="muted">선언 리소스 없음</td></tr>';
+        out.innerHTML = '<div style="margin-bottom:4px">필드 드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(fd.declared || 0) + ' · 존재 ' + fmt(fd.present || 0) + '</span></div>' +
+          '<table><thead><tr><th>상태</th><th>Kind</th><th>리소스</th><th>필드 차이</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackApply = async (id) => {
+      const out = document.getElementById('stk-detail');
+      const dryRun = confirm('확인=실제 적용(Server-Side Apply), 취소=Dry-run 미리보기');
+      out.innerHTML = '<span class="muted">' + (dryRun ? '적용' : 'Dry-run') + ' 중...</span>';
+      try {
+        let d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/apply', { method: 'POST', body: JSON.stringify({ dry_run: !dryRun, confirm: false }) });
+        if (d.decision === 'approval_required') {
+          if (!confirm('승인 필요 변경이 포함되어 있습니다(' + ((d.plan || {}).approval_reasons || []).join(', ') + '). 그래도 적용할까요?')) { out.innerHTML = '<span class="status warn">승인 대기로 취소됨</span>'; return; }
+          d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/apply', { method: 'POST', body: JSON.stringify({ dry_run: !dryRun, confirm: true }) });
+        }
+        const results = (d.results || []).map(r => '<tr><td>' + (r.ok ? '<span class="status" style="font-size:10px">ok</span>' : '<span class="status error" style="font-size:10px">fail</span>') + '</td><td>' + escapeHTML(r.kind) + '</td><td>' + escapeHTML((r.namespace || '-') + '/' + r.name) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.error || '') + '</td></tr>').join('');
+        const stCls = d.status === 'success' ? '' : (d.status === 'partial' ? 'warn' : 'error');
+        out.innerHTML = '<div style="margin-bottom:4px">' + (d.dry_run ? '<span class="status">DRY-RUN</span> ' : '') + '<span class="status ' + stCls + '">' + escapeHTML(d.status || d.decision || '') + '</span> <span class="muted" style="font-size:11px">적용 ' + fmt(d.applied || 0) + ' · 실패 ' + fmt(d.failed || 0) + '</span></div>' +
+          (results ? '<table><thead><tr><th>결과</th><th>Kind</th><th>리소스</th><th>오류</th></tr></thead><tbody>' + results + '</tbody></table>' : '<div class="muted">' + escapeHTML(d.note || '') + '</div>');
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackPromote = async (id) => {
+      const targetName = prompt('승격 대상 스택 이름(새로 만들거나 기존 이름과 동일하게 입력):');
+      if (!targetName) return;
+      const targetCluster = prompt('대상 cluster_id (비우면 소스와 동일):') || '';
+      const targetNs = prompt('대상 namespace (비우면 소스와 동일):') || '';
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">승격 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/promote', { method: 'POST', body: JSON.stringify({ target_name: targetName, target_cluster_id: targetCluster, target_namespace: targetNs }) });
+        const diff = d.diff || {};
+        out.innerHTML = '<div style="margin-bottom:4px"><span class="status">승격됨</span> → <strong>' + escapeHTML((d.target_stack || {}).name || '') + '</strong> (rev ' + fmt((d.target_stack || {}).revision_no || 0) + ')</div>' +
+          '<div style="font-size:12px">추가 ' + fmt((diff.added || []).length) + ' · 제거 ' + fmt((diff.removed || []).length) + ' · 공통 ' + fmt((diff.common || []).length) + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(d.note || '') + '</div>';
+        await renderK8sStacks(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackRollback = async (id, rev) => {
+      if (!confirm('rev ' + rev + ' 매니페스트로 롤백할까요? (새 리비전 생성, 클러스터 반영은 적용 버튼)')) return;
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">롤백 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/rollback', { method: 'POST', body: JSON.stringify({ revision_no: rev }) });
+        out.innerHTML = '<div><span class="status">롤백됨</span> rev ' + fmt(rev) + ' → 새 rev ' + fmt((d.stack || {}).revision_no || 0) + '</div><div class="muted" style="font-size:11px">' + escapeHTML(d.note || '') + '</div>';
+        await renderK8sStacks(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sStackHistory = async (id) => {
+      const out = document.getElementById('stk-detail');
+      out.innerHTML = '<span class="muted">이력 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/stacks/' + encodeURIComponent(id) + '/history');
+        const rows = (d.history || []).map(h => '<tr><td>' + escapeHTML(h.operation) + '</td><td>rev ' + fmt(h.revision_no) + '</td><td>' + (h.dry_run ? 'dry-run' : '실적용') + '</td><td><span class="status ' + (h.status === 'success' ? '' : (h.status === 'partial' ? 'warn' : 'error')) + '" style="font-size:10px">' + escapeHTML(h.status) + '</span></td><td class="muted" style="font-size:11px">적용 ' + fmt(h.applied) + '/실패 ' + fmt(h.failed) + '</td><td class="muted" style="font-size:11px">' + ago(h.created_at) + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">이력 없음</td></tr>';
+        out.innerHTML = '<div style="font-size:12px;margin-bottom:4px">배포 이력</div><table><thead><tr><th>작업</th><th>Rev</th><th>모드</th><th>상태</th><th>결과</th><th>시각</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sStackDelete = async (id) => {
@@ -10533,6 +10793,60 @@ const adminHTML = `<!doctype html>
         '<p class="muted" style="font-size:10px;margin-top:4px">' + escapeHTML(d.note || '') + '</p></div>'));
     };
 
+    // MCP Tool Scope Enforcement (CLU-REQ-11) — per-tool least-privilege policy management.
+    window.mcpLoadScopes = async () => {
+      const host = document.getElementById('mcp-tool-scopes');
+      if (!host) return;
+      let d;
+      try { d = await api('/admin/mcp/tool-scopes'); } catch (e) { host.innerHTML = ''; return; }
+      const scopes = d.tool_scopes || [];
+      const rows = scopes.length ? scopes.map(sc =>
+        '<tr><td><code style="font-size:11px">' + escapeHTML(sc.server_label) + '/' + escapeHTML(sc.tool_name) + '</code></td>' +
+        '<td>' + escapeHTML(sc.allowed_roles || '전체') + '</td>' +
+        '<td>' + escapeHTML(sc.allowed_namespaces || '전체') + '</td>' +
+        '<td>' + escapeHTML(sc.allowed_clusters || '전체') + '</td>' +
+        '<td>' + escapeHTML(sc.masking_level || 'none') + '</td>' +
+        '<td>' + escapeHTML(sc.approval_rule || 'inherit') + '</td>' +
+        '<td>' + (sc.enabled ? '<span class="status" style="font-size:10px">on</span>' : '<span class="status warn" style="font-size:10px">off</span>') + '</td>' +
+        '<td><button type="button" class="secondary" style="font-size:10px" onclick="mcpScopeDelete(' + JSON.stringify(sc.server_label) + ',' + JSON.stringify(sc.tool_name) + ')">삭제</button></td></tr>'
+      ).join('') : '<tr><td colspan="8" class="muted">설정된 도구 스코프 없음 (미설정 도구는 기존 동작 유지)</td></tr>';
+      const form =
+        '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
+        '<input id="scope-server" placeholder="server (* 가능)" style="width:120px">' +
+        '<input id="scope-tool" placeholder="tool (* 가능)" style="width:120px">' +
+        '<input id="scope-roles" placeholder="허용 role CSV" style="width:130px">' +
+        '<input id="scope-ns" placeholder="허용 namespace CSV" style="width:150px">' +
+        '<input id="scope-clusters" placeholder="허용 cluster CSV" style="width:140px">' +
+        '<select id="scope-mask"><option value="none">mask:none</option><option value="partial">mask:partial</option><option value="strict">mask:strict</option></select>' +
+        '<select id="scope-approval"><option value="inherit">approval:inherit</option><option value="always">approval:always</option><option value="never">approval:never</option></select>' +
+        '<button type="button" onclick="mcpScopeSave()">스코프 저장</button></div>' +
+        '<div id="scope-out" style="font-size:11px"></div></div>';
+      host.innerHTML = section('MCP Tool Scope Enforcement (도구별 최소권한)',
+        card('스코프 추가/수정', form) +
+        card('도구 스코프 목록', '<div class="card-body"><table><thead><tr><th>도구</th><th>role</th><th>namespace</th><th>cluster</th><th>masking</th><th>approval</th><th>활성</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<p class="muted" style="font-size:10px;margin-top:4px">' + escapeHTML(d.note || '') + '</p></div>'));
+    };
+    window.mcpScopeSave = async () => {
+      const out = document.getElementById('scope-out');
+      const body = {
+        server_label: (document.getElementById('scope-server').value || '').trim(),
+        tool_name: (document.getElementById('scope-tool').value || '').trim(),
+        allowed_roles: (document.getElementById('scope-roles').value || '').trim(),
+        allowed_namespaces: (document.getElementById('scope-ns').value || '').trim(),
+        allowed_clusters: (document.getElementById('scope-clusters').value || '').trim(),
+        masking_level: document.getElementById('scope-mask').value,
+        approval_rule: document.getElementById('scope-approval').value,
+        enabled: true,
+      };
+      try { await api('/admin/mcp/tool-scopes', { method: 'POST', body: JSON.stringify(body) }); mcpLoadScopes(); }
+      catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.mcpScopeDelete = async (server, tool) => {
+      if (!confirm(server + '/' + tool + ' 스코프를 삭제할까요?')) return;
+      try { await api('/admin/mcp/tool-scopes/' + encodeURIComponent(server) + '/' + encodeURIComponent(tool), { method: 'DELETE' }); mcpLoadScopes(); }
+      catch (e) { alert(e.message); }
+    };
+
     async function renderMCP(initial) {
       const apiKeyId = initial ? (initial.get('api_key_id') || '') : '';
       const serverFilter = initial ? (initial.get('server') || '') : '';
@@ -10787,9 +11101,11 @@ const adminHTML = `<!doctype html>
         '<div id="mcp-trust"></div>' +
         section('에이전트 루프 의심 (세션별 반복 호출 ≥ 10)', loopTable) +
         section(catalogTitle, catalogTable) +
-        section('MCP 서버 정책', allowlistToggle + policyForm + policyTable);
+        section('MCP 서버 정책', allowlistToggle + policyForm + policyTable) +
+        '<div id="mcp-tool-scopes"></div>';
 
       mcpLoadTrust();
+      mcpLoadScopes();
 
       const wizardSelect = document.getElementById('mcp-wizard-upstream');
       if (wizardSelect) {

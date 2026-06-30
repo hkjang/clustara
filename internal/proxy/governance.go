@@ -587,6 +587,29 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		action = normalizeToolRiskAction(profile.Action, action)
 		note = profile.Note
 	}
+	// MCP Tool Scope Enforcement (CLU-REQ-11): an opt-in least-privilege layer. When a scope is
+	// configured for this (server, tool) it constrains role + target namespace/cluster and may
+	// force/skip the approval gate.
+	if scope, scopeFound, scopeErr := s.db.MCPToolScope(r.Context(), route.upstreamName, toolName); scopeErr == nil && scopeFound {
+		role := ""
+		if authCtx != nil {
+			role = authCtx.Role
+		}
+		ns, cl := extractScopeTargets(args)
+		sd := evaluateMCPToolScope(scope, role, ns, cl)
+		if sd.Blocked {
+			s.metrics.IncMCPBlocked()
+			reqID := s.logMCPCall(r, apiKeyID, route.upstreamName, toolName, args, true, http.StatusForbidden, 0)
+			s.recordMCPRouteDecision(r, reqID, apiKeyID, method, exposedName, route, "block", "scope: "+sd.Reason, 0)
+			return rpcErrorResponse(id, -32000, "blocked by MCP tool scope: "+sd.Reason)
+		}
+		if sd.ForceApproval {
+			action = "require_approval"
+		}
+		if sd.SkipApproval && action == "require_approval" {
+			action = "allow"
+		}
+	}
 	g := governanceContext{
 		APIKeyID:    apiKeyID,
 		Endpoint:    "/mcp",

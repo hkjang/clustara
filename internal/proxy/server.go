@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.9"
+const AppVersion = "v0.9.10"
 
 type Server struct {
 	cfg            config.Config
@@ -636,6 +636,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/mcp/requests/", s.handleMCPRequestWaterfall)
 	mux.HandleFunc("/admin/mcp/policies", s.handleMCPPolicies)
 	mux.HandleFunc("/admin/mcp/policies/", s.handleMCPPolicyByServer)
+	mux.HandleFunc("/admin/mcp/tool-scopes", s.handleMCPToolScopes)
+	mux.HandleFunc("/admin/mcp/tool-scopes/", s.handleMCPToolScopeByID)
 	mux.HandleFunc("/admin/mcp/loops", s.handleMCPLoops)
 	mux.HandleFunc("/admin/mcp/catalog", s.handleMCPCatalog)
 	mux.HandleFunc("/admin/kill-switch", s.handleKillSwitch)
@@ -644,6 +646,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/agent/sessions/", s.handleAgentSessionByID)
 	mux.HandleFunc("/admin/agent/messages", s.handleAgentMessages)
 	mux.HandleFunc("/admin/agent/action-cards", s.handleAgentActionCard)
+	mux.HandleFunc("/admin/agent/action-cards/", s.handleAgentActionCardStatus)
+	mux.HandleFunc("/admin/agent/evaluations", s.handleAgentEvaluations)
+	mux.HandleFunc("/admin/agent/evaluations/feedback", s.handleAgentEvaluationFeedback)
 	mux.HandleFunc("/admin/notifications/mattermost", s.handleMattermostConfig)
 	mux.HandleFunc("/admin/notifications/mattermost/test", s.handleMattermostTest)
 	mux.HandleFunc("/integrations/mattermost/command", s.handleMattermostCommand) // ChatOps inbound (token-verified, public)

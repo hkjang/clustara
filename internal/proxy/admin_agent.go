@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -97,6 +98,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	var pctx analyzer.AgentPageContext
 	_ = json.Unmarshal([]byte(sess.Context), &pctx)
 	pctx.Route = firstNonEmpty(pctx.Route, sess.Route)
@@ -202,8 +204,10 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 
 		// Save turns
 		evJSON, _ := json.Marshal(evidence)
+		agentMsgID := newID("k8samsg")
 		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
-		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: agentMsgID, SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+		s.recordAgentEvaluation(r.Context(), sess, agentMsgID, intent, pctx, toolPlan, evidence, answer, !llmOK, llmOK, start)
 		s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan), "stream": true}))
 		return
 	}
@@ -222,15 +226,54 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	evJSON, _ := json.Marshal(evidence)
+	agentMsgID := newID("k8samsg")
 	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
-	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: agentMsgID, SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+	grounding := s.recordAgentEvaluation(r.Context(), sess, agentMsgID, intent, pctx, toolPlan, evidence, answer, !llmOK, llmOK, start)
 
 	s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan)}))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"intent": intent, "answer": answer, "evidence": evidence, "llm_available": llmOK,
 		"tool_plan": toolPlan, "suggestions": analyzer.SuggestAgentPrompts(pctx), "note": note,
-		"safety": "이 에이전트는 조회·분석만 수행합니다. 변경은 Action Center 승인 흐름으로 진행하세요.",
+		"grounding": grounding,
+		"safety":    "이 에이전트는 조회·분석만 수행합니다. 변경은 Action Center 승인 흐름으로 진행하세요.",
 	})
+}
+
+// recordAgentEvaluation persists the quality signals for one agent answer (Ops Agent Evaluation
+// Center, CLU-REQ-02) including the grounding score (CLU-REQ-03). Best-effort: failures are logged
+// but never block the answer. Returns the computed grounding score so the handler can surface it.
+func (s *Server) recordAgentEvaluation(ctx context.Context, sess store.K8sAgentSession, msgID, intent string, pctx analyzer.AgentPageContext, toolPlan []analyzer.AgentToolCall, evidence []string, answer string, fallback, llmOK bool, start time.Time) analyzer.GroundingScore {
+	grounding := analyzer.ScoreGrounding(answer, evidence, toolPlan, fallback)
+	usedAPIs := make([]string, 0, len(toolPlan))
+	for _, t := range toolPlan {
+		if strings.TrimSpace(t.API) != "" {
+			usedAPIs = append(usedAPIs, t.API)
+		}
+	}
+	planJSON, _ := json.Marshal(toolPlan)
+	apisJSON, _ := json.Marshal(usedAPIs)
+	pctxJSON, _ := json.Marshal(pctx)
+	detailJSON, _ := json.Marshal(grounding)
+	eval := store.K8sAgentEvaluation{
+		ID:              newID("k8saeval"),
+		SessionID:       sess.ID,
+		MessageID:       msgID,
+		Intent:          intent,
+		PageContext:     string(pctxJSON),
+		ToolPlan:        string(planJSON),
+		UsedAPIs:        string(apisJSON),
+		EvidenceCount:   len(evidence),
+		ResponseMS:      time.Since(start).Milliseconds(),
+		Fallback:        fallback,
+		LLMAvailable:    llmOK,
+		GroundingScore:  grounding.Score,
+		GroundingDetail: string(detailJSON),
+	}
+	if err := s.db.InsertK8sAgentEvaluation(ctx, eval); err != nil {
+		slog.Warn("record agent evaluation failed", "session", sess.ID, "error", err)
+	}
+	return grounding
 }
 
 type streamingInterceptor struct {
@@ -317,15 +360,33 @@ func composeAgentFallbackAnswer(question string, evidence []string, toolPlan []a
 	return strings.TrimSpace(b.String())
 }
 
-// handleAgentActionCard builds a proposed action card (the agent proposes, never executes). The
-// returned card carries the exact action-request payload the operator submits to the Action Center
-// approval flow. POST /admin/agent/action-cards {action, kind, namespace, name}
+// handleAgentActionCard builds + persists a proposed action card (the agent proposes, never
+// executes). The card enters the lifecycle at status "proposed" and carries the exact action-request
+// payload the operator submits to the Action Center approval flow. GET lists existing cards.
+// POST /admin/agent/action-cards {action, kind, namespace, name, session_id}
+// GET  /admin/agent/action-cards?session_id=&status=
 func (s *Server) handleAgentActionCard(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		cards, err := s.db.ListK8sAgentActionCards(r.Context(), store.K8sAgentActionCardFilter{
+			SessionID: strings.TrimSpace(q.Get("session_id")),
+			Status:    strings.TrimSpace(q.Get("status")),
+			Limit:     200,
+		})
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_action_cards_failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"action_cards": cards})
+		return
+	case http.MethodPost:
+		// handled below
+	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
@@ -334,6 +395,7 @@ func (s *Server) handleAgentActionCard(w http.ResponseWriter, r *http.Request) {
 		Kind      string `json:"kind"`
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -344,6 +406,27 @@ func (s *Server) handleAgentActionCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card := analyzer.BuildAgentActionCard(in.Action, strings.TrimSpace(in.Kind), strings.TrimSpace(in.Namespace), strings.TrimSpace(in.Name))
+	// Persist the proposal so its lifecycle (proposed → approved → executed → rolled_back) is tracked.
+	stored := store.K8sAgentActionCard{
+		ID:               newID("k8sacard"),
+		SessionID:        strings.TrimSpace(in.SessionID),
+		Action:           card.Action,
+		Kind:             card.Kind,
+		Namespace:        card.Namespace,
+		Name:             card.Name,
+		Title:            card.Title,
+		Summary:          card.Summary,
+		Risk:             card.Risk,
+		Rollback:         card.Rollback,
+		RequiresApproval: card.RequiresApproval,
+		Executable:       card.Executable,
+		Status:           "proposed",
+		CreatedBy:        adminID(r),
+	}
+	if err := s.db.InsertK8sAgentActionCard(r.Context(), stored); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_action_card_failed")
+		return
+	}
 	// Approval Bridge: the payload the operator submits to the Action Center (POST
 	// /admin/k8s/actions). The agent does NOT create it automatically.
 	bridge := map[string]any{
@@ -352,11 +435,123 @@ func (s *Server) handleAgentActionCard(w http.ResponseWriter, r *http.Request) {
 			"action": card.Action, "resource_kind": card.Kind, "namespace": card.Namespace, "resource_name": card.Name,
 		},
 	}
-	s.auditAdmin(r, "k8s.agent.action_card", "", auditJSON(map[string]any{"action": card.Action, "target": card.Namespace + "/" + card.Kind + "/" + card.Name}))
+	s.auditAdmin(r, "k8s.agent.action_card", "", auditJSON(map[string]any{"id": stored.ID, "action": card.Action, "target": card.Namespace + "/" + card.Kind + "/" + card.Name}))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"card": card, "approval_bridge": bridge,
+		"card": card, "id": stored.ID, "status": stored.Status, "approval_bridge": bridge,
 		"safety": "에이전트는 조치를 실행하지 않습니다. 이 카드를 Action Center 승인 흐름으로 제출하세요.",
 	})
+}
+
+// handleAgentActionCardStatus advances a persisted action card through its lifecycle, validating
+// the transition. POST /admin/agent/action-cards/{id}/status {status, action_request_id, result}
+func (s *Server) handleAgentActionCardStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/agent/action-cards/"), "/")
+	id := strings.TrimSuffix(rest, "/status")
+	if id == "" || id == rest {
+		writeOpenAIError(w, http.StatusBadRequest, "card id required (POST .../action-cards/{id}/status)", "invalid_request_error", "missing_card_id")
+		return
+	}
+	var in struct {
+		Status          string `json:"status"`
+		ActionRequestID string `json:"action_request_id"`
+		Result          string `json:"result"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	err := s.db.UpdateK8sAgentActionCardStatus(r.Context(), id, strings.TrimSpace(in.Status), strings.TrimSpace(in.ActionRequestID), strings.TrimSpace(in.Result))
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "action card not found", "invalid_request_error", "card_not_found")
+		return
+	} else if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "invalid lifecycle transition", "invalid_request_error", "invalid_transition")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "card_status_failed")
+		return
+	}
+	card, _ := s.db.GetK8sAgentActionCard(r.Context(), id)
+	s.auditAdmin(r, "k8s.agent.action_card.status", id, auditJSON(map[string]any{"status": in.Status, "request": in.ActionRequestID}))
+	writeJSON(w, http.StatusOK, map[string]any{"action_card": card})
+}
+
+// handleAgentEvaluations serves the Ops Agent Evaluation Center: GET lists recent evaluations and
+// (with ?stats=true) the aggregate quality dashboard.
+// GET /admin/agent/evaluations?session_id=&intent=&stats=true
+func (s *Server) handleAgentEvaluations(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	q := r.URL.Query()
+	if q.Get("stats") == "true" {
+		stats, byIntent, err := s.db.K8sAgentEvalStats(r.Context())
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_eval_stats_failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"stats": stats, "by_intent": byIntent})
+		return
+	}
+	evals, err := s.db.ListK8sAgentEvaluations(r.Context(), store.K8sAgentEvalFilter{
+		SessionID: strings.TrimSpace(q.Get("session_id")),
+		Intent:    strings.TrimSpace(q.Get("intent")),
+		Limit:     200,
+	})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_evaluations_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"evaluations": evals})
+}
+
+// handleAgentEvaluationFeedback records operator thumbs feedback on an answer (CLU-REQ-02).
+// POST /admin/agent/evaluations/feedback {id, feedback, note}
+func (s *Server) handleAgentEvaluationFeedback(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		ID       string `json:"id"`
+		Feedback string `json:"feedback"`
+		Note     string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	fb := strings.TrimSpace(in.Feedback)
+	if fb != "" && fb != "up" && fb != "down" {
+		writeOpenAIError(w, http.StatusBadRequest, "feedback must be 'up', 'down' or empty", "invalid_request_error", "invalid_feedback")
+		return
+	}
+	err := s.db.SetK8sAgentEvaluationFeedback(r.Context(), strings.TrimSpace(in.ID), fb, strings.TrimSpace(in.Note))
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "evaluation not found", "invalid_request_error", "eval_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "feedback_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleAgentSuggestions returns context-aware suggested prompts + the resolved intent for the

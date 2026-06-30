@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.9** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.10** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.9)
+## 기능 상태 (v0.9.10)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -43,6 +43,12 @@
 | Config Impact(blast radius) — ConfigMap/Secret 변경 전 참조 워크로드(env/envFrom/volume) + 재시작 필요 여부(CFG-REQ-04) | ✅ |
 | Config Change Control Center — ConfigMap/Secret 변경 요청 생성, 영향도 자동 첨부, 승인 게이트, 적용 기록, 사후 검증 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
+| Ops Agent 평가 센터 — 답변별 intent·도구 계획·사용 API·응답시간·폴백·근거 점수(인용·근거 수·도구·폴백 가중)·👍/👎 피드백 저장 + intent별 품질 대시보드(CLU-REQ-02/03) | ✅ (v0.9.10) |
+| Action Card Lifecycle — 제안→승인대기→승인→실행→실패→롤백/재발 상태 전이 영속화 + Action Center 요청 연계(CLU-REQ-04) | ✅ (v0.9.10) |
+| Stack Field-level Drift — 선언 매니페스트 vs 라이브 객체를 image·replicas·env·resources·probe·label·annotation 필드 단위 비교(`?fields=true`, CLU-REQ-07) | ✅ (v0.9.10) |
+| Stack Apply/Promotion/Rollback — Server-Side Apply 적용(정책 Deny 차단·승인 게이트·dry-run)·환경 간 승격(diff)·이전 revision 롤백·배포 이력(CLU-REQ-08/09/10) | ✅ (v0.9.10) |
+| 런타임 설정 롤백 센터 — 변경 이력·변경자·이전 값, 직전/특정 시점 값 롤백, 멀티 파드 수렴 상태(CLU-REQ-06) | ✅ (v0.9.10) |
+| MCP Tool Scope Enforcement — 도구별 role·namespace·cluster 허용목록·masking level·approval rule(opt-in 최소권한, 게이트웨이 호출 시 강제, CLU-REQ-11) | ✅ (v0.9.10) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 

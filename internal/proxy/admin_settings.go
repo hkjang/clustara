@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -1527,12 +1528,31 @@ func (s *Server) handleAdminSettingsRollback(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}
-	var payload struct{ Key, Reason string }
+	var payload struct{ Key, Reason, HistoryID string }
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 		return
 	}
 	key := strings.TrimSpace(payload.Key)
+	historyID := strings.TrimSpace(payload.HistoryID)
+	// Point-in-time rollback: a specific history entry's id restores the value that entry set,
+	// letting operators jump back to any past state — not only the immediately-previous one.
+	if historyID != "" {
+		entry, err := s.db.GetAdminSettingHistoryEntry(r.Context(), historyID)
+		if errors.Is(err, store.ErrNotFound) {
+			writeOpenAIError(w, http.StatusNotFound, "history entry not found", "invalid_request_error", "history_not_found")
+			return
+		} else if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollback_failed")
+			return
+		}
+		if key == "" {
+			key = entry.Key
+		} else if key != entry.Key {
+			writeOpenAIError(w, http.StatusBadRequest, "history entry belongs to a different key", "invalid_request_error", "history_key_mismatch")
+			return
+		}
+	}
 	d, ok := settingDefByKey(key)
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "unknown setting key", "invalid_request_error", "unknown_key")
@@ -1546,24 +1566,40 @@ func (s *Server) handleAdminSettingsRollback(w http.ResponseWriter, r *http.Requ
 		writeOpenAIError(w, http.StatusBadRequest, "secret values cannot be rolled back (history stores no value); set or revert instead", "invalid_request_error", "secret_rollback_unsupported")
 		return
 	}
-	hist, err := s.db.ListAdminSettingHistory(r.Context(), key, 5)
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollback_failed")
-		return
+	var target string
+	if historyID != "" {
+		entry, _ := s.db.GetAdminSettingHistoryEntry(r.Context(), historyID)
+		// Restore the value this entry established (new_value); if it was a delete, fall back to old.
+		raw := entry.NewValueJSON
+		if strings.TrimSpace(raw) == "" {
+			raw = entry.OldValueJSON
+		}
+		if strings.TrimSpace(raw) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "selected history entry has no restorable value", "invalid_request_error", "no_value")
+			return
+		}
+		if json.Unmarshal([]byte(raw), &target) != nil {
+			target = raw
+		}
+	} else {
+		hist, err := s.db.ListAdminSettingHistory(r.Context(), key, 5)
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollback_failed")
+			return
+		}
+		if len(hist) == 0 || strings.TrimSpace(hist[0].OldValueJSON) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "no previous value to roll back to", "invalid_request_error", "no_history")
+			return
+		}
+		if json.Unmarshal([]byte(hist[0].OldValueJSON), &target) != nil {
+			target = hist[0].OldValueJSON
+		}
 	}
-	if len(hist) == 0 || strings.TrimSpace(hist[0].OldValueJSON) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "no previous value to roll back to", "invalid_request_error", "no_history")
-		return
-	}
-	var prev string
-	if json.Unmarshal([]byte(hist[0].OldValueJSON), &prev) != nil {
-		prev = hist[0].OldValueJSON
-	}
-	if err := s.applySettingWrite(r, d, prev, "rollback: "+strings.TrimSpace(payload.Reason)); err != nil {
+	if err := s.applySettingWrite(r, d, target, "rollback: "+strings.TrimSpace(payload.Reason)); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "rollback_failed")
 		return
 	}
-	s.auditAdmin(r, "setting.rollback", key, auditJSON(map[string]any{"key": key}))
+	s.auditAdmin(r, "setting.rollback", key, auditJSON(map[string]any{"key": key, "history_id": historyID}))
 	stored, _ := s.loadStoredSettings(r)
 	writeJSON(w, http.StatusOK, s.settingView(stored, d))
 }
