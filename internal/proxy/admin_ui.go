@@ -1387,6 +1387,18 @@ const adminHTML = `<!doctype html>
         m.lastElementChild.remove();
         const agentBubble = document.createElement('div');
         agentBubble.className = 'msg agent';
+
+        const reasoningDiv = document.createElement('details');
+        reasoningDiv.style.fontSize = '11px';
+        reasoningDiv.style.color = '#666';
+        reasoningDiv.style.borderLeft = '2px solid #ccc';
+        reasoningDiv.style.paddingLeft = '8px';
+        reasoningDiv.style.marginBottom = '8px';
+        reasoningDiv.style.display = 'none';
+        reasoningDiv.open = true;
+        reasoningDiv.innerHTML = '<summary style="cursor:pointer;font-weight:bold;margin-bottom:4px;outline:none;user-select:none">생각 과정</summary><div class="reasoning-text" style="white-space:pre-wrap"></div>';
+        agentBubble.appendChild(reasoningDiv);
+
         const contentDiv = document.createElement('div');
         contentDiv.style.whiteSpace = 'pre-wrap';
         agentBubble.appendChild(contentDiv);
@@ -1396,6 +1408,7 @@ const adminHTML = `<!doctype html>
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let accumulatedAnswer = '';
+        let accumulatedReasoning = '';
         let evidence = [];
         let toolPlan = [];
         let note = '';
@@ -1428,8 +1441,22 @@ const adminHTML = `<!doctype html>
                   contentDiv.innerHTML = '<span class="status error">' + escapeHTML(chunk.message) + '</span>';
                 } else if (chunk.choices && chunk.choices.length > 0) {
                   const delta = chunk.choices[0].delta || {};
+                  
+                  const reasoningText = delta.reasoning || delta.reasoning_content || '';
+                  if (reasoningText) {
+                    if (reasoningDiv.style.display === 'none') {
+                      reasoningDiv.style.display = 'block';
+                    }
+                    accumulatedReasoning += reasoningText;
+                    reasoningDiv.querySelector('.reasoning-text').textContent = accumulatedReasoning;
+                    m.scrollTop = m.scrollHeight;
+                  }
+
                   const text = delta.content || '';
                   if (text) {
+                    if (reasoningDiv.style.display !== 'none' && reasoningDiv.open) {
+                      reasoningDiv.open = false;
+                    }
                     accumulatedAnswer += text;
                     contentDiv.textContent = accumulatedAnswer;
                     m.scrollTop = m.scrollHeight;
