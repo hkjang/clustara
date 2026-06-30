@@ -1,3 +1,6 @@
+v0.9.32:
+- **Developer Self-Service Request Center (v0.9.32, CLU-NEXT-01·02)**: 개발자 뷰를 단순 조회에서 안전한 셀프서비스 포털로 확장했습니다. 개발자가 재시작·스케일·롤백·cordon/uncordon·Config 변경·로그 조회 요청을 만들면, 새 승인 체계가 아니라 기존 흐름으로 연결됩니다 — action 계열은 Action Center에 pending_approval 요청으로 등록되어 운영자 승인 후 기존 실클러스터 executor가 실행하고, Config 변경은 Config Change Control Center로 브리지(영향도·승인·검증), 로그 조회는 읽기 전용이라 승인 없이 마스킹 로그 링크를 반환합니다. 자동 실행기가 없는 작업(rollback)은 수동 처리 요청으로 등록됩니다. 요청 유형별 흐름·위험·승인 여부 매핑은 순수 함수(`PlanDevRequest`)로 단위 테스트했고, 개발자 뷰에 '요청 생성' 패널을 추가했습니다(`GET/POST /admin/k8s/dev-requests`). Clustara는 이 경로에서 클러스터를 직접 변경하지 않습니다.
+
 v0.9.31:
 - **Developer Workspace View (v0.9.31, CLU-OCP-09)**: OpenShift Developer Console 스타일의 개발자 관점 화면을 추가했습니다(신규 메뉴 `개발자 뷰`, menuVersion 22). 클러스터를 선택하면 담당 워크스페이스 건강도·외부 노출(Exposure)·이미지 원장(Image Ledger)·위험 Pod(Health 낮은 순, Pod 상세 딥링크)를 한 화면에 모아 앱 생명주기를 개발자 관점으로 보여줍니다(기존 `/admin/k8s/workspaces`·`/exposures`·`/image-ledger`·`/pods` 재사용, 변경은 운영자 승인 흐름 유지). 이로써 CLU-OCP 10개 에픽의 구축 가능한 핵심을 모두 흡수했습니다 — 빌드 실행·오퍼레이터 실제 설치·노드 OS 변경 같은 실행부만 라이브 인프라 의존으로 후속 페이즈에 남깁니다.
 

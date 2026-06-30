@@ -6976,6 +6976,44 @@ const adminHTML = `<!doctype html>
     function samplePodLinksImpact(clusterId, ns, pods) {
       return (pods || []).slice(0, 5).map(p => k8sPodLink(clusterId, ns, p, p)).join(', ');
     }
+    // Developer Self-Service Request Center (CLU-NEXT-01/02): raise an op request that routes to
+    // the existing approval flows (Action Center / Config Change Control).
+    window.k8sDevSubmit = async (cid) => {
+      const out = document.getElementById('devreq-out');
+      const body = {
+        type: document.getElementById('devreq-type').value,
+        cluster_id: cid,
+        namespace: (document.getElementById('devreq-ns').value || '').trim(),
+        resource_kind: (document.getElementById('devreq-kind').value || '').trim(),
+        resource_name: (document.getElementById('devreq-name').value || '').trim(),
+        replicas: parseInt(document.getElementById('devreq-replicas').value || '0', 10),
+        reason: (document.getElementById('devreq-reason').value || '').trim(),
+      };
+      if (out) out.textContent = '요청 중…';
+      try {
+        const d = await api('/admin/k8s/dev-requests', { method: 'POST', body: JSON.stringify(body) });
+        let msg = '✅ ' + (d.note || '요청 생성됨');
+        if (d.action_id) msg += '\nAction ID: ' + d.action_id + ' (상태: ' + d.status + ') → Action Center에서 승인하세요.';
+        if (d.submit_to) msg += '\n제출 대상: ' + d.submit_to;
+        if (d.logs_endpoint) msg += '\n로그: ' + d.logs_endpoint;
+        if (out) out.textContent = msg;
+      } catch (e) { if (out) out.textContent = '실패: ' + e.message; }
+    };
+    function renderDevRequestCard(cid) {
+      const types = [['restart', '롤아웃 재시작'], ['scale', '스케일'], ['rollback', '롤백(수동)'], ['cordon', 'cordon'], ['uncordon', 'uncordon'], ['config_change', 'Config 변경'], ['log_access', '로그 조회']];
+      const opts = types.map(t => '<option value="' + t[0] + '">' + escapeHTML(t[1]) + '</option>').join('');
+      return card('요청 생성 (Self-Service · 운영자 승인 연결)',
+        '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:6px">변경 요청은 Clustara가 직접 실행하지 않고 기존 승인 흐름(Action Center·Config Change)으로 등록됩니다.</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+        '<select id="devreq-type">' + opts + '</select>' +
+        '<input id="devreq-ns" placeholder="namespace" style="width:120px">' +
+        '<input id="devreq-kind" placeholder="kind (예: Deployment)" style="width:150px">' +
+        '<input id="devreq-name" placeholder="resource name" style="width:150px">' +
+        '<input id="devreq-replicas" type="number" placeholder="replicas(scale)" style="width:110px">' +
+        '<input id="devreq-reason" placeholder="사유" style="width:160px">' +
+        '<button type="button" onclick="k8sDevSubmit(\'' + escapeAttr(cid || '') + '\')">요청</button></div>' +
+        '<pre id="devreq-out" style="margin-top:8px;font-size:11px;white-space:pre-wrap"></pre></div>');
+    }
     // Developer Workspace View (CLU-OCP-09): developer-centric consolidation of an app's K8s
     // surface — workspace health, exposure, images, risky pods — reusing existing endpoints.
     window.k8sDevClusterGo = (cid) => { location.hash = '#/k8s-developer' + (cid ? '?cluster_id=' + encodeURIComponent(cid) : ''); };
@@ -7015,6 +7053,7 @@ const adminHTML = `<!doctype html>
         section('개발자 뷰 (Developer Workspace · OpenShift Developer Console 스타일)',
           '<div class="muted" style="font-size:12px;padding:0 14px 6px">앱 생명주기를 개발자 관점으로 모았습니다 — 워크스페이스 건강도 · 외부 노출 · 이미지 원장 · 위험 Pod. 변경은 운영자 승인 흐름으로 진행됩니다.</div>') +
         picker +
+        renderDevRequestCard(cid) +
         renderWorkspaceCard(ws, clusters, cid) +
         renderExposureCard(exp) +
         renderImageLedgerCard(img) +
