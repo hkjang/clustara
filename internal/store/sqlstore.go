@@ -2101,6 +2101,17 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			expires_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_collect_bursts_active ON k8s_collect_bursts(cluster_id, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_agent_regression_baselines (
+			id TEXT PRIMARY KEY,
+			version TEXT NOT NULL DEFAULT '',
+			total INTEGER NOT NULL DEFAULT 0,
+			passed INTEGER NOT NULL DEFAULT 0,
+			pass_rate REAL NOT NULL DEFAULT 0,
+			intent_accuracy REAL NOT NULL DEFAULT 0,
+			avg_tool_coverage REAL NOT NULL DEFAULT 0,
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS k8s_pod_log_queries (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL,

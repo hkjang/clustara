@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.16"
+const AppVersion = "v0.9.17"
 
 type Server struct {
 	cfg            config.Config
@@ -656,6 +656,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/agent/evaluations", s.handleAgentEvaluations)
 	mux.HandleFunc("/admin/agent/evaluations/feedback", s.handleAgentEvaluationFeedback)
 	mux.HandleFunc("/admin/agent/action-outcomes", s.handleAgentActionOutcomes)
+	mux.HandleFunc("/admin/agent/regression", s.handleAgentRegression)
 	mux.HandleFunc("/admin/notifications/mattermost", s.handleMattermostConfig)
 	mux.HandleFunc("/admin/notifications/mattermost/test", s.handleMattermostTest)
 	mux.HandleFunc("/integrations/mattermost/command", s.handleMattermostCommand) // ChatOps inbound (token-verified, public)

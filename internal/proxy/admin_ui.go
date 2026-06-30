@@ -2436,6 +2436,46 @@ const adminHTML = `<!doctype html>
         renderK8sAgentOps();
       } catch (e) { alert('피드백 실패: ' + e.message); }
     };
+    // Agent Regression Suite (CLU-REQ-08): deterministic intent/tool-plan quality vs baseline.
+    window.agentSaveRegressionBaseline = async () => {
+      try { await api('/admin/agent/regression', { method: 'POST' }); renderK8sAgentOps(); }
+      catch (e) { alert('baseline 저장 실패: ' + e.message); }
+    };
+    function renderRegressionSection(regResp) {
+      const rep = (regResp && regResp.report) || null;
+      if (!rep || !rep.total) {
+        return section('Agent Regression Suite', '<div class="muted" style="font-size:12px;padding:0 14px 10px">회귀 케이스가 없습니다.</div>');
+      }
+      const pct = (v) => (v || 0).toFixed(1) + '%';
+      const base = regResp.baseline;
+      const regressed = regResp.regressed;
+      const delta = regResp.pass_rate_delta;
+      const kpis = '<div class="kpis">' +
+        kpi('통과율', pct(rep.pass_rate)) +
+        kpi('통과/총계', fmt(rep.passed) + ' / ' + fmt(rep.total)) +
+        kpi('intent 정확도', pct(rep.intent_accuracy)) +
+        kpi('도구 커버리지', pct(rep.avg_tool_coverage)) +
+        (base ? kpi('baseline(' + escapeHTML(base.version || '') + ')', pct(base.pass_rate) + (delta != null ? ' (' + (delta >= 0 ? '+' : '') + delta + ')' : '')) : kpi('baseline', '없음')) +
+        '</div>';
+      let banner = '';
+      if (regressed) banner = '<div class="status error" style="margin:0 14px 8px;display:inline-block">⚠ baseline 대비 통과율 하락(회귀) 감지</div>';
+      else if (base) banner = '<div class="status" style="margin:0 14px 8px;display:inline-block">baseline 이상 유지</div>';
+      const fails = rep.failures || [];
+      const failTable = fails.length ? (
+        '<table><thead><tr><th>케이스</th><th>질문</th><th>기대 intent</th><th>실제 intent</th><th>누락 도구</th><th>커버리지</th></tr></thead><tbody>' +
+        fails.map(f => '<tr><td>' + escapeHTML(f.id) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(f.question) + '</td>' +
+          '<td>' + escapeHTML(f.expect_intent) + '</td>' +
+          '<td>' + (f.intent_ok ? escapeHTML(f.got_intent) : '<span class="status error" style="font-size:10px">' + escapeHTML(f.got_intent) + '</span>') + '</td>' +
+          '<td>' + ((f.missing_tools || []).map(t => '<span class="status warn" style="font-size:9px">' + escapeHTML(t) + '</span>').join(' ') || '-') + '</td>' +
+          '<td>' + pct(f.tool_coverage) + '</td></tr>').join('') + '</tbody></table>'
+      ) : '<div class="muted" style="font-size:12px">실패 케이스 없음 — 모든 대표 질문이 기대 intent·도구로 라우팅됩니다.</div>';
+      return section('Agent Regression Suite (CLU-REQ-08)',
+        '<div class="muted" style="font-size:12px;padding:0 14px 6px">' + escapeHTML(regResp.note || '') +
+        ' <button type="button" class="secondary" style="font-size:11px;padding:1px 8px" onclick="agentSaveRegressionBaseline()">현재 결과를 baseline으로 저장</button></div>' +
+        banner + kpis +
+        '<h4 style="margin:12px 14px 4px">실패 케이스</h4>' + failTable);
+    }
     // Action Outcome Analytics (CLU-REQ-09): did AI suggestions actually help?
     function renderActionOutcomeSection(outcomeResp) {
       const o = (outcomeResp && outcomeResp.stats) || null;
@@ -2474,13 +2514,14 @@ const adminHTML = `<!doctype html>
     async function renderK8sAgentOps() {
       const view = document.getElementById('view');
       view.innerHTML = '<div class="empty">불러오는 중…</div>';
-      let statsResp = {}, evalsResp = {}, cardsResp = {}, outcomeResp = {};
+      let statsResp = {}, evalsResp = {}, cardsResp = {}, outcomeResp = {}, regResp = {};
       try {
-        [statsResp, evalsResp, cardsResp, outcomeResp] = await Promise.all([
+        [statsResp, evalsResp, cardsResp, outcomeResp, regResp] = await Promise.all([
           api('/admin/agent/evaluations?stats=true'),
           api('/admin/agent/evaluations'),
           api('/admin/agent/action-cards'),
           api('/admin/agent/action-outcomes').catch(() => ({})),
+          api('/admin/agent/regression').catch(() => ({})),
         ]);
       } catch (e) { view.innerHTML = '<div class="empty">' + escapeHTML(e.message) + '</div>'; return; }
       const st = statsResp.stats || {};
@@ -2547,12 +2588,14 @@ const adminHTML = `<!doctype html>
       ) : '<div class="empty">제안된 Action Card 없음</div>';
 
       const outcomeSection = renderActionOutcomeSection(outcomeResp);
+      const regSection = renderRegressionSection(regResp);
 
       view.innerHTML =
         section('Ops Agent 평가 센터 (Evaluation Center)',
           '<div class="muted" style="font-size:12px;padding:0 14px 8px">플로팅 운영 에이전트의 답변 품질·근거 점수·채택률을 측정합니다. 근거 점수는 근거 인용·근거 수·도구 계획·폴백 여부로 산정합니다(A≥80·B≥60·C≥40·D).</div>' +
           kpis +
           '<h4 style="margin:12px 14px 4px">Intent별 품질</h4>' + intentTable) +
+        regSection +
         outcomeSection +
         section('최근 답변 평가', evalTable) +
         section('Action Card Lifecycle', cardTable);

@@ -547,6 +547,46 @@ func (s *Server) handleAgentActionOutcomes(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleAgentRegression runs the Ops Agent deterministic regression suite (CLU-REQ-08) and
+// compares it to the saved baseline. GET runs + compares; POST saves the current run as baseline.
+// GET/POST /admin/agent/regression
+func (s *Server) handleAgentRegression(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	report := analyzer.RunAgentRegression(analyzer.DefaultAgentRegressionCases())
+
+	switch r.Method {
+	case http.MethodGet:
+		resp := map[string]any{
+			"report": report,
+			"note":   "대표 운영 질문 세트로 에이전트의 결정적 동작(intent 분류·도구 계획)을 회귀 검증합니다. LLM 답변이 아닌 라우팅/도구 품질을 측정합니다.",
+		}
+		if base, ok, _ := s.db.LatestK8sAgentRegressionBaseline(r.Context()); ok {
+			resp["baseline"] = base
+			resp["pass_rate_delta"] = round2(report.PassRate - base.PassRate)
+			// Regression = current pass rate dropped below the saved baseline.
+			resp["regressed"] = report.PassRate < base.PassRate
+		}
+		writeJSON(w, http.StatusOK, resp)
+	case http.MethodPost:
+		base := store.K8sAgentRegressionBaseline{
+			ID: newID("k8sregbl"), Version: AppVersion, Total: report.Total, Passed: report.Passed,
+			PassRate: report.PassRate, IntentAccuracy: report.IntentAccuracy,
+			AvgToolCoverage: report.AvgToolCoverage, CreatedBy: adminID(r),
+		}
+		if err := s.db.SaveK8sAgentRegressionBaseline(r.Context(), base); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "regression_baseline_failed")
+			return
+		}
+		s.auditAdmin(r, "k8s.agent.regression.baseline", base.ID, auditJSON(map[string]any{"version": AppVersion, "pass_rate": report.PassRate}))
+		writeJSON(w, http.StatusOK, map[string]any{"baseline": base, "report": report})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
+}
+
 // handleAgentEvaluationFeedback records operator thumbs feedback on an answer (CLU-REQ-02).
 // POST /admin/agent/evaluations/feedback {id, feedback, note}
 func (s *Server) handleAgentEvaluationFeedback(w http.ResponseWriter, r *http.Request) {
