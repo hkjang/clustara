@@ -9204,17 +9204,28 @@ const adminHTML = `<!doctype html>
       const host = document.getElementById('collect-config');
       if (!host) return;
       let d;
-      try { d = await api('/admin/k8s/collect-config'); } catch (e) { host.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; return; }
+      try { d = await api('/admin/k8s/collect-bursts'); } catch (e) { host.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; return; }
       const c = d.config || {};
+      const bursts = d.bursts || [];
+      const burstList = bursts.length
+        ? '<div style="margin-top:10px"><strong style="font-size:12px">활성 Burst (' + fmt(bursts.length) + ')</strong> <span class="muted" style="font-size:11px">변경 직후 고빈도 수집 중인 클러스터</span>' +
+          '<table><thead><tr><th>클러스터</th><th>namespace</th><th>트리거</th><th>사유</th><th>만료</th></tr></thead><tbody>' +
+          bursts.map(b => '<tr><td>' + escapeHTML(b.cluster_id) + '</td><td>' + escapeHTML(b.namespace || '-') + '</td>' +
+            '<td><span class="status warn" style="font-size:10px">' + escapeHTML(b.trigger || '') + '</span></td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML(b.reason || '') + '</td><td class="muted" style="font-size:11px">' + ago(b.expires_at) + '</td></tr>').join('') +
+          '</tbody></table></div>'
+        : '<div class="muted" style="font-size:11px;margin-top:8px">활성 burst 없음 — Config/Stack/Action 변경 직후 자동으로 생성됩니다.</div>';
       host.innerHTML =
         '<div class="muted" style="font-size:12px;margin-bottom:8px">' + escapeHTML(d.note || '') + ' 실시간 agent가 없는 클러스터는 자주, 있는 클러스터는 보정 주기로만 수집합니다.</div>' +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
         '<label style="font-size:12px"><input type="checkbox" id="cc-enabled"' + (c.enabled ? ' checked' : '') + '> 자동 수집 활성</label>' +
         '<label style="font-size:12px">agent 없음 주기(초) <input id="cc-noagent" type="number" min="15" value="' + fmt(c.no_agent_secs || 60) + '" style="width:80px"></label>' +
         '<label style="font-size:12px">agent 있음 주기(초) <input id="cc-withagent" type="number" min="60" value="' + fmt(c.with_agent_secs || 1800) + '" style="width:90px"></label>' +
+        '<label style="font-size:12px">burst 주기(초) <input id="cc-burst" type="number" min="10" value="' + fmt(c.burst_secs || 20) + '" style="width:70px"></label>' +
+        '<label style="font-size:12px">burst 창(초) <input id="cc-burstwin" type="number" min="30" value="' + fmt(c.burst_window_secs || 300) + '" style="width:80px"></label>' +
         '<button type="button" onclick="k8sSaveCollectConfig()">저장</button>' +
         '<span class="muted" style="font-size:11px">tick ' + fmt(c.tick_secs || 20) + 's · stale 기준 ' + fmt(c.agent_stale_secs || 90) + 's</span>' +
-        '</div><div id="cc-msg" style="font-size:11px;margin-top:6px"></div>';
+        '</div>' + burstList + '<div id="cc-msg" style="font-size:11px;margin-top:6px"></div>';
     };
     window.k8sSaveCollectConfig = async () => {
       const msg = document.getElementById('cc-msg');
@@ -9222,8 +9233,10 @@ const adminHTML = `<!doctype html>
         enabled: document.getElementById('cc-enabled').checked,
         no_agent_secs: parseInt(document.getElementById('cc-noagent').value || '60', 10),
         with_agent_secs: parseInt(document.getElementById('cc-withagent').value || '1800', 10),
+        burst_secs: parseInt(document.getElementById('cc-burst').value || '20', 10),
+        burst_window_secs: parseInt(document.getElementById('cc-burstwin').value || '300', 10),
       };
-      try { await api('/admin/k8s/collect-config', { method: 'POST', body: JSON.stringify(body) }); if (msg) msg.innerHTML = '<span class="status">저장됨</span>'; }
+      try { await api('/admin/k8s/collect-config', { method: 'POST', body: JSON.stringify(body) }); if (msg) msg.innerHTML = '<span class="status">저장됨</span>'; k8sLoadCollectConfig(); }
       catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sCollectorGo = () => {

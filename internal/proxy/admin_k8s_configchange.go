@@ -213,6 +213,10 @@ func (s *Server) transitionK8sConfigChange(w http.ResponseWriter, r *http.Reques
 	}
 	s.auditAdmin(r, "k8s.config_change."+command, "", auditJSON(map[string]string{"id": id, "status": status}))
 	req, _ := s.db.GetK8sConfigChangeRequest(r.Context(), id)
+	if command == "apply" {
+		// Change-aware burst: speed up verification of the applied config change.
+		s.registerCollectBurst(r.Context(), req.ClusterID, req.Namespace, "config_change", "config_change:"+req.SourceKind+"/"+req.SourceName)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": status, "request": req})
 }
 

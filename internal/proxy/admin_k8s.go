@@ -795,6 +795,8 @@ func (s *Server) executeK8sAction(w http.ResponseWriter, r *http.Request, id str
 		writeJSON(w, http.StatusBadGateway, map[string]any{"id": id, "status": resultStatus, "error": resultMsg})
 		return
 	}
+	// Change-aware burst: collect this cluster at high frequency briefly so the change verifies fast.
+	s.registerCollectBurst(r.Context(), act.ClusterID, act.Namespace, "action", "action:"+act.Action+" "+act.ResourceKind+"/"+act.ResourceName)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": resultStatus, "result": resultMsg})
 }
 

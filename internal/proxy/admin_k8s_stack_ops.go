@@ -145,6 +145,10 @@ func (s *Server) handleK8sStackApply(w http.ResponseWriter, r *http.Request, id 
 	if !in.DryRun && status == "success" {
 		_ = s.db.SetK8sStackStatus(r.Context(), st.ID, "applied")
 	}
+	if !in.DryRun && applied > 0 {
+		// Change-aware burst: collect the stack's cluster at high frequency to verify the apply.
+		s.registerCollectBurst(r.Context(), st.ClusterID, st.Namespace, "stack_apply", "stack_apply:"+st.Name)
+	}
 	s.auditAdmin(r, "k8s.stack.apply", st.ID, auditJSON(map[string]any{"dry_run": in.DryRun, "status": status, "applied": applied, "failed": failed}))
 	code := http.StatusOK
 	if status == "failed" {

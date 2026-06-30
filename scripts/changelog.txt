@@ -1,3 +1,6 @@
+v0.9.14:
+- **Change-Aware Burst Collection (v0.9.14, CLU-REQ-05)**: Config Change 적용·Stack 적용·K8s Action 실행 직후, 해당 클러스터를 짧은 기간(기본 5분) 고빈도(기본 20초)로 자동 수집하는 burst 창을 추가했습니다. 변경 성공 지점에서 burst를 등록하면 적응형 스케줄러가 그 클러스터의 수집 주기를 burst 주기로 낮춰 변경 후 검증(인벤토리·드리프트·헬스)이 빠르게 반영됩니다. 창이 만료되면 자동으로 일반 주기로 복귀합니다(만료 row는 매 tick prune). burst 주기/창 길이는 런타임 설정으로 조정하고, 수동 burst 등록과 활성 burst 조회 API(`GET/POST /admin/k8s/collect-bursts`)도 제공합니다. `수집 상태` 화면의 스케줄러 카드에 burst 설정 입력과 활성 burst 목록을 추가했습니다. 시간 기반 활성/만료 로직은 store 테스트로, 등록→활성→자동 만료 전 구간은 라이브로 검증했습니다.
+
 v0.9.13:
 - **Collector SLO Dashboard + Collect Gap RCA (v0.9.13, CLU-REQ-02·03)**: 수집 장애와 실제 클러스터 장애를 구분하기 위해, 모든 인벤토리 수집 시도(수동·스케줄)의 결과를 이력으로 기록하고(`k8s_collect_runs`: 단계·성공여부·원인·지연·리소스 수·트리거) 이를 Collector SLO로 집계합니다. 클러스터별 성공률·실패율·p50/p95 지연·마지막 성공/실패·주요 실패 원인·레이트리밋 횟수와 healthy/degraded/failing 밴드를 산출합니다(`GET /admin/k8s/collect-slo?cluster_id=&window_hours=`). 수집 실패는 Collect Gap RCA로 인증 만료·RBAC 부족·타임아웃·네트워크 단절·레이트리밋·TLS·설정 오류·대상 없음으로 분류하고, 각 원인이 클러스터/인프라 신호인지(`cluster_issue=true`) 수집 설정·권한 신호인지 구분해 권장 조치와 함께 제시합니다. `수집 상태` 화면에 SLO KPI·클러스터별 표·최근 실패 원인(RCA) 표를 추가했습니다. 순수 분석 로직(`ClassifyCollectGap`·`SummarizeCollectSLO`)은 단위 테스트로, 기록→집계→분류 전 구간은 라이브로 검증했습니다.
 

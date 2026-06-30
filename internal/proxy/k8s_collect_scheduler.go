@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"clustara/internal/store"
@@ -21,8 +22,12 @@ const (
 	k8sPollEnabledFlag         = "k8s_poll_enabled"
 	k8sPollNoAgentSecsFlag     = "k8s_poll_no_agent_secs"
 	k8sPollWithAgentSecsFlag   = "k8s_poll_with_agent_secs"
+	k8sPollBurstSecsFlag       = "k8s_poll_burst_secs"
+	k8sBurstWindowSecsFlag     = "k8s_burst_window_secs"
 	k8sPollNoAgentDefaultSecs  = 60   // no live agent → poll every 60s (keep inventory fresh)
 	k8sPollWithAgentDefaultSec = 1800 // live agent → reconcile poll every 30m
+	k8sPollBurstDefaultSecs    = 20   // change-aware burst → poll as fast as the tick allows
+	k8sBurstWindowDefaultSecs  = 300  // burst lasts 5m after a change
 )
 
 // k8sCollectScheduler runs the adaptive polling loop. Started once at server startup.
@@ -43,6 +48,18 @@ func (s *Server) runK8sCollectTick(ctx context.Context, lastAttempt map[string]t
 	}
 	noAgentSecs := s.k8sPollFlagInt(ctx, k8sPollNoAgentSecsFlag, k8sPollNoAgentDefaultSecs)
 	withAgentSecs := s.k8sPollFlagInt(ctx, k8sPollWithAgentSecsFlag, k8sPollWithAgentDefaultSec)
+	burstSecs := s.k8sPollFlagInt(ctx, k8sPollBurstSecsFlag, k8sPollBurstDefaultSecs)
+
+	// Change-aware burst: collect clusters with an active burst at high frequency for a short
+	// window after a change, so post-change verification sees fresh inventory quickly.
+	nowStr := now.Format(time.RFC3339Nano)
+	_ = s.db.PruneExpiredK8sCollectBursts(ctx, nowStr)
+	bursting := map[string]bool{}
+	if bursts, err := s.db.ListActiveK8sCollectBursts(ctx, "", nowStr); err == nil {
+		for _, b := range bursts {
+			bursting[b.ClusterID] = true
+		}
+	}
 
 	clusters, err := s.db.ListK8sClusters(ctx)
 	if err != nil {
@@ -53,6 +70,12 @@ func (s *Server) runK8sCollectTick(ctx context.Context, lastAttempt map[string]t
 		interval := time.Duration(noAgentSecs) * time.Second
 		if s.clusterHasLiveAgent(ctx, cluster.ID, now) {
 			interval = time.Duration(withAgentSecs) * time.Second
+		}
+		// An active burst overrides the normal cadence with the (shorter) burst interval.
+		if bursting[cluster.ID] {
+			if burst := time.Duration(burstSecs) * time.Second; burst < interval {
+				interval = burst
+			}
 		}
 		// Gate on the later of: last local attempt (rate-limits failing clusters) and the
 		// DB-recorded last connect (dedups across pods for collects that reached the cluster).
@@ -88,6 +111,25 @@ func (s *Server) clusterHasLiveAgent(ctx context.Context, clusterID string, now 
 	return false
 }
 
+// registerCollectBurst opens a change-aware burst window for a cluster so the scheduler collects
+// it at high frequency until the window expires. Best-effort: errors are swallowed (telemetry).
+func (s *Server) registerCollectBurst(ctx context.Context, clusterID, namespace, trigger, reason string) {
+	if strings.TrimSpace(clusterID) == "" {
+		return
+	}
+	windowSecs := s.k8sPollFlagInt(ctx, k8sBurstWindowSecsFlag, k8sBurstWindowDefaultSecs)
+	now := time.Now().UTC()
+	_ = s.db.RegisterK8sCollectBurst(ctx, store.K8sCollectBurst{
+		ID:        newID("k8sburst"),
+		ClusterID: clusterID,
+		Namespace: namespace,
+		Reason:    reason,
+		Trigger:   trigger,
+		StartedAt: now.Format(time.RFC3339Nano),
+		ExpiresAt: now.Add(time.Duration(windowSecs) * time.Second).Format(time.RFC3339Nano),
+	})
+}
+
 func (s *Server) k8sPollFlagBool(ctx context.Context, key string, def bool) bool {
 	if flag, found, err := s.db.GetFlag(ctx, key); err == nil && found {
 		switch flag.Value {
@@ -112,11 +154,13 @@ func (s *Server) k8sPollFlagInt(ctx context.Context, key string, def int) int {
 // k8sPollConfig returns the effective scheduler config (for the settings UI).
 func (s *Server) k8sPollConfig(ctx context.Context) map[string]any {
 	return map[string]any{
-		"enabled":          s.k8sPollFlagBool(ctx, k8sPollEnabledFlag, true),
-		"no_agent_secs":    s.k8sPollFlagInt(ctx, k8sPollNoAgentSecsFlag, k8sPollNoAgentDefaultSecs),
-		"with_agent_secs":  s.k8sPollFlagInt(ctx, k8sPollWithAgentSecsFlag, k8sPollWithAgentDefaultSec),
-		"agent_stale_secs": int(agentStaleAfter.Seconds()),
-		"tick_secs":        int(k8sCollectTickInterval.Seconds()),
+		"enabled":           s.k8sPollFlagBool(ctx, k8sPollEnabledFlag, true),
+		"no_agent_secs":     s.k8sPollFlagInt(ctx, k8sPollNoAgentSecsFlag, k8sPollNoAgentDefaultSecs),
+		"with_agent_secs":   s.k8sPollFlagInt(ctx, k8sPollWithAgentSecsFlag, k8sPollWithAgentDefaultSec),
+		"burst_secs":        s.k8sPollFlagInt(ctx, k8sPollBurstSecsFlag, k8sPollBurstDefaultSecs),
+		"burst_window_secs": s.k8sPollFlagInt(ctx, k8sBurstWindowSecsFlag, k8sBurstWindowDefaultSecs),
+		"agent_stale_secs":  int(agentStaleAfter.Seconds()),
+		"tick_secs":         int(k8sCollectTickInterval.Seconds()),
 	}
 }
 
@@ -133,9 +177,11 @@ func (s *Server) handleK8sCollectConfig(w http.ResponseWriter, r *http.Request) 
 			"note": "실시간 agent가 없는 클러스터는 no_agent_secs 주기로 자주 수집하고, agent가 살아있으면 with_agent_secs 주기로만 보정 수집합니다."})
 	case http.MethodPost:
 		var in struct {
-			Enabled       *bool `json:"enabled"`
-			NoAgentSecs   *int  `json:"no_agent_secs"`
-			WithAgentSecs *int  `json:"with_agent_secs"`
+			Enabled         *bool `json:"enabled"`
+			NoAgentSecs     *int  `json:"no_agent_secs"`
+			WithAgentSecs   *int  `json:"with_agent_secs"`
+			BurstSecs       *int  `json:"burst_secs"`
+			BurstWindowSecs *int  `json:"burst_window_secs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -145,7 +191,11 @@ func (s *Server) handleK8sCollectConfig(w http.ResponseWriter, r *http.Request) 
 			writeOpenAIError(w, http.StatusBadRequest, "no_agent_secs는 15초 이상이어야 합니다", "invalid_request_error", "interval_too_small")
 			return
 		}
-		if err := s.setK8sPollConfig(r.Context(), adminID(r), in.Enabled, in.NoAgentSecs, in.WithAgentSecs); err != nil {
+		if in.BurstSecs != nil && *in.BurstSecs < 10 {
+			writeOpenAIError(w, http.StatusBadRequest, "burst_secs는 10초 이상이어야 합니다", "invalid_request_error", "interval_too_small")
+			return
+		}
+		if err := s.setK8sPollConfig(r.Context(), adminID(r), in.Enabled, in.NoAgentSecs, in.WithAgentSecs, in.BurstSecs, in.BurstWindowSecs); err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "collect_config_failed")
 			return
 		}
@@ -156,8 +206,49 @@ func (s *Server) handleK8sCollectConfig(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleK8sCollectBursts lists active change-aware burst windows, or (POST) opens one manually.
+// GET  /admin/k8s/collect-bursts?cluster_id=
+// POST /admin/k8s/collect-bursts {cluster_id, namespace, reason}
+func (s *Server) handleK8sCollectBursts(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		bursts, err := s.db.ListActiveK8sCollectBursts(r.Context(), strings.TrimSpace(r.URL.Query().Get("cluster_id")), "")
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "collect_bursts_failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"bursts": bursts, "config": s.k8sPollConfig(r.Context()),
+			"note": "변경(Config/Stack/Action) 직후 해당 클러스터를 짧은 기간 고빈도 수집하는 burst 창입니다.",
+		})
+	case http.MethodPost:
+		var in struct {
+			ClusterID string `json:"cluster_id"`
+			Namespace string `json:"namespace"`
+			Reason    string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+			return
+		}
+		if strings.TrimSpace(in.ClusterID) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "cluster_id is required", "invalid_request_error", "missing_cluster_id")
+			return
+		}
+		s.registerCollectBurst(r.Context(), in.ClusterID, in.Namespace, "manual", firstNonEmpty(in.Reason, "manual burst"))
+		s.auditAdmin(r, "k8s.collect.burst", in.ClusterID, auditJSON(map[string]string{"namespace": in.Namespace, "trigger": "manual"}))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "config": s.k8sPollConfig(r.Context())})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
+}
+
 // setK8sPollConfig persists scheduler config flags.
-func (s *Server) setK8sPollConfig(ctx context.Context, actor string, enabled *bool, noAgentSecs, withAgentSecs *int) error {
+func (s *Server) setK8sPollConfig(ctx context.Context, actor string, enabled *bool, noAgentSecs, withAgentSecs, burstSecs, burstWindowSecs *int) error {
 	if enabled != nil {
 		v := "false"
 		if *enabled {
@@ -167,14 +258,20 @@ func (s *Server) setK8sPollConfig(ctx context.Context, actor string, enabled *bo
 			return err
 		}
 	}
-	if noAgentSecs != nil && *noAgentSecs > 0 {
-		if err := s.db.SetFlag(ctx, store.RuntimeFlag{Key: k8sPollNoAgentSecsFlag, Value: strconv.Itoa(*noAgentSecs), UpdatedBy: actor}); err != nil {
-			return err
-		}
+	intFlags := []struct {
+		key string
+		val *int
+	}{
+		{k8sPollNoAgentSecsFlag, noAgentSecs},
+		{k8sPollWithAgentSecsFlag, withAgentSecs},
+		{k8sPollBurstSecsFlag, burstSecs},
+		{k8sBurstWindowSecsFlag, burstWindowSecs},
 	}
-	if withAgentSecs != nil && *withAgentSecs > 0 {
-		if err := s.db.SetFlag(ctx, store.RuntimeFlag{Key: k8sPollWithAgentSecsFlag, Value: strconv.Itoa(*withAgentSecs), UpdatedBy: actor}); err != nil {
-			return err
+	for _, f := range intFlags {
+		if f.val != nil && *f.val > 0 {
+			if err := s.db.SetFlag(ctx, store.RuntimeFlag{Key: f.key, Value: strconv.Itoa(*f.val), UpdatedBy: actor}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
