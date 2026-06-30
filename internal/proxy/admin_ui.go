@@ -9032,11 +9032,12 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s Collector 상태', '<div class="empty">불러오는 중...</div>');
-      let clusters, st;
+      let clusters, st, fr;
       try {
-        [clusters, st] = await Promise.all([
+        [clusters, st, fr] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/agent/status' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/freshness' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
         ]);
       } catch (e) { view.innerHTML = section('K8s Collector 상태', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -9069,6 +9070,7 @@ const adminHTML = `<!doctype html>
         '<td>' + escapeHTML(e.resource_version || '-') + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(e.agent_id || '') + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">최근 watch 이벤트가 없습니다.</td></tr>';
+      const freshCard = renderFreshnessCard(fr, clusterId);
       const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
       const agentGuide =
         '<div class="card-body">' +
@@ -9088,6 +9090,7 @@ const adminHTML = `<!doctype html>
           kpi('agent', fmt(st.count || 0)) + kpi('stale(오프라인)', fmt(st.stale || 0)) +
           kpi('live', fmt((st.count || 0) - (st.stale || 0))) + kpi('stale 기준', fmt(st.stale_after_secs || 0) + 's') + '</div>') +
         card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
+        freshCard +
         card('자동 수집 스케줄러 (Adaptive Polling)', '<div class="card-body" id="collect-config"><span class="muted">불러오는 중…</span></div>') +
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
@@ -9098,6 +9101,55 @@ const adminHTML = `<!doctype html>
         card('최근 Watch 이벤트',
           '<div class="card-body"><table><thead><tr><th>시간</th><th>Type</th><th>리소스</th><th>resourceVersion</th><th>Agent</th></tr></thead><tbody>' + eventRows + '</tbody></table></div>');
       k8sLoadCollectConfig();
+    }
+    // freshnessBadge renders an inventory-freshness pill (CLU-REQ-10 stale warning). It is
+    // reused on the collector screen and is exported so other screens can attach a data-trust
+    // badge to their headers.
+    window.freshnessBadge = (f) => {
+      if (!f) return '';
+      const band = f.band || 'unknown';
+      const color = band === 'fresh' ? '' : (band === 'aging' ? 'warn' : 'error');
+      const label = band === 'fresh' ? '최신' : (band === 'aging' ? '다소 오래됨' : (band === 'unknown' ? '수집 없음' : 'STALE'));
+      const age = (typeof f.age_seconds === 'number' && f.age_seconds >= 0)
+        ? (f.age_seconds >= 60 ? Math.floor(f.age_seconds / 60) + '분 전' : f.age_seconds + '초 전') : '기록 없음';
+      return '<span class="status ' + color + '" style="font-size:10px" title="' + escapeAttr(f.reason || '') + '">' +
+        escapeHTML(label) + ' · ' + fmt(f.score || 0) + '/100 · ' + escapeHTML(age) + '</span>';
+    };
+    function renderFreshnessRows(items) {
+      if (!items || !items.length) return '<tr><td colspan="5" class="muted">표시할 항목이 없습니다.</td></tr>';
+      return items.map(f =>
+        '<tr><td>' + freshnessBadge(f) + '</td>' +
+        '<td>' + escapeHTML(f.key || '') + '</td>' +
+        '<td>' + fmt(f.resource_count || 0) + '</td>' +
+        '<td>' + (f.reference_at ? ago(f.reference_at) : '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(f.reason || '') + '</td></tr>'
+      ).join('');
+    }
+    function renderFreshnessCard(fr, clusterId) {
+      if (!fr) return '';
+      const s = fr.summary || {};
+      const clusters = fr.clusters || [];
+      const kpis = '<div class="kpis">' +
+        kpi('평균 신선도', fmt(s.average_score || 0) + '/100') +
+        kpi('fresh', fmt(s.fresh || 0)) +
+        kpi('aging', fmt(s.aging || 0)) +
+        kpi('stale', fmt((s.stale || 0) + (s.unknown || 0))) +
+        kpi('최저 점수', fmt(s.worst_score != null ? s.worst_score : 100)) + '</div>';
+      let body = '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(fr.note || '') + '</div>' +
+        '<table><thead><tr><th>신선도</th><th>클러스터</th><th>리소스</th><th>기준 시각</th><th>설명</th></tr></thead><tbody>' +
+        renderFreshnessRows(clusters) + '</tbody></table>';
+      if (clusterId && (fr.namespaces || fr.kinds)) {
+        body += '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px">' +
+          '<div style="flex:1;min-width:300px"><strong style="font-size:12px">namespace별</strong>' +
+          '<table><thead><tr><th>신선도</th><th>namespace</th><th>리소스</th><th>기준 시각</th><th>설명</th></tr></thead><tbody>' +
+          renderFreshnessRows(fr.namespaces) + '</tbody></table></div>' +
+          '<div style="flex:1;min-width:300px"><strong style="font-size:12px">kind별</strong>' +
+          '<table><thead><tr><th>신선도</th><th>kind</th><th>리소스</th><th>기준 시각</th><th>설명</th></tr></thead><tbody>' +
+          renderFreshnessRows(fr.kinds) + '</tbody></table></div></div>';
+      }
+      body += '</div>';
+      return card('데이터 신선도 (Inventory Freshness)', body);
     }
     window.k8sLoadCollectConfig = async () => {
       const host = document.getElementById('collect-config');

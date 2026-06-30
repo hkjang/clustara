@@ -1,3 +1,6 @@
+v0.9.12:
+- **Inventory Freshness Score + Stale Warning (v0.9.12, CLU-REQ-01·10)**: 적응형 자동 수집(v0.9.11) 위에 "지금 보는 데이터가 믿을 만한가"를 판단하는 데이터 신선도 점수를 추가했습니다. 마지막 수집 시각(인벤토리 ObservedAt), 클러스터별 수집 주기(agent 없음 60초 / 있음 30분), 실시간 agent 생존 여부(heartbeat), 연속 수집 실패(클러스터 LastError)를 종합해 scope(클러스터·namespace·kind)별 0~100 신선도 점수와 fresh/aging/stale 밴드, 설명 가능한 factor를 산출합니다. 실시간 agent가 살아있으면 heartbeat를 신선도 기준으로 삼아 보정 주기가 길어도 stale로 오판하지 않고, agent가 붙었다가 오프라인이면 감점합니다. 50점 미만은 stale로 표시하고, `수집 상태` 화면에 평균/최저 점수와 클러스터별 신선도 표(클러스터 선택 시 namespace·kind 분해)를 추가했습니다(`GET /admin/k8s/freshness?cluster_id=`). 다른 화면이 데이터 신뢰도 배지를 붙일 수 있도록 `clusterFreshnessBadge` 헬퍼와 `freshnessBadge` UI 함수를 노출합니다. 순수 분석 로직은 단위 테스트로, 핸들러 배선은 라이브로 검증했습니다.
+
 v0.9.11:
 - **적응형 자동 수집 스케줄러 + 운영 리스트 Pod 딥링크·자원 태그 (v0.9.11)**: 인벤토리 수집이 그동안 수동 버튼 전용이라 실시간 agent 없이 클러스터만 등록하면 인벤토리가 갱신되지 않던 문제를 해결했습니다. 백그라운드 스케줄러가 클러스터별 agent 생존 여부(heartbeat)를 보고, 실시간 agent가 없는 클러스터는 자주(기본 60초), agent가 살아있는 클러스터는 보정 주기로만(기본 30분) 자동 수집합니다. 멀티 파드에서도 `LastConnectedAt` 기준으로 중복 수집을 방지하고 실패 클러스터는 레이트리밋합니다. 주기는 런타임 플래그로 즉시 조정 가능하며 `수집 상태` 화면에서 설정합니다(`GET/POST /admin/k8s/collect-config`). 또한 장애 후보·Restart Storm·워크로드 묶음·Pod 목록에 Pod 상세 바로가기(딥링크)와 CPU/메모리 요청·상한 태그를 추가해 OOMKilled 등에서 할당 자원을 리스트에서 바로 확인할 수 있습니다. 신규 순수 로직은 단위 테스트로 검증했습니다.
 
