@@ -9358,10 +9358,23 @@ const adminHTML = `<!doctype html>
     window.k8sLoadCollectConfig = async () => {
       const host = document.getElementById('collect-config');
       if (!host) return;
-      let d;
-      try { d = await api('/admin/k8s/collect-bursts'); } catch (e) { host.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; return; }
+      let d, cfgResp;
+      try { [d, cfgResp] = await Promise.all([api('/admin/k8s/collect-bursts'), api('/admin/k8s/collect-config').catch(() => ({}))]); } catch (e) { host.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; return; }
       const c = d.config || {};
       const bursts = d.bursts || [];
+      const cadences = (cfgResp && cfgResp.cadences) || [];
+      const cadenceList = cadences.length
+        ? '<div style="margin-top:10px"><strong style="font-size:12px">적응형 유효 주기 (CLU-REQ-04)</strong> <span class="muted" style="font-size:11px">우선순위(label priority)·incident·watch 반영</span>' +
+          '<table><thead><tr><th>클러스터</th><th>우선순위</th><th>agent</th><th>incident</th><th>watch</th><th>유효 주기</th><th>사유</th></tr></thead><tbody>' +
+          cadences.map(x => '<tr><td>' + escapeHTML(x.cluster_name || x.cluster_id) + '</td>' +
+            '<td>' + escapeHTML(x.priority || 'normal') + '</td>' +
+            '<td>' + (x.agent_alive ? '<span class="status" style="font-size:9px">live</span>' : '-') + '</td>' +
+            '<td>' + (x.open_incidents ? '<span class="status error" style="font-size:9px">' + fmt(x.open_incidents) + '</span>' : '-') + '</td>' +
+            '<td>' + fmt(x.watch_count || 0) + '</td>' +
+            '<td><strong>' + fmt(x.effective_secs || 0) + 's</strong></td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML(x.reason || '') + '</td></tr>').join('') +
+          '</tbody></table></div>'
+        : '';
       const burstList = bursts.length
         ? '<div style="margin-top:10px"><strong style="font-size:12px">활성 Burst (' + fmt(bursts.length) + ')</strong> <span class="muted" style="font-size:11px">변경 직후 고빈도 수집 중인 클러스터</span>' +
           '<table><thead><tr><th>클러스터</th><th>namespace</th><th>트리거</th><th>사유</th><th>만료</th></tr></thead><tbody>' +
@@ -9380,7 +9393,7 @@ const adminHTML = `<!doctype html>
         '<label style="font-size:12px">burst 창(초) <input id="cc-burstwin" type="number" min="30" value="' + fmt(c.burst_window_secs || 300) + '" style="width:80px"></label>' +
         '<button type="button" onclick="k8sSaveCollectConfig()">저장</button>' +
         '<span class="muted" style="font-size:11px">tick ' + fmt(c.tick_secs || 20) + 's · stale 기준 ' + fmt(c.agent_stale_secs || 90) + 's</span>' +
-        '</div>' + burstList + '<div id="cc-msg" style="font-size:11px;margin-top:6px"></div>';
+        '</div>' + cadenceList + burstList + '<div id="cc-msg" style="font-size:11px;margin-top:6px"></div>';
     };
     window.k8sSaveCollectConfig = async () => {
       const msg = document.getElementById('cc-msg');

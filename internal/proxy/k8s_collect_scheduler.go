@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -61,16 +62,33 @@ func (s *Server) runK8sCollectTick(ctx context.Context, lastAttempt map[string]t
 		}
 	}
 
+	// Adaptive policy (CLU-REQ-04): open incidents per cluster shorten cadence cluster-wide.
+	openIncidents := map[string]int{}
+	if incs, err := s.db.ListK8sIncidents(ctx, store.K8sIncidentFilter{Status: "open", Limit: 2000}); err == nil {
+		for _, inc := range incs {
+			openIncidents[inc.ClusterID]++
+		}
+	}
+
 	clusters, err := s.db.ListK8sClusters(ctx)
 	if err != nil {
 		slog.Warn("k8s collect scheduler: list clusters failed", "error", err)
 		return
 	}
 	for _, cluster := range clusters {
-		interval := time.Duration(noAgentSecs) * time.Second
-		if s.clusterHasLiveAgent(ctx, cluster.ID, now) {
-			interval = time.Duration(withAgentSecs) * time.Second
+		// Adaptive cadence from agent liveness + cluster priority + open incidents + watch entries.
+		watchCount := 0
+		if ws, err := s.db.ListK8sPodWatches(ctx, store.K8sPodWatchFilter{ClusterID: cluster.ID, Limit: 200}); err == nil {
+			watchCount = len(ws)
 		}
+		secs, _ := analyzer.EffectiveCollectInterval(analyzer.CollectPolicyInput{
+			BaseSecs: noAgentSecs, WithAgentSecs: withAgentSecs,
+			AgentAlive:    s.clusterHasLiveAgent(ctx, cluster.ID, now),
+			Priority:      strings.ToLower(strings.TrimSpace(cluster.Labels["priority"])),
+			OpenIncidents: openIncidents[cluster.ID],
+			WatchCount:    watchCount,
+		})
+		interval := time.Duration(secs) * time.Second
 		// An active burst overrides the normal cadence with the (shorter) burst interval.
 		if bursting[cluster.ID] {
 			if burst := time.Duration(burstSecs) * time.Second; burst < interval {
@@ -174,7 +192,8 @@ func (s *Server) handleK8sCollectConfig(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{"config": s.k8sPollConfig(r.Context()),
-			"note": "실시간 agent가 없는 클러스터는 no_agent_secs 주기로 자주 수집하고, agent가 살아있으면 with_agent_secs 주기로만 보정 수집합니다."})
+			"cadences": s.effectiveCadencePreview(r.Context()),
+			"note":     "실시간 agent가 없는 클러스터는 no_agent_secs 주기로 자주 수집하고, agent가 살아있으면 with_agent_secs 주기로만 보정 수집합니다. 적응형 정책(CLU-REQ-04): 우선순위(label priority)·미해결 incident·watch 등록에 따라 주기를 자동 조정합니다."})
 	case http.MethodPost:
 		var in struct {
 			Enabled         *bool `json:"enabled"`
@@ -204,6 +223,42 @@ func (s *Server) handleK8sCollectConfig(w http.ResponseWriter, r *http.Request) 
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
+}
+
+// effectiveCadencePreview computes the adaptive collect cadence + reason per cluster (for the UI).
+func (s *Server) effectiveCadencePreview(ctx context.Context) []map[string]any {
+	noAgentSecs := s.k8sPollFlagInt(ctx, k8sPollNoAgentSecsFlag, k8sPollNoAgentDefaultSecs)
+	withAgentSecs := s.k8sPollFlagInt(ctx, k8sPollWithAgentSecsFlag, k8sPollWithAgentDefaultSec)
+	now := time.Now().UTC()
+	openIncidents := map[string]int{}
+	if incs, err := s.db.ListK8sIncidents(ctx, store.K8sIncidentFilter{Status: "open", Limit: 2000}); err == nil {
+		for _, inc := range incs {
+			openIncidents[inc.ClusterID]++
+		}
+	}
+	clusters, err := s.db.ListK8sClusters(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(clusters))
+	for _, c := range clusters {
+		watchCount := 0
+		if ws, e := s.db.ListK8sPodWatches(ctx, store.K8sPodWatchFilter{ClusterID: c.ID, Limit: 200}); e == nil {
+			watchCount = len(ws)
+		}
+		agentAlive := s.clusterHasLiveAgent(ctx, c.ID, now)
+		secs, reason := analyzer.EffectiveCollectInterval(analyzer.CollectPolicyInput{
+			BaseSecs: noAgentSecs, WithAgentSecs: withAgentSecs, AgentAlive: agentAlive,
+			Priority: strings.ToLower(strings.TrimSpace(c.Labels["priority"])), OpenIncidents: openIncidents[c.ID], WatchCount: watchCount,
+		})
+		out = append(out, map[string]any{
+			"cluster_id": c.ID, "cluster_name": firstNonEmpty(c.Name, c.ID),
+			"priority": firstNonEmpty(strings.ToLower(strings.TrimSpace(c.Labels["priority"])), "normal"),
+			"agent_alive": agentAlive, "open_incidents": openIncidents[c.ID], "watch_count": watchCount,
+			"effective_secs": secs, "reason": reason,
+		})
+	}
+	return out
 }
 
 // handleK8sCollectBursts lists active change-aware burst windows, or (POST) opens one manually.
