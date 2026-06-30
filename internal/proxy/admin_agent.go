@@ -108,11 +108,15 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 
 	toolPlan := analyzer.PlanAgentTools(intent, pctx)
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1024, nil)
-	llmOK := llmErr == nil
+	llmOK := llmErr == nil && strings.TrimSpace(answer) != ""
 	note := ""
 	if !llmOK {
 		answer = composeAgentFallbackAnswer(in.Question, evidence, toolPlan)
-		note = "LLM 호출 실패 — 근거 기반 요약으로 대체했습니다: " + llmErr.Error()
+		if llmErr != nil {
+			note = "LLM 호출 실패 — 근거 기반 요약으로 대체했습니다: " + llmErr.Error()
+		} else {
+			note = "LLM이 빈 답변을 반환하여 근거 기반 요약으로 대체했습니다."
+		}
 	}
 
 	evJSON, _ := json.Marshal(evidence)

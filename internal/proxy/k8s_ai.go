@@ -136,10 +136,14 @@ func (s *Server) handleK8sAIAsk(w http.ResponseWriter, r *http.Request) {
 
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1024, nil)
 	resp := map[string]any{"evidence": evidence, "grounded": true}
-	if llmErr != nil {
+	if llmErr != nil || strings.TrimSpace(answer) == "" {
 		resp["answer"] = ""
 		resp["llm_available"] = false
-		resp["note"] = "LLM 업스트림이 구성되지 않았거나 호출에 실패했습니다. 아래 근거 데이터를 참고하세요: " + llmErr.Error()
+		if llmErr != nil {
+			resp["note"] = "LLM 업스트림이 구성되지 않았거나 호출에 실패했습니다. 아래 근거 데이터를 참고하세요: " + llmErr.Error()
+		} else {
+			resp["note"] = "LLM이 빈 답변을 반환했습니다. 아래 근거 데이터를 참고하세요."
+		}
 	} else {
 		resp["answer"] = answer
 		resp["llm_available"] = true
@@ -180,10 +184,14 @@ func (s *Server) handleK8sAIReport(w http.ResponseWriter, r *http.Request) {
 
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1500, nil)
 	resp := map[string]any{"evidence": evidence}
-	if llmErr != nil {
+	if llmErr != nil || strings.TrimSpace(answer) == "" {
 		resp["report"] = ""
 		resp["llm_available"] = false
-		resp["note"] = "LLM 미구성/실패 — 아래 근거로 직접 요약하세요: " + llmErr.Error()
+		if llmErr != nil {
+			resp["note"] = "LLM 미구성/실패 — 아래 근거로 직접 요약하세요: " + llmErr.Error()
+		} else {
+			resp["note"] = "LLM이 빈 답변을 반환했습니다. 아래 근거로 직접 요약하세요."
+		}
 	} else {
 		resp["report"] = answer
 		resp["llm_available"] = true
