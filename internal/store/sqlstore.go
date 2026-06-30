@@ -2078,6 +2078,19 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (cluster_id, agent_id, resource_kind)
 		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_collect_runs (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL,
+			trigger TEXT NOT NULL DEFAULT '',
+			stage TEXT NOT NULL DEFAULT '',
+			ok INTEGER NOT NULL DEFAULT 0,
+			category TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			resource_count INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_collect_runs_cluster_time ON k8s_collect_runs(cluster_id, started_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_pod_log_queries (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL,

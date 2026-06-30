@@ -64,7 +64,7 @@ func (s *Server) runK8sCollectTick(ctx context.Context, lastAttempt map[string]t
 			continue
 		}
 		lastAttempt[cluster.ID] = now
-		out := s.collectClusterInventory(ctx, cluster)
+		out := s.collectClusterInventoryTriggered(ctx, cluster, "scheduled")
 		if out.Err != nil {
 			slog.Warn("k8s scheduled collect failed", "cluster", cluster.ID, "stage", out.Stage, "error", out.Err)
 			continue

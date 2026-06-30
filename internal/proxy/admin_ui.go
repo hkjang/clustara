@@ -9032,12 +9032,13 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s Collector 상태', '<div class="empty">불러오는 중...</div>');
-      let clusters, st, fr;
+      let clusters, st, fr, slo;
       try {
-        [clusters, st, fr] = await Promise.all([
+        [clusters, st, fr, slo] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/agent/status' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/freshness' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/collect-slo' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
         ]);
       } catch (e) { view.innerHTML = section('K8s Collector 상태', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -9071,6 +9072,7 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(e.agent_id || '') + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">최근 watch 이벤트가 없습니다.</td></tr>';
       const freshCard = renderFreshnessCard(fr, clusterId);
+      const sloCard = renderCollectSloCard(slo);
       const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
       const agentGuide =
         '<div class="card-body">' +
@@ -9091,6 +9093,7 @@ const adminHTML = `<!doctype html>
           kpi('live', fmt((st.count || 0) - (st.stale || 0))) + kpi('stale 기준', fmt(st.stale_after_secs || 0) + 's') + '</div>') +
         card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
         freshCard +
+        sloCard +
         card('자동 수집 스케줄러 (Adaptive Polling)', '<div class="card-body" id="collect-config"><span class="muted">불러오는 중…</span></div>') +
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
@@ -9150,6 +9153,52 @@ const adminHTML = `<!doctype html>
       }
       body += '</div>';
       return card('데이터 신선도 (Inventory Freshness)', body);
+    }
+    function sloBandBadge(band) {
+      const color = band === 'healthy' ? '' : (band === 'degraded' ? 'warn' : 'error');
+      const label = band === 'healthy' ? '정상' : (band === 'degraded' ? '저하' : '실패');
+      return '<span class="status ' + color + '" style="font-size:10px">' + escapeHTML(label) + '</span>';
+    }
+    function renderCollectSloCard(slo) {
+      if (!slo || !slo.slo) return '';
+      const s = slo.slo;
+      const clusters = s.clusters || [];
+      const fails = slo.recent_failures || [];
+      const kpis = '<div class="kpis">' +
+        kpi('전체 성공률', fmt(s.overall_success || 0) + '%') +
+        kpi('수집 시도(' + fmt(s.window_hours || 24) + 'h)', fmt(s.total_attempts || 0)) +
+        kpi('실패', fmt(s.total_failures || 0)) +
+        kpi('정상', fmt(s.healthy || 0)) +
+        kpi('저하', fmt(s.degraded || 0)) +
+        kpi('실패 클러스터', fmt(s.failing || 0)) + '</div>';
+      const cRows = clusters.length ? clusters.map(c =>
+        '<tr><td>' + sloBandBadge(c.band) + '</td>' +
+        '<td>' + escapeHTML(c.cluster_name || c.cluster_id) + '</td>' +
+        '<td>' + fmt(c.success_rate || 0) + '%</td>' +
+        '<td>' + fmt(c.successes || 0) + '/' + fmt(c.attempts || 0) + '</td>' +
+        '<td>' + fmt(c.p50_latency_ms || 0) + ' / ' + fmt(c.p95_latency_ms || 0) + 'ms</td>' +
+        '<td>' + (c.top_failure ? '<span class="status error" style="font-size:10px">' + escapeHTML(c.top_failure) + '</span>' : '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + (c.last_success_at ? ago(c.last_success_at) : '-') + '</td></tr>'
+      ).join('') : '<tr><td colspan="7" class="muted">기록된 수집 시도가 없습니다 — 자동 수집이 한 번 이상 실행되면 표시됩니다.</td></tr>';
+      let body = '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(slo.note || '') + '</div>' +
+        '<table><thead><tr><th>상태</th><th>클러스터</th><th>성공률</th><th>성공/시도</th><th>지연 p50/p95</th><th>주요 실패</th><th>마지막 성공</th></tr></thead><tbody>' +
+        cRows + '</tbody></table>';
+      if (fails.length) {
+        const fRows = fails.map(f =>
+          '<tr><td class="muted" style="font-size:11px">' + ago(f.started_at) + '</td>' +
+          '<td>' + escapeHTML(f.cluster_name || f.cluster_id) + '</td>' +
+          '<td><span class="status ' + (f.cluster_issue ? 'error' : 'warn') + '" style="font-size:10px" title="' + escapeAttr(f.likely || '') + '">' + escapeHTML(f.title || f.category) + '</span></td>' +
+          '<td><span class="status" style="font-size:10px">' + escapeHTML(f.cluster_issue ? '클러스터' : '수집') + '</span></td>' +
+          '<td>' + escapeHTML(f.stage || '') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(f.remediation || '') + '</td></tr>'
+        ).join('');
+        body += '<div style="margin-top:12px"><strong style="font-size:12px">최근 수집 실패 원인 (RCA)</strong>' +
+          '<table><thead><tr><th>시간</th><th>클러스터</th><th>원인</th><th>구분</th><th>단계</th><th>권장 조치</th></tr></thead><tbody>' +
+          fRows + '</tbody></table></div>';
+      }
+      body += '</div>';
+      return card('Collector SLO + 실패 원인 분석', body);
     }
     window.k8sLoadCollectConfig = async () => {
       const host = document.getElementById('collect-config');

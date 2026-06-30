@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.12** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.13** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.12)
+## 기능 상태 (v0.9.13)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -52,6 +52,7 @@
 | 적응형 자동 수집 스케줄러 — 실시간 agent 없는 클러스터는 자주(기본 60s), agent 있으면 보정 주기로만(기본 30m) 자동 수집. 멀티 파드 중복 방지·런타임 설정(`/admin/k8s/collect-config`) | ✅ (v0.9.11) |
 | 운영 리스트 Pod 딥링크·자원 태그 — 장애 후보·Restart Storm·워크로드 묶음·Pod 목록에 Pod 상세 바로가기 + CPU/메모리 요청·상한 태그(OOMKilled 할당 자원 즉시 확인) | ✅ (v0.9.11) |
 | Inventory Freshness Score + Stale Warning — 마지막 수집 시각·수집 주기·agent 생존·수집 실패를 종합한 scope(클러스터·namespace·kind)별 0~100 데이터 신선도/stale 판정(`/admin/k8s/freshness`, CLU-REQ-01·10) | ✅ (v0.9.12) |
+| Collector SLO Dashboard + Collect Gap RCA — 수집 시도 이력 기반 성공률·p50/p95 지연·실패 밴드 + 실패 원인 분류(auth·rbac·timeout·network·ratelimit·tls·config)·클러스터 vs 수집 신호 구분(`/admin/k8s/collect-slo`, CLU-REQ-02·03) | ✅ (v0.9.13) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -72,6 +73,7 @@
 | GET | `/admin/k8s/clusters/{id}` | 클러스터 상세 |
 | POST | `/admin/k8s/clusters/{id}/test` | API Server 연결 테스트, 버전/노드/네임스페이스 수 갱신 |
 | POST | `/admin/k8s/clusters/{id}/collect` | Kubernetes API에서 라이브 인벤토리·이벤트·메트릭 수집 |
+| GET | `/admin/k8s/collect-slo` | Collector SLO: 클러스터별 수집 성공률·p50/p95 지연·실패 밴드 + 최근 실패 원인 분류(RCA). `?cluster_id=&window_hours=` |
 | POST | `/admin/k8s/snapshot` | 리소스, 이벤트, 메트릭 스냅샷 적재 |
 | GET | `/admin/k8s/inventory` | 리소스 인벤토리 조회 |
 | GET | `/admin/k8s/images` | 이미지→워크로드 사용 현황 + 공급망 위험(mutable :latest / digest 고정) |

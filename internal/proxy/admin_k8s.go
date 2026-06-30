@@ -206,6 +206,37 @@ type k8sCollectOutcome struct {
 // (updating the cluster's status + LastConnectedAt on every attempt). Shared by the manual collect
 // endpoint and the adaptive scheduler so both behave identically.
 func (s *Server) collectClusterInventory(ctx context.Context, cluster store.K8sCluster) k8sCollectOutcome {
+	return s.collectClusterInventoryTriggered(ctx, cluster, "manual")
+}
+
+// collectClusterInventoryTriggered runs a collect and records the attempt's outcome (for the
+// Collector SLO dashboard + Collect Gap RCA). trigger labels the caller (manual | scheduled).
+func (s *Server) collectClusterInventoryTriggered(ctx context.Context, cluster store.K8sCluster, trigger string) k8sCollectOutcome {
+	start := time.Now()
+	out := s.runClusterCollect(ctx, cluster)
+	s.recordCollectRun(ctx, out, trigger, time.Since(start).Milliseconds())
+	return out
+}
+
+// recordCollectRun persists one collect attempt outcome, classifying failures via Collect Gap RCA.
+func (s *Server) recordCollectRun(ctx context.Context, out k8sCollectOutcome, trigger string, latencyMS int64) {
+	run := store.K8sCollectRun{
+		ID:            newID("k8scrun"),
+		ClusterID:     out.Cluster.ID,
+		Trigger:       trigger,
+		Stage:         out.Stage,
+		OK:            out.Stage == "ok",
+		LatencyMS:     latencyMS,
+		ResourceCount: out.Result.Resources,
+	}
+	if out.Err != nil {
+		run.ErrorText = out.Err.Error()
+		run.Category = analyzer.ClassifyCollectGap(out.Stage, run.ErrorText).Category
+	}
+	_ = s.db.RecordK8sCollectRun(ctx, run) // best-effort telemetry
+}
+
+func (s *Server) runClusterCollect(ctx context.Context, cluster store.K8sCluster) k8sCollectOutcome {
 	client, err := s.k8sClientForCluster(ctx, cluster)
 	if err != nil {
 		return k8sCollectOutcome{Cluster: cluster, Stage: "client", Err: err}
