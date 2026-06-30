@@ -117,10 +117,11 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
 	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
 
-	s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK}))
+	toolPlan := analyzer.PlanAgentTools(intent, pctx)
+	s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan)}))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"intent": intent, "answer": answer, "evidence": evidence, "llm_available": llmOK,
-		"suggestions": analyzer.SuggestAgentPrompts(pctx), "note": note,
+		"tool_plan": toolPlan, "suggestions": analyzer.SuggestAgentPrompts(pctx), "note": note,
 		"safety": "이 에이전트는 조회·분석만 수행합니다. 변경은 Action Center 승인 흐름으로 진행하세요.",
 	})
 }
@@ -194,9 +195,11 @@ func (s *Server) handleAgentSuggestions(w http.ResponseWriter, r *http.Request) 
 		ConfigName: strings.TrimSpace(q.Get("config_name")),
 		Risk:       strings.TrimSpace(q.Get("risk")),
 	}
+	intent := analyzer.RouteIntent(ctx.Route)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"intent":      analyzer.RouteIntent(ctx.Route),
+		"intent":      intent,
 		"suggestions": analyzer.SuggestAgentPrompts(ctx),
+		"tool_plan":   analyzer.PlanAgentTools(intent, ctx),
 		"note":        "현재 화면 맥락 기반 추천 질문입니다. 에이전트는 조회·분석·제안만 즉시 수행하고 변경은 승인 흐름으로 연결됩니다.",
 	})
 }
