@@ -17,21 +17,23 @@ type RestartStormPod struct {
 	OwnerKind    string
 	OwnerName    string
 	RestartCount int
-	Unhealthy    bool // crashloop/oom/not-ready/critical band
+	Unhealthy    bool         // crashloop/oom/not-ready/critical band
+	Resources    ResourceTags // container CPU/mem requests+limits (replicas share the template)
 }
 
 // RestartStorm is a workload where multiple Pods are restarting/unhealthy together.
 type RestartStorm struct {
-	Namespace     string   `json:"namespace"`
-	OwnerKind     string   `json:"owner_kind"`
-	OwnerName     string   `json:"owner_name"`
-	PodCount      int      `json:"pod_count"`
-	AffectedPods  int      `json:"affected_pods"`
-	AffectedPct   int      `json:"affected_pct"`
-	TotalRestarts int      `json:"total_restarts"`
-	Severity      string   `json:"severity"` // high | critical
-	Reason        string   `json:"reason"`
-	SamplePods    []string `json:"sample_pods"`
+	Namespace     string       `json:"namespace"`
+	OwnerKind     string       `json:"owner_kind"`
+	OwnerName     string       `json:"owner_name"`
+	PodCount      int          `json:"pod_count"`
+	AffectedPods  int          `json:"affected_pods"`
+	AffectedPct   int          `json:"affected_pct"`
+	TotalRestarts int          `json:"total_restarts"`
+	Severity      string       `json:"severity"` // high | critical
+	Reason        string       `json:"reason"`
+	SamplePods    []string     `json:"sample_pods"`
+	Resources     ResourceTags `json:"resources"` // representative container requests+limits
 }
 
 // RestartStormOptions tunes thresholds. Zero values fall back to sensible defaults.
@@ -64,6 +66,8 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 		ns, kind, owner       string
 		total, affected, rest int
 		samples               []string
+		res                   ResourceTags
+		resSet                bool
 	}
 	groups := map[string]*agg{}
 	for _, p := range pods {
@@ -80,6 +84,12 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 		}
 		a.total++
 		a.rest += p.RestartCount
+		if !a.resSet || (!a.res.HasReq && !a.res.HasLim) {
+			if p.Resources.HasReq || p.Resources.HasLim || !a.resSet {
+				a.res = p.Resources
+				a.resSet = true
+			}
+		}
 		if p.Unhealthy || p.RestartCount >= opts.RestartThreshold {
 			a.affected++
 			if len(a.samples) < 5 {
@@ -104,7 +114,7 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 		out = append(out, RestartStorm{
 			Namespace: a.ns, OwnerKind: a.kind, OwnerName: a.owner,
 			PodCount: a.total, AffectedPods: a.affected, AffectedPct: pct, TotalRestarts: a.rest,
-			Severity: severity, SamplePods: a.samples,
+			Severity: severity, SamplePods: a.samples, Resources: a.res,
 			Reason: a.kind + "/" + a.owner + " 워크로드에서 " + strconv.Itoa(a.affected) + "/" + strconv.Itoa(a.total) +
 				" Pod가 재시작/비정상 (" + strconv.Itoa(pct) + "%) — 단일 Pod가 아닌 서비스 장애로 판단",
 		})

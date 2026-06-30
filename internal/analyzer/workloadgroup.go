@@ -17,23 +17,26 @@ type WorkloadPod struct {
 	PrimarySymptom string
 	RestartCount   int
 	Ready          bool
+	Resources      ResourceTags // container CPU/mem requests+limits (replicas share the template)
 }
 
 // WorkloadGroup is the aggregated health of one owning workload.
 type WorkloadGroup struct {
-	Namespace     string `json:"namespace"`
-	OwnerKind     string `json:"owner_kind"`
-	OwnerName     string `json:"owner_name"`
-	PodCount      int    `json:"pod_count"`
-	ReadyPods     int    `json:"ready_pods"`
-	HealthyPods   int    `json:"healthy_pods"`
-	WarningPods   int    `json:"warning_pods"`
-	CriticalPods  int    `json:"critical_pods"`
-	TotalRestarts int    `json:"total_restarts"`
-	MinHealth     int    `json:"min_health"` // worst pod's score
-	AvgHealth     int    `json:"avg_health"`
-	WorstSymptom  string `json:"worst_symptom"`
-	Band          string `json:"band"` // worst band among member pods
+	Namespace     string       `json:"namespace"`
+	OwnerKind     string       `json:"owner_kind"`
+	OwnerName     string       `json:"owner_name"`
+	PodCount      int          `json:"pod_count"`
+	ReadyPods     int          `json:"ready_pods"`
+	HealthyPods   int          `json:"healthy_pods"`
+	WarningPods   int          `json:"warning_pods"`
+	CriticalPods  int          `json:"critical_pods"`
+	TotalRestarts int          `json:"total_restarts"`
+	MinHealth     int          `json:"min_health"` // worst pod's score
+	AvgHealth     int          `json:"avg_health"`
+	WorstSymptom  string       `json:"worst_symptom"`
+	Band          string       `json:"band"`        // worst band among member pods
+	Resources     ResourceTags `json:"resources"`   // representative container requests+limits
+	SamplePods    []string     `json:"sample_pods"` // member pod names (worst-health first), for deep-links
 }
 
 // symptomPriority returns a rank for a primary symptom (lower = more severe); -1 for none/healthy.
@@ -49,12 +52,18 @@ func symptomPriority(tag string) int {
 // BuildWorkloadGroups aggregates pods by owning workload, worst-first (critical → warning →
 // healthy, then by lowest member health). Pods without an owner are grouped per-pod.
 func BuildWorkloadGroups(pods []WorkloadPod) []WorkloadGroup {
+	type sampleMember struct {
+		name   string
+		health int
+	}
 	type agg struct {
 		g          WorkloadGroup
 		sumHealth  int
 		worstRank  int
 		worstSympt string
 		minInit    bool
+		resSet     bool
+		members    []sampleMember
 	}
 	groups := map[string]*agg{}
 	order := []string{}
@@ -73,6 +82,15 @@ func BuildWorkloadGroups(pods []WorkloadPod) []WorkloadGroup {
 		a.g.PodCount++
 		a.g.TotalRestarts += p.RestartCount
 		a.sumHealth += p.HealthScore
+		a.members = append(a.members, sampleMember{name: p.Name, health: p.HealthScore})
+		// Replicas share a pod template, so any member's resources represent the workload; prefer
+		// the first member that actually declares resources.
+		if !a.resSet || (!a.g.Resources.HasReq && !a.g.Resources.HasLim) {
+			if p.Resources.HasReq || p.Resources.HasLim || !a.resSet {
+				a.g.Resources = p.Resources
+				a.resSet = true
+			}
+		}
 		if !a.minInit || p.HealthScore < a.g.MinHealth {
 			a.g.MinHealth = p.HealthScore
 			a.minInit = true
@@ -108,6 +126,15 @@ func BuildWorkloadGroups(pods []WorkloadPod) []WorkloadGroup {
 			a.g.Band = "warning"
 		default:
 			a.g.Band = "healthy"
+		}
+		// Sample pod names, worst-health first, for Pod-detail deep-links (cap 5).
+		sort.SliceStable(a.members, func(i, j int) bool { return a.members[i].health < a.members[j].health })
+		a.g.SamplePods = []string{}
+		for i, m := range a.members {
+			if i >= 5 {
+				break
+			}
+			a.g.SamplePods = append(a.g.SamplePods, m.name)
 		}
 		out = append(out, a.g)
 	}

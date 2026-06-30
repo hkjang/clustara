@@ -8,16 +8,41 @@ import (
 )
 
 type RCAFinding struct {
-	ClusterID      string   `json:"cluster_id"`
-	Namespace      string   `json:"namespace"`
-	ResourceKind   string   `json:"resource_kind"`
-	ResourceName   string   `json:"resource_name"`
-	Condition      string   `json:"condition"`
-	Severity       string   `json:"severity"`
-	Cause          string   `json:"cause"`
-	Evidence       []string `json:"evidence"`
-	CheckResources []string `json:"check_resources"`
-	Actions        []string `json:"actions"`
+	ClusterID      string        `json:"cluster_id"`
+	Namespace      string        `json:"namespace"`
+	ResourceKind   string        `json:"resource_kind"`
+	ResourceName   string        `json:"resource_name"`
+	Condition      string        `json:"condition"`
+	Severity       string        `json:"severity"`
+	Cause          string        `json:"cause"`
+	Evidence       []string      `json:"evidence"`
+	CheckResources []string      `json:"check_resources"`
+	Actions        []string      `json:"actions"`
+	Resources      *ResourceTags `json:"resources,omitempty"` // CPU/mem requests+limits of the target (when resolvable)
+}
+
+// AttachFindingResources enriches findings with the target's container CPU/memory requests+limits
+// (e.g. so an OOMKilled finding shows its memory limit inline). Matches a finding to its inventory
+// item by cluster/kind/namespace/name; for Pods it also falls back to the owning workload's spec.
+// Pure over its inputs.
+func AttachFindingResources(findings []RCAFinding, items []store.K8sInventoryItem) {
+	byKey := map[string]store.K8sInventoryItem{}
+	for _, it := range items {
+		byKey[strings.ToLower(it.Kind)+"|"+it.Namespace+"|"+it.Name] = it
+	}
+	for i := range findings {
+		f := &findings[i]
+		key := strings.ToLower(f.ResourceKind) + "|" + f.Namespace + "|" + f.ResourceName
+		item, ok := byKey[key]
+		if !ok {
+			continue
+		}
+		tags := SummarizePodResources(item.Spec)
+		if tags.HasReq || tags.HasLim {
+			t := tags
+			f.Resources = &t
+		}
+	}
 }
 
 func AnalyzeRCA(items []store.K8sInventoryItem, events []store.K8sEvent) []RCAFinding {

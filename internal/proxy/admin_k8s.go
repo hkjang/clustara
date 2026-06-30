@@ -192,17 +192,25 @@ func (s *Server) handleK8sClusterTest(w http.ResponseWriter, r *http.Request, cl
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cluster": cluster, "probe": probe})
 }
 
-func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request, cluster store.K8sCluster) {
-	if r.Method != http.MethodPost {
-		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
-		return
-	}
-	client, err := s.k8sClientForCluster(r.Context(), cluster)
+// k8sCollectOutcome is the staged result of one inventory collection (used by both the manual
+// endpoint and the background scheduler).
+type k8sCollectOutcome struct {
+	Cluster store.K8sCluster
+	Probe   kube.ProbeResult
+	Result  collector.ApplyResult
+	Stage   string // client | probe | collect | snapshot | ok
+	Err     error
+}
+
+// collectClusterInventory probes a cluster, pulls a full inventory snapshot, and persists it
+// (updating the cluster's status + LastConnectedAt on every attempt). Shared by the manual collect
+// endpoint and the adaptive scheduler so both behave identically.
+func (s *Server) collectClusterInventory(ctx context.Context, cluster store.K8sCluster) k8sCollectOutcome {
+	client, err := s.k8sClientForCluster(ctx, cluster)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 수집 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed")
-		return
+		return k8sCollectOutcome{Cluster: cluster, Stage: "client", Err: err}
 	}
-	probe, probeErr := client.Probe(r.Context())
+	probe, probeErr := client.Probe(ctx)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	cluster.LastConnectedAt = now
 	cluster.KubernetesVersion = probe.KubernetesVersion
@@ -213,20 +221,18 @@ func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request,
 	if probeErr != nil {
 		cluster.Status = "error"
 		cluster.LastError = probeErr.Error()
-		_ = s.db.UpsertK8sCluster(r.Context(), cluster)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "cluster": cluster, "probe": probe, "error": "Kubernetes API 연결 테스트 실패: " + probeErr.Error()})
-		return
+		_ = s.db.UpsertK8sCluster(ctx, cluster)
+		return k8sCollectOutcome{Cluster: cluster, Probe: probe, Stage: "probe", Err: probeErr}
 	}
-	collected, err := client.Collect(r.Context())
+	collected, err := client.Collect(ctx)
 	if err != nil {
 		cluster.Status = "error"
 		cluster.LastError = err.Error()
-		_ = s.db.UpsertK8sCluster(r.Context(), cluster)
-		writeOpenAIError(w, http.StatusServiceUnavailable, "Kubernetes 인벤토리 수집 실패: "+err.Error(), "server_error", "k8s_collect_failed")
-		return
+		_ = s.db.UpsertK8sCluster(ctx, cluster)
+		return k8sCollectOutcome{Cluster: cluster, Probe: probe, Stage: "collect", Err: err}
 	}
-	_ = s.db.UpsertK8sCluster(r.Context(), cluster)
-	result, err := collector.ApplySnapshot(r.Context(), s.db, collector.Snapshot{
+	_ = s.db.UpsertK8sCluster(ctx, cluster)
+	result, err := collector.ApplySnapshot(ctx, s.db, collector.Snapshot{
 		ClusterID:     cluster.ID,
 		ObservedAt:    now,
 		Resources:     collected.Resources,
@@ -236,11 +242,30 @@ func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request,
 		FullSyncKinds: collected.FullSyncKinds,
 	}, newID)
 	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_snapshot_failed")
+		return k8sCollectOutcome{Cluster: cluster, Probe: probe, Stage: "snapshot", Err: err}
+	}
+	return k8sCollectOutcome{Cluster: cluster, Probe: probe, Result: result, Stage: "ok"}
+}
+
+func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request, cluster store.K8sCluster) {
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
-	s.auditAdmin(r, "k8s.cluster.collect", "", auditJSON(result))
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cluster": cluster, "probe": probe, "result": result})
+	out := s.collectClusterInventory(r.Context(), cluster)
+	switch out.Stage {
+	case "client":
+		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 수집 준비 실패: "+out.Err.Error(), "invalid_request_error", "k8s_client_failed")
+	case "probe":
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "cluster": out.Cluster, "probe": out.Probe, "error": "Kubernetes API 연결 테스트 실패: " + out.Err.Error()})
+	case "collect":
+		writeOpenAIError(w, http.StatusServiceUnavailable, "Kubernetes 인벤토리 수집 실패: "+out.Err.Error(), "server_error", "k8s_collect_failed")
+	case "snapshot":
+		writeOpenAIError(w, http.StatusInternalServerError, out.Err.Error(), "server_error", "k8s_snapshot_failed")
+	default:
+		s.auditAdmin(r, "k8s.cluster.collect", "", auditJSON(out.Result))
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cluster": out.Cluster, "probe": out.Probe, "result": out.Result})
+	}
 }
 
 func (s *Server) k8sClientForCluster(ctx context.Context, cluster store.K8sCluster) (kube.Client, error) {

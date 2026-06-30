@@ -42,6 +42,7 @@ type k8sPodView struct {
 	PrimarySymptom string                   `json:"primary_symptom"`
 	Symptoms       []string                 `json:"symptoms,omitempty"`
 	Containers     []k8sContainerStatusView `json:"containers,omitempty"`
+	Resources      analyzer.ResourceTags    `json:"resources"`
 }
 
 type k8sContainerStatusView struct {
@@ -367,7 +368,7 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 	for _, p := range views {
 		stormPods = append(stormPods, analyzer.RestartStormPod{
 			Namespace: p.Namespace, Name: p.Name, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName,
-			RestartCount: p.RestartCount, Unhealthy: p.HealthBand == "critical",
+			RestartCount: p.RestartCount, Unhealthy: p.HealthBand == "critical", Resources: p.Resources,
 		})
 	}
 	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
@@ -398,6 +399,7 @@ func podViewsToWorkloadPods(views []k8sPodView) []analyzer.WorkloadPod {
 			Namespace: p.Namespace, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, Name: p.Name,
 			HealthScore: p.HealthScore, HealthBand: p.HealthBand, PrimarySymptom: p.PrimarySymptom,
 			RestartCount: p.RestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
+			Resources: p.Resources,
 		})
 	}
 	return out
@@ -1849,6 +1851,7 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 		Images:           images,
 		Age:              ageFromTime(firstNonEmpty(strAny(status["startTime"]), item.ObservedAt)),
 		WarningEvents:    countWarningEvents(events, item.Namespace, item.Name),
+		Resources:        analyzer.SummarizePodResources(spec),
 	}
 	view.Ready = fmt.Sprintf("%d/%d", ready, len(containers))
 	if includeContainers {
@@ -1871,7 +1874,7 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 	health := analyzer.ScorePodHealth(analyzer.PodHealthInput{
 		Phase: view.Phase, ContainerCount: view.ContainerCount, ReadyCount: view.ReadyCount,
 		RestartCount: view.RestartCount, WarningEvents: view.WarningEvents, RiskLevel: view.RiskLevel,
-		Deleting: strAny(status["deletionTimestamp"]) != "" || metadataDeleting(item),
+		Deleting:         strAny(status["deletionTimestamp"]) != "" || metadataDeleting(item),
 		ContainerReasons: reasons,
 	})
 	view.HealthScore = health.Score

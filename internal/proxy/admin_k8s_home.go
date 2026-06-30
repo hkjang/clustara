@@ -45,6 +45,7 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 
 	// Failure candidates TOP10 (severity-sorted).
 	failures := append([]analyzer.RCAFinding{}, rca...)
+	analyzer.AttachFindingResources(failures, items) // CPU/mem tags (e.g. OOMKilled memory limit)
 	sort.SliceStable(failures, func(i, j int) bool { return sevRank[failures[i].Severity] < sevRank[failures[j].Severity] })
 	type failOut struct {
 		analyzer.RCAFinding

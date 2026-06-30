@@ -6419,6 +6419,20 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 운영 허브 ----------
+    // Small CPU/memory request·limit tags for ops list rows (e.g. so an OOMKilled pod shows how
+    // much memory it was actually allocated). Pass a ResourceTags object (req_cpu/lim_cpu/...).
+    function k8sResTags(res) {
+      if (!res || (!res.has_req && !res.has_lim)) return '';
+      const out = [];
+      if (res.has_req) out.push('<span class="status" style="font-size:9px" title="requests">req ' + escapeHTML((res.req_cpu || '-') + ' · ' + (res.req_mem || '-')) + '</span>');
+      if (res.has_lim) out.push('<span class="status warn" style="font-size:9px" title="limits">lim ' + escapeHTML((res.lim_cpu || '-') + ' · ' + (res.lim_mem || '-')) + '</span>');
+      return ' ' + out.join(' ');
+    }
+    // Deep-link to a Pod's detail (pod center filtered to the pod). label defaults to the pod name.
+    function k8sPodLink(clusterId, namespace, pod, label) {
+      const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: namespace || '', pod: pod || '' }).toString();
+      return '<a href="' + escapeAttr(href) + '">' + escapeHTML(label || pod || '') + '</a>';
+    }
     // ---------- K8s 운영 홈: 위험 TOP5 / 장애후보 TOP10 / 최근변경 TOP10 (섹션 7) ----------
     async function renderK8sHome() {
       const view = document.getElementById('view');
@@ -6455,8 +6469,9 @@ const adminHTML = `<!doctype html>
         '<tr><td><span class="status ' + sevClass(f.severity) + '" style="font-size:10px">' + escapeHTML(f.severity) + '</span></td>' +
         '<td>' + escapeHTML(f.condition) + '</td>' +
         '<td>' + escapeHTML((f.cluster_name || '') + ' · ' + (f.namespace || '-') + '/' + f.resource_kind + '/' + f.resource_name) + '</td>' +
-        '<td class="muted" style="font-size:11px">' + escapeHTML(f.cause || '') + '</td>' +
-        '<td><a href="' + escapeAttr(tlHref(f)) + '">타임라인</a> · <a href="#/k8s-incidents' + (f.cluster_id ? '?cluster_id=' + encodeURIComponent(f.cluster_id) : '') + '">워룸</a></td></tr>').join('')
+        '<td class="muted" style="font-size:11px">' + escapeHTML(f.cause || '') + k8sResTags(f.resources) + '</td>' +
+        '<td>' + (f.resource_kind === 'Pod' ? k8sPodLink(f.cluster_id, f.namespace, f.resource_name, 'Pod 상세') + ' · ' : '') +
+          '<a href="' + escapeAttr(tlHref(f)) + '">타임라인</a> · <a href="#/k8s-incidents' + (f.cluster_id ? '?cluster_id=' + encodeURIComponent(f.cluster_id) : '') + '">워룸</a></td></tr>').join('')
         : '<tr><td colspan="5" class="muted">장애 후보 없음.</td></tr>';
 
       const changeRows = (d.recent_changes || []).length ? (d.recent_changes || []).map(c =>
@@ -6717,8 +6732,10 @@ const adminHTML = `<!doctype html>
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || '', namespace: p.namespace || '', pod: p.name || '' }).toString();
         return '<tr>' + healthCell(p) + '<td>' + riskBadge(p.risk_level, p.status) + '</td><td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML(p.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML(p.cluster_id || '') + '</div></td>' +
           '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td><td>' + fmt(p.restart_count || 0) + '</td>' +
-          '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td><td>' + fmt(p.warning_events || 0) + '</td></tr>';
-      }).join('') : '<tr><td colspan="10" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
+          '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td>' +
+          '<td style="font-size:11px">' + (k8sResTags(p.resources) || '<span class="muted">미설정</span>') + '</td>' +
+          '<td>' + fmt(p.warning_events || 0) + '</td></tr>';
+      }).join('') : '<tr><td colspan="11" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
       const bmRows = ((d.bookmarks || []).concat(d.auto_bookmarks || [])).slice(0, 10).map(b => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: b.cluster_id || '', namespace: b.namespace || '', pod: b.pod || '' }).toString();
         return '<tr><td>' + (b.auto ? '<span class="status warn" style="font-size:10px">auto</span>' : '<span class="status" style="font-size:10px">manual</span>') + '</td><td><a href="' + escapeAttr(href) + '">' + escapeHTML((b.namespace || '-') + '/' + (b.pod || '-')) + '</a><div class="muted" style="font-size:11px">' + escapeHTML(b.reason || b.note || '') + '</div></td><td class="muted" style="font-size:11px">' + ago(b.updated_at) + '</td></tr>';
@@ -6728,16 +6745,18 @@ const adminHTML = `<!doctype html>
         return '<tr><td><a href="' + escapeAttr(href) + '">' + escapeHTML((a.namespace || '-') + '/' + (a.pod || '-')) + '</a></td><td>' + escapeHTML(a.action || '-') + '</td><td>' + fmt(a.count || 0) + '</td><td class="muted" style="font-size:11px">' + ago(a.last_seen) + '</td></tr>';
       }).join('') || '<tr><td colspan="4" class="muted">최근 접속 이력이 없습니다.</td></tr>';
       const storms = d.restart_storms || [];
-      const stormCard = storms.length ? card('⚠ Restart Storm — 서비스 단위 장애 의심', '<div class="card-body"><table><thead><tr><th>심각도</th><th>워크로드</th><th>Namespace</th><th>영향 Pod</th><th>재시작</th><th>판단</th></tr></thead><tbody>' +
+      const samplePodLinks = (ns, pods) => (pods || []).map(p => k8sPodLink(clusterId, ns, p, p)).join(', ');
+      const stormCard = storms.length ? card('⚠ Restart Storm — 서비스 단위 장애 의심', '<div class="card-body"><table><thead><tr><th>심각도</th><th>워크로드</th><th>Namespace</th><th>영향 Pod</th><th>자원</th><th>재시작</th><th>Pod 바로가기</th></tr></thead><tbody>' +
         storms.map(s => '<tr><td><span class="status ' + (s.severity === 'critical' ? 'error' : 'warn') + '">' + escapeHTML(s.severity) + '</span></td>' +
           '<td><strong>' + escapeHTML((s.owner_kind || '-') + '/' + (s.owner_name || '-')) + '</strong></td>' +
           '<td>' + escapeHTML(s.namespace || '-') + '</td>' +
           '<td>' + fmt(s.affected_pods || 0) + '/' + fmt(s.pod_count || 0) + ' (' + fmt(s.affected_pct || 0) + '%)</td>' +
+          '<td>' + (k8sResTags(s.resources) || '<span class="muted" style="font-size:10px">미설정</span>') + '</td>' +
           '<td>' + fmt(s.total_restarts || 0) + '</td>' +
-          '<td class="muted" style="font-size:11px">' + escapeHTML(s.reason || '') + '</td></tr>').join('') +
+          '<td style="font-size:11px">' + (samplePodLinks(s.namespace, s.sample_pods) || '<span class="muted">-</span>') + '</td></tr>').join('') +
         '</tbody></table></div>') : '';
       const workloads = d.workloads || [];
-      const wlCard = workloads.length ? card('워크로드 묶음 (owner 단위 · 위험 순)', '<div class="card-body"><table><thead><tr><th>상태</th><th>워크로드</th><th>Namespace</th><th>Pod(Ready)</th><th>정상/주의/위험</th><th>최저 Health</th><th>증상</th><th>재시작</th></tr></thead><tbody>' +
+      const wlCard = workloads.length ? card('워크로드 묶음 (owner 단위 · 위험 순)', '<div class="card-body"><table><thead><tr><th>상태</th><th>워크로드</th><th>Namespace</th><th>Pod(Ready)</th><th>정상/주의/위험</th><th>최저 Health</th><th>증상</th><th>자원</th><th>Pod 바로가기</th></tr></thead><tbody>' +
         workloads.slice(0, 50).map(w => {
           const cls = w.band === 'critical' ? 'error' : (w.band === 'warning' ? 'warn' : '');
           return '<tr><td><span class="status ' + cls + '">' + escapeHTML(w.band || 'healthy') + '</span></td>' +
@@ -6747,7 +6766,8 @@ const adminHTML = `<!doctype html>
             '<td>' + fmt(w.healthy_pods || 0) + ' / ' + fmt(w.warning_pods || 0) + ' / ' + fmt(w.critical_pods || 0) + '</td>' +
             '<td>' + fmt(w.min_health || 0) + '</td>' +
             '<td class="muted" style="font-size:11px">' + escapeHTML(w.worst_symptom || '-') + '</td>' +
-            '<td>' + fmt(w.total_restarts || 0) + '</td></tr>';
+            '<td>' + (k8sResTags(w.resources) || '<span class="muted" style="font-size:10px">미설정</span>') + '</td>' +
+            '<td style="font-size:11px">' + (samplePodLinks(w.namespace, w.sample_pods) || '<span class="muted">-</span>') + '</td></tr>';
         }).join('') + '</tbody></table></div>') : '';
       const wStatuses = (watch && watch.statuses) || [];
       const watchRows = wStatuses.length ? wStatuses.map(s => {
@@ -6777,7 +6797,7 @@ const adminHTML = `<!doctype html>
           '<select id="pod-risk"><option value="">risk 전체</option><option value="high"' + ((params && params.get('risk')) === 'high' ? ' selected' : '') + '>high</option><option value="medium"' + ((params && params.get('risk')) === 'medium' ? ' selected' : '') + '>medium</option></select>' +
           '<button type="button" onclick="k8sPodFilter()">적용</button></div>') +
         card('북마크와 최근 이력', '<div class="grid2"><div class="card-body"><h4 style="margin-top:0">Pod 북마크</h4><table><thead><tr><th>Type</th><th>Pod</th><th>Updated</th></tr></thead><tbody>' + bmRows + '</tbody></table></div><div class="card-body"><h4 style="margin-top:0">최근 접속 Pod</h4><table><thead><tr><th>Pod</th><th>Action</th><th>Count</th><th>Last</th></tr></thead><tbody>' + accessRows + '</tbody></table></div></div>') +
-        card('Pod 목록 (Health 낮은 순)', '<div class="card-body"><table><thead><tr><th>Health</th><th>Risk</th><th>Pod</th><th>Namespace</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node</th><th>Owner</th><th>Warn</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        card('Pod 목록 (Health 낮은 순)', '<div class="card-body"><table><thead><tr><th>Health</th><th>Risk</th><th>Pod</th><th>Namespace</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node</th><th>Owner</th><th>자원(req·lim)</th><th>Warn</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     window.k8sPodFilter = () => {
       const q = new URLSearchParams();
@@ -9068,6 +9088,7 @@ const adminHTML = `<!doctype html>
           kpi('agent', fmt(st.count || 0)) + kpi('stale(오프라인)', fmt(st.stale || 0)) +
           kpi('live', fmt((st.count || 0) - (st.stale || 0))) + kpi('stale 기준', fmt(st.stale_after_secs || 0) + 's') + '</div>') +
         card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
+        card('자동 수집 스케줄러 (Adaptive Polling)', '<div class="card-body" id="collect-config"><span class="muted">불러오는 중…</span></div>') +
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
           '<div class="card-body"><table><thead><tr><th>상태</th><th>클러스터</th><th>Agent</th><th>버전</th><th>resourceVersion</th><th>watch lag</th><th>수신 이벤트</th><th>재연결</th><th>마지막 수신</th><th>오류</th></tr></thead><tbody>' + rows + '</tbody></table>' +
@@ -9076,7 +9097,34 @@ const adminHTML = `<!doctype html>
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>Agent</th><th>Kind</th><th>resourceVersion</th><th>수신</th><th>중복</th><th>갱신</th></tr></thead><tbody>' + offsetRows + '</tbody></table></div>') +
         card('최근 Watch 이벤트',
           '<div class="card-body"><table><thead><tr><th>시간</th><th>Type</th><th>리소스</th><th>resourceVersion</th><th>Agent</th></tr></thead><tbody>' + eventRows + '</tbody></table></div>');
+      k8sLoadCollectConfig();
     }
+    window.k8sLoadCollectConfig = async () => {
+      const host = document.getElementById('collect-config');
+      if (!host) return;
+      let d;
+      try { d = await api('/admin/k8s/collect-config'); } catch (e) { host.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; return; }
+      const c = d.config || {};
+      host.innerHTML =
+        '<div class="muted" style="font-size:12px;margin-bottom:8px">' + escapeHTML(d.note || '') + ' 실시간 agent가 없는 클러스터는 자주, 있는 클러스터는 보정 주기로만 수집합니다.</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
+        '<label style="font-size:12px"><input type="checkbox" id="cc-enabled"' + (c.enabled ? ' checked' : '') + '> 자동 수집 활성</label>' +
+        '<label style="font-size:12px">agent 없음 주기(초) <input id="cc-noagent" type="number" min="15" value="' + fmt(c.no_agent_secs || 60) + '" style="width:80px"></label>' +
+        '<label style="font-size:12px">agent 있음 주기(초) <input id="cc-withagent" type="number" min="60" value="' + fmt(c.with_agent_secs || 1800) + '" style="width:90px"></label>' +
+        '<button type="button" onclick="k8sSaveCollectConfig()">저장</button>' +
+        '<span class="muted" style="font-size:11px">tick ' + fmt(c.tick_secs || 20) + 's · stale 기준 ' + fmt(c.agent_stale_secs || 90) + 's</span>' +
+        '</div><div id="cc-msg" style="font-size:11px;margin-top:6px"></div>';
+    };
+    window.k8sSaveCollectConfig = async () => {
+      const msg = document.getElementById('cc-msg');
+      const body = {
+        enabled: document.getElementById('cc-enabled').checked,
+        no_agent_secs: parseInt(document.getElementById('cc-noagent').value || '60', 10),
+        with_agent_secs: parseInt(document.getElementById('cc-withagent').value || '1800', 10),
+      };
+      try { await api('/admin/k8s/collect-config', { method: 'POST', body: JSON.stringify(body) }); if (msg) msg.innerHTML = '<span class="status">저장됨</span>'; }
+      catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
     window.k8sCollectorGo = () => {
       const cl = document.getElementById('col-cluster').value;
       location.hash = '#/k8s-collector' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');

@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.10"
+const AppVersion = "v0.9.11"
 
 type Server struct {
 	cfg            config.Config
@@ -161,6 +161,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 	go server.text2sqlReportScheduler()
 	// Background scheduler for due K8s operations report deliveries (Mattermost).
 	go server.k8sReportScheduler()
+	go server.k8sCollectScheduler()
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)
@@ -275,6 +276,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/snapshot", s.handleK8sSnapshot)
 	mux.HandleFunc("/admin/k8s/agent/events", s.handleK8sAgentEvents)
 	mux.HandleFunc("/admin/k8s/agent/status", s.handleK8sAgentStatus)
+	mux.HandleFunc("/admin/k8s/collect-config", s.handleK8sCollectConfig)
 	mux.HandleFunc("/admin/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/pods/", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/inventory", s.handleK8sInventory)

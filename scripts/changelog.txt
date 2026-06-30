@@ -1,3 +1,6 @@
+v0.9.11:
+- **적응형 자동 수집 스케줄러 + 운영 리스트 Pod 딥링크·자원 태그 (v0.9.11)**: 인벤토리 수집이 그동안 수동 버튼 전용이라 실시간 agent 없이 클러스터만 등록하면 인벤토리가 갱신되지 않던 문제를 해결했습니다. 백그라운드 스케줄러가 클러스터별 agent 생존 여부(heartbeat)를 보고, 실시간 agent가 없는 클러스터는 자주(기본 60초), agent가 살아있는 클러스터는 보정 주기로만(기본 30분) 자동 수집합니다. 멀티 파드에서도 `LastConnectedAt` 기준으로 중복 수집을 방지하고 실패 클러스터는 레이트리밋합니다. 주기는 런타임 플래그로 즉시 조정 가능하며 `수집 상태` 화면에서 설정합니다(`GET/POST /admin/k8s/collect-config`). 또한 장애 후보·Restart Storm·워크로드 묶음·Pod 목록에 Pod 상세 바로가기(딥링크)와 CPU/메모리 요청·상한 태그를 추가해 OOMKilled 등에서 할당 자원을 리스트에서 바로 확인할 수 있습니다. 신규 순수 로직은 단위 테스트로 검증했습니다.
+
 v0.9.10:
 - **운영 품질·배포·통제 3종 묶음 (v0.9.10)**: (1) Ops Agent 평가 센터를 추가해 플로팅 에이전트의 답변마다 intent·도구 계획·사용 API·응답시간·폴백 여부·근거 점수(인용·근거 수·도구 계획·폴백 가중)·👍/👎 피드백·Action Card 채택을 저장하고 intent별 품질 대시보드(`/admin/agent/evaluations`·`/evaluations/feedback`)로 집계합니다. Action Card는 제안→승인대기→승인→실행→실패→롤백/재발의 lifecycle로 영속화됩니다(`/admin/agent/action-cards`·`/{id}/status`). (2) Application Stack에 필드 단위 드리프트(image·replicas·env·resources·probe·label·annotation, `?fields=true`)와 Server-Side Apply 기반 적용(정책 Deny 차단·승인 게이트·dry-run), 환경 간 승격(diff+새 revision), 이전 revision 롤백, 배포 이력(`/apply`·`/promote`·`/rollback`·`/history`)을 추가했습니다. (3) 런타임 설정 롤백 센터(특정 시점 값 복원 + 멀티 파드 수렴 상태)와 MCP 도구 스코프 강제(도구별 role·namespace·cluster 허용목록·masking level·approval rule, opt-in)를 추가했습니다(`/admin/mcp/tool-scopes`). 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
