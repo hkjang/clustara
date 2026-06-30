@@ -1468,7 +1468,7 @@ const adminHTML = `<!doctype html>
                       reasoningDiv.style.display = 'block';
                     }
                     reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
-                    if (displayAnswer.trim() && reasoningDiv.open) {
+                    if ((accumulatedAnswer.includes('</think>') || displayAnswer.trim()) && reasoningDiv.open) {
                       reasoningDiv.open = false;
                     }
                   }
@@ -1526,7 +1526,7 @@ const adminHTML = `<!doctype html>
                         reasoningDiv.style.display = 'block';
                       }
                       reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
-                      if (displayAnswer.trim() && reasoningDiv.open) {
+                      if ((accumulatedAnswer.includes('</think>') || displayAnswer.trim()) && reasoningDiv.open) {
                         reasoningDiv.open = false;
                       }
                     }
