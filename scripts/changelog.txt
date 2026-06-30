@@ -1,3 +1,6 @@
+v0.9.4:
+- **Floating Ops Agent 완성 — 화면 내장 운영 보조 에이전트 (v0.9.4)**: 모든 운영 화면 우측 하단에 뜨는 플로팅 에이전트를 완성했습니다. 현재 화면 맥락(cluster·namespace·pod·incident·stack)을 자동으로 수집(Page Context SDK)해 사용자가 다시 입력하지 않아도 되며, 화면 이동 시 맥락이 갱신됩니다. 질문 intent에 맞는 read-only 도구 호출 계획(Tool Planner)을 세우고, 기존 AI-ask 근거(RCA·이벤트)로 답하며, 어떤 도구로 답했는지 함께 노출합니다. 변경 작업은 직접 실행하지 않고 승인용 Action Card로 제안해 Action Center 승인 흐름으로 연결합니다. 추천 질문 원클릭, 근거 접이식 패널을 제공합니다. (`/admin/agent/suggestions`·`/sessions`·`/messages`·`/action-cards`) 신규 로직은 순수 함수 + 단위 테스트로 검증하고 통합 동작을 라이브로 확인했습니다.
+
 v0.9.3:
 - **Floating Ops Agent 백엔드 — 웹 내장 운영 챗봇 기반 (v0.9.3)**: Clustara 화면에 내장될 플로팅 운영 에이전트의 백엔드 기반을 추가했습니다. 현재 화면 맥락(route·cluster·namespace·pod·incident·stack)으로 intent를 분류하고 화면별 추천 질문을 생성하며(`GET /admin/agent/suggestions`), 대화 세션과 메시지를 저장해 화면을 이동해도 맥락이 이어집니다(`POST /admin/agent/sessions`·`GET /sessions/{id}`·`POST /messages`). 답변은 기존 AI-ask의 결정적 근거 수집·프롬프트를 재사용해 RCA·이벤트 근거에 기반하며 LLM 미구성 시 근거만 제공합니다. 변경 작업은 직접 실행하지 않고 승인용 Action Card로 제안해 Action Center 승인 흐름으로 연결합니다(`POST /admin/agent/action-cards`, 모든 write는 승인 필수). 신규 로직은 순수 함수 + 단위 테스트로 검증했습니다.
 
