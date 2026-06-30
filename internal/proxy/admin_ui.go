@@ -9398,6 +9398,16 @@ const adminHTML = `<!doctype html>
           '<td>' + (r.listable ? '<span class="status" style="font-size:9px">list/watch</span>' : '<span class="muted">-</span>') + '</td>' +
           '<td class="muted" style="font-size:10px">' + escapeHTML(splitJoin(r.short_names)) + '</td></tr>';
       }).join('');
+      const deprecated = disc.deprecated || [];
+      const depCard = deprecated.length
+        ? '<h4 style="margin:12px 0 4px"><span class="status error" style="font-size:9px">업그레이드 주의</span> Deprecated/Removed API (' + fmt(deprecated.length) + ')</h4>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:4px">이 클러스터가 제공하는 deprecated API group/version입니다. 클러스터 업그레이드 전에 마이그레이션하세요.</div>' +
+          '<table><thead><tr><th>group/version</th><th>제거 버전</th><th>대체</th><th>resource</th></tr></thead><tbody>' +
+          deprecated.map(d => '<tr><td><span class="status error" style="font-size:9px">' + escapeHTML(d.group_version) + '</span></td>' +
+            '<td>k8s ' + escapeHTML(d.removed_in) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(d.replacement) + '</td>' +
+            '<td class="muted" style="font-size:11px">' + escapeHTML((d.resources || []).join(', ')) + '</td></tr>').join('') +
+          '</tbody></table>'
+        : '';
       const ts = disc.targets_summary || {};
       const targets = (disc.targets || []).filter(t => t.recommended || t.is_crd).slice(0, 60);
       const targetRows = targets.map(t =>
@@ -9424,7 +9434,7 @@ const adminHTML = `<!doctype html>
         '<table><thead><tr><th>group/version</th><th>resource</th><th>kind</th><th>scope</th><th>verbs</th><th>shortNames</th></tr></thead><tbody>' +
         (rows || '<tr><td colspan="6" class="muted">resource가 없습니다.</td></tr>') + '</tbody></table>' +
         (resources.length > 200 ? '<div class="muted" style="font-size:11px;margin-top:4px">상위 200개 표시 (전체 ' + fmt(resources.length) + ')</div>' : '') +
-        targetCard + toolCard +
+        depCard + targetCard + toolCard +
         '</div>');
     }
     function splitJoin(v) { return Array.isArray(v) ? v.join(', ') : (v || ''); }

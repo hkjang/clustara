@@ -1,3 +1,6 @@
+v0.9.25:
+- **API Compatibility Radar (v0.9.25, CLU-DISC-12)**: 클러스터 업그레이드 사전 영향 분석을 추가했습니다. 발견된 API 카탈로그에서 deprecated/removed group-version(extensions/v1beta1·apps/v1beta1·networking.k8s.io/v1beta1·policy/v1beta1·batch/v1beta1·autoscaling/v2beta*·flowcontrol v1beta* 등)을 내장 제거 테이블과 대조해 제거 버전·대체 API와 함께 표시합니다. 또한 두 클러스터(또는 업그레이드 전후) API 카탈로그를 비교해 added/removed resource와 verb 변경(changed)을 산출합니다(`GET /admin/k8s/discovery/compare?from=&to=`). discovery 응답·`수집 상태` 화면에 'Deprecated/Removed API(업그레이드 주의)' 표를 추가했습니다. 탐지·diff 로직은 순수 함수(`DetectDeprecatedAPIs`·`DiffAPICatalogs`)로 단위 테스트했습니다.
+
 v0.9.24:
 - **Dynamic Inventory Target + CRD Auto + MCP Tool Candidate Generator (v0.9.24, CLU-DISC-06/07/11)**: v0.9.23 Schema Registry 위에, 발견된 API resource 카탈로그를 실행 가능한 제안으로 변환합니다. list/watch 가능한 리소스에서 동적 수집 대상 후보를 만들고 핵심 워크로드는 기본 권장·Secret 등 민감 리소스는 기본 제외(마스킹 안내)·CRD는 선택 수집으로 분류합니다(CLU-DISC-06/07). 또한 read 가능 verb(list/get) 기반으로 `k8s_list_*`·`k8s_get_*`·`k8s_explain_*` read-only MCP 도구 후보를 생성하고(전부 low risk), Secret 계열은 secret-redacted 마스킹, explain은 클러스터 미접근으로 표시합니다(CLU-DISC-11). discovery 응답·`수집 상태` 화면에 권장/CRD 수집 대상 표와 MCP 도구 후보 표를 추가했습니다. 모든 변환 로직은 순수 함수(`SuggestInventoryTargets`·`GenerateMCPToolCandidates`·`SummarizeDiscoveryTargets`)로 단위 테스트했습니다. 실제 동적 수집 적용·MCP 게이트웨이 등록은 후속 단계입니다.
 
