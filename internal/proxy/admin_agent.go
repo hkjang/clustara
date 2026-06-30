@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 
@@ -105,8 +108,91 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
 	evidence := gatherK8sEvidence(pctx.Namespace, firstNonEmpty(pctx.Pod, pctx.Name), rca, events, nil)
 	prompt := composeK8sAIPrompt(in.Question, evidence)
-
 	toolPlan := analyzer.PlanAgentTools(intent, pctx)
+
+	isStream := r.URL.Query().Get("stream") == "true"
+	if isStream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// 1. Send metadata event
+		metaJSON, _ := json.Marshal(map[string]any{
+			"event":         "metadata",
+			"intent":        intent,
+			"tool_plan":     toolPlan,
+			"evidence":      evidence,
+			"llm_available": true,
+		})
+		_, _ = w.Write([]byte("data: " + string(metaJSON) + "\n\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+
+		// 2. Prepare in-process streaming call to handleOpenAI
+		msg, _ := json.Marshal(map[string]string{"role": "user", "content": prompt})
+		bodyMap := map[string]any{
+			"model":      "clustara/auto",
+			"messages":   []json.RawMessage{msg},
+			"stream":     true,
+			"max_tokens": 1024,
+		}
+		enc, _ := json.Marshal(bodyMap)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(enc))
+		req = req.WithContext(r.Context())
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		// Trusted internal admin context
+		if _, injected := injectedChatTestAuth(req.Context()); !injected && s.authorizeAdmin(r) {
+			authCtx := s.internalAdminAuthContext(r, "admin_internal")
+			req = req.WithContext(context.WithValue(req.Context(), chatTestAuthContextKey{}, chatTestInjectedAuth{APIKeyID: authCtx.APIKeyID, AuthCtx: authCtx}))
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = r.RemoteAddr
+
+		flusher, _ := w.(http.Flusher)
+		interceptor := &streamingInterceptor{
+			ResponseWriter: w,
+			flusher:        flusher,
+		}
+
+		s.handleOpenAI(interceptor, req)
+
+		// 3. Extract the accumulated text to save in DB
+		rawSSE := interceptor.buf.Bytes()
+		answer := extractTextFromSSE(rawSSE)
+		llmOK := strings.TrimSpace(answer) != ""
+
+		if !llmOK {
+			// If empty or failed, send fallback delta to client
+			fallback := composeAgentFallbackAnswer(in.Question, evidence, toolPlan)
+			errJSON, _ := json.Marshal(map[string]any{
+				"event":   "error",
+				"message": "LLM이 답변을 생성하지 못해 근거 요약으로 대체합니다.",
+			})
+			_, _ = w.Write([]byte("data: " + string(errJSON) + "\n\n"))
+			deltaJSON, _ := json.Marshal(map[string]any{
+				"event":   "delta",
+				"content": fallback,
+			})
+			_, _ = w.Write([]byte("data: " + string(deltaJSON) + "\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			answer = fallback
+		}
+
+		// Save turns
+		evJSON, _ := json.Marshal(evidence)
+		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
+		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+		s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan), "stream": true}))
+		return
+	}
+
+	// Non-streaming fallback (unchanged behavior)
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1024, nil)
 	llmOK := llmErr == nil && strings.TrimSpace(answer) != ""
 	note := ""
@@ -129,6 +215,49 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 		"tool_plan": toolPlan, "suggestions": analyzer.SuggestAgentPrompts(pctx), "note": note,
 		"safety": "이 에이전트는 조회·분석만 수행합니다. 변경은 Action Center 승인 흐름으로 진행하세요.",
 	})
+}
+
+type streamingInterceptor struct {
+	http.ResponseWriter
+	flusher http.Flusher
+	buf     bytes.Buffer
+}
+
+func (i *streamingInterceptor) Write(p []byte) (int, error) {
+	i.buf.Write(p)
+	n, err := i.ResponseWriter.Write(p)
+	if i.flusher != nil {
+		i.flusher.Flush()
+	}
+	return n, err
+}
+
+func extractTextFromSSE(data []byte) string {
+	var sb strings.Builder
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		dataStr := strings.TrimPrefix(line, "data: ")
+		if dataStr == "[DONE]" {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+			if len(chunk.Choices) > 0 {
+				sb.WriteString(chunk.Choices[0].Delta.Content)
+			}
+		}
+	}
+	return sb.String()
 }
 
 func nowK8sAgentTime() string { return time.Now().UTC().Format(time.RFC3339Nano) }

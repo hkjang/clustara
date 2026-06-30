@@ -1359,23 +1359,92 @@ const adminHTML = `<!doctype html>
       const m = document.getElementById('agent-msgs');
       try {
         await agentEnsureSession();
-        const d = await api('/admin/agent/messages', { method: 'POST', body: JSON.stringify({ session_id: agentState.sessionId, question: q }) });
-        const ev = (d.evidence || []).slice(0, 6).map(e => '<li style="font-size:11px">' + escapeHTML(e) + '</li>').join('');
-        const tools = (d.tool_plan || []).map(t => escapeHTML(t.tool)).join(', ');
-        let body = '';
-        if (d.answer) {
-          if (d.llm_available === false) body += '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 실패 — 근거 요약</div>';
-          body += '<div style="white-space:pre-wrap">' + escapeHTML(d.answer) + '</div>';
-          if (d.llm_available === false && d.note) body += '<div class="muted" style="font-size:10px;margin-top:4px">' + escapeHTML(d.note) + '</div>';
-        } else {
-          body += '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || 'LLM 미구성 — 근거만 제공') + '</div>';
+        const token = sessionStorage.getItem('admin_token') || '';
+        const response = await fetch('/admin/agent/messages?stream=true', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? 'Bearer ' + token : ''
+          },
+          body: JSON.stringify({ session_id: agentState.sessionId, question: q })
+        });
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(errText || '서버 오류가 발생했습니다.');
         }
-        if (ev) body += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer">근거 ' + (d.evidence || []).length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + ev + '</ul></details>';
-        if (tools) body += '<div class="muted" style="font-size:10px;margin-top:4px">사용 도구: ' + tools + '</div>';
-        // Replace the "분석 중" placeholder (last agent bubble).
         m.lastElementChild.remove();
-        agentAppend('agent', body);
-      } catch (e) { m.lastElementChild.remove(); agentAppend('agent', '<span class="status error">' + escapeHTML(e.message) + '</span>'); }
+        const agentBubble = document.createElement('div');
+        agentBubble.className = 'msg agent';
+        const contentDiv = document.createElement('div');
+        contentDiv.style.whiteSpace = 'pre-wrap';
+        agentBubble.appendChild(contentDiv);
+        m.appendChild(agentBubble);
+        m.scrollTop = m.scrollHeight;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedAnswer = '';
+        let evidence = [];
+        let toolPlan = [];
+        let note = '';
+        let llmAvailable = true;
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (dataStr === '[DONE]') continue;
+              try {
+                const chunk = JSON.parse(dataStr);
+                if (chunk.event === 'metadata') {
+                  evidence = chunk.evidence || [];
+                  toolPlan = chunk.tool_plan || [];
+                  note = chunk.note || '';
+                  llmAvailable = chunk.llm_available !== false;
+                } else if (chunk.event === 'delta') {
+                  accumulatedAnswer += chunk.content || '';
+                  contentDiv.textContent = accumulatedAnswer;
+                  m.scrollTop = m.scrollHeight;
+                } else if (chunk.event === 'error') {
+                  contentDiv.innerHTML = '<span class="status error">' + escapeHTML(chunk.message) + '</span>';
+                }
+              } catch (e) {
+                console.error('Error parsing stream chunk:', e);
+              }
+            }
+          }
+        }
+
+        let footerHtml = '';
+        if (llmAvailable === false) {
+          footerHtml += '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 실패 — 근거 요약</div>';
+          if (note) footerHtml += '<div class="muted" style="font-size:10px;margin-bottom:4px">' + escapeHTML(note) + '</div>';
+        }
+        const ev = evidence.slice(0, 6).map(e => '<li style="font-size:11px">' + escapeHTML(e) + '</li>').join('');
+        if (ev) {
+          footerHtml += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer">근거 ' + evidence.length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + ev + '</ul></details>';
+        }
+        const tools = toolPlan.map(t => escapeHTML(t.tool)).join(', ');
+        if (tools) {
+          footerHtml += '<div class="muted" style="font-size:10px;margin-top:4px">사용 도구: ' + tools + '</div>';
+        }
+        if (footerHtml) {
+          const footerDiv = document.createElement('div');
+          footerDiv.innerHTML = footerHtml;
+          agentBubble.appendChild(footerDiv);
+          m.scrollTop = m.scrollHeight;
+        }
+      } catch (e) {
+        m.lastElementChild.remove();
+        agentAppend('agent', '<span class="status error">' + escapeHTML(e.message) + '</span>');
+      }
     };
 
     // Open nav dropdowns on hover with a close delay so brief pointer excursions
