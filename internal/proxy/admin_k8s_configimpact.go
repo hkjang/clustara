@@ -10,7 +10,7 @@ import (
 
 // handleK8sConfigImpact reports which workloads consume a given ConfigMap/Secret and whether a
 // restart is needed — the blast radius of a config/secret change (CFG-REQ-04).
-// GET /admin/k8s/config-impact?cluster_id=&kind=ConfigMap|Secret&name=
+// GET /admin/k8s/config-impact?cluster_id=&namespace=&kind=ConfigMap|Secret&name=
 func (s *Server) handleK8sConfigImpact(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -32,7 +32,7 @@ func (s *Server) handleK8sConfigImpact(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
 	}
-	report := analyzer.AnalyzeConfigImpact(items, kind, name)
+	report := analyzer.AnalyzeConfigImpactInNamespace(items, kind, strings.TrimSpace(q.Get("namespace")), name)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"impact": report,
 		"note":   "env/envFrom로 주입된 워크로드는 변경 반영을 위해 재시작이 필요하고, volume 마운트는 in-place로 갱신될 수 있습니다.",

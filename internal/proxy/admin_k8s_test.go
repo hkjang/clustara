@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"clustara/internal/store"
 )
@@ -232,6 +233,179 @@ func TestK8sAdminFlowRegistersClusterAndIngestsSnapshot(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("second approval should be blocked by action FSM, status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
+func TestK8sConfigChangeControlCenter(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	cfg := testConfig("http://upstream.invalid", "secret")
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	reg := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "cfg-change", "server_url": "https://k8s.example.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1",
+	})
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(reg.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	reg.Body.Close()
+	cid := created.Cluster.ID
+
+	initialObserved := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	snap := postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
+		"cluster_id":  cid,
+		"observed_at": initialObserved,
+		"resources": []map[string]any{
+			{"kind": "ConfigMap", "namespace": "default", "name": "app-cfg", "status": "Observed", "spec": map[string]any{"data": map[string]any{"FEATURE_FLAG": "off"}}},
+			{"kind": "Secret", "namespace": "default", "name": "db-secret", "status": "Observed", "spec": map[string]any{"type": "Opaque"}},
+			{"kind": "Deployment", "namespace": "default", "name": "web", "status": "Available 2/2",
+				"spec": map[string]any{
+					"replicas": 2,
+					"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
+						"name": "web", "image": "example/web:1.0",
+						"envFrom": []any{map[string]any{"configMapRef": map[string]any{"name": "app-cfg"}}},
+					}}}},
+				}},
+		},
+	})
+	if snap.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(snap.Body)
+		snap.Body.Close()
+		t.Fatalf("snapshot status=%d body=%s", snap.StatusCode, body)
+	}
+	snap.Body.Close()
+
+	reqResp := postJSON(t, proxy.URL+"/admin/k8s/config-changes", "", map[string]any{
+		"cluster_id":       cid,
+		"namespace":        "default",
+		"kind":             "ConfigMap",
+		"name":             "app-cfg",
+		"change_type":      "update",
+		"proposed_summary": "FEATURE_FLAG on",
+		"reason":           "enable canary behavior",
+		"idempotency_key":  "cfg-app-cfg-once",
+	})
+	if reqResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(reqResp.Body)
+		reqResp.Body.Close()
+		t.Fatalf("config change create status=%d body=%s", reqResp.StatusCode, body)
+	}
+	var createdChange struct {
+		Request store.K8sConfigChangeRequest `json:"request"`
+		Impact  struct {
+			SourceNamespace string `json:"source_namespace"`
+			Count           int    `json:"count"`
+			RestartNeeded   int    `json:"restart_needed"`
+		} `json:"impact"`
+	}
+	if err := json.NewDecoder(reqResp.Body).Decode(&createdChange); err != nil {
+		t.Fatal(err)
+	}
+	reqResp.Body.Close()
+	if createdChange.Request.Status != "approval_required" || !createdChange.Request.RequiresApproval || createdChange.Request.ImpactCount != 1 || createdChange.Request.RestartNeeded != 1 {
+		t.Fatalf("impacted ConfigMap change should require approval: %+v", createdChange.Request)
+	}
+	if createdChange.Impact.SourceNamespace != "default" || createdChange.Impact.Count != 1 || createdChange.Impact.RestartNeeded != 1 {
+		t.Fatalf("impact snapshot mismatch: %+v", createdChange.Impact)
+	}
+
+	replay := postJSON(t, proxy.URL+"/admin/k8s/config-changes", "", map[string]any{
+		"cluster_id": cid, "namespace": "default", "kind": "ConfigMap", "name": "app-cfg", "idempotency_key": "cfg-app-cfg-once",
+	})
+	var replayBody struct {
+		Request          store.K8sConfigChangeRequest `json:"request"`
+		IdempotentReplay bool                         `json:"idempotent_replay"`
+	}
+	if err := json.NewDecoder(replay.Body).Decode(&replayBody); err != nil {
+		t.Fatal(err)
+	}
+	replay.Body.Close()
+	if !replayBody.IdempotentReplay || replayBody.Request.ID != createdChange.Request.ID {
+		t.Fatalf("expected idempotent replay, got %+v", replayBody)
+	}
+
+	applyEarly := postJSON(t, proxy.URL+"/admin/k8s/config-changes/"+createdChange.Request.ID+"/apply", "", map[string]any{})
+	if applyEarly.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(applyEarly.Body)
+		applyEarly.Body.Close()
+		t.Fatalf("apply before approval should conflict, status=%d body=%s", applyEarly.StatusCode, body)
+	}
+	applyEarly.Body.Close()
+
+	approve := postJSON(t, proxy.URL+"/admin/k8s/config-changes/"+createdChange.Request.ID+"/approve", "", map[string]any{"note": "ok"})
+	if approve.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(approve.Body)
+		approve.Body.Close()
+		t.Fatalf("approve status=%d body=%s", approve.StatusCode, body)
+	}
+	approve.Body.Close()
+	apply := postJSON(t, proxy.URL+"/admin/k8s/config-changes/"+createdChange.Request.ID+"/apply", "", map[string]any{"result": "applied by GitOps"})
+	if apply.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(apply.Body)
+		apply.Body.Close()
+		t.Fatalf("apply status=%d body=%s", apply.StatusCode, body)
+	}
+	apply.Body.Close()
+
+	afterObserved := time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano)
+	after := postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
+		"cluster_id":  cid,
+		"observed_at": afterObserved,
+		"resources": []map[string]any{
+			{"kind": "ConfigMap", "namespace": "default", "name": "app-cfg", "status": "Observed", "spec": map[string]any{"data": map[string]any{"FEATURE_FLAG": "on"}}},
+			{"kind": "Deployment", "namespace": "default", "name": "web", "status": "Available 2/2",
+				"spec": map[string]any{
+					"replicas": 2,
+					"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
+						"name": "web", "image": "example/web:1.0",
+						"envFrom": []any{map[string]any{"configMapRef": map[string]any{"name": "app-cfg"}}},
+					}}}},
+				}},
+		},
+	})
+	after.Body.Close()
+	verify := postJSON(t, proxy.URL+"/admin/k8s/config-changes/"+createdChange.Request.ID+"/verify", "", map[string]any{})
+	if verify.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(verify.Body)
+		verify.Body.Close()
+		t.Fatalf("verify status=%d body=%s", verify.StatusCode, body)
+	}
+	var verified struct {
+		Request      store.K8sConfigChangeRequest      `json:"request"`
+		Verification store.K8sConfigChangeVerification `json:"verification"`
+	}
+	if err := json.NewDecoder(verify.Body).Decode(&verified); err != nil {
+		t.Fatal(err)
+	}
+	verify.Body.Close()
+	if verified.Request.Status != "verified" || verified.Verification.Status != "passed" {
+		t.Fatalf("expected passed verification, got %+v", verified)
+	}
+
+	secretReq := postJSON(t, proxy.URL+"/admin/k8s/config-changes", "", map[string]any{
+		"cluster_id": cid, "namespace": "default", "kind": "Secret", "name": "db-secret", "reason": "rotation window",
+	})
+	var secretChange struct {
+		Request store.K8sConfigChangeRequest `json:"request"`
+	}
+	if err := json.NewDecoder(secretReq.Body).Decode(&secretChange); err != nil {
+		t.Fatal(err)
+	}
+	secretReq.Body.Close()
+	if secretChange.Request.Status != "approval_required" || !secretChange.Request.RequiresApproval || secretChange.Request.ImpactCount != 0 {
+		t.Fatalf("Secret change should require approval even without impact: %+v", secretChange.Request)
 	}
 }
 

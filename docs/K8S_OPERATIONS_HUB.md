@@ -41,6 +41,7 @@
 | 운영 RBAC 참조 모델 — capability 카탈로그 + 역할(viewer/developer/operator/approver/security/finops/admin)↔권한 매트릭스 + preflight(SEC-REQ-03/04/05, 강제 아님) | ✅ |
 | Pull Secret 생성기 — 사설 레지스트리 imagePullSecret(dockerconfigjson) 매니페스트 생성, 자격증명 미저장(REG-REQ-03) | ✅ |
 | Config Impact(blast radius) — ConfigMap/Secret 변경 전 참조 워크로드(env/envFrom/volume) + 재시작 필요 여부(CFG-REQ-04) | ✅ |
+| Config Change Control Center — ConfigMap/Secret 변경 요청 생성, 영향도 자동 첨부, 승인 게이트, 적용 기록, 사후 검증 | ✅ |
 | Terminal Policy Builder + Exec 세션 승인함 — role·namespace·label·명령 allow/deny·승인·세션 시간·감사 정책·Risk Briefing·명령 템플릿·세션 상세/리포트·Debug Container 요청 이력 | ✅ |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -67,7 +68,10 @@
 | GET | `/admin/k8s/images` | 이미지→워크로드 사용 현황 + 공급망 위험(mutable :latest / digest 고정) |
 | GET | `/admin/k8s/rbac` `/rbac/check?role=&capability=` | 운영 RBAC 참조: capability 카탈로그·역할 매트릭스·preflight 점검(강제 아님) |
 | POST | `/admin/k8s/registries/pull-secret` | 사설 레지스트리 imagePullSecret 매니페스트 생성(자격증명 미저장·미감사) |
-| GET | `/admin/k8s/config-impact?kind=&name=` | ConfigMap/Secret 변경 영향: 참조 워크로드(env/envFrom/volume) + 재시작 필요 여부 |
+| GET | `/admin/k8s/config-impact?kind=&namespace=&name=` | ConfigMap/Secret 변경 영향: 참조 워크로드(env/envFrom/volume) + 재시작 필요 여부 |
+| GET/POST | `/admin/k8s/config-changes` | ConfigMap/Secret 변경 요청 목록/생성. 생성 시 Config Impact 스냅샷 자동 첨부, Secret 또는 영향 workload가 있으면 승인 필요 |
+| GET | `/admin/k8s/config-changes/{id}` | 변경 요청 상세: 승인/적용/검증 상태, 영향 workload, 검증 이력 |
+| POST | `/admin/k8s/config-changes/{id}/approve`, `/reject`, `/apply`, `/verify` | 변경 요청 승인/반려, 외부/GitOps 적용 기록, 사후 검증. Secret 원문 payload는 저장하지 않음 |
 | GET | `/admin/k8s/pods` | Pod 관리 목록: 클러스터·namespace·node·owner·status·risk·검색 필터, restart/warning 요약 |
 | GET | `/admin/k8s/pods/{namespace}/{pod}` | Pod 상세: 상태, 컨테이너 상태, 관련 이벤트, Pod 메트릭, 로그 감사, 마스킹 manifest |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/logs` | Pod 로그 조회: `cluster_id`, `container`, `previous`, `tail_lines`, `since`, `since_time`, `q`, `error_only`, `timestamps` |

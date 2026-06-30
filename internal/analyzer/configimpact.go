@@ -25,19 +25,30 @@ type ConfigImpactEntry struct {
 // ConfigImpactReport summarizes the blast radius of a config/secret change.
 type ConfigImpactReport struct {
 	SourceKind       string              `json:"source_kind"`
+	SourceNamespace  string              `json:"source_namespace,omitempty"`
 	SourceName       string              `json:"source_name"`
 	Workloads        []ConfigImpactEntry `json:"workloads"`
 	Count            int                 `json:"count"`
-	RestartNeeded    int                 `json:"restart_needed"`   // workloads consuming via env/envFrom
+	RestartNeeded    int                 `json:"restart_needed"` // workloads consuming via env/envFrom
 	RestartRecommend bool                `json:"restart_recommend"`
 }
 
 // AnalyzeConfigImpact finds the workloads referencing the given ConfigMap/Secret. sourceKind is
 // "ConfigMap" or "Secret". Pure.
 func AnalyzeConfigImpact(items []store.K8sInventoryItem, sourceKind, sourceName string) ConfigImpactReport {
-	rep := ConfigImpactReport{SourceKind: sourceKind, SourceName: sourceName, Workloads: []ConfigImpactEntry{}}
+	return AnalyzeConfigImpactInNamespace(items, sourceKind, "", sourceName)
+}
+
+// AnalyzeConfigImpactInNamespace scopes impact analysis to the source namespace when provided.
+// ConfigMap/Secret references are namespace-local, so the namespaced form is the safer default for
+// change-control workflows while the legacy wrapper keeps the broad lookup behavior.
+func AnalyzeConfigImpactInNamespace(items []store.K8sInventoryItem, sourceKind, sourceNamespace, sourceName string) ConfigImpactReport {
+	rep := ConfigImpactReport{SourceKind: sourceKind, SourceNamespace: sourceNamespace, SourceName: sourceName, Workloads: []ConfigImpactEntry{}}
 	isSecret := strings.EqualFold(sourceKind, "Secret")
 	for _, it := range items {
+		if sourceNamespace != "" && it.Namespace != sourceNamespace {
+			continue
+		}
 		ps := podSpecOf(it)
 		if ps == nil {
 			continue

@@ -7219,13 +7219,14 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 보안', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, rbacDiff, imgs;
+      let clusters, data, rbacDiff, imgs, cfgChanges;
       try {
-        [clusters, data, rbacDiff, imgs] = await Promise.all([
+        [clusters, data, rbacDiff, imgs, cfgChanges] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/security' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/rbac-diff' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ entries: [] })),
           api('/admin/k8s/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ images: [] })),
+          api('/admin/k8s/config-changes?limit=20' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ requests: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 보안', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -7237,6 +7238,21 @@ const adminHTML = `<!doctype html>
       const sum = r.summary || {};
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const lvlClass = (l) => l === 'privileged' ? 'error' : (l === 'baseline' ? 'warn' : '');
+      const cfgRows = ((cfgChanges && cfgChanges.requests) || []).length ? (cfgChanges.requests || []).map(cr => {
+        const pending = cr.status === 'pending' || cr.status === 'approval_required';
+        const approved = cr.status === 'approved';
+        const applied = cr.status === 'applied' || cr.status === 'verification_failed';
+        const cls = cr.status === 'verified' ? '' : (cr.status === 'rejected' || cr.status === 'failed' || cr.status === 'verification_failed' ? 'error' : 'warn');
+        const btns = pending
+          ? '<button type="button" class="secondary" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'approve\')">승인</button> <button type="button" class="secondary" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'reject\')">반려</button>'
+          : (approved
+            ? '<button type="button" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'apply\')">적용 기록</button>'
+            : (applied ? '<button type="button" class="secondary" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'verify\')">검증</button>' : '<span class="muted" style="font-size:11px">' + escapeHTML(cr.verified_by || cr.applied_by || cr.approved_by || '-') + '</span>'));
+        return '<tr><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
+          '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.source_kind + '/' + cr.source_name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.proposed_summary || '') + '</div></td>' +
+          '<td>' + fmt(cr.impact_count || 0) + '</td><td>' + fmt(cr.restart_needed || 0) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(cr.requested_by || '-') + '</td><td>' + btns + '</td></tr>';
+      }).join('') : '<tr><td colspan="6" class="muted">Config 변경 요청이 없습니다.</td></tr>';
 
       const psRows = (r.pod_security || []).filter(p => p.level !== 'restricted').map(p =>
         '<tr><td><span class="status ' + lvlClass(p.level) + '" style="font-size:10px">' + escapeHTML(p.level) + '</span></td>' +
@@ -7283,8 +7299,10 @@ const adminHTML = `<!doctype html>
         card('Config 변경 영향 (blast radius · CFG-REQ-04)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">ConfigMap/Secret 변경 전 참조 워크로드와 재시작 필요 여부를 확인합니다.</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="ci-kind"><option value="ConfigMap">ConfigMap</option><option value="Secret">Secret</option></select>' +
-          '<input id="ci-name" placeholder="이름" style="min-width:160px"><input id="ci-cluster" type="hidden" value="' + escapeAttr(clusterId) + '"><button type="button" onclick="k8sConfigImpact()">영향 조회</button></div>' +
-          '<div id="ci-out" style="margin-top:8px"></div></div>') +
+          '<input id="ci-ns" placeholder="namespace" style="min-width:130px"><input id="ci-name" placeholder="이름" style="min-width:160px"><input id="ci-cluster" type="hidden" value="' + escapeAttr(clusterId) + '"><button type="button" onclick="k8sConfigImpact()">영향 조회</button></div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="ci-summary" placeholder="변경 요약(값 원문 제외)" style="min-width:220px"><input id="ci-reason" placeholder="사유" style="min-width:180px"><button type="button" onclick="k8sConfigChangeCreate()">변경 요청 생성</button></div>' +
+          '<div id="ci-out" style="margin-top:8px"></div>' +
+          '<div style="margin-top:10px"><table><thead><tr><th>상태</th><th>대상</th><th>영향</th><th>재시작</th><th>요청자</th><th></th></tr></thead><tbody>' + cfgRows + '</tbody></table></div></div>') +
         (function () {
           const es = (rbacDiff && rbacDiff.entries) || [];
           const rows = es.length ? es.map(e =>
@@ -7320,17 +7338,45 @@ const adminHTML = `<!doctype html>
       const out = document.getElementById('ci-out');
       const kind = document.getElementById('ci-kind').value;
       const name = (document.getElementById('ci-name').value || '').trim();
+      const ns = (document.getElementById('ci-ns').value || '').trim();
       const cl = (document.getElementById('ci-cluster').value || '').trim();
       if (!name) { out.innerHTML = '<span class="status warn">이름을 입력하세요</span>'; return; }
       out.innerHTML = '<span class="muted">조회 중...</span>';
       try {
         const q = new URLSearchParams({ kind, name }); if (cl) q.set('cluster_id', cl);
+        if (ns) q.set('namespace', ns);
         const d = await api('/admin/k8s/config-impact?' + q.toString());
         const im = d.impact || {};
         const rows = (im.workloads || []).map(wl => '<tr><td>' + escapeHTML((wl.namespace || '-') + '/' + wl.kind + '/' + wl.name) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((wl.via || []).join(', ')) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">참조 워크로드 없음</td></tr>';
         out.innerHTML = '<div style="margin-bottom:4px">' + (im.restart_recommend ? '<span class="status warn">재시작 필요 ' + fmt(im.restart_needed || 0) + '</span>' : '<span class="status">재시작 불필요</span>') + ' <span class="muted" style="font-size:11px">참조 ' + fmt(im.count || 0) + '개</span></div>' +
           '<table><thead><tr><th>워크로드</th><th>참조 경로</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sConfigChangeCreate = async () => {
+      const out = document.getElementById('ci-out');
+      const body = {
+        cluster_id: (document.getElementById('ci-cluster').value || '').trim(),
+        namespace: (document.getElementById('ci-ns').value || '').trim(),
+        kind: document.getElementById('ci-kind').value,
+        name: (document.getElementById('ci-name').value || '').trim(),
+        proposed_summary: (document.getElementById('ci-summary').value || '').trim(),
+        reason: (document.getElementById('ci-reason').value || '').trim()
+      };
+      if (!body.cluster_id) { out.innerHTML = '<span class="status warn">클러스터 필터를 먼저 선택하세요</span>'; return; }
+      if (!body.name) { out.innerHTML = '<span class="status warn">이름을 입력하세요</span>'; return; }
+      try {
+        const res = await api('/admin/k8s/config-changes', { method: 'POST', body: JSON.stringify(body) });
+        out.innerHTML = '<span class="status warn">' + escapeHTML((res.request && res.request.status) || 'created') + '</span> <span class="muted" style="font-size:11px">요청이 생성되었습니다.</span>';
+        await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sConfigChangeAction = async (id, action) => {
+      let body = '{}';
+      if (action === 'reject') body = JSON.stringify({ note: prompt('반려 사유를 입력하세요(선택):') || '' });
+      if (action === 'apply' && !confirm('이 변경이 외부/GitOps 경로로 적용되었음을 기록할까요?')) return;
+      try { await api('/admin/k8s/config-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body }); }
+      catch (e) { alert(e.message); }
+      await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
