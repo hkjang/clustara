@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.22** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.23** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.22)
+## 기능 상태 (v0.9.23)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -62,6 +62,7 @@
 | Collection Cost Guard — 클러스터별 수집 저장 footprint(행 수×테이블별 평균 크기) 추정 + 수집 주기 기반 월 증가 예측 + 예산 초과 경고(`/admin/k8s/collection-cost`, CLU-REQ-11) | ✅ (v0.9.20) |
 | Release Quality Gate 2.0 — AppVersion↔changelog↔문서 헤더/기능 상태 일치, changelog 중복·정렬·자기 버전 언급을 `go test`에서 강제하는 영구 게이트(CLU-REQ-13) | ✅ (v0.9.21) |
 | Domain Module Map — proxy/store 점진 분리를 위한 목표 도메인 경계·파일 매핑·추출 순서 정의(`docs/ARCHITECTURE_MODULES.md`, CLU-REQ-12) | ✅ (v0.9.22) |
+| K8s API Discovery + Schema Registry — aggregated discovery(`/apis`·`/api`)와 `/openapi/v3` root를 수집해 클러스터별 API resource 카탈로그·OpenAPI 문서 인덱스 캐싱(동적 리소스 인식·CRD 인식 토대, `/admin/k8s/discovery`, `/clusters/{id}/discover`, CLU-DISC-01/02/04/05/13) | ✅ (v0.9.23) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 

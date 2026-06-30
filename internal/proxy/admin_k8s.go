@@ -147,6 +147,8 @@ func (s *Server) handleK8sClusterByID(w http.ResponseWriter, r *http.Request) {
 			s.handleK8sClusterTest(w, r, cluster)
 		case "collect":
 			s.handleK8sClusterCollect(w, r, cluster)
+		case "discover":
+			s.handleK8sClusterDiscover(w, r, cluster)
 		default:
 			writeOpenAIError(w, http.StatusNotFound, "unknown cluster command: "+parts[1], "invalid_request_error", "unknown_cluster_command")
 		}

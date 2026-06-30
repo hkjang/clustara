@@ -2101,6 +2101,39 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			expires_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_collect_bursts_active ON k8s_collect_bursts(cluster_id, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_api_resources (
+			cluster_id TEXT NOT NULL,
+			group_name TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
+			resource TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			namespaced INTEGER NOT NULL DEFAULT 0,
+			listable INTEGER NOT NULL DEFAULT 0,
+			verbs TEXT NOT NULL DEFAULT '',
+			short_names TEXT NOT NULL DEFAULT '',
+			categories TEXT NOT NULL DEFAULT '',
+			is_crd INTEGER NOT NULL DEFAULT 0,
+			collected_at TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, group_name, version, resource)
+		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_openapi_documents (
+			cluster_id TEXT NOT NULL,
+			group_version TEXT NOT NULL,
+			server_relative_url TEXT NOT NULL DEFAULT '',
+			schema_hash TEXT NOT NULL DEFAULT '',
+			collected_at TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, group_version)
+		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_api_discovery_snapshots (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL,
+			resource_count INTEGER NOT NULL DEFAULT 0,
+			document_count INTEGER NOT NULL DEFAULT 0,
+			ok INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			collected_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_api_discovery_snapshots_cluster ON k8s_api_discovery_snapshots(cluster_id, collected_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_agent_regression_baselines (
 			id TEXT PRIMARY KEY,
 			version TEXT NOT NULL DEFAULT '',

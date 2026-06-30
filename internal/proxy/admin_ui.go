@@ -9187,14 +9187,15 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s Collector 상태', '<div class="empty">불러오는 중...</div>');
-      let clusters, st, fr, slo, cost;
+      let clusters, st, fr, slo, cost, disc;
       try {
-        [clusters, st, fr, slo, cost] = await Promise.all([
+        [clusters, st, fr, slo, cost, disc] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/agent/status' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/freshness' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/collect-slo' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/collection-cost').catch(() => null),
+          clusterId ? api('/admin/k8s/discovery?cluster_id=' + encodeURIComponent(clusterId)).catch(() => null) : Promise.resolve(null),
         ]);
       } catch (e) { view.innerHTML = section('K8s Collector 상태', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -9230,6 +9231,7 @@ const adminHTML = `<!doctype html>
       const freshCard = renderFreshnessCard(fr, clusterId);
       const sloCard = renderCollectSloCard(slo);
       const costCard = renderCollectionCostCard(cost);
+      const discCard = renderDiscoveryCard(disc, clusterId);
       const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
       const agentGuide =
         '<div class="card-body">' +
@@ -9252,6 +9254,7 @@ const adminHTML = `<!doctype html>
         freshCard +
         sloCard +
         costCard +
+        discCard +
         card('자동 수집 스케줄러 (Adaptive Polling)', '<div class="card-body" id="collect-config"><span class="muted">불러오는 중…</span></div>') +
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
@@ -9358,6 +9361,52 @@ const adminHTML = `<!doctype html>
       body += '</div>';
       return card('Collector SLO + 실패 원인 분석', body);
     }
+    // K8s API Discovery + Schema Registry (CLU-DISC). Collect the cluster's real resource catalog
+    // + OpenAPI v3 schema index, then render it.
+    window.k8sDiscover = async (clusterId) => {
+      if (!clusterId) { alert('필터에서 클러스터를 먼저 선택하세요.'); return; }
+      const btn = document.getElementById('disc-btn');
+      if (btn) { btn.disabled = true; btn.textContent = '탐색 중…'; }
+      try { await api('/admin/k8s/clusters/' + encodeURIComponent(clusterId) + '/discover', { method: 'POST' }); renderK8sCollector(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('API 탐색 실패: ' + e.message); if (btn) { btn.disabled = false; btn.textContent = 'API 탐색 실행'; } }
+    };
+    function renderDiscoveryCard(disc, clusterId) {
+      const btn = clusterId ? '<button type="button" id="disc-btn" onclick="k8sDiscover(\'' + escapeAttr(clusterId) + '\')">API 탐색 실행</button>' : '';
+      if (!clusterId) {
+        return card('API Discovery + Schema Registry (CLU-DISC)', '<div class="card-body"><p class="muted" style="font-size:12px">필터에서 클러스터를 선택하면 클러스터가 실제 제공하는 API resource 카탈로그와 OpenAPI v3 스키마 인덱스를 수집·표시합니다.</p></div>');
+      }
+      if (!disc || !disc.summary) {
+        return card('API Discovery + Schema Registry (CLU-DISC)', '<div class="card-body"><p class="muted" style="font-size:12px">아직 수집된 discovery가 없습니다. ' + btn + '</p></div>');
+      }
+      const s = disc.summary;
+      const resources = disc.resources || [];
+      const age = (typeof disc.collected_age_secs === 'number' && disc.collected_age_secs >= 0)
+        ? (disc.collected_age_secs >= 60 ? Math.floor(disc.collected_age_secs / 60) + '분 전' : disc.collected_age_secs + '초 전') : '기록 없음';
+      const kpis = '<div class="kpis">' +
+        kpi('API resource', fmt(s.total_resources || 0)) +
+        kpi('수집 가능(list)', fmt(s.listable || 0)) +
+        kpi('CRD/확장', fmt(s.crd_resources || 0)) +
+        kpi('API group', fmt(s.groups || 0)) +
+        kpi('스키마 문서', fmt(s.schema_documents || 0)) +
+        kpi('수집', escapeHTML(age)) + '</div>';
+      const rows = resources.slice(0, 200).map(r => {
+        const gv = r.group ? (r.group + '/' + r.version) : r.version;
+        return '<tr><td>' + (r.is_crd ? '<span class="status warn" style="font-size:9px">CRD</span> ' : '') + escapeHTML(gv) + '</td>' +
+          '<td><strong>' + escapeHTML(r.resource) + '</strong></td>' +
+          '<td>' + escapeHTML(r.kind || '') + '</td>' +
+          '<td>' + (r.namespaced ? 'ns' : 'cluster') + '</td>' +
+          '<td>' + (r.listable ? '<span class="status" style="font-size:9px">list/watch</span>' : '<span class="muted">-</span>') + '</td>' +
+          '<td class="muted" style="font-size:10px">' + escapeHTML(splitJoin(r.short_names)) + '</td></tr>';
+      }).join('');
+      return card('API Discovery + Schema Registry (CLU-DISC)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(disc.note || '') + ' ' + btn + '</div>' +
+        '<table><thead><tr><th>group/version</th><th>resource</th><th>kind</th><th>scope</th><th>verbs</th><th>shortNames</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="6" class="muted">resource가 없습니다.</td></tr>') + '</tbody></table>' +
+        (resources.length > 200 ? '<div class="muted" style="font-size:11px;margin-top:4px">상위 200개 표시 (전체 ' + fmt(resources.length) + ')</div>' : '') +
+        '</div>');
+    }
+    function splitJoin(v) { return Array.isArray(v) ? v.join(', ') : (v || ''); }
     // Collection Cost Guard (CLU-REQ-11): estimated storage footprint + growth, budget alerts.
     window.k8sSaveCollectionBudget = async () => {
       const v = parseInt((document.getElementById('cc-budget') || {}).value || '0', 10);
