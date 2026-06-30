@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.30** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.31** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.30)
+## 기능 상태 (v0.9.31)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -72,6 +72,7 @@
 | Platform Lifecycle Center — 업그레이드 준비도(deprecated API·kubelet skew·critical incident 종합)(OpenShift ClusterVersion 스타일, `/admin/k8s/lifecycle`, CLU-OCP-08) | ✅ (v0.9.29) |
 | Built-in Observability Profile — 서비스 유형별 ServiceMonitor·Alert·SLO 템플릿 생성기(클러스터 미변경, OpenShift Monitoring 스타일, `/admin/k8s/observability`, CLU-OCP-10) | ✅ (v0.9.29) |
 | Build·Add-on·Node 분석 코어 — 빌드 실패 RCA + Dockerfile 보안 게이트 / add-on install-plan 위험 미리보기 / 노드 drain 영향 분석(실행 제외·분석만, `/admin/k8s/build/analyze`·`/extensions/install-plan`·`/node-drain`, CLU-OCP-05/06/07 코어) | ✅ (v0.9.30) |
+| Developer Workspace View — 개발자 관점 화면(워크스페이스 건강도·노출·이미지 원장·위험 Pod 통합, OpenShift Developer Console 스타일, `#/k8s-developer`, CLU-OCP-09) | ✅ (v0.9.31) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 

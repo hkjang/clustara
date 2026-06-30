@@ -1,3 +1,6 @@
+v0.9.31:
+- **Developer Workspace View (v0.9.31, CLU-OCP-09)**: OpenShift Developer Console 스타일의 개발자 관점 화면을 추가했습니다(신규 메뉴 `개발자 뷰`, menuVersion 22). 클러스터를 선택하면 담당 워크스페이스 건강도·외부 노출(Exposure)·이미지 원장(Image Ledger)·위험 Pod(Health 낮은 순, Pod 상세 딥링크)를 한 화면에 모아 앱 생명주기를 개발자 관점으로 보여줍니다(기존 `/admin/k8s/workspaces`·`/exposures`·`/image-ledger`·`/pods` 재사용, 변경은 운영자 승인 흐름 유지). 이로써 CLU-OCP 10개 에픽의 구축 가능한 핵심을 모두 흡수했습니다 — 빌드 실행·오퍼레이터 실제 설치·노드 OS 변경 같은 실행부만 라이브 인프라 의존으로 후속 페이즈에 남깁니다.
+
 v0.9.30:
 - **Build·Add-on·Node 분석 코어 (v0.9.30, CLU-OCP-05/06/07 분석 코어)**: 실행 인프라(빌드 시스템·오퍼레이터 설치·노드 OS 변경) 없이 안전하게 제공 가능한 분석/사전점검 기능을 추가했습니다. (1) Build Job Center 코어: 빌드 실패 로그를 git_clone·dockerfile·dependencies·registry_push·quota·timeout·network로 분류(RCA)하고, Dockerfile을 root 실행·mutable base(:latest)·ENV/ARG 비밀값·ADD 원격 URL 등으로 사전 게이트합니다(`POST /admin/k8s/build/analyze`). (2) Add-on Marketplace 코어: 설치 매니페스트 번들이 생성할 CRD·cluster RBAC·admin 권한·webhook·APIService·privileged 워크로드를 분석해 install-plan blast radius 위험을 점수화하고 고위험은 승인 필요로 표시합니다(`POST /admin/k8s/extensions/install-plan`). (3) Node Config 코어: 노드 drain 영향(축출 Pod·DaemonSet 제외·컨트롤러 없는 Pod·critical Pod·차단 PDB)을 분석합니다(`GET /admin/k8s/node-drain`). 모두 순수 분석기(`ClassifyBuildFailure`·`AnalyzeDockerfile`·`AnalyzeInstallPlan`·`AnalyzeDrainImpact`)로 단위 테스트했습니다. 빌드 실행·실제 설치·노드 변경은 인프라 의존이라 후속 페이즈로 분리하고, 이 릴리즈는 분석/미리보기만 제공합니다.
 

@@ -350,6 +350,7 @@ const adminHTML = `<!doctype html>
         <div class="nav-group-menu">
           <a href="#/k8s" data-tab="k8s">클러스터</a>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
+          <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
           <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
           <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
         </div>
@@ -1235,6 +1236,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-home':  await renderK8sHome(params); break;
           case 'k8s':       await renderK8sOperations(); break;
           case 'k8s-pods': await renderK8sPods(params); break;
+          case 'k8s-developer': await renderK8sDeveloper(params); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
           case 'k8s-incidents': await renderK8sIncidents(params); break;
@@ -6973,6 +6975,50 @@ const adminHTML = `<!doctype html>
     }
     function samplePodLinksImpact(clusterId, ns, pods) {
       return (pods || []).slice(0, 5).map(p => k8sPodLink(clusterId, ns, p, p)).join(', ');
+    }
+    // Developer Workspace View (CLU-OCP-09): developer-centric consolidation of an app's K8s
+    // surface — workspace health, exposure, images, risky pods — reusing existing endpoints.
+    window.k8sDevClusterGo = (cid) => { location.hash = '#/k8s-developer' + (cid ? '?cluster_id=' + encodeURIComponent(cid) : ''); };
+    async function renderK8sDeveloper(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('개발자 뷰', '<div class="empty">불러오는 중...</div>');
+      let clusters = [];
+      try { clusters = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (e) { view.innerHTML = section('개발자 뷰', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const cid = clusterId || ((clusters[0] || {}).id || '');
+      const opts = clusters.map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === cid ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+      const picker = card('클러스터', '<div class="card-body"><select onchange="k8sDevClusterGo(this.value)">' + (opts || '<option>등록된 클러스터 없음</option>') + '</select> <span class="muted" style="font-size:12px">개발자 관점: 담당 워크스페이스의 노출·이미지·위험 Pod를 한 화면에서 봅니다.</span></div>');
+      if (!cid) { view.innerHTML = section('개발자 뷰', picker.replace('class="card"', 'class="card"')); return; }
+      let ws = null, exp = null, img = null, pods = null;
+      try {
+        [ws, exp, img, pods] = await Promise.all([
+          api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
+          api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
+          api('/admin/k8s/image-ledger?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
+          api('/admin/k8s/pods?cluster_id=' + encodeURIComponent(cid) + '&limit=300').catch(() => null),
+        ]);
+      } catch (_) {}
+      // Top risky pods (health low) with deep links.
+      const riskyPods = ((pods && pods.pods) || []).filter(p => (p.health_band === 'critical' || p.health_band === 'warning' || (p.restart_count || 0) > 0)).slice(0, 20);
+      const podRows = riskyPods.length ? riskyPods.map(p => {
+        const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || cid, namespace: p.namespace || '', pod: p.name || '' }).toString();
+        const cls = p.health_band === 'critical' ? 'error' : (p.health_band === 'warning' ? 'warn' : '');
+        return '<tr><td><span class="status ' + cls + '">' + fmt(p.health_score || 0) + '</span></td>' +
+          '<td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML((p.namespace || '-') + '/' + p.name) + '</strong></a></td>' +
+          '<td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + fmt(p.restart_count || 0) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(p.primary_symptom || '') + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="muted">위험 Pod 없음</td></tr>';
+      const podCard = card('내 앱 위험 Pod (Health 낮은 순)',
+        '<div class="card-body"><table><thead><tr><th>Health</th><th>Pod</th><th>Phase</th><th>재시작</th><th>증상</th></tr></thead><tbody>' + podRows + '</tbody></table></div>');
+
+      view.innerHTML =
+        section('개발자 뷰 (Developer Workspace · OpenShift Developer Console 스타일)',
+          '<div class="muted" style="font-size:12px;padding:0 14px 6px">앱 생명주기를 개발자 관점으로 모았습니다 — 워크스페이스 건강도 · 외부 노출 · 이미지 원장 · 위험 Pod. 변경은 운영자 승인 흐름으로 진행됩니다.</div>') +
+        picker +
+        renderWorkspaceCard(ws, clusters, cid) +
+        renderExposureCard(exp) +
+        renderImageLedgerCard(img) +
+        podCard;
     }
     async function renderK8sPods(params) {
       const view = document.getElementById('view');
