@@ -1363,8 +1363,13 @@ const adminHTML = `<!doctype html>
         const ev = (d.evidence || []).slice(0, 6).map(e => '<li style="font-size:11px">' + escapeHTML(e) + '</li>').join('');
         const tools = (d.tool_plan || []).map(t => escapeHTML(t.tool)).join(', ');
         let body = '';
-        if (d.llm_available && d.answer) body += '<div style="white-space:pre-wrap">' + escapeHTML(d.answer) + '</div>';
-        else body += '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || 'LLM 미구성 — 근거만 제공') + '</div>';
+        if (d.answer) {
+          if (d.llm_available === false) body += '<div class="status warn" style="font-size:11px;margin-bottom:4px">LLM 실패 — 근거 요약</div>';
+          body += '<div style="white-space:pre-wrap">' + escapeHTML(d.answer) + '</div>';
+          if (d.llm_available === false && d.note) body += '<div class="muted" style="font-size:10px;margin-top:4px">' + escapeHTML(d.note) + '</div>';
+        } else {
+          body += '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || 'LLM 미구성 — 근거만 제공') + '</div>';
+        }
         if (ev) body += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer">근거 ' + (d.evidence || []).length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + ev + '</ul></details>';
         if (tools) body += '<div class="muted" style="font-size:10px;margin-top:4px">사용 도구: ' + tools + '</div>';
         // Replace the "분석 중" placeholder (last agent bubble).

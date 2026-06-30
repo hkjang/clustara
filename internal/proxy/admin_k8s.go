@@ -227,11 +227,13 @@ func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request,
 	}
 	_ = s.db.UpsertK8sCluster(r.Context(), cluster)
 	result, err := collector.ApplySnapshot(r.Context(), s.db, collector.Snapshot{
-		ClusterID:  cluster.ID,
-		ObservedAt: now,
-		Resources:  collected.Resources,
-		Events:     collected.Events,
-		Metrics:    collected.Metrics,
+		ClusterID:     cluster.ID,
+		ObservedAt:    now,
+		Resources:     collected.Resources,
+		Events:        collected.Events,
+		Metrics:       collected.Metrics,
+		FullSync:      true,
+		FullSyncKinds: collected.FullSyncKinds,
 	}, newID)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_snapshot_failed")

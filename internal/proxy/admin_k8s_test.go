@@ -588,6 +588,13 @@ func TestK8sHomeAggregates(t *testing.T) {
 		ClustersAtRisk    []map[string]any `json:"clusters_at_risk"`
 		FailureCandidates []map[string]any `json:"failure_candidates"`
 		RecentChanges     []map[string]any `json:"recent_changes"`
+		DataFreshness     struct {
+			InventoryItems   int    `json:"inventory_items"`
+			NewestObservedAt string `json:"newest_observed_at"`
+		} `json:"data_freshness"`
+		Agents struct {
+			Count int `json:"count"`
+		} `json:"agents"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&home); err != nil {
 		t.Fatal(err)
@@ -600,6 +607,12 @@ func TestK8sHomeAggregates(t *testing.T) {
 	}
 	if len(home.ClustersAtRisk) == 0 {
 		t.Fatalf("expected the cluster to appear at risk, got none")
+	}
+	if home.DataFreshness.InventoryItems == 0 || home.DataFreshness.NewestObservedAt == "" {
+		t.Fatalf("expected home freshness metadata, got %+v", home.DataFreshness)
+	}
+	if home.Agents.Count != 0 {
+		t.Fatalf("expected no realtime agents in this test, got %+v", home.Agents)
 	}
 }
 

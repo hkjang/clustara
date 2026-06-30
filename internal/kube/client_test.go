@@ -111,6 +111,40 @@ func TestHTTPClientPodLogs(t *testing.T) {
 	}
 }
 
+func TestHTTPClientListFollowsContinueTokens(t *testing.T) {
+	requests := []string{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("continue") == "" {
+			_, _ = w.Write([]byte(`{"metadata":{"continue":"next-page"},"items":[{"metadata":{"name":"p1"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"metadata":{},"items":[{"metadata":{"name":"p2"}}]}`))
+	}))
+	defer api.Close()
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := client.list(context.Background(), "/api/v1/pods")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items across pages, got %d", len(items))
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 paginated requests, got %d (%v)", len(requests), requests)
+	}
+	if !strings.Contains(requests[0], "limit=500") || strings.Contains(requests[0], "continue=") {
+		t.Fatalf("unexpected first query: %q", requests[0])
+	}
+	if !strings.Contains(requests[1], "continue=next-page") {
+		t.Fatalf("second query should carry continue token, got %q", requests[1])
+	}
+}
+
 func TestHTTPClientPodLogsStream(t *testing.T) {
 	var gotPath, gotQuery string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

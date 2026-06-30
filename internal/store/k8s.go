@@ -361,7 +361,7 @@ func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) (
 		args = append(args, f.Status)
 	}
 	query += ` ORDER BY updated_at DESC LIMIT ?`
-	args = append(args, boundedLimit(f.Limit, 200, 1000))
+	args = append(args, boundedLimit(f.Limit, 200, 10000))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
 		return nil, err
@@ -371,6 +371,32 @@ func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) (
 	for rows.Next() {
 		item, err := scanK8sInventory(rows)
 		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ListK8sInventoryIdentities returns inventory identities for reconciliation without the
+// normal UI/API list cap.
+func (s *SQLStore) ListK8sInventoryIdentities(ctx context.Context, clusterID, kind string) ([]K8sInventoryItem, error) {
+	query := `SELECT cluster_id, kind, namespace, name FROM k8s_inventory WHERE cluster_id = ?`
+	args := []any{clusterID}
+	if strings.TrimSpace(kind) != "" {
+		query += ` AND lower(kind) = lower(?)`
+		args = append(args, kind)
+	}
+	query += ` ORDER BY kind, namespace, name`
+	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []K8sInventoryItem{}
+	for rows.Next() {
+		var item K8sInventoryItem
+		if err := rows.Scan(&item.ClusterID, &item.Kind, &item.Namespace, &item.Name); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

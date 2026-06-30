@@ -15,21 +15,24 @@ import (
 type IDFunc func(prefix string) string
 
 type Snapshot struct {
-	ClusterID  string                   `json:"cluster_id"`
-	ObservedAt string                   `json:"observed_at"`
-	Resources  []store.K8sInventoryItem `json:"resources"`
-	Events     []store.K8sEvent         `json:"events"`
-	Metrics    []store.K8sMetricSample  `json:"metrics"`
+	ClusterID     string                   `json:"cluster_id"`
+	ObservedAt    string                   `json:"observed_at"`
+	Resources     []store.K8sInventoryItem `json:"resources"`
+	Events        []store.K8sEvent         `json:"events"`
+	Metrics       []store.K8sMetricSample  `json:"metrics"`
+	FullSync      bool                     `json:"full_sync"`
+	FullSyncKinds []string                 `json:"full_sync_kinds,omitempty"`
 }
 
 type ApplyResult struct {
-	ClusterID  string `json:"cluster_id"`
-	Resources  int    `json:"resources"`
-	Events     int    `json:"events"`
-	Metrics    int    `json:"metrics"`
-	Findings   int    `json:"findings"`
-	Revisions  int    `json:"revisions"`
-	ObservedAt string `json:"observed_at"`
+	ClusterID    string `json:"cluster_id"`
+	Resources    int    `json:"resources"`
+	Events       int    `json:"events"`
+	Metrics      int    `json:"metrics"`
+	Findings     int    `json:"findings"`
+	Revisions    int    `json:"revisions"`
+	StaleDeleted int    `json:"stale_deleted"`
+	ObservedAt   string `json:"observed_at"`
 }
 
 func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID IDFunc) (ApplyResult, error) {
@@ -47,6 +50,8 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 	result := ApplyResult{ClusterID: snap.ClusterID, ObservedAt: snap.ObservedAt}
 	analyzedResources := []store.K8sInventoryItem{}
 	analyzedEvents := []store.K8sEvent{}
+	present := map[string]bool{}
+	fullSyncKinds := normalizeKinds(snap.FullSyncKinds)
 	for _, item := range snap.Resources {
 		if strings.TrimSpace(item.Kind) == "" || strings.TrimSpace(item.Name) == "" {
 			continue
@@ -56,6 +61,10 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 		item.Kind = strings.TrimSpace(item.Kind)
 		item.Name = strings.TrimSpace(item.Name)
 		item.ObservedAt = first(item.ObservedAt, snap.ObservedAt)
+		present[inventoryIdentity(item.Kind, item.Namespace, item.Name)] = true
+		if snap.FullSync && len(fullSyncKinds) == 0 {
+			fullSyncKinds[item.Kind] = true
+		}
 		analyzer.ScoreResource(&item)
 		if err := db.UpsertK8sInventory(ctx, item); err != nil {
 			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
@@ -80,6 +89,14 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 			result.Revisions++
 		}
 		analyzedResources = append(analyzedResources, item)
+	}
+	if snap.FullSync {
+		deleted, err := pruneMissingInventory(ctx, db, snap.ClusterID, fullSyncKinds, present)
+		if err != nil {
+			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
+			return result, err
+		}
+		result.StaleDeleted = deleted
 	}
 	for _, event := range snap.Events {
 		if strings.TrimSpace(event.Reason) == "" && strings.TrimSpace(event.Message) == "" {
@@ -126,6 +143,43 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 		LastSuccessAt: snap.ObservedAt,
 	})
 	return result, nil
+}
+
+func pruneMissingInventory(ctx context.Context, db *store.SQLStore, clusterID string, kinds map[string]bool, present map[string]bool) (int, error) {
+	if len(kinds) == 0 {
+		return 0, nil
+	}
+	deleted := 0
+	for kind := range kinds {
+		existing, err := db.ListK8sInventoryIdentities(ctx, clusterID, kind)
+		if err != nil {
+			return deleted, err
+		}
+		for _, item := range existing {
+			if present[inventoryIdentity(item.Kind, item.Namespace, item.Name)] {
+				continue
+			}
+			if err := db.DeleteK8sInventoryItem(ctx, clusterID, item.Kind, item.Namespace, item.Name); err != nil {
+				return deleted, err
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func normalizeKinds(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		if v := strings.TrimSpace(value); v != "" {
+			out[v] = true
+		}
+	}
+	return out
+}
+
+func inventoryIdentity(kind, namespace, name string) string {
+	return strings.ToLower(strings.TrimSpace(kind)) + "\x00" + strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name)
 }
 
 func first(values ...string) string {

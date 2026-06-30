@@ -106,18 +106,19 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	evidence := gatherK8sEvidence(pctx.Namespace, firstNonEmpty(pctx.Pod, pctx.Name), rca, events, nil)
 	prompt := composeK8sAIPrompt(in.Question, evidence)
 
+	toolPlan := analyzer.PlanAgentTools(intent, pctx)
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1024, nil)
 	llmOK := llmErr == nil
 	note := ""
 	if !llmOK {
-		note = "LLM 미구성/호출 실패 — 근거 데이터만 제공합니다: " + llmErr.Error()
+		answer = composeAgentFallbackAnswer(in.Question, evidence, toolPlan)
+		note = "LLM 호출 실패 — 근거 기반 요약으로 대체했습니다: " + llmErr.Error()
 	}
 
 	evJSON, _ := json.Marshal(evidence)
 	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
 	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
 
-	toolPlan := analyzer.PlanAgentTools(intent, pctx)
 	s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan)}))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"intent": intent, "answer": answer, "evidence": evidence, "llm_available": llmOK,
@@ -127,6 +128,45 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func nowK8sAgentTime() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+func composeAgentFallbackAnswer(question string, evidence []string, toolPlan []analyzer.AgentToolCall) string {
+	var b strings.Builder
+	b.WriteString("LLM 호출은 실패했지만, 현재 수집된 근거 기준으로 요약합니다.\n\n")
+	b.WriteString("핵심 요약\n")
+	if len(evidence) == 0 {
+		b.WriteString("- 저장된 RCA/Warning 이벤트 근거에서 직접적인 이상 신호가 확인되지 않았습니다.\n")
+		b.WriteString("- 실시간성이 의심되면 수집 상태에서 agent live/stale 여부와 마지막 수집 시각을 먼저 확인하세요.\n")
+	} else {
+		limit := min(len(evidence), 5)
+		for i := 0; i < limit; i++ {
+			b.WriteString("- ")
+			b.WriteString(strings.TrimSpace(evidence[i]))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n권고 조치\n")
+	b.WriteString("- 운영 홈과 장애 워룸에서 같은 대상의 최신 이벤트와 인시던트 상태를 확인하세요.\n")
+	b.WriteString("- 수집 상태에서 realtime agent가 stale이면 클러스터 수집을 실행해 inventory/event를 보정하세요.\n")
+	if strings.TrimSpace(question) != "" {
+		b.WriteString("- 질문: ")
+		b.WriteString(strings.TrimSpace(question))
+		b.WriteString("\n")
+	}
+	if len(toolPlan) > 0 {
+		tools := make([]string, 0, len(toolPlan))
+		for _, tool := range toolPlan {
+			if strings.TrimSpace(tool.Tool) != "" {
+				tools = append(tools, tool.Tool)
+			}
+		}
+		if len(tools) > 0 {
+			b.WriteString("\n참고 도구: ")
+			b.WriteString(strings.Join(tools, ", "))
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
 
 // handleAgentActionCard builds a proposed action card (the agent proposes, never executes). The
 // returned card carries the exact action-request payload the operator submits to the Action Center

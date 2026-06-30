@@ -41,7 +41,11 @@ func gatherK8sEvidence(namespace, name string, rca []analyzer.RCAFinding, events
 		if namespace != "" && c.Namespace != namespace {
 			continue
 		}
-		line := fmt.Sprintf("RCA[%s] %s/%s: %s", c.Severity, c.ResourceKind, c.ResourceName, c.Cause)
+		condition := strings.TrimSpace(c.Condition)
+		if condition != "" {
+			condition += " "
+		}
+		line := fmt.Sprintf("RCA[%s] %s%s/%s: %s", c.Severity, condition, c.ResourceKind, c.ResourceName, c.Cause)
 		ev = append(ev, line)
 		for _, e := range c.Evidence {
 			ev = append(ev, "  근거: "+e)

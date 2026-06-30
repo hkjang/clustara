@@ -131,9 +131,16 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	freshness := summarizeK8sHomeFreshness(items, name)
+	agentSummary := k8sHomeAgentSummary{}
+	if hbs, herr := s.db.ListK8sAgentHeartbeats(r.Context(), ""); herr == nil {
+		agentSummary = summarizeK8sHomeAgents(hbs, time.Now().UTC())
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"generated_at":       time.Now().UTC().Format(time.RFC3339Nano),
+		"data_freshness":     freshness,
+		"agents":             agentSummary,
 		"clusters_at_risk":   risks,
 		"failure_candidates": failList,
 		"recent_changes":     changes,
@@ -141,4 +148,138 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 		"cost_increase":      costIncrease,
 		"cost_note":          "namespace별 월 추정 비용 TOP. 증가 TOP은 일별 스냅샷(POST /admin/k8s/cost/snapshot) 2일 이상 누적 시 표시됩니다.",
 	})
+}
+
+type k8sHomeFreshness struct {
+	InventoryItems      int                       `json:"inventory_items"`
+	NewestObservedAt    string                    `json:"newest_observed_at"`
+	NewestAgeSeconds    int                       `json:"newest_age_seconds"`
+	OldestObservedAt    string                    `json:"oldest_observed_at"`
+	OldestAgeSeconds    int                       `json:"oldest_age_seconds"`
+	ClustersWithData    int                       `json:"clusters_with_data"`
+	ClustersWithoutData int                       `json:"clusters_without_data"`
+	ByCluster           []k8sHomeClusterFreshness `json:"by_cluster"`
+}
+
+type k8sHomeClusterFreshness struct {
+	ClusterID      string `json:"cluster_id"`
+	ClusterName    string `json:"cluster_name"`
+	Items          int    `json:"items"`
+	LastObservedAt string `json:"last_observed_at"`
+	AgeSeconds     int    `json:"age_seconds"`
+}
+
+type k8sHomeAgentSummary struct {
+	Count              int    `json:"count"`
+	Live               int    `json:"live"`
+	Stale              int    `json:"stale"`
+	MaxWatchLagMS      int64  `json:"max_watch_lag_ms"`
+	LastSeen           string `json:"last_seen"`
+	LastSeenAgeSeconds int    `json:"last_seen_age_seconds"`
+	LastErrorCount     int    `json:"last_error_count"`
+	StaleAfterSeconds  int    `json:"stale_after_seconds"`
+}
+
+func summarizeK8sHomeFreshness(items []store.K8sInventoryItem, clusterNames map[string]string) k8sHomeFreshness {
+	now := time.Now().UTC()
+	out := k8sHomeFreshness{InventoryItems: len(items), NewestAgeSeconds: -1, OldestAgeSeconds: -1}
+	byCluster := map[string]*k8sHomeClusterFreshness{}
+	var newest, oldest time.Time
+	for _, item := range items {
+		cf := byCluster[item.ClusterID]
+		if cf == nil {
+			cf = &k8sHomeClusterFreshness{ClusterID: item.ClusterID, ClusterName: clusterNames[item.ClusterID], AgeSeconds: -1}
+			byCluster[item.ClusterID] = cf
+		}
+		cf.Items++
+		ts, ok := parseK8sHomeTime(item.ObservedAt)
+		if !ok {
+			continue
+		}
+		if newest.IsZero() || ts.After(newest) {
+			newest = ts
+			out.NewestObservedAt = item.ObservedAt
+		}
+		if oldest.IsZero() || ts.Before(oldest) {
+			oldest = ts
+			out.OldestObservedAt = item.ObservedAt
+		}
+		if cf.LastObservedAt == "" {
+			cf.LastObservedAt = item.ObservedAt
+			cf.AgeSeconds = int(now.Sub(ts).Seconds())
+			continue
+		}
+		if cur, ok := parseK8sHomeTime(cf.LastObservedAt); ok && ts.After(cur) {
+			cf.LastObservedAt = item.ObservedAt
+			cf.AgeSeconds = int(now.Sub(ts).Seconds())
+		}
+	}
+	if !newest.IsZero() {
+		out.NewestAgeSeconds = int(now.Sub(newest).Seconds())
+	}
+	if !oldest.IsZero() {
+		out.OldestAgeSeconds = int(now.Sub(oldest).Seconds())
+	}
+	for clusterID, clusterName := range clusterNames {
+		if cf := byCluster[clusterID]; cf != nil {
+			out.ClustersWithData++
+			out.ByCluster = append(out.ByCluster, *cf)
+		} else {
+			out.ClustersWithoutData++
+			out.ByCluster = append(out.ByCluster, k8sHomeClusterFreshness{ClusterID: clusterID, ClusterName: clusterName, AgeSeconds: -1})
+		}
+	}
+	sort.SliceStable(out.ByCluster, func(i, j int) bool {
+		a, b := out.ByCluster[i], out.ByCluster[j]
+		if a.LastObservedAt == "" {
+			return false
+		}
+		if b.LastObservedAt == "" {
+			return true
+		}
+		return a.LastObservedAt > b.LastObservedAt
+	})
+	return out
+}
+
+func summarizeK8sHomeAgents(hbs []store.K8sAgentHeartbeat, now time.Time) k8sHomeAgentSummary {
+	out := k8sHomeAgentSummary{Count: len(hbs), LastSeenAgeSeconds: -1, StaleAfterSeconds: int(agentStaleAfter.Seconds())}
+	var lastSeen time.Time
+	for _, h := range hbs {
+		if h.LastError != "" {
+			out.LastErrorCount++
+		}
+		if h.WatchLagMS > out.MaxWatchLagMS {
+			out.MaxWatchLagMS = h.WatchLagMS
+		}
+		ts, ok := parseK8sHomeTime(h.LastSeen)
+		isStale := true
+		if ok {
+			isStale = now.Sub(ts) > agentStaleAfter
+			if lastSeen.IsZero() || ts.After(lastSeen) {
+				lastSeen = ts
+				out.LastSeen = h.LastSeen
+				out.LastSeenAgeSeconds = int(now.Sub(ts).Seconds())
+			}
+		}
+		if isStale {
+			out.Stale++
+		} else {
+			out.Live++
+		}
+	}
+	return out
+}
+
+func parseK8sHomeTime(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts, true
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,9 +37,10 @@ type ProbeResult struct {
 }
 
 type CollectResult struct {
-	Resources []store.K8sInventoryItem `json:"resources"`
-	Events    []store.K8sEvent         `json:"events"`
-	Metrics   []store.K8sMetricSample  `json:"metrics"`
+	Resources     []store.K8sInventoryItem `json:"resources"`
+	Events        []store.K8sEvent         `json:"events"`
+	Metrics       []store.K8sMetricSample  `json:"metrics"`
+	FullSyncKinds []string                 `json:"full_sync_kinds,omitempty"`
 }
 
 type HTTPClientConfig struct {
@@ -132,6 +134,7 @@ func (c *HTTPClient) Collect(ctx context.Context) (CollectResult, error) {
 			}
 			return out, err
 		}
+		out.FullSyncKinds = append(out.FullSyncKinds, target.Kind)
 		for _, obj := range items {
 			out.Resources = append(out.Resources, inventoryFromObject(target.Kind, target.APIVersion, obj))
 		}
@@ -171,19 +174,45 @@ func (c *HTTPClient) version(ctx context.Context) (string, error) {
 }
 
 func (c *HTTPClient) list(ctx context.Context, path string) ([]map[string]any, error) {
-	if !strings.Contains(path, "?") {
-		path += "?limit=500"
+	out := []map[string]any{}
+	continueToken := ""
+	for {
+		pagePath, err := listPagePath(path, continueToken)
+		if err != nil {
+			return nil, err
+		}
+		var body struct {
+			Metadata struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
+			Items []map[string]any `json:"items"`
+		}
+		if err := c.getJSON(ctx, pagePath, &body); err != nil {
+			return nil, err
+		}
+		out = append(out, body.Items...)
+		continueToken = strings.TrimSpace(body.Metadata.Continue)
+		if continueToken == "" {
+			break
+		}
 	}
-	var body struct {
-		Items []map[string]any `json:"items"`
+	return out, nil
+}
+
+func listPagePath(path string, continueToken string) (string, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", err
 	}
-	if err := c.getJSON(ctx, path, &body); err != nil {
-		return nil, err
+	q := u.Query()
+	if strings.TrimSpace(q.Get("limit")) == "" {
+		q.Set("limit", "500")
 	}
-	if body.Items == nil {
-		body.Items = []map[string]any{}
+	if strings.TrimSpace(continueToken) != "" {
+		q.Set("continue", continueToken)
 	}
-	return body.Items, nil
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func (c *HTTPClient) getJSON(ctx context.Context, path string, out any) error {
