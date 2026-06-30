@@ -1453,13 +1453,15 @@ const adminHTML = `<!doctype html>
                     }
                   }
 
-                  const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
-                  for (const prefix of prefixes) {
-                    if (displayAnswer.trim().startsWith(prefix)) {
-                      const raw = displayAnswer.trim().slice(prefix.length).trim();
-                      displayReasoning += (displayReasoning ? '\n' : '') + raw;
-                      displayAnswer = '';
-                      break;
+                  if (!accumulatedAnswer.includes('<think>')) {
+                    const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
+                    for (const prefix of prefixes) {
+                      if (displayAnswer.trim().startsWith(prefix)) {
+                        const raw = displayAnswer.trim().slice(prefix.length).trim();
+                        displayReasoning += (displayReasoning ? '\n' : '') + raw;
+                        displayAnswer = '';
+                        break;
+                      }
                     }
                   }
 
@@ -1511,13 +1513,15 @@ const adminHTML = `<!doctype html>
                       }
                     }
 
-                    const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
-                    for (const prefix of prefixes) {
-                      if (displayAnswer.trim().startsWith(prefix)) {
-                        const raw = displayAnswer.trim().slice(prefix.length).trim();
-                        displayReasoning += (displayReasoning ? '\n' : '') + raw;
-                        displayAnswer = '';
-                        break;
+                    if (!accumulatedAnswer.includes('<think>')) {
+                      const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
+                      for (const prefix of prefixes) {
+                        if (displayAnswer.trim().startsWith(prefix)) {
+                          const raw = displayAnswer.trim().slice(prefix.length).trim();
+                          displayReasoning += (displayReasoning ? '\n' : '') + raw;
+                          displayAnswer = '';
+                          break;
+                        }
                       }
                     }
 
