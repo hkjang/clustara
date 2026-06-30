@@ -9398,12 +9398,33 @@ const adminHTML = `<!doctype html>
           '<td>' + (r.listable ? '<span class="status" style="font-size:9px">list/watch</span>' : '<span class="muted">-</span>') + '</td>' +
           '<td class="muted" style="font-size:10px">' + escapeHTML(splitJoin(r.short_names)) + '</td></tr>';
       }).join('');
+      const ts = disc.targets_summary || {};
+      const targets = (disc.targets || []).filter(t => t.recommended || t.is_crd).slice(0, 60);
+      const targetRows = targets.map(t =>
+        '<tr><td>' + (t.recommended ? '<span class="status" style="font-size:9px">기본</span>' : (t.sensitive ? '<span class="status error" style="font-size:9px">민감</span>' : (t.is_crd ? '<span class="status warn" style="font-size:9px">CRD</span>' : '선택'))) + '</td>' +
+        '<td>' + escapeHTML(t.group_version) + '</td><td><strong>' + escapeHTML(t.resource) + '</strong></td><td>' + escapeHTML(t.kind || '') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(t.reason || '') + '</td></tr>').join('');
+      const targetCard = targets.length
+        ? '<h4 style="margin:12px 0 4px">동적 수집 대상 후보 (권장·CRD, ' + fmt(ts.recommended || 0) + ' 권장 / ' + fmt(ts.crd_targets || 0) + ' CRD / ' + fmt(ts.sensitive || 0) + ' 민감)</h4>' +
+          '<table><thead><tr><th>구분</th><th>group/version</th><th>resource</th><th>kind</th><th>사유</th></tr></thead><tbody>' + targetRows + '</tbody></table>'
+        : '';
+      const tools = (disc.tool_candidates || []).slice(0, 60);
+      const toolRows = tools.map(c =>
+        '<tr><td><code>' + escapeHTML(c.tool_name) + '</code></td><td>' + escapeHTML(c.verb) + '</td>' +
+        '<td>' + escapeHTML(c.group_version) + '</td><td>' + escapeHTML(c.scope) + '</td>' +
+        '<td>' + (c.masking_level !== 'none' ? '<span class="status warn" style="font-size:9px">' + escapeHTML(c.masking_level) + '</span>' : '<span class="muted">none</span>') + '</td></tr>').join('');
+      const toolCard = tools.length
+        ? '<h4 style="margin:12px 0 4px">MCP read-only 도구 후보 (' + fmt(ts.tool_candidates || 0) + ')</h4>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:4px">discovery의 read 가능 verb 기반으로 생성된 안전한 도구 후보입니다(전부 low risk). 게이트웨이 등록은 MCP Tool Scope 정책으로 관리하세요.</div>' +
+          '<table><thead><tr><th>tool</th><th>verb</th><th>group/version</th><th>scope</th><th>masking</th></tr></thead><tbody>' + toolRows + '</tbody></table>'
+        : '';
       return card('API Discovery + Schema Registry (CLU-DISC)',
         '<div class="card-body">' + kpis +
         '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(disc.note || '') + ' ' + btn + '</div>' +
         '<table><thead><tr><th>group/version</th><th>resource</th><th>kind</th><th>scope</th><th>verbs</th><th>shortNames</th></tr></thead><tbody>' +
         (rows || '<tr><td colspan="6" class="muted">resource가 없습니다.</td></tr>') + '</tbody></table>' +
         (resources.length > 200 ? '<div class="muted" style="font-size:11px;margin-top:4px">상위 200개 표시 (전체 ' + fmt(resources.length) + ')</div>' : '') +
+        targetCard + toolCard +
         '</div>');
     }
     function splitJoin(v) { return Array.isArray(v) ? v.join(', ') : (v || ''); }

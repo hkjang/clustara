@@ -112,6 +112,9 @@ func (s *Server) handleK8sDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 	resources, _ := s.db.ListK8sAPIResources(r.Context(), clusterID)
 	docs, _ := s.db.ListK8sOpenAPIDocuments(r.Context(), clusterID)
+	infos := toAPIResourceInfos(resources)
+	targets := analyzer.SuggestInventoryTargets(infos)
+	toolCandidates := analyzer.GenerateMCPToolCandidates(infos)
 	snap, hasSnap, _ := s.db.LatestK8sDiscoverySnapshot(r.Context(), clusterID)
 	now := time.Now().UTC()
 	ageSecs := int64(-1)
@@ -121,10 +124,13 @@ func (s *Server) handleK8sDiscovery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := map[string]any{
-		"resources": resources,
-		"documents": docs,
-		"summary":   analyzer.SummarizeDiscovery(toAPIResourceInfos(resources), toDocRefs(docs)),
-		"note":      "클러스터가 실제 제공하는 API resource 카탈로그와 OpenAPI v3 스키마 문서 인덱스입니다. 클러스터 상세에서 'API 탐색'으로 갱신하세요.",
+		"resources":          resources,
+		"documents":          docs,
+		"summary":            analyzer.SummarizeDiscovery(infos, toDocRefs(docs)),
+		"targets":            targets,
+		"tool_candidates":    toolCandidates,
+		"targets_summary":    analyzer.SummarizeDiscoveryTargets(targets, toolCandidates),
+		"note":               "클러스터가 실제 제공하는 API resource 카탈로그·OpenAPI v3 스키마 인덱스와, 이를 기반으로 한 동적 수집 대상·read-only MCP 도구 후보입니다. 클러스터 상세에서 'API 탐색'으로 갱신하세요.",
 		"collected_age_secs": ageSecs,
 	}
 	if hasSnap {
