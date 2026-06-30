@@ -1,3 +1,6 @@
+v0.9.18:
+- **Service Impact Home (v0.9.18, CLU-REQ-07)**: Pod 중심 목록을 서비스(워크로드) 중심으로 끌어올렸습니다. 각 카드는 워크로드의 Pod 헬스 롤업에 더해 blast radius를 결정하는 요소 — 라우팅하는 Service(selector ⊆ pod label 매칭), 노출 Ingress, 스케일링하는 HPA(at-max 여부), 최근(24h) 스펙/설정 변경, 미해결 incident — 를 함께 보여줍니다. ReplicaSet owner는 hash suffix를 제거해 Deployment 기준으로 HPA·incident·변경을 매칭합니다. 심각도(critical=위험 Pod·미해결 incident·HPA at-max / warning=주의 Pod·재시작·최근 변경)와 외부 노출 여부로 정렬해 "어떤 서비스가 위험하고 얼마나 노출됐는지"를 먼저 보여줍니다(`GET /admin/k8s/service-impact?cluster_id=&namespace=`). Pod 관리 화면 상단에 서비스 영향 카드를 추가했습니다. 순수 조립·정렬 로직은 단위 테스트로, 셀렉터·Ingress·HPA·base-name 매칭 전 구간은 라이브로 검증했습니다.
+
 v0.9.17:
 - **Agent Regression Suite (v0.9.17, CLU-REQ-08)**: 플로팅 Ops Agent의 UX/로직이 자주 바뀌면서(v0.9.4–v0.9.16) 답변 품질이 조용히 퇴화하는 것을 막기 위한 회귀 테스트를 추가했습니다. LLM 답변(비결정)이 아니라 답변 품질을 좌우하는 결정적 동작 — intent 분류와 read-only 도구 계획 — 을 대표 운영 질문 세트(장애·Pod·Config·Stack·비용·SLO·조치·리포트·홈 11종)로 검증해 intent 정확도와 기대 도구 커버리지를 채점합니다. 결과를 baseline으로 저장하고(앱 버전 태깅) 이후 실행을 비교해 통과율 하락(회귀)을 감지합니다(`GET /admin/agent/regression` 실행·비교, `POST` baseline 저장). Ops Agent 평가 센터 화면에 통과율·intent 정확도·도구 커버리지 KPI와 실패 케이스 표, baseline 저장 버튼을 추가했습니다. 기본 세트는 현재 코드 대비 100% 통과하며, 단위 테스트(`TestRunAgentRegressionDefaultAllPass`)가 영구 회귀 가드로 동작합니다. 전 구간 라이브 검증했습니다.
 

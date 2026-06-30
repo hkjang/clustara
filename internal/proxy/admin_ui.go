@@ -6784,6 +6784,41 @@ const adminHTML = `<!doctype html>
       await renderK8sOperations();
     };
 
+    // Service Impact Home (CLU-REQ-07): service-centric view of workloads + exposure + blast radius.
+    function renderServiceImpactCard(svcImpact, clusterId) {
+      if (!clusterId) {
+        return card('서비스 영향 (Service Impact)', '<div class="card-body"><p class="muted" style="font-size:12px">필터에서 클러스터를 선택하면 워크로드를 서비스 중심(노출·HPA·변경·incident)으로 묶어 보여줍니다.</p></div>');
+      }
+      if (!svcImpact) return '';
+      const cards = svcImpact.services || [];
+      const s = svcImpact.summary || {};
+      if (!cards.length) {
+        return card('서비스 영향 (Service Impact)', '<div class="card-body"><p class="muted" style="font-size:12px">표시할 워크로드가 없습니다.</p></div>');
+      }
+      const sevBadge = (sev) => '<span class="status ' + (sev === 'critical' ? 'error' : (sev === 'warning' ? 'warn' : '')) + '">' + escapeHTML(sev) + '</span>';
+      const kpis = '<div class="kpis">' +
+        kpi('서비스', fmt(s.total || 0)) + kpi('위험', fmt(s.critical || 0)) + kpi('주의', fmt(s.warning || 0)) +
+        kpi('정상', fmt(s.ok || 0)) + kpi('외부 노출', fmt(s.exposed || 0)) + '</div>';
+      const rows = cards.slice(0, 80).map(c => {
+        const hpa = c.hpa ? (fmt(c.hpa.current_replicas) + '/' + fmt(c.hpa.max_replicas) + (c.hpa.at_max ? ' <span class="status error" style="font-size:9px">MAX</span>' : '')) : '<span class="muted">-</span>';
+        return '<tr><td>' + sevBadge(c.severity) + '</td>' +
+          '<td><strong>' + escapeHTML((c.kind || '') + '/' + c.workload) + '</strong>' + (c.exposed ? ' <span class="status warn" style="font-size:9px">노출</span>' : '') + '<div class="muted" style="font-size:11px">' + escapeHTML(c.namespace) + '</div></td>' +
+          '<td>' + fmt(c.ready_pods || 0) + '/' + fmt(c.pod_count || 0) + (c.critical_pods ? ' <span class="status error" style="font-size:9px">' + fmt(c.critical_pods) + ' crit</span>' : '') + '</td>' +
+          '<td style="font-size:11px">' + ((c.services || []).map(escapeHTML).join(', ') || '-') + '</td>' +
+          '<td style="font-size:11px">' + ((c.ingresses || []).map(escapeHTML).join(', ') || '-') + '</td>' +
+          '<td>' + hpa + '</td>' +
+          '<td>' + (c.open_incidents ? '<span class="status error" style="font-size:10px">' + fmt(c.open_incidents) + '</span>' : '-') + '</td>' +
+          '<td>' + (c.recent_changes ? '<span class="status warn" style="font-size:10px">' + fmt(c.recent_changes) + '</span>' : '-') + '</td>' +
+          '<td style="font-size:11px">' + (samplePodLinksImpact(clusterId, c.namespace, c.sample_pods) || '-') + '</td></tr>';
+      }).join('');
+      return card('서비스 영향 (Service Impact · 위험 순)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(svcImpact.note || '') + '</div>' +
+        '<table><thead><tr><th>심각도</th><th>워크로드</th><th>Pod(Ready)</th><th>Service</th><th>Ingress</th><th>HPA(cur/max)</th><th>Incident</th><th>최근변경</th><th>Pod 바로가기</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    function samplePodLinksImpact(clusterId, ns, pods) {
+      return (pods || []).slice(0, 5).map(p => k8sPodLink(clusterId, ns, p, p)).join(', ');
+    }
     async function renderK8sPods(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -6794,8 +6829,8 @@ const adminHTML = `<!doctype html>
       const q = new URLSearchParams();
       ['cluster_id','namespace','node','status','owner','risk','q'].forEach(k => { const v = params && params.get(k); if (v) q.set(k, v); });
       q.set('limit', (params && params.get('limit')) || '300');
-      let clusters, d, watch;
-      try { [clusters, d, watch] = await Promise.all([api('/admin/k8s/clusters'), api('/admin/k8s/pods?' + q.toString()), api('/admin/k8s/pod-watches' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ statuses: [] }))]); }
+      let clusters, d, watch, svcImpact;
+      try { [clusters, d, watch, svcImpact] = await Promise.all([api('/admin/k8s/clusters'), api('/admin/k8s/pods?' + q.toString()), api('/admin/k8s/pod-watches' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ statuses: [] })), clusterId ? api('/admin/k8s/service-impact?cluster_id=' + encodeURIComponent(clusterId) + (ns ? '&namespace=' + encodeURIComponent(ns) : '')).catch(() => null) : Promise.resolve(null)]); }
       catch (e) { view.innerHTML = section('Pod 관리', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(c =>
         '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
@@ -6868,8 +6903,10 @@ const adminHTML = `<!doctype html>
         '<input id="watch-ns" placeholder="namespace" style="min-width:120px"><input id="watch-owner-kind" placeholder="owner kind(선택)" style="min-width:120px"><input id="watch-owner-name" placeholder="owner name(선택)" style="min-width:140px"><input id="watch-note" placeholder="메모" style="min-width:140px"><button type="button" onclick="k8sPodWatchAdd()">감시 추가</button>' +
         '<span class="muted" style="font-size:11px">현재 클러스터: ' + escapeHTML(clusterId || '(필터에서 선택)') + '</span></div>' +
         '<table><thead><tr><th>상태</th><th>대상</th><th>Namespace</th><th>매칭</th><th>위험/주의 Pod</th><th>증상</th><th></th></tr></thead><tbody>' + watchRows + '</tbody></table></div>');
+      const svcCard = renderServiceImpactCard(svcImpact, clusterId);
       view.innerHTML =
         section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('감시 위험', fmt((watch && watch.summary && watch.summary.critical) || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        svcCard +
         watchCard +
         stormCard +
         wlCard +
