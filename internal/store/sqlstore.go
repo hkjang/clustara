@@ -2168,6 +2168,26 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			UNIQUE(user_id, cluster_id, namespace, owner_kind, owner_name)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_watches_user ON k8s_pod_watches(user_id, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_agent_sessions (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL DEFAULT '',
+			route TEXT NOT NULL DEFAULT '',
+			context TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_agent_messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
+			intent TEXT NOT NULL DEFAULT '',
+			evidence TEXT NOT NULL DEFAULT '',
+			llm_available INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_agent_messages_session ON k8s_agent_messages(session_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_application_stacks (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,

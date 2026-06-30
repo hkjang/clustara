@@ -1,11 +1,131 @@
 package proxy
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"clustara/internal/analyzer"
+	"clustara/internal/store"
 )
+
+// handleAgentSessions creates a floating-agent conversation session with the current page context.
+// POST /admin/agent/sessions {route, context{...}}
+func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		Route   string         `json:"route"`
+		Context map[string]any `json:"context"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	ctxJSON, _ := json.Marshal(in.Context)
+	sess := store.K8sAgentSession{ID: newID("k8sagent"), UserID: adminID(r), Route: strings.TrimSpace(in.Route), Context: string(ctxJSON)}
+	if err := s.db.CreateK8sAgentSession(r.Context(), sess); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_session_failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"session": sess})
+}
+
+// handleAgentSessionByID returns a session with its message history. GET /admin/agent/sessions/{id}
+func (s *Server) handleAgentSessionByID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/agent/sessions/"), "/")
+	if id == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "session id required", "invalid_request_error", "missing_session")
+		return
+	}
+	sess, err := s.db.GetK8sAgentSession(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "session not found", "invalid_request_error", "session_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_session_failed")
+		return
+	}
+	msgs, _ := s.db.ListK8sAgentMessages(r.Context(), id, 200)
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": msgs})
+}
+
+// handleAgentMessages processes a user question in a session: it resolves intent, grounds the answer
+// in the cluster's RCA/events evidence (reusing the AI-ask path, read-only), persists both turns,
+// and returns the answer + evidence + follow-up suggestions. Changes are never executed here.
+// POST /admin/agent/messages {session_id, question}
+func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		SessionID string `json:"session_id"`
+		Question  string `json:"question"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	if strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.Question) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "session_id and question are required", "invalid_request_error", "missing_fields")
+		return
+	}
+	sess, err := s.db.GetK8sAgentSession(r.Context(), in.SessionID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "session not found", "invalid_request_error", "session_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_session_failed")
+		return
+	}
+
+	var pctx analyzer.AgentPageContext
+	_ = json.Unmarshal([]byte(sess.Context), &pctx)
+	pctx.Route = firstNonEmpty(pctx.Route, sess.Route)
+	intent := analyzer.ClassifyAgentIntent(in.Question, pctx.Route)
+
+	// Ground the answer in current evidence (reuse the deterministic AI-ask gathering).
+	items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: pctx.ClusterID, Limit: 2000})
+	events, _ := s.db.ListK8sEvents(r.Context(), pctx.ClusterID, 500)
+	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: pctx.ClusterID, Limit: 1000})
+	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
+	evidence := gatherK8sEvidence(pctx.Namespace, firstNonEmpty(pctx.Pod, pctx.Name), rca, events, nil)
+	prompt := composeK8sAIPrompt(in.Question, evidence)
+
+	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, 1024, nil)
+	llmOK := llmErr == nil
+	note := ""
+	if !llmOK {
+		note = "LLM 미구성/호출 실패 — 근거 데이터만 제공합니다: " + llmErr.Error()
+	}
+
+	evJSON, _ := json.Marshal(evidence)
+	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
+	_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
+
+	s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK}))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"intent": intent, "answer": answer, "evidence": evidence, "llm_available": llmOK,
+		"suggestions": analyzer.SuggestAgentPrompts(pctx), "note": note,
+		"safety": "이 에이전트는 조회·분석만 수행합니다. 변경은 Action Center 승인 흐름으로 진행하세요.",
+	})
+}
+
+func nowK8sAgentTime() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 // handleAgentSuggestions returns context-aware suggested prompts + the resolved intent for the
 // floating Ops Agent, derived from the current screen context (route + focused resource).
