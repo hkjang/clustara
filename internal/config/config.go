@@ -257,6 +257,7 @@ type LimitsConfig struct {
 	MaxOutputTokens int
 	MaxRequestBytes int // reject chat request bodies larger than this many bytes; 0 = disabled
 	MaxMessages     int // reject chat requests with more than this many messages; 0 = disabled
+	AgentMaxTokens  int // Ops Agent and K8s AI max tokens; default 16384
 }
 
 // SkillsConfig controls the Skill policy enforcement engine. A request opts into a skill
@@ -478,6 +479,7 @@ func Load() (Config, error) {
 			MaxOutputTokens: intEnv("LIMITS_MAX_OUTPUT_TOKENS", 0),
 			MaxRequestBytes: intEnv("LIMITS_MAX_REQUEST_BYTES", 0),
 			MaxMessages:     intEnv("LIMITS_MAX_MESSAGES", 0),
+			AgentMaxTokens:  intEnv("LIMITS_AGENT_MAX_TOKENS", 16384),
 		},
 		MCP: MCPConfig{
 			AgenticModel:   os.Getenv("MCP_AGENTIC_MODEL"),

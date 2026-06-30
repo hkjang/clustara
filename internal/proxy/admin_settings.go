@@ -203,6 +203,7 @@ func buildSettingRegistry() []settingDef {
 
 		// ---- Limits (request guardrails) ----
 		{Key: "limits.max_output_tokens", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.MaxOutputTokens) }},
+		{Key: "limits.agent_max_tokens", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.AgentMaxTokens) }},
 		{Key: "limits.max_request_bytes", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.MaxRequestBytes) }},
 		{Key: "limits.max_messages", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.MaxMessages) }},
 
@@ -335,6 +336,7 @@ var settingDescriptions = map[string]string{
 	"mcp.max_tools":        "에이전틱 루프에서 모델에 노출할 MCP 도구 최대 개수(기본 32). vibe/all-mcp처럼 도구가 많으면 선택 정확도·토큰 비용이 나빠지므로 상위 랭크 후보의 도구만 노출.",
 	// Limits
 	"limits.max_output_tokens": "응답 최대 출력 토큰 상한(0=비활성). >0이면 chat 요청의 max_tokens/max_completion_tokens를 이 값으로 클램프(없으면 주입). 런어웨이 생성·비용 폭주 가드.",
+	"limits.agent_max_tokens":  "Ops Agent 및 K8s AI 답변 생성의 최대 출력 토큰 제한 (기본 16384). 너무 작으면 답변이 잘립니다.",
 	"limits.max_request_bytes": "chat 요청 본문 최대 바이트(0=비활성). 초과 시 413 payload_too_large로 거부. 비정상적으로 큰 프롬프트·남용 차단.",
 	"limits.max_messages":      "chat 요청 messages 배열 최대 개수(0=비활성). 초과 시 400 too_many_messages로 거부. 컨텍스트 스터핑·과도한 멀티턴 누적 차단.",
 	// Logging
@@ -742,6 +744,8 @@ func applyRuntimeSetting(t2s *config.Text2SQLConfig, ch *config.ClickHouseConfig
 		mcp.MaxTools = atoi()
 	case "limits.max_output_tokens":
 		limits.MaxOutputTokens = atoi()
+	case "limits.agent_max_tokens":
+		limits.AgentMaxTokens = atoi()
 	case "limits.max_request_bytes":
 		limits.MaxRequestBytes = atoi()
 	case "limits.max_messages":
