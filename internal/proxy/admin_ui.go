@@ -9660,6 +9660,10 @@ const adminHTML = `<!doctype html>
       try { await api('/admin/k8s/clusters/' + encodeURIComponent(clusterId) + '/discover', { method: 'POST' }); renderK8sCollector(new URLSearchParams(location.hash.split('?')[1] || '')); }
       catch (e) { alert('API 탐색 실패: ' + e.message); if (btn) { btn.disabled = false; btn.textContent = 'API 탐색 실행'; } }
     };
+    window.k8sDiscActivate = async (cid, kind, key, enabled) => {
+      try { await api('/admin/k8s/discovery/activate', { method: 'POST', body: JSON.stringify({ cluster_id: cid, kind: kind, key: key, enabled: enabled }) }); renderK8sCollector(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('활성화 변경 실패: ' + e.message); }
+    };
     function renderDiscoveryCard(disc, clusterId) {
       const btn = clusterId ? '<button type="button" id="disc-btn" onclick="k8sDiscover(\'' + escapeAttr(clusterId) + '\')">API 탐색 실행</button>' : '';
       if (!clusterId) {
@@ -9699,24 +9703,25 @@ const adminHTML = `<!doctype html>
           '</tbody></table>'
         : '';
       const ts = disc.targets_summary || {};
-      const targets = (disc.targets || []).filter(t => t.recommended || t.is_crd).slice(0, 60);
-      const targetRows = targets.map(t =>
-        '<tr><td>' + (t.recommended ? '<span class="status" style="font-size:9px">기본</span>' : (t.sensitive ? '<span class="status error" style="font-size:9px">민감</span>' : (t.is_crd ? '<span class="status warn" style="font-size:9px">CRD</span>' : '선택'))) + '</td>' +
+      const actBtn = (cid, kind, key, on) => '<button type="button" class="secondary" style="font-size:9px;padding:1px 6px" onclick="k8sDiscActivate(\'' + escapeAttr(cid) + '\',\'' + kind + '\',' + JSON.stringify(key) + ',' + (on ? 'false' : 'true') + ')">' + (on ? '비활성' : '활성화') + '</button>';
+      const tv = (disc.target_views || []).filter(v => v.target.recommended || v.target.is_crd || v.activated).slice(0, 60);
+      const targetRows = tv.map(v => { const t = v.target;
+        return '<tr><td>' + (v.activated ? '<span class="status" style="font-size:9px">활성</span> ' : '') + (t.recommended ? '<span class="status" style="font-size:9px">기본</span>' : (t.sensitive ? '<span class="status error" style="font-size:9px">민감</span>' : (t.is_crd ? '<span class="status warn" style="font-size:9px">CRD</span>' : '선택'))) + '</td>' +
         '<td>' + escapeHTML(t.group_version) + '</td><td><strong>' + escapeHTML(t.resource) + '</strong></td><td>' + escapeHTML(t.kind || '') + '</td>' +
-        '<td class="muted" style="font-size:11px">' + escapeHTML(t.reason || '') + '</td></tr>').join('');
-      const targetCard = targets.length
+        '<td>' + actBtn(clusterId, 'target', v.key, v.activated) + '</td></tr>'; }).join('');
+      const targetCard = tv.length
         ? '<h4 style="margin:12px 0 4px">동적 수집 대상 후보 (권장·CRD, ' + fmt(ts.recommended || 0) + ' 권장 / ' + fmt(ts.crd_targets || 0) + ' CRD / ' + fmt(ts.sensitive || 0) + ' 민감)</h4>' +
-          '<table><thead><tr><th>구분</th><th>group/version</th><th>resource</th><th>kind</th><th>사유</th></tr></thead><tbody>' + targetRows + '</tbody></table>'
+          '<table><thead><tr><th>상태/구분</th><th>group/version</th><th>resource</th><th>kind</th><th>활성화</th></tr></thead><tbody>' + targetRows + '</tbody></table>'
         : '';
-      const tools = (disc.tool_candidates || []).slice(0, 60);
-      const toolRows = tools.map(c =>
-        '<tr><td><code>' + escapeHTML(c.tool_name) + '</code></td><td>' + escapeHTML(c.verb) + '</td>' +
+      const toolViews = (disc.tool_views || []).slice(0, 60);
+      const toolRows = toolViews.map(v => { const c = v.tool;
+        return '<tr><td>' + (v.activated ? '<span class="status" style="font-size:9px">활성</span> ' : '') + '<code>' + escapeHTML(c.tool_name) + '</code></td><td>' + escapeHTML(c.verb) + '</td>' +
         '<td>' + escapeHTML(c.group_version) + '</td><td>' + escapeHTML(c.scope) + '</td>' +
-        '<td>' + (c.masking_level !== 'none' ? '<span class="status warn" style="font-size:9px">' + escapeHTML(c.masking_level) + '</span>' : '<span class="muted">none</span>') + '</td></tr>').join('');
-      const toolCard = tools.length
+        '<td>' + (c.masking_level !== 'none' ? '<span class="status warn" style="font-size:9px">' + escapeHTML(c.masking_level) + '</span> ' : '') + actBtn(clusterId, 'mcp_tool', v.key, v.activated) + '</td></tr>'; }).join('');
+      const toolCard = toolViews.length
         ? '<h4 style="margin:12px 0 4px">MCP read-only 도구 후보 (' + fmt(ts.tool_candidates || 0) + ')</h4>' +
-          '<div class="muted" style="font-size:11px;margin-bottom:4px">discovery의 read 가능 verb 기반으로 생성된 안전한 도구 후보입니다(전부 low risk). 게이트웨이 등록은 MCP Tool Scope 정책으로 관리하세요.</div>' +
-          '<table><thead><tr><th>tool</th><th>verb</th><th>group/version</th><th>scope</th><th>masking</th></tr></thead><tbody>' + toolRows + '</tbody></table>'
+          '<div class="muted" style="font-size:11px;margin-bottom:4px">discovery의 read 가능 verb 기반 안전 도구 후보(전부 low risk). 활성화는 운영자 큐레이션 allow-list이며, 실제 게이트웨이 등록 enforcement는 다음 단계입니다.</div>' +
+          '<table><thead><tr><th>tool</th><th>verb</th><th>group/version</th><th>scope</th><th>masking/활성화</th></tr></thead><tbody>' + toolRows + '</tbody></table>'
         : '';
       return card('API Discovery + Schema Registry (CLU-DISC)',
         '<div class="card-body">' + kpis +

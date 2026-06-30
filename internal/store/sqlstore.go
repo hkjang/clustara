@@ -2164,6 +2164,15 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_image_promotions_cluster ON k8s_image_promotions(cluster_id, status)`,
+		`CREATE TABLE IF NOT EXISTS k8s_discovery_activations (
+			cluster_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			key TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			updated_by TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (cluster_id, kind, key)
+		)`,
 		`CREATE TABLE IF NOT EXISTS k8s_agent_regression_baselines (
 			id TEXT PRIMARY KEY,
 			version TEXT NOT NULL DEFAULT '',

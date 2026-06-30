@@ -1,3 +1,6 @@
+v0.9.34:
+- **Discovery 활성화 — Dynamic Target + MCP Candidate Activation (v0.9.34, CLU-NEXT-15·16)**: v0.9.24가 생성한 동적 수집 대상 후보와 read-only MCP 도구 후보를 운영자가 클러스터별로 활성화/비활성화하는 큐레이션 allow-list를 추가했습니다. 활성화 상태를 영속화(`k8s_discovery_activations`, upsert)하고 discovery 응답의 `target_views`·`tool_views`에 `activated` 플래그로 반영하며, `수집 상태` 화면의 Discovery 카드에서 대상/도구별로 토글합니다(`POST /admin/k8s/discovery/activate`). 이 상태는 향후 collector per-target 수집·MCP 게이트웨이 등록 enforcement가 소비할 allow-list이며, 실제 enforcement 배선은 다음 단계입니다. 활성화 upsert·필터 라운드트립은 store 테스트로, 토글 영속은 라이브로 검증했습니다.
+
 v0.9.33:
 - **Security Exception Workflow + Image Promotion (v0.9.33, CLU-NEXT-12·13)**: 분석을 거버넌스로 잇는 두 영속 승인 워크플로우를 추가했습니다. (1) Runtime Security 예외: 위험 Pod/워크로드(privileged 등)에 대해 사유·만료일과 함께 예외를 요청하고 승인/반려하며, 만료일이 지난 승인 예외는 자동으로 expired 처리합니다(`GET/POST /admin/k8s/security-exceptions`, `/{id}/status`). (2) 이미지 승격: 환경 간(dev→stage→prod) 승격을 mutable 태그가 아닌 고정 digest(sha256)로만 요청하고 승인 후 promoted로 기록합니다 — mutable 태그 승격은 거부합니다(`GET/POST /admin/k8s/image-promotions`, `/{id}/status`). 운영 홈에 거버넌스 워크플로우 카드(생성·승인/반려)를 추가했습니다. lifecycle 전이는 store 테스트로, 생성→승인·태그 거부·digest 승격 전 구간은 라이브로 검증했습니다. 어느 경로도 클러스터를 직접 변경하지 않습니다.
 

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -123,12 +124,36 @@ func (s *Server) handleK8sDiscovery(w http.ResponseWriter, r *http.Request) {
 			ageSecs = int64(now.Sub(ts).Seconds())
 		}
 	}
+	// Activation state (CLU-NEXT-15/16): which targets/tools the operator has enabled.
+	activeTargets := map[string]bool{}
+	activeTools := map[string]bool{}
+	if acts, aerr := s.db.ListK8sDiscoveryActivations(r.Context(), clusterID, ""); aerr == nil {
+		for _, a := range acts {
+			if a.Kind == "mcp_tool" {
+				activeTools[a.Key] = a.Enabled
+			} else {
+				activeTargets[a.Key] = a.Enabled
+			}
+		}
+	}
+	targetViews := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		key := t.GroupVersion + "/" + t.Resource
+		targetViews = append(targetViews, map[string]any{"target": t, "key": key, "activated": activeTargets[key]})
+	}
+	toolViews := make([]map[string]any, 0, len(toolCandidates))
+	for _, c := range toolCandidates {
+		toolViews = append(toolViews, map[string]any{"tool": c, "key": c.ToolName, "activated": activeTools[c.ToolName]})
+	}
+
 	resp := map[string]any{
 		"resources":          resources,
 		"documents":          docs,
 		"summary":            analyzer.SummarizeDiscovery(infos, toDocRefs(docs)),
 		"targets":            targets,
+		"target_views":       targetViews,
 		"tool_candidates":    toolCandidates,
+		"tool_views":         toolViews,
 		"targets_summary":    analyzer.SummarizeDiscoveryTargets(targets, toolCandidates),
 		"deprecated":         analyzer.DetectDeprecatedAPIs(infos),
 		"note":               "클러스터가 실제 제공하는 API resource 카탈로그·OpenAPI v3 스키마 인덱스와, 이를 기반으로 한 동적 수집 대상·read-only MCP 도구 후보입니다. 클러스터 상세에서 'API 탐색'으로 갱신하세요.",
@@ -138,6 +163,47 @@ func (s *Server) handleK8sDiscovery(w http.ResponseWriter, r *http.Request) {
 		resp["snapshot"] = snap
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleK8sDiscoveryActivate toggles activation of a discovered inventory target or MCP tool
+// candidate (CLU-NEXT-15/16). The activated set is the operator-curated allow-list.
+// POST /admin/k8s/discovery/activate {cluster_id, kind, key, enabled}
+func (s *Server) handleK8sDiscoveryActivate(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		ClusterID string `json:"cluster_id"`
+		Kind      string `json:"kind"` // target | mcp_tool
+		Key       string `json:"key"`
+		Enabled   bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	if strings.TrimSpace(in.ClusterID) == "" || strings.TrimSpace(in.Key) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id and key are required", "invalid_request_error", "missing_fields")
+		return
+	}
+	kind := in.Kind
+	if kind != "mcp_tool" {
+		kind = "target"
+	}
+	if err := s.db.SetK8sDiscoveryActivation(r.Context(), store.K8sDiscoveryActivation{
+		ClusterID: in.ClusterID, Kind: kind, Key: in.Key, Enabled: in.Enabled, UpdatedBy: adminID(r),
+	}); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "activation_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.discovery.activate", in.ClusterID, auditJSON(map[string]any{"kind": kind, "key": in.Key, "enabled": in.Enabled}))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "kind": kind, "key": in.Key, "enabled": in.Enabled,
+		"note": "활성화 상태가 저장되었습니다. 실제 수집(collector)·MCP 게이트웨이 등록 enforcement는 다음 배선 단계입니다."})
 }
 
 // handleK8sDiscoveryCompare diffs two clusters' API catalogs (CLU-DISC-12 — upgrade/cross-cluster).
