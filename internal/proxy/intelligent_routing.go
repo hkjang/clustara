@@ -53,20 +53,42 @@ func (s *Server) planIntelligentRouting(ctx context.Context, body []byte, endpoi
 	if noRoute {
 		reasons = append(reasons, "routing disabled by X-Proxy-No-Route")
 	} else if auto {
-		selectedModel = s.defaultAutoModelForPolicy(tier, authCtx)
-		routeReason = "auto_router"
-		forceProvider = !pinned
-		reasons = append(reasons, "auto alias mapped "+tier+" tier to "+selectedModel)
+		hasDefault := strings.TrimSpace(s.cfg.Upstream.BaseURL) != ""
+		hasProviderFor := func(m string) bool {
+			if hasDefault {
+				return true
+			}
+			cands, _ := s.providersForModel(ctx, m)
+			return len(cands) > 0
+		}
+
+		candidate := s.defaultAutoModelForPolicy(tier, authCtx)
+		if hasProviderFor(candidate) {
+			selectedModel = candidate
+			routeReason = "auto_router"
+			reasons = append(reasons, "auto alias mapped "+tier+" tier to "+selectedModel)
+		} else if hasProviderFor(model) {
+			selectedModel = model
+			routeReason = "auto_router_original"
+			reasons = append(reasons, "auto alias kept original "+model+" because no provider supports candidate "+candidate)
+		} else {
+			selectedModel = candidate
+			routeReason = "auto_router"
+			reasons = append(reasons, "auto alias mapped "+tier+" tier to "+selectedModel+" (no active providers)")
+		}
 		// Closed learning loop: prefer the model that historically performed best
 		// for this (task type, complexity bucket), when the loop is enabled and the
 		// learned choice is allowed by the key's policy.
 		if learned, why, ok := s.learnedModelFor(ctx, classifyTaskType(prompts), complexity.Score); ok && learned != selectedModel {
 			if authCtx == nil || listAllows(learned, authCtx.AllowedModels, authCtx.DeniedModels) {
-				selectedModel = learned
-				routeReason = "auto_router_learned"
-				reasons = append(reasons, why)
+				if hasProviderFor(learned) {
+					selectedModel = learned
+					routeReason = "auto_router_learned"
+					reasons = append(reasons, why)
+				}
 			}
 		}
+		forceProvider = !pinned
 		if pinned {
 			reasons = append(reasons, "provider pinned by client")
 		}
