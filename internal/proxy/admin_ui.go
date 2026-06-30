@@ -452,6 +452,23 @@ const adminHTML = `<!doctype html>
     </div>
   </div>
 
+  <!-- Floating Ops Agent (FLOAT-REQ-01/02): global, context-aware. Read-only; changes go to approval. -->
+  <div id="agent-fab" title="Clustara Ops Agent" onclick="agentToggle()"
+       style="position:fixed;right:20px;bottom:20px;width:52px;height:52px;border-radius:50%;background:var(--accent,#1d4ed8);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:24px;box-shadow:0 3px 12px rgba(0,0,0,.3);z-index:9998">🤖</div>
+  <div id="agent-drawer" style="display:none;position:fixed;right:20px;bottom:84px;width:390px;max-width:92vw;height:62vh;max-height:580px;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--border,#ccc);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.28);z-index:9999;display:none;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border,#ddd)">
+      <strong style="flex:0 0 auto">🤖 Ops Agent</strong><span id="agent-ctx" class="muted" style="flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <button type="button" class="secondary" style="font-size:11px;padding:2px 8px" onclick="agentToggle()">✕</button>
+    </div>
+    <div id="agent-suggest" style="padding:8px 12px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border,#eee)"></div>
+    <div id="agent-msgs" style="flex:1;overflow:auto;padding:10px 12px;font-size:13px"></div>
+    <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--border,#ddd)">
+      <input id="agent-q" placeholder="이 화면에 대해 물어보세요…" style="flex:1" onkeydown="if(event.key==='Enter')agentSend()">
+      <button type="button" onclick="agentSend()">전송</button>
+    </div>
+    <div class="muted" style="font-size:10px;padding:0 12px 8px">조회·분석만 즉시 수행 · 변경은 Action Center 승인 흐름</div>
+  </div>
+
   <script>
     // ---------- theme ----------
     function applyTheme(theme) {
@@ -1138,9 +1155,31 @@ const adminHTML = `<!doctype html>
       }
     }
 
+    let k8sHomeRefreshTimer = null;
+    function clearK8sHomeRefreshTimer() {
+      if (k8sHomeRefreshTimer) {
+        clearInterval(k8sHomeRefreshTimer);
+        k8sHomeRefreshTimer = null;
+      }
+    }
+    function scheduleK8sHomeRefresh() {
+      clearK8sHomeRefreshTimer();
+      const globalSeconds = Number((document.getElementById('refresh-interval') || {}).value || 0);
+      if (globalSeconds > 0) return;
+      k8sHomeRefreshTimer = setInterval(() => {
+        const p = parseHash();
+        if ((p.parts[0] || 'k8s-home') !== 'k8s-home') {
+          clearK8sHomeRefreshTimer();
+          return;
+        }
+        route();
+      }, 30000);
+    }
+
     async function route() {
       const { parts, params } = parseHash();
       const [tab, ...rest] = parts;
+      if ((tab || 'k8s-home') !== 'k8s-home') clearK8sHomeRefreshTimer();
       // Nested sub-views keep their parent's top-level nav tab highlighted.
       const navParent = {
         xview: 'dashboard', waterfall: 'dashboard', llm: 'dashboard',
@@ -1253,8 +1292,86 @@ const adminHTML = `<!doctype html>
       } catch (err) {
         document.getElementById('view').innerHTML = '<div class="error-line">' + escapeHTML(err.message) + '</div>';
       }
+      agentOnRoute();
     }
     window.addEventListener('hashchange', route);
+
+    // ---------- Floating Ops Agent (Page Context SDK + drawer) ----------
+    var agentState = { sessionId: null, ctx: {}, open: false };
+    // Collect the current screen context from the hash route + params (Page Context Registry).
+    function agentCollectContext() {
+      const { parts, params } = parseHash();
+      const tab = parts[0] || 'k8s-home';
+      const ctx = { route: '#/' + tab };
+      const g = (k) => (params && params.get ? (params.get(k) || '') : '');
+      ctx.cluster_id = g('cluster_id'); ctx.namespace = g('namespace'); ctx.pod = g('pod');
+      ctx.kind = g('kind'); ctx.name = g('name');
+      if (tab === 'k8s-incidents') ctx.incident_id = g('id') || g('incident_id');
+      if (tab === 'k8s-stacks') ctx.stack_id = g('id') || g('stack_id');
+      return ctx;
+    }
+    function agentCtxQuery(ctx) {
+      const q = new URLSearchParams();
+      Object.keys(ctx).forEach(k => { if (ctx[k]) q.set(k, ctx[k]); });
+      return q.toString();
+    }
+    function agentOnRoute() {
+      agentState.ctx = agentCollectContext();
+      const label = (agentState.ctx.pod || agentState.ctx.incident_id || agentState.ctx.stack_id || agentState.ctx.namespace || agentState.ctx.route || '').toString();
+      const el = document.getElementById('agent-ctx'); if (el) el.textContent = label;
+      if (agentState.open) agentLoadSuggestions();
+    }
+    window.agentToggle = () => {
+      const d = document.getElementById('agent-drawer');
+      agentState.open = !agentState.open;
+      d.style.display = agentState.open ? 'flex' : 'none';
+      if (agentState.open) { agentOnRoute(); if (!document.getElementById('agent-msgs').dataset.init) { agentLoadSuggestions(); document.getElementById('agent-msgs').dataset.init = '1'; } }
+    };
+    window.agentLoadSuggestions = async () => {
+      const box = document.getElementById('agent-suggest');
+      try {
+        const d = await api('/admin/agent/suggestions?' + agentCtxQuery(agentState.ctx));
+        box.innerHTML = (d.suggestions || []).slice(0, 4).map(s =>
+          '<button type="button" class="secondary" style="font-size:11px;padding:3px 8px" onclick="agentAsk(' + JSON.stringify(s.text).replace(/"/g, '&quot;') + ')">' + escapeHTML(s.text) + '</button>').join('');
+      } catch (e) { box.innerHTML = '<span class="muted" style="font-size:11px">' + escapeHTML(e.message) + '</span>'; }
+    };
+    async function agentEnsureSession() {
+      if (agentState.sessionId) return agentState.sessionId;
+      const d = await api('/admin/agent/sessions', { method: 'POST', body: JSON.stringify({ route: agentState.ctx.route, context: agentState.ctx }) });
+      agentState.sessionId = (d.session || {}).id;
+      return agentState.sessionId;
+    }
+    function agentAppend(role, html) {
+      const m = document.getElementById('agent-msgs');
+      const align = role === 'user' ? 'right' : 'left';
+      const bg = role === 'user' ? 'var(--accent,#1d4ed8);color:#fff' : 'var(--panel-alt,#f3f4f6)';
+      m.innerHTML += '<div style="text-align:' + align + ';margin:6px 0"><div style="display:inline-block;max-width:90%;text-align:left;background:' + bg + ';padding:6px 10px;border-radius:10px">' + html + '</div></div>';
+      m.scrollTop = m.scrollHeight;
+    }
+    window.agentAsk = (text) => { document.getElementById('agent-q').value = text; agentSend(); };
+    window.agentSend = async () => {
+      const input = document.getElementById('agent-q');
+      const q = (input.value || '').trim();
+      if (!q) return;
+      input.value = '';
+      agentAppend('user', escapeHTML(q));
+      agentAppend('agent', '<span class="muted">분석 중…</span>');
+      const m = document.getElementById('agent-msgs');
+      try {
+        await agentEnsureSession();
+        const d = await api('/admin/agent/messages', { method: 'POST', body: JSON.stringify({ session_id: agentState.sessionId, question: q }) });
+        const ev = (d.evidence || []).slice(0, 6).map(e => '<li style="font-size:11px">' + escapeHTML(e) + '</li>').join('');
+        const tools = (d.tool_plan || []).map(t => escapeHTML(t.tool)).join(', ');
+        let body = '';
+        if (d.llm_available && d.answer) body += '<div style="white-space:pre-wrap">' + escapeHTML(d.answer) + '</div>';
+        else body += '<div class="muted" style="font-size:11px">' + escapeHTML(d.note || 'LLM 미구성 — 근거만 제공') + '</div>';
+        if (ev) body += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer">근거 ' + (d.evidence || []).length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + ev + '</ul></details>';
+        if (tools) body += '<div class="muted" style="font-size:10px;margin-top:4px">사용 도구: ' + tools + '</div>';
+        // Replace the "분석 중" placeholder (last agent bubble).
+        m.lastElementChild.remove();
+        agentAppend('agent', body);
+      } catch (e) { m.lastElementChild.remove(); agentAppend('agent', '<span class="status error">' + escapeHTML(e.message) + '</span>'); }
+    };
 
     // Open nav dropdowns on hover with a close delay so brief pointer excursions
     // (the gap between toggle and menu, or slightly overshooting an item) don't
@@ -1293,8 +1410,11 @@ const adminHTML = `<!doctype html>
     function applyRefreshInterval(seconds) {
       sessionStorage.setItem('adminRefresh', String(seconds));
       if (refreshTimer) clearInterval(refreshTimer);
+      if (seconds > 0) clearK8sHomeRefreshTimer();
       if (seconds > 0) {
         refreshTimer = setInterval(() => { route(); }, seconds * 1000);
+      } else if ((parseHash().parts[0] || 'k8s-home') === 'k8s-home') {
+        scheduleK8sHomeRefresh();
       }
     }
     const refreshSelect = document.getElementById('refresh-interval');
@@ -5922,6 +6042,23 @@ const adminHTML = `<!doctype html>
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
+      const freshness = d.data_freshness || {};
+      const agents = d.agents || {};
+      const dataAge = freshness.newest_observed_at ? ago(freshness.newest_observed_at) : '<span class="muted">-</span>';
+      const agentText = (agents.count || 0)
+        ? ('live ' + fmt(agents.live || 0) + ' / stale ' + fmt(agents.stale || 0))
+        : 'agent 없음';
+      const agentClass = !(agents.count || 0) || (agents.stale || 0) > 0 ? 'warn' : '';
+      const maxLag = agents.max_watch_lag_ms ? (' · lag ' + fmt(agents.max_watch_lag_ms) + 'ms') : '';
+      const freshnessMeta =
+        '<div class="toolbar" style="align-items:center">' +
+        '<span class="muted">생성 ' + ago(d.generated_at) + '</span>' +
+        '<span class="muted">최신 데이터 ' + dataAge + '</span>' +
+        '<span class="status ' + agentClass + '" title="실시간 collector agent 상태">' + escapeHTML(agentText) + '</span>' +
+        '<span class="muted">' + escapeHTML(maxLag) + '</span>' +
+        '<button type="button" class="secondary" style="margin-left:auto" onclick="route()">새로고침</button>' +
+        '<button type="button" class="secondary" onclick="location.hash=\'#/k8s-collector\'">수집 상태</button>' +
+        '</div>';
 
       const riskRows = (d.clusters_at_risk || []).length ? (d.clusters_at_risk || []).map(c =>
         '<tr><td><strong>' + escapeHTML(c.name || c.cluster_id) + '</strong></td>' +
@@ -5944,10 +6081,12 @@ const adminHTML = `<!doctype html>
         : '<tr><td colspan="4" class="muted">최근 변경 없음.</td></tr>';
 
       view.innerHTML =
-        section('K8s 운영 홈', '<div class="kpis">' +
+        section('K8s 운영 홈', freshnessMeta + '<div class="kpis">' +
           kpi('위험 클러스터', fmt((d.clusters_at_risk || []).length)) +
           kpi('장애 후보', fmt((d.failure_candidates || []).length)) +
-          kpi('최근 변경', fmt((d.recent_changes || []).length)) + '</div>') +
+          kpi('최근 변경', fmt((d.recent_changes || []).length)) +
+          kpi('Inventory', fmt(freshness.inventory_items || 0)) +
+          kpi('Agent', escapeHTML(agentText)) + '</div>') +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
         card('장애 후보 TOP 10',
@@ -5967,6 +6106,7 @@ const adminHTML = `<!doctype html>
                   '</tbody></table>'
                 : '<p class="muted" style="font-size:12px">요청(request)이 설정된 워크로드가 없습니다.</p>') +
               '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(d.cost_note || '') + '</div></div>'));
+      scheduleK8sHomeRefresh();
     }
 
     function k8sRegisterGuideHTML() {
