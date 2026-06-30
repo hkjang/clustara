@@ -1359,15 +1359,27 @@ const adminHTML = `<!doctype html>
       const m = document.getElementById('agent-msgs');
       try {
         await agentEnsureSession();
-        const token = sessionStorage.getItem('admin_token') || '';
-        const response = await fetch('/admin/agent/messages?stream=true', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token ? 'Bearer ' + token : ''
-          },
-          body: JSON.stringify({ session_id: agentState.sessionId, question: q })
-        });
+        const doFetch = () => {
+          const requestHeaders = headers();
+          return fetch('/admin/agent/messages?stream=true', {
+            method: 'POST',
+            headers: {
+              ...requestHeaders,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ session_id: agentState.sessionId, question: q })
+          });
+        };
+        let response = await doFetch();
+        if (response.status === 401 && authState.enabled) {
+          if (await tryRefresh()) {
+            response = await doFetch();
+          } else {
+            clearAuth();
+            showLogin('세션이 만료되었습니다. 다시 로그인해주세요.');
+            throw new Error('세션 만료');
+          }
+        }
         if (!response.ok) {
           const errText = await response.text();
           throw new Error(errText || '서버 오류가 발생했습니다.');
