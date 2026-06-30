@@ -9187,13 +9187,14 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s Collector 상태', '<div class="empty">불러오는 중...</div>');
-      let clusters, st, fr, slo;
+      let clusters, st, fr, slo, cost;
       try {
-        [clusters, st, fr, slo] = await Promise.all([
+        [clusters, st, fr, slo, cost] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/agent/status' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/freshness' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/collect-slo' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/collection-cost').catch(() => null),
         ]);
       } catch (e) { view.innerHTML = section('K8s Collector 상태', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
@@ -9228,6 +9229,7 @@ const adminHTML = `<!doctype html>
       ).join('') : '<tr><td colspan="5" class="muted">최근 watch 이벤트가 없습니다.</td></tr>';
       const freshCard = renderFreshnessCard(fr, clusterId);
       const sloCard = renderCollectSloCard(slo);
+      const costCard = renderCollectionCostCard(cost);
       const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
       const agentGuide =
         '<div class="card-body">' +
@@ -9249,6 +9251,7 @@ const adminHTML = `<!doctype html>
         card('필터', '<div class="card-body"><select id="col-cluster" onchange="k8sCollectorGo()">' + clusterOpts + '</select></div>') +
         freshCard +
         sloCard +
+        costCard +
         card('자동 수집 스케줄러 (Adaptive Polling)', '<div class="card-body" id="collect-config"><span class="muted">불러오는 중…</span></div>') +
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
@@ -9354,6 +9357,36 @@ const adminHTML = `<!doctype html>
       }
       body += '</div>';
       return card('Collector SLO + 실패 원인 분석', body);
+    }
+    // Collection Cost Guard (CLU-REQ-11): estimated storage footprint + growth, budget alerts.
+    window.k8sSaveCollectionBudget = async () => {
+      const v = parseInt((document.getElementById('cc-budget') || {}).value || '0', 10);
+      try { await api('/admin/k8s/collection-cost', { method: 'POST', body: JSON.stringify({ budget_mb: v }) }); renderK8sCollector(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('예산 저장 실패: ' + e.message); }
+    };
+    function renderCollectionCostCard(cost) {
+      if (!cost || !cost.report) return '';
+      const rep = cost.report;
+      const cs = rep.clusters || [];
+      const kpis = '<div class="kpis">' +
+        kpi('총 추정 저장량', fmt(Math.round(rep.total_est_mb || 0)) + ' MB') +
+        kpi('월 증가 예측', fmt(Math.round(rep.total_monthly_growth_mb || 0)) + ' MB') +
+        kpi('예산 초과', fmt(rep.over_budget_count || 0)) +
+        kpi('클러스터 예산', fmt(cost.budget_mb || 0) + ' MB') + '</div>';
+      const rows = cs.length ? cs.map(c =>
+        '<tr><td>' + (c.over_budget ? '<span class="status error" style="font-size:10px">초과</span>' : '<span class="status" style="font-size:10px">정상</span>') + '</td>' +
+        '<td>' + escapeHTML(c.cluster_name || c.cluster_id) + '</td>' +
+        '<td>' + fmt(c.total_rows || 0) + '</td>' +
+        '<td>' + (c.est_mb || 0).toFixed(1) + ' MB</td>' +
+        '<td>' + (c.monthly_growth_mb || 0).toFixed(1) + ' MB/월</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(c.top_table || '-') + '</td></tr>').join('')
+        : '<tr><td colspan="6" class="muted">수집 데이터가 없습니다.</td></tr>';
+      return card('수집 비용 가드 (Collection Cost Guard)',
+        '<div class="card-body">' + kpis +
+        '<div style="display:flex;gap:6px;align-items:center;margin:4px 0 8px"><span class="muted" style="font-size:11px">클러스터별 예산(MB)</span>' +
+        '<input id="cc-budget" type="number" min="0" value="' + fmt(cost.budget_mb || 0) + '" style="width:100px"><button type="button" onclick="k8sSaveCollectionBudget()">저장</button></div>' +
+        '<div class="muted" style="font-size:11px;margin-bottom:6px">' + escapeHTML(cost.note || '') + '</div>' +
+        '<table><thead><tr><th>상태</th><th>클러스터</th><th>행 수</th><th>추정 저장량</th><th>월 증가</th><th>최대 테이블</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     window.k8sLoadCollectConfig = async () => {
       const host = document.getElementById('collect-config');
