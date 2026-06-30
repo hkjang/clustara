@@ -14,45 +14,65 @@ type ResourceTags struct {
 	HasLim bool   `json:"has_lim"`
 }
 
-// SummarizePodResources sums the regular containers' CPU/memory requests and limits from a pod or
-// workload spec (.spec.containers or .spec.template.spec.containers) and formats them for display.
-// initContainers are excluded (they don't run alongside the main containers). Pure.
-func SummarizePodResources(spec map[string]any) ResourceTags {
-	var reqCPU, limCPU int   // millicores
-	var reqMem, limMem int64 // bytes
-	hasReq, hasLim := false, false
+// PodResourceQuantities is the numeric (millicores / bytes) CPU+memory request/limit totals for a
+// pod or workload spec. Companion to ResourceTags (which is the display-formatted view).
+type PodResourceQuantities struct {
+	ReqCPUm int   // millicores
+	LimCPUm int   // millicores
+	ReqMemB int64 // bytes
+	LimMemB int64 // bytes
+	HasReq  bool
+	HasLim  bool
+}
+
+// PodResourceNumbers sums the regular containers' CPU/memory requests and limits as numeric totals
+// (.spec.containers or .spec.template.spec.containers; initContainers excluded). Pure.
+func PodResourceNumbers(spec map[string]any) PodResourceQuantities {
+	var q PodResourceQuantities
 	for _, raw := range regularContainers(spec) {
 		res := asAnyMap(asAnyMap(raw)["resources"])
 		req := asAnyMap(res["requests"])
 		lim := asAnyMap(res["limits"])
 		if _, ok := req["cpu"]; ok {
-			reqCPU += qtyCPU(req["cpu"])
-			hasReq = true
+			q.ReqCPUm += qtyCPU(req["cpu"])
+			q.HasReq = true
 		}
 		if _, ok := req["memory"]; ok {
-			reqMem += qtyMem(req["memory"])
-			hasReq = true
+			q.ReqMemB += qtyMem(req["memory"])
+			q.HasReq = true
 		}
 		if _, ok := lim["cpu"]; ok {
-			limCPU += qtyCPU(lim["cpu"])
-			hasLim = true
+			q.LimCPUm += qtyCPU(lim["cpu"])
+			q.HasLim = true
 		}
 		if _, ok := lim["memory"]; ok {
-			limMem += qtyMem(lim["memory"])
-			hasLim = true
+			q.LimMemB += qtyMem(lim["memory"])
+			q.HasLim = true
 		}
 	}
-	t := ResourceTags{HasReq: hasReq, HasLim: hasLim}
-	if hasReq {
-		t.ReqCPU = formatCPUMillis(reqCPU)
-		t.ReqMem = formatMemBytes(reqMem)
+	return q
+}
+
+// SummarizePodResources sums the regular containers' CPU/memory requests and limits from a pod or
+// workload spec and formats them for display. initContainers are excluded. Pure.
+func SummarizePodResources(spec map[string]any) ResourceTags {
+	q := PodResourceNumbers(spec)
+	t := ResourceTags{HasReq: q.HasReq, HasLim: q.HasLim}
+	if q.HasReq {
+		t.ReqCPU = formatCPUMillis(q.ReqCPUm)
+		t.ReqMem = formatMemBytes(q.ReqMemB)
 	}
-	if hasLim {
-		t.LimCPU = formatCPUMillis(limCPU)
-		t.LimMem = formatMemBytes(limMem)
+	if q.HasLim {
+		t.LimCPU = formatCPUMillis(q.LimCPUm)
+		t.LimMem = formatMemBytes(q.LimMemB)
 	}
 	return t
 }
+
+// FormatCPUMillis / FormatMemBytes expose the display formatters for callers building resource
+// recommendations (e.g. Resource Request Advisor).
+func FormatCPUMillis(m int) string    { return formatCPUMillis(m) }
+func FormatMemBytes(b int64) string   { return formatMemBytes(b) }
 
 func regularContainers(spec map[string]any) []any {
 	ps := spec

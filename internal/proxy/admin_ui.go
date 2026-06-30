@@ -8493,15 +8493,50 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 용량·자동확장 (SCALE-01~08) ----------
+    function advisorSeverityBadge(sev) {
+      const color = sev === 'critical' ? 'error' : (sev === 'warning' ? 'warn' : '');
+      return '<span class="status ' + color + '" style="font-size:10px">' + escapeHTML(sev) + '</span>';
+    }
+    function renderResourceAdvisorCard(advisor, clusterId) {
+      if (!clusterId) {
+        return card('Resource Request Advisor (CLU-REQ-06)', '<div class="card-body"><p class="muted" style="font-size:12px">클러스터를 선택하면 OOMKilled·Pending·throttling 증상 기반 request/limit 권장값을 표시합니다.</p></div>');
+      }
+      if (!advisor) {
+        return card('Resource Request Advisor (CLU-REQ-06)', '<div class="card-body"><p class="muted" style="font-size:12px">권장값을 불러오지 못했습니다.</p></div>');
+      }
+      const items = advisor.advice || [];
+      const c = advisor.counts || {};
+      if (!items.length) {
+        return card('Resource Request Advisor (CLU-REQ-06)', '<div class="card-body"><p class="muted" style="font-size:12px">자원 증상이 감지된 워크로드가 없습니다 — OOMKilled·Pending·throttling이 발생하면 권장값이 표시됩니다.' + (advisor.metrics_available ? '' : ' (사용량 메트릭이 적재되면 정확도가 올라갑니다.)') + '</p></div>');
+      }
+      const rows = items.map(a => {
+        const recs = (a.recommendations || []).map(r =>
+          '<div style="font-size:11px;margin:2px 0"><code>' + escapeHTML(r.resource + '.' + r.field) + '</code> ' +
+          (r.current ? escapeHTML(r.current) + ' → ' : '') + '<strong>' + escapeHTML(r.recommended || '설정 권장') + '</strong> ' +
+          '<span class="status ' + (r.direction === 'up' ? 'warn' : (r.direction === 'down' ? '' : 'error')) + '" style="font-size:9px">' + escapeHTML(r.direction) + '</span>' +
+          '<span class="muted"> · ' + escapeHTML(r.reason || '') + '</span></div>').join('');
+        return '<tr><td>' + advisorSeverityBadge(a.severity) + '</td>' +
+          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.workload) + '<div class="muted" style="font-size:10px">' + escapeHTML(a.kind || '') + '</div></td>' +
+          '<td>' + (a.symptoms || []).map(s => '<span class="status warn" style="font-size:9px;margin:1px">' + escapeHTML(s) + '</span>').join(' ') + '</td>' +
+          '<td>' + recs + '</td></tr>';
+      }).join('');
+      const kpis = '<div class="kpis">' +
+        kpi('critical', fmt(c.critical || 0)) + kpi('warning', fmt(c.warning || 0)) + kpi('info', fmt(c.info || 0)) + '</div>';
+      return card('Resource Request Advisor — 증상 기반 권장 (CLU-REQ-06)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(advisor.note || '') + '</div>' +
+        '<table><thead><tr><th>심각도</th><th>워크로드</th><th>증상</th><th>권장 조치</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
     async function renderK8sCapacity(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 용량·자동확장', '<div class="empty">불러오는 중...</div>');
-      let clusters, data;
+      let clusters, data, advisor;
       try {
-        [clusters, data] = await Promise.all([
+        [clusters, data, advisor] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/capacity' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          clusterId ? api('/admin/k8s/resource-advisor?cluster_id=' + encodeURIComponent(clusterId)).catch(() => null) : Promise.resolve(null),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 용량·자동확장', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -8549,6 +8584,7 @@ const adminHTML = `<!doctype html>
         card('필터', '<div class="card-body"><select id="k8scap-cluster" onchange="k8sCapGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">' + escapeHTML(data.note || '') + '</span></div>') +
         card('HPA 현황 (SCALE-01/02)', '<div class="card-body"><table><thead><tr><th>HPA</th><th>대상</th><th>min~max</th><th>current→desired</th><th>상태</th></tr></thead><tbody>' + hpaRows + '</tbody></table></div>') +
         card('할당 효율 (SCALE-03/04)', '<div class="card-body"><table><thead><tr><th>구분</th><th>Pod</th><th>CPU 사용/요청</th><th>권고</th></tr></thead><tbody>' + allocRows + '</tbody></table></div>') +
+        renderResourceAdvisorCard(advisor, clusterId) +
         card('노드 Bin Packing (SCALE-07)', '<div class="card-body"><table><thead><tr><th>노드</th><th>Pod</th><th>요청/가용 CPU</th><th>요청률</th></tr></thead><tbody>' + packRows + '</tbody></table></div>') +
         (function () {
           const ps = r.projections || [];
