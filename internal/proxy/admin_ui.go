@@ -2436,15 +2436,51 @@ const adminHTML = `<!doctype html>
         renderK8sAgentOps();
       } catch (e) { alert('피드백 실패: ' + e.message); }
     };
+    // Action Outcome Analytics (CLU-REQ-09): did AI suggestions actually help?
+    function renderActionOutcomeSection(outcomeResp) {
+      const o = (outcomeResp && outcomeResp.stats) || null;
+      if (!o || !o.total) {
+        return section('Action Outcome Analytics', '<div class="muted" style="font-size:12px;padding:0 14px 10px">아직 제안된 Action Card가 없습니다 — 에이전트가 조치를 제안하고 승인/실행되면 채택률·성공률·재발률이 집계됩니다.</div>');
+      }
+      const pct = (v) => (v || 0).toFixed(1) + '%';
+      const kpis = '<div class="kpis">' +
+        kpi('제안 총계', fmt(o.total)) +
+        kpi('채택률', pct(o.adoption_rate)) +
+        kpi('실행 성공률', pct(o.success_rate)) +
+        kpi('롤백률', pct(o.rollback_rate)) +
+        kpi('재발률', pct(o.recurrence_rate)) +
+        kpi('실행/실패', fmt(o.executed || 0) + ' / ' + fmt(o.failed || 0)) + '</div>';
+      const grp = (rows) => (rows && rows.length) ? (
+        '<table><thead><tr><th data-sort="str">구분</th><th data-sort="num">제안</th><th data-sort="num">채택</th>' +
+        '<th data-sort="num">실행</th><th data-sort="num">실패</th><th data-sort="num">롤백</th><th data-sort="num">재발</th>' +
+        '<th data-sort="num">채택률</th><th data-sort="num">성공률</th></tr></thead><tbody>' +
+        rows.map(g => '<tr><td><strong>' + escapeHTML(g.key) + '</strong></td>' +
+          '<td data-num="' + g.total + '">' + fmt(g.total) + '</td>' +
+          '<td data-num="' + g.adopted + '">' + fmt(g.adopted) + '</td>' +
+          '<td data-num="' + g.executed + '">' + fmt(g.executed) + '</td>' +
+          '<td data-num="' + g.failed + '">' + fmt(g.failed) + '</td>' +
+          '<td data-num="' + g.rolled_back + '">' + fmt(g.rolled_back) + '</td>' +
+          '<td data-num="' + g.recurred + '">' + fmt(g.recurred) + '</td>' +
+          '<td data-num="' + (g.adoption_rate || 0) + '">' + pct(g.adoption_rate) + '</td>' +
+          '<td data-num="' + (g.success_rate || 0) + '">' + pct(g.success_rate) + '</td></tr>').join('') +
+        '</tbody></table>'
+      ) : '<div class="muted" style="font-size:12px">데이터 없음</div>';
+      return section('Action Outcome Analytics (CLU-REQ-09)',
+        '<div class="muted" style="font-size:12px;padding:0 14px 6px">' + escapeHTML(outcomeResp.note || '') + '</div>' +
+        kpis +
+        '<h4 style="margin:12px 14px 4px">조치 유형별</h4>' + grp(o.by_action) +
+        '<h4 style="margin:12px 14px 4px">위험도별</h4>' + grp(o.by_risk));
+    }
     async function renderK8sAgentOps() {
       const view = document.getElementById('view');
       view.innerHTML = '<div class="empty">불러오는 중…</div>';
-      let statsResp = {}, evalsResp = {}, cardsResp = {};
+      let statsResp = {}, evalsResp = {}, cardsResp = {}, outcomeResp = {};
       try {
-        [statsResp, evalsResp, cardsResp] = await Promise.all([
+        [statsResp, evalsResp, cardsResp, outcomeResp] = await Promise.all([
           api('/admin/agent/evaluations?stats=true'),
           api('/admin/agent/evaluations'),
           api('/admin/agent/action-cards'),
+          api('/admin/agent/action-outcomes').catch(() => ({})),
         ]);
       } catch (e) { view.innerHTML = '<div class="empty">' + escapeHTML(e.message) + '</div>'; return; }
       const st = statsResp.stats || {};
@@ -2510,11 +2546,14 @@ const adminHTML = `<!doctype html>
         '<th data-sort="str">Action 요청</th><th>전이</th><th data-sort="str">제안 시각</th></tr></thead><tbody>' + cardRows + '</tbody></table>'
       ) : '<div class="empty">제안된 Action Card 없음</div>';
 
+      const outcomeSection = renderActionOutcomeSection(outcomeResp);
+
       view.innerHTML =
         section('Ops Agent 평가 센터 (Evaluation Center)',
           '<div class="muted" style="font-size:12px;padding:0 14px 8px">플로팅 운영 에이전트의 답변 품질·근거 점수·채택률을 측정합니다. 근거 점수는 근거 인용·근거 수·도구 계획·폴백 여부로 산정합니다(A≥80·B≥60·C≥40·D).</div>' +
           kpis +
           '<h4 style="margin:12px 14px 4px">Intent별 품질</h4>' + intentTable) +
+        outcomeSection +
         section('최근 답변 평가', evalTable) +
         section('Action Card Lifecycle', cardTable);
       makeSortable('#view', 'agentops');

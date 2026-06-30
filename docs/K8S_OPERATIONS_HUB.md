@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.15** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.16** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.15)
+## 기능 상태 (v0.9.16)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -55,6 +55,7 @@
 | Collector SLO Dashboard + Collect Gap RCA — 수집 시도 이력 기반 성공률·p50/p95 지연·실패 밴드 + 실패 원인 분류(auth·rbac·timeout·network·ratelimit·tls·config)·클러스터 vs 수집 신호 구분(`/admin/k8s/collect-slo`, CLU-REQ-02·03) | ✅ (v0.9.13) |
 | Change-Aware Burst Collection — Config 적용·Stack 적용·Action 실행 직후 해당 클러스터를 짧은 기간 고빈도 수집(burst)해 변경 검증 가속, 창 만료 시 자동 복귀(`/admin/k8s/collect-bursts`, CLU-REQ-05) | ✅ (v0.9.14) |
 | Resource Request Advisor — OOMKilled·Pending(자원 부족)·CPU throttling·반복 재시작 증상을 현재 request/limit·사용량과 연결해 워크로드별 request/limit 권장값 제시(증상 기반, Rightsizing 보완, `/admin/k8s/resource-advisor`, CLU-REQ-06) | ✅ (v0.9.15) |
+| Action Outcome Analytics — AI 제안 Action Card의 채택률·실행 성공률·롤백률·재발률을 조치 유형·위험도별로 집계(Action Card lifecycle 기반, `/admin/agent/action-outcomes`, CLU-REQ-09) | ✅ (v0.9.16) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 

@@ -1,3 +1,6 @@
+v0.9.16:
+- **Action Outcome Analytics (v0.9.16, CLU-REQ-09)**: AI(플로팅 Ops Agent)가 제안한 Action Card가 실제 운영에 도움이 됐는지 수치화합니다. v0.9.10의 Action Card lifecycle(제안→승인→실행→실패/롤백/재발) 데이터를 집계해 채택률(승인 이상 진행 / 결정), 실행 성공률(실행 / (실행+실패)), 롤백률, 재발률을 산출하고 조치 유형·위험도별로 분해합니다(`GET /admin/agent/action-outcomes`). Ops Agent 평가 센터 화면에 KPI와 유형/위험도별 표를 추가했습니다. 순수 집계 로직은 단위 테스트로, 카드 생성→lifecycle 전이→집계 전 구간은 라이브로 검증했습니다.
+
 v0.9.15:
 - **Resource Request Advisor (v0.9.15, CLU-REQ-06)**: v0.9.11의 CPU/메모리 request·상한 태그를 실제 조치로 연결합니다. OOMKilled·Pending(자원 부족)·CPU throttling·반복 재시작 같은 증상을 워크로드의 현재 request/limit·사용량 메트릭과 결합해 구체적인 request/limit 권장값을 제시합니다. 예: OOMKilled면 메모리 limit을 사용량×2(또는 현재 limit×1.5)로 상향, Pending(Insufficient memory)면 request를 사용량 기준으로 하향(또는 노드 용량 확보), CPU 사용량이 limit의 90% 이상이면 CPU limit 상향, request 미설정이면 사용량 기준 설정을 권고합니다. 사용량 기반(비용 중심) Rightsizing과 달리 '지금 실패 중인' 워크로드에 초점을 둔 보완 기능이며, 워크로드(owner) 단위로 심각도 worst-first 집계합니다(`GET /admin/k8s/resource-advisor?cluster_id=&namespace=`). 용량·자동확장 화면에 증상·권장 조치 카드를 추가했습니다. 권장은 직접 실행하지 않고 Action Center 승인 흐름으로 연결합니다. 순수 분석 로직은 단위 테스트로, 스냅샷→증상 추출→권장 전 구간은 라이브로 검증했습니다.
 

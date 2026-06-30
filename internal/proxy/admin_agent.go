@@ -518,6 +518,35 @@ func (s *Server) handleAgentEvaluations(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"evaluations": evals})
 }
 
+// handleAgentActionOutcomes serves Action Outcome Analytics (CLU-REQ-09): adoption, execution
+// success, rollback, and recurrence rates of AI-proposed Action Cards, overall and by action/risk.
+// GET /admin/agent/action-outcomes
+func (s *Server) handleAgentActionOutcomes(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	cards, err := s.db.ListK8sAgentActionCards(r.Context(), store.K8sAgentActionCardFilter{Limit: 1000})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_action_outcomes_failed")
+		return
+	}
+	samples := make([]analyzer.ActionOutcomeSample, 0, len(cards))
+	for _, c := range cards {
+		samples = append(samples, analyzer.ActionOutcomeSample{
+			Status: c.Status, Action: c.Action, Risk: c.Risk, Recurred: c.Recurred,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stats": analyzer.SummarizeActionOutcomes(samples),
+		"note":  "AI가 제안한 Action Card의 채택률·실행 성공률·롤백률·재발률입니다. 채택=승인 이상 진행, 성공=실행 중 실패 제외, 재발=조치 후 동일 문제 재발생.",
+	})
+}
+
 // handleAgentEvaluationFeedback records operator thumbs feedback on an answer (CLU-REQ-02).
 // POST /admin/agent/evaluations/feedback {id, feedback, note}
 func (s *Server) handleAgentEvaluationFeedback(w http.ResponseWriter, r *http.Request) {
