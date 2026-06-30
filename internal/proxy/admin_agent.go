@@ -127,6 +127,48 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 
 func nowK8sAgentTime() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// handleAgentActionCard builds a proposed action card (the agent proposes, never executes). The
+// returned card carries the exact action-request payload the operator submits to the Action Center
+// approval flow. POST /admin/agent/action-cards {action, kind, namespace, name}
+func (s *Server) handleAgentActionCard(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		Action    string `json:"action"`
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	if strings.TrimSpace(in.Action) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "action is required", "invalid_request_error", "missing_action")
+		return
+	}
+	card := analyzer.BuildAgentActionCard(in.Action, strings.TrimSpace(in.Kind), strings.TrimSpace(in.Namespace), strings.TrimSpace(in.Name))
+	// Approval Bridge: the payload the operator submits to the Action Center (POST
+	// /admin/k8s/actions). The agent does NOT create it automatically.
+	bridge := map[string]any{
+		"approval_endpoint": "/admin/k8s/actions",
+		"request_payload": map[string]any{
+			"action": card.Action, "resource_kind": card.Kind, "namespace": card.Namespace, "resource_name": card.Name,
+		},
+	}
+	s.auditAdmin(r, "k8s.agent.action_card", "", auditJSON(map[string]any{"action": card.Action, "target": card.Namespace + "/" + card.Kind + "/" + card.Name}))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"card": card, "approval_bridge": bridge,
+		"safety": "에이전트는 조치를 실행하지 않습니다. 이 카드를 Action Center 승인 흐름으로 제출하세요.",
+	})
+}
+
 // handleAgentSuggestions returns context-aware suggested prompts + the resolved intent for the
 // floating Ops Agent, derived from the current screen context (route + focused resource).
 // GET /admin/agent/suggestions?route=&cluster_id=&namespace=&pod=&incident_id=&stack_id=&config_name=

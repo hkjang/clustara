@@ -643,6 +643,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/agent/sessions", s.handleAgentSessions)
 	mux.HandleFunc("/admin/agent/sessions/", s.handleAgentSessionByID)
 	mux.HandleFunc("/admin/agent/messages", s.handleAgentMessages)
+	mux.HandleFunc("/admin/agent/action-cards", s.handleAgentActionCard)
 	mux.HandleFunc("/admin/notifications/mattermost", s.handleMattermostConfig)
 	mux.HandleFunc("/admin/notifications/mattermost/test", s.handleMattermostTest)
 	mux.HandleFunc("/integrations/mattermost/command", s.handleMattermostCommand) // ChatOps inbound (token-verified, public)
