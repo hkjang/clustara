@@ -1,3 +1,6 @@
+v0.9.35:
+- **Workspace Template + Exposure/Observability Apply Bridge (v0.9.35, CLU-NEXT-10·11·14)**: 생성→기존 Stack Apply 승인 흐름으로 잇는 세 가지를 추가했습니다. (10) Workspace 생성 템플릿: 신규 업무 namespace의 표준 매니페스트(Namespace+오너 라벨·ResourceQuota·LimitRange·옵션 default-deny NetworkPolicy)를 생성하는 순수 생성기(`GET /admin/k8s/workspace-template`). (14) Observability Apply: 생성된 ServiceMonitor 템플릿에 Stack Apply 제출 브리지(`apply_bridge`)를 추가해 적용 요청으로 전환. (11) Exposure Change: 외부 노출(Ingress/Gateway/Service) 변경을 수정 매니페스트의 Stack Apply(정책·위험 검증→승인) 흐름으로 안내하는 `change_bridge` 추가. 운영 홈에 Workspace 템플릿 생성 카드를 추가했습니다. 생성 로직(`GenerateWorkspaceTemplate`)은 단위 테스트로, 템플릿·apply bridge는 라이브로 검증했습니다. 어느 경로도 클러스터를 직접 변경하지 않고 Stack Apply 검증·승인을 거칩니다.
+
 v0.9.34:
 - **Discovery 활성화 — Dynamic Target + MCP Candidate Activation (v0.9.34, CLU-NEXT-15·16)**: v0.9.24가 생성한 동적 수집 대상 후보와 read-only MCP 도구 후보를 운영자가 클러스터별로 활성화/비활성화하는 큐레이션 allow-list를 추가했습니다. 활성화 상태를 영속화(`k8s_discovery_activations`, upsert)하고 discovery 응답의 `target_views`·`tool_views`에 `activated` 플래그로 반영하며, `수집 상태` 화면의 Discovery 카드에서 대상/도구별로 토글합니다(`POST /admin/k8s/discovery/activate`). 이 상태는 향후 collector per-target 수집·MCP 게이트웨이 등록 enforcement가 소비할 allow-list이며, 실제 enforcement 배선은 다음 단계입니다. 활성화 upsert·필터 라운드트립은 store 테스트로, 토글 영속은 라이브로 검증했습니다.
 

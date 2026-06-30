@@ -6591,6 +6591,7 @@ const adminHTML = `<!doctype html>
         renderImageLedgerCard(imgResp) +
         renderLifecycleCard(lifeResp) +
         renderGovernanceCard(secxResp, promoResp, wsClusterId) +
+        renderWorkspaceTemplateCard() +
         renderObservabilityCard(wsClusterId) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
@@ -6708,6 +6709,32 @@ const adminHTML = `<!doctype html>
         '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(imgResp.note || '') + '</div>' + drift +
         '<h4 style="margin:10px 0 4px">이미지 목록</h4><table><thead><tr><th></th><th>image</th><th>digest</th><th>워크로드</th></tr></thead><tbody>' +
         (entries || '<tr><td colspan="4" class="muted">이미지 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Workspace Template (CLU-NEXT-10): generate a governed-namespace manifest set.
+    window.k8sWsTemplate = async () => {
+      const out = document.getElementById('wstpl-out');
+      const q = new URLSearchParams({
+        namespace: (document.getElementById('wstpl-ns').value || '').trim(),
+        team: (document.getElementById('wstpl-team').value || '').trim(),
+        environment: (document.getElementById('wstpl-env').value || '').trim(),
+        cpu: (document.getElementById('wstpl-cpu').value || '').trim(),
+        mem: (document.getElementById('wstpl-mem').value || '').trim(),
+        pods: (document.getElementById('wstpl-pods').value || '').trim(),
+        default_deny: document.getElementById('wstpl-deny').checked ? 'true' : 'false',
+      });
+      if (out) out.textContent = '생성 중…';
+      try { const d = await api('/admin/k8s/workspace-template?' + q.toString()); if (out) out.textContent = (d.template && d.template.manifest) || ''; }
+      catch (e) { if (out) out.textContent = '실패: ' + e.message; }
+    };
+    function renderWorkspaceTemplateCard() {
+      return card('Workspace 생성 템플릿 (CLU-NEXT-10)',
+        '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:6px">신규 업무 Workspace의 표준 매니페스트(Namespace·Quota·LimitRange·NetworkPolicy)를 생성합니다. 앱 배포(Stack)로 검증·승인 후 적용하세요.</div>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">' +
+        '<input id="wstpl-ns" placeholder="namespace" style="width:130px"><input id="wstpl-team" placeholder="team" style="width:100px"><input id="wstpl-env" placeholder="env" style="width:80px">' +
+        '<input id="wstpl-cpu" placeholder="cpu(예 8)" style="width:90px"><input id="wstpl-mem" placeholder="mem(예 16Gi)" style="width:100px"><input id="wstpl-pods" placeholder="pods(예 40)" style="width:100px">' +
+        '<label style="font-size:11px"><input type="checkbox" id="wstpl-deny" checked> default-deny</label>' +
+        '<button type="button" onclick="k8sWsTemplate()">생성</button></div>' +
+        '<pre id="wstpl-out" style="max-height:240px;overflow:auto;font-size:11px;white-space:pre-wrap;margin-top:8px">필드 입력 후 생성하세요.</pre></div>');
     }
     // Governance workflows (CLU-NEXT-12/13): security exceptions + image promotions.
     window.k8sSecxCreate = async (cid) => {

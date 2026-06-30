@@ -42,6 +42,7 @@ func (s *Server) handleK8sObservability(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"profile":       prof,
 		"service_types": analyzer.SupportedObservabilityTypes(),
+		"apply_bridge":  map[string]any{"submit_to": "/admin/k8s/stacks", "manifest": prof.ServiceMonitorYAML, "note": "생성된 ServiceMonitor를 앱 배포(Stack)로 저장→검증→승인→적용하세요 (CLU-NEXT-14)."},
 		"note":          "생성된 템플릿입니다. 적용 전 selector label과 metrics port를 워크로드에 맞게 확인하세요. Clustara는 클러스터를 변경하지 않습니다.",
 	})
 }

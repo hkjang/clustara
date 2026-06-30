@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.34** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.35** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.34)
+## 기능 상태 (v0.9.35)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -77,6 +77,7 @@
 | Security Exception Workflow — 런타임 보안 위험 예외 요청·승인·자동 만료(`/admin/k8s/security-exceptions`, CLU-NEXT-12) | ✅ (v0.9.33) |
 | Image Promotion — 환경 간 digest 기반 이미지 승격 요청·승인(mutable 태그 거부, `/admin/k8s/image-promotions`, CLU-NEXT-13) | ✅ (v0.9.33) |
 | Discovery 활성화 (Dynamic Target + MCP Candidate Activation) — 발견된 수집 대상·MCP 도구 후보를 클러스터별 활성화 allow-list로 큐레이션(enforcement는 후속, `/admin/k8s/discovery/activate`, CLU-NEXT-15·16) | ✅ (v0.9.34) |
+| Workspace Template + Exposure/Observability Apply Bridge — 신규 Workspace 표준 매니페스트 생성 + 노출/관측 변경을 Stack Apply 승인 흐름으로 연결(`/admin/k8s/workspace-template`, CLU-NEXT-10·11·14) | ✅ (v0.9.35) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 

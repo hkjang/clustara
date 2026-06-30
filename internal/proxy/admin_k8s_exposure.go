@@ -52,7 +52,8 @@ func (s *Server) handleK8sExposures(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exposures": findings,
 		"summary":   analyzer.SummarizeExposure(findings),
-		"note":      "외부 노출 리소스(Ingress·LoadBalancer/NodePort Service)와 TLS·wildcard·민감 경로 노출 위험입니다(OpenShift Route 스타일). 위험 순으로 정렬됩니다.",
+		"change_bridge": map[string]any{"submit_to": "/admin/k8s/stacks", "note": "노출(Ingress/Gateway/Service) 변경은 수정한 매니페스트를 앱 배포(Stack)로 검증(정책·위험)→승인→적용하세요 (CLU-NEXT-11)."},
+		"note":      "외부 노출 리소스(Ingress·LoadBalancer/NodePort Service)와 TLS·wildcard·민감 경로 노출 위험입니다(OpenShift Route 스타일). 위험 순으로 정렬됩니다. 변경은 Stack Apply 승인 흐름으로 진행하세요.",
 	})
 }
 
