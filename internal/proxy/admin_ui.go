@@ -6524,8 +6524,12 @@ const adminHTML = `<!doctype html>
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
       const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
-      let wsResp = null;
-      if (wsClusterId) { try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; } }
+      let wsResp = null, expResp = null, secResp = null;
+      if (wsClusterId) {
+        try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; }
+        try { expResp = await api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { expResp = null; }
+        try { secResp = await api('/admin/k8s/runtime-security?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { secResp = null; }
+      }
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
       const freshness = d.data_freshness || {};
@@ -6575,6 +6579,8 @@ const adminHTML = `<!doctype html>
           kpi('Inventory', fmt(freshness.inventory_items || 0)) +
           kpi('Agent', escapeHTML(agentText)) + '</div>') +
         renderWorkspaceCard(wsResp, clusterList, wsClusterId) +
+        renderExposureCard(expResp) +
+        renderRuntimeSecurityCard(secResp) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
         card('장애 후보 TOP 10',
@@ -6623,6 +6629,49 @@ const adminHTML = `<!doctype html>
         '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">' + escapeHTML(wsResp.note || '') + picker + '</div>' + kpis +
         '<table><thead><tr><th>건강도</th><th>Workspace</th><th>Pod</th><th>incident</th><th>Quota</th><th>보안</th><th>사유</th></tr></thead><tbody>' +
         (rows || '<tr><td colspan="7" class="muted">워크스페이스 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Exposure Center (CLU-OCP-02): external-exposure risk overview (OpenShift Route style).
+    function renderExposureCard(expResp) {
+      if (!expResp || !expResp.summary) return '';
+      const s = expResp.summary;
+      if (!s.total) return '';
+      const ex = expResp.exposures || [];
+      const lvl = (l) => '<span class="status ' + (l === 'high' ? 'error' : (l === 'medium' ? 'warn' : '')) + '">' + escapeHTML(l) + '</span>';
+      const kpis = '<div class="kpis">' +
+        kpi('노출 리소스', fmt(s.total || 0)) + kpi('high', fmt(s.high || 0)) + kpi('medium', fmt(s.medium || 0)) +
+        kpi('평문(no TLS)', fmt(s.plaintext || 0)) + kpi('wildcard', fmt(s.wildcard || 0)) + '</div>';
+      const rows = ex.slice(0, 40).map(e =>
+        '<tr><td>' + lvl(e.risk_level) + ' ' + fmt(e.risk_score) + '</td>' +
+        '<td>' + escapeHTML(e.kind) + '</td>' +
+        '<td><strong>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</strong></td>' +
+        '<td style="font-size:11px">' + escapeHTML((e.hosts || []).join(', ') || '-') + (e.tls ? ' <span class="status" style="font-size:9px">TLS</span>' : '') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((e.risk_reasons || []).join(', ')) + '</td></tr>').join('');
+      return card('외부 노출 (Exposure Center · OpenShift Route 스타일)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(expResp.note || '') + '</div>' +
+        '<table><thead><tr><th>위험</th><th>kind</th><th>리소스</th><th>host</th><th>사유</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="5" class="muted">외부 노출 리소스 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Runtime Security Profile (CLU-OCP-03): per-Pod security scoring (OpenShift SCC style).
+    function renderRuntimeSecurityCard(secResp) {
+      if (!secResp || !secResp.summary) return '';
+      const s = secResp.summary;
+      if (!s.total) return '';
+      const fs = secResp.findings || [];
+      const lvl = (l) => '<span class="status ' + (l === 'high' ? 'error' : (l === 'medium' ? 'warn' : '')) + '">' + escapeHTML(l) + '</span>';
+      const kpis = '<div class="kpis">' +
+        kpi('Pod', fmt(s.total || 0)) + kpi('high', fmt(s.high || 0)) + kpi('medium', fmt(s.medium || 0)) +
+        kpi('privileged', fmt(s.privileged || 0)) + kpi('baseline', fmt(s.baseline || 0)) + kpi('restricted', fmt(s.restricted || 0)) + '</div>';
+      const rows = fs.slice(0, 40).map(f =>
+        '<tr><td>' + lvl(f.risk_level) + ' ' + fmt(f.risk_score) + '</td>' +
+        '<td><strong>' + escapeHTML((f.namespace || '-') + '/' + f.pod) + '</strong>' + (f.owner ? '<div class="muted" style="font-size:10px">' + escapeHTML(f.owner) + '</div>' : '') + '</td>' +
+        '<td><span class="status ' + (f.profile === 'privileged' ? 'error' : (f.profile === 'baseline' ? 'warn' : '')) + '" style="font-size:9px">' + escapeHTML(f.profile) + '</span></td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((f.findings || []).join(', ')) + '</td></tr>').join('');
+      return card('런타임 보안 프로파일 (Runtime Security · OpenShift SCC 스타일)',
+        '<div class="card-body">' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(secResp.note || '') + '</div>' +
+        '<table><thead><tr><th>위험</th><th>Pod</th><th>프로파일</th><th>위험 설정</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="4" class="muted">위험 Pod 없음</td></tr>') + '</tbody></table></div>');
     }
     function k8sRegisterGuideHTML() {
       return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">' +
