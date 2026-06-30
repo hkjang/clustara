@@ -1426,6 +1426,14 @@ const adminHTML = `<!doctype html>
                   m.scrollTop = m.scrollHeight;
                 } else if (chunk.event === 'error') {
                   contentDiv.innerHTML = '<span class="status error">' + escapeHTML(chunk.message) + '</span>';
+                } else if (chunk.choices && chunk.choices.length > 0) {
+                  const delta = chunk.choices[0].delta || {};
+                  const text = delta.content || '';
+                  if (text) {
+                    accumulatedAnswer += text;
+                    contentDiv.textContent = accumulatedAnswer;
+                    m.scrollTop = m.scrollHeight;
+                  }
                 }
               } catch (e) {
                 console.error('Error parsing stream chunk:', e);
