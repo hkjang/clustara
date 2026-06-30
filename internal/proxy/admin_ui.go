@@ -1435,7 +1435,45 @@ const adminHTML = `<!doctype html>
                   llmAvailable = chunk.llm_available !== false;
                 } else if (chunk.event === 'delta') {
                   accumulatedAnswer += chunk.content || '';
-                  contentDiv.textContent = accumulatedAnswer;
+                  
+                  let displayAnswer = accumulatedAnswer;
+                  let displayReasoning = accumulatedReasoning;
+
+                  if (displayAnswer.includes('<think>')) {
+                    const parts = displayAnswer.split('<think>');
+                    const before = parts[0];
+                    const rest = parts.slice(1).join('<think>');
+                    if (rest.includes('</think>')) {
+                      const subparts = rest.split('</think>');
+                      displayReasoning += (displayReasoning ? '\n' : '') + subparts[0];
+                      displayAnswer = before + subparts.slice(1).join('</think>');
+                    } else {
+                      displayReasoning += (displayReasoning ? '\n' : '') + rest;
+                      displayAnswer = before;
+                    }
+                  }
+
+                  const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
+                  for (const prefix of prefixes) {
+                    if (displayAnswer.trim().startsWith(prefix)) {
+                      const raw = displayAnswer.trim().slice(prefix.length).trim();
+                      displayReasoning += (displayReasoning ? '\n' : '') + raw;
+                      displayAnswer = '';
+                      break;
+                    }
+                  }
+
+                  if (displayReasoning) {
+                    if (reasoningDiv.style.display === 'none') {
+                      reasoningDiv.style.display = 'block';
+                    }
+                    reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
+                    if (displayAnswer.trim() && reasoningDiv.open) {
+                      reasoningDiv.open = false;
+                    }
+                  }
+
+                  contentDiv.innerHTML = renderMarkdown(displayAnswer);
                   m.scrollTop = m.scrollHeight;
                 } else if (chunk.event === 'error') {
                   contentDiv.innerHTML = '<span class="status error">' + escapeHTML(chunk.message) + '</span>';
@@ -1454,11 +1492,46 @@ const adminHTML = `<!doctype html>
 
                   const text = delta.content || '';
                   if (text) {
-                    if (reasoningDiv.style.display !== 'none' && reasoningDiv.open) {
-                      reasoningDiv.open = false;
-                    }
                     accumulatedAnswer += text;
-                    contentDiv.textContent = accumulatedAnswer;
+
+                    let displayAnswer = accumulatedAnswer;
+                    let displayReasoning = accumulatedReasoning;
+
+                    if (displayAnswer.includes('<think>')) {
+                      const parts = displayAnswer.split('<think>');
+                      const before = parts[0];
+                      const rest = parts.slice(1).join('<think>');
+                      if (rest.includes('</think>')) {
+                        const subparts = rest.split('</think>');
+                        displayReasoning += (displayReasoning ? '\n' : '') + subparts[0];
+                        displayAnswer = before + subparts.slice(1).join('</think>');
+                      } else {
+                        displayReasoning += (displayReasoning ? '\n' : '') + rest;
+                        displayAnswer = before;
+                      }
+                    }
+
+                    const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
+                    for (const prefix of prefixes) {
+                      if (displayAnswer.trim().startsWith(prefix)) {
+                        const raw = displayAnswer.trim().slice(prefix.length).trim();
+                        displayReasoning += (displayReasoning ? '\n' : '') + raw;
+                        displayAnswer = '';
+                        break;
+                      }
+                    }
+
+                    if (displayReasoning) {
+                      if (reasoningDiv.style.display === 'none') {
+                        reasoningDiv.style.display = 'block';
+                      }
+                      reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
+                      if (displayAnswer.trim() && reasoningDiv.open) {
+                        reasoningDiv.open = false;
+                      }
+                    }
+
+                    contentDiv.innerHTML = renderMarkdown(displayAnswer);
                     m.scrollTop = m.scrollHeight;
                   }
                 }

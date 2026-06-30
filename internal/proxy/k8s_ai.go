@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,9 +135,19 @@ func (s *Server) handleK8sAIAsk(w http.ResponseWriter, r *http.Request) {
 	evidence := gatherK8sEvidence(p.Namespace, p.Name, rca, events, diff)
 	prompt := composeK8sAIPrompt(p.Question, evidence)
 
-	maxTokens := int64(s.limitsConf().AgentMaxTokens)
-	if maxTokens <= 0 {
-		maxTokens = 16384
+	maxTokens := int64(16384)
+	if val, found, err := s.db.GetAdminSetting(r.Context(), "limits.agent_max_tokens"); err == nil && found {
+		var decoded string
+		if json.Unmarshal([]byte(val.ValueJSON), &decoded) != nil {
+			decoded = val.ValueJSON
+		}
+		if n, err := strconv.Atoi(decoded); err == nil && n > 0 {
+			maxTokens = int64(n)
+		}
+	} else {
+		if limit := s.limitsConf().AgentMaxTokens; limit > 0 {
+			maxTokens = int64(limit)
+		}
 	}
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, maxTokens, nil)
 	resp := map[string]any{"evidence": evidence, "grounded": true}
@@ -186,9 +197,19 @@ func (s *Server) handleK8sAIReport(w http.ResponseWriter, r *http.Request) {
 	}
 	prompt := composeK8sAIPrompt("이 클러스터의 운영 상태를 경영진 보고용으로 요약하고, 우선 조치 3가지를 제안하세요.", evidence)
 
-	maxTokens := int64(s.limitsConf().AgentMaxTokens)
-	if maxTokens <= 0 {
-		maxTokens = 16384
+	maxTokens := int64(16384)
+	if val, found, err := s.db.GetAdminSetting(r.Context(), "limits.agent_max_tokens"); err == nil && found {
+		var decoded string
+		if json.Unmarshal([]byte(val.ValueJSON), &decoded) != nil {
+			decoded = val.ValueJSON
+		}
+		if n, err := strconv.Atoi(decoded); err == nil && n > 0 {
+			maxTokens = int64(n)
+		}
+	} else {
+		if limit := s.limitsConf().AgentMaxTokens; limit > 0 {
+			maxTokens = int64(limit)
+		}
 	}
 	answer, llmErr := s.workflowChatStep(r, "clustara/auto", prompt, maxTokens, nil)
 	resp := map[string]any{"evidence": evidence}

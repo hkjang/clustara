@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,9 +111,19 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 	prompt := composeK8sAIPrompt(in.Question, evidence)
 	toolPlan := analyzer.PlanAgentTools(intent, pctx)
 
-	maxTokens := int64(s.limitsConf().AgentMaxTokens)
-	if maxTokens <= 0 {
-		maxTokens = 16384
+	maxTokens := int64(16384)
+	if val, found, err := s.db.GetAdminSetting(r.Context(), "limits.agent_max_tokens"); err == nil && found {
+		var decoded string
+		if json.Unmarshal([]byte(val.ValueJSON), &decoded) != nil {
+			decoded = val.ValueJSON
+		}
+		if n, err := strconv.Atoi(decoded); err == nil && n > 0 {
+			maxTokens = int64(n)
+		}
+	} else {
+		if limit := s.limitsConf().AgentMaxTokens; limit > 0 {
+			maxTokens = int64(limit)
+		}
 	}
 
 	isStream := r.URL.Query().Get("stream") == "true"
