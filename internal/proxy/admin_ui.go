@@ -1232,7 +1232,7 @@ const adminHTML = `<!doctype html>
           case 'sbom':      await renderSBOMView(); break;
           case 'journey-probe': await renderJourneyProbeView(); break;
           case 'pods':      await renderPodsView(); break;
-          case 'k8s-home':  await renderK8sHome(); break;
+          case 'k8s-home':  await renderK8sHome(params); break;
           case 'k8s':       await renderK8sOperations(); break;
           case 'k8s-pods': await renderK8sPods(params); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
@@ -6516,12 +6516,16 @@ const adminHTML = `<!doctype html>
       return '<a href="' + escapeAttr(href) + '">' + escapeHTML(label || pod || '') + '</a>';
     }
     // ---------- K8s 운영 홈: 위험 TOP5 / 장애후보 TOP10 / 최근변경 TOP10 (섹션 7) ----------
-    async function renderK8sHome() {
+    async function renderK8sHome(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 홈', '<div class="empty">불러오는 중...</div>');
-      let d;
+      let d, clusterList = [];
       try { d = await api('/admin/k8s/home'); }
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
+      const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
+      let wsResp = null;
+      if (wsClusterId) { try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; } }
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
       const freshness = d.data_freshness || {};
@@ -6570,6 +6574,7 @@ const adminHTML = `<!doctype html>
           kpi('최근 변경', fmt((d.recent_changes || []).length)) +
           kpi('Inventory', fmt(freshness.inventory_items || 0)) +
           kpi('Agent', escapeHTML(agentText)) + '</div>') +
+        renderWorkspaceCard(wsResp, clusterList, wsClusterId) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
         card('장애 후보 TOP 10',
@@ -6592,6 +6597,33 @@ const adminHTML = `<!doctype html>
       scheduleK8sHomeRefresh();
     }
 
+    // Workspace Center (CLU-OCP-01): namespace-as-business-unit health overview on the home.
+    window.k8sWorkspaceClusterGo = (cid) => { location.hash = '#/k8s-home' + (cid ? '?ws_cluster=' + encodeURIComponent(cid) : ''); };
+    function renderWorkspaceCard(wsResp, clusters, selectedId) {
+      const opts = (clusters || []).map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === selectedId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+      const picker = (clusters || []).length > 1 ? '<select onchange="k8sWorkspaceClusterGo(this.value)" style="margin-left:8px">' + opts + '</select>' : '';
+      if (!wsResp || !wsResp.summary) {
+        return card('워크스페이스 (업무 단위 · OpenShift Project 스타일)', '<div class="card-body"><p class="muted" style="font-size:12px">표시할 워크스페이스가 없습니다. 클러스터 인벤토리를 수집하세요. ' + picker + '</p></div>');
+      }
+      const s = wsResp.summary;
+      const ws = wsResp.workspaces || [];
+      const bandBadge = (b) => '<span class="status ' + (b === 'critical' ? 'error' : (b === 'warning' ? 'warn' : '')) + '">' + escapeHTML(b) + '</span>';
+      const kpis = '<div class="kpis">' +
+        kpi('워크스페이스', fmt(s.total || 0)) + kpi('위험', fmt(s.critical || 0)) + kpi('주의', fmt(s.warning || 0)) +
+        kpi('정상', fmt(s.healthy || 0)) + kpi('외부 노출', fmt(s.exposed || 0)) + kpi('미해결 incident', fmt(s.incidents || 0)) + '</div>';
+      const rows = ws.slice(0, 40).map(w =>
+        '<tr><td>' + bandBadge(w.band) + ' ' + fmt(w.score) + '</td>' +
+        '<td><strong>' + escapeHTML(w.namespace) + '</strong>' + (w.owner_team ? ' <span class="muted" style="font-size:10px">' + escapeHTML(w.owner_team) + '</span>' : '') + (w.exposed ? ' <span class="status warn" style="font-size:9px">노출</span>' : '') + '</td>' +
+        '<td>' + fmt(w.pod_total || 0) + (w.pod_critical ? ' <span class="status error" style="font-size:9px">' + fmt(w.pod_critical) + ' crit</span>' : '') + (w.pod_warning ? ' <span class="status warn" style="font-size:9px">' + fmt(w.pod_warning) + ' warn</span>' : '') + '</td>' +
+        '<td>' + (w.open_incidents ? '<span class="status error" style="font-size:10px">' + fmt(w.open_incidents) + '</span>' : '-') + '</td>' +
+        '<td>' + (w.quota_used_pct >= 0 ? fmt(Math.round(w.quota_used_pct)) + '%' : '-') + '</td>' +
+        '<td>' + (w.security_findings ? '<span class="status warn" style="font-size:10px">' + fmt(w.security_findings) + '</span>' : '-') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((w.reasons || []).join(', ')) + '</td></tr>').join('');
+      return card('워크스페이스 (업무 단위 · OpenShift Project 스타일)' + (picker ? '' : ''),
+        '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">' + escapeHTML(wsResp.note || '') + picker + '</div>' + kpis +
+        '<table><thead><tr><th>건강도</th><th>Workspace</th><th>Pod</th><th>incident</th><th>Quota</th><th>보안</th><th>사유</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="7" class="muted">워크스페이스 없음</td></tr>') + '</tbody></table></div>');
+    }
     function k8sRegisterGuideHTML() {
       return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">' +
         '<div style="border:1px solid var(--border);border-radius:8px;padding:12px">' +

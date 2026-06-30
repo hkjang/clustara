@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.25"
+const AppVersion = "v0.9.26"
 
 type Server struct {
 	cfg            config.Config
@@ -285,6 +285,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/collection-cost", s.handleK8sCollectionCost)
 	mux.HandleFunc("/admin/k8s/discovery", s.handleK8sDiscovery)
 	mux.HandleFunc("/admin/k8s/discovery/compare", s.handleK8sDiscoveryCompare)
+	mux.HandleFunc("/admin/k8s/workspaces", s.handleK8sWorkspaces)
 	mux.HandleFunc("/admin/k8s/pods", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/pods/", s.handleK8sPods)
 	mux.HandleFunc("/admin/k8s/inventory", s.handleK8sInventory)
