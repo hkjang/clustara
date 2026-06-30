@@ -6524,12 +6524,13 @@ const adminHTML = `<!doctype html>
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
       const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
-      let wsResp = null, expResp = null, secResp = null, imgResp = null;
+      let wsResp = null, expResp = null, secResp = null, imgResp = null, lifeResp = null;
       if (wsClusterId) {
         try { wsResp = await api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { wsResp = null; }
         try { expResp = await api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { expResp = null; }
         try { secResp = await api('/admin/k8s/runtime-security?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { secResp = null; }
         try { imgResp = await api('/admin/k8s/image-ledger?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { imgResp = null; }
+        try { lifeResp = await api('/admin/k8s/lifecycle?cluster_id=' + encodeURIComponent(wsClusterId)); } catch (_) { lifeResp = null; }
       }
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = (o) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: o.cluster_id || '', namespace: o.namespace || '', name: o.resource_name || o.name || '', kind: o.resource_kind || o.kind || '' }).toString();
@@ -6583,6 +6584,8 @@ const adminHTML = `<!doctype html>
         renderExposureCard(expResp) +
         renderRuntimeSecurityCard(secResp) +
         renderImageLedgerCard(imgResp) +
+        renderLifecycleCard(lifeResp) +
+        renderObservabilityCard(wsClusterId) +
         card('클러스터 위험 TOP 5',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>위험 점수</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
         card('장애 후보 TOP 10',
@@ -6699,6 +6702,50 @@ const adminHTML = `<!doctype html>
         '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(imgResp.note || '') + '</div>' + drift +
         '<h4 style="margin:10px 0 4px">이미지 목록</h4><table><thead><tr><th></th><th>image</th><th>digest</th><th>워크로드</th></tr></thead><tbody>' +
         (entries || '<tr><td colspan="4" class="muted">이미지 없음</td></tr>') + '</tbody></table></div>');
+    }
+    // Platform Lifecycle Center (CLU-OCP-08): upgrade readiness (OpenShift ClusterVersion style).
+    function renderLifecycleCard(lifeResp) {
+      const rd = lifeResp && lifeResp.readiness;
+      if (!rd) return '';
+      const lvl = rd.level === 'blocked' ? 'error' : (rd.level === 'caution' ? 'warn' : '');
+      const kpis = '<div class="kpis">' +
+        kpi('업그레이드 준비도', fmt(rd.score) + '/100') +
+        kpi('상태', '') +
+        kpi('K8s', escapeHTML(rd.kubernetes_version || '-')) +
+        kpi('deprecated API', fmt(rd.deprecated_apis || 0)) +
+        kpi('버전 skew', fmt((rd.version_skew || []).length)) +
+        kpi('노드', fmt(lifeResp.node_count || 0)) + '</div>';
+      const blockers = (rd.blockers || []).length
+        ? '<div class="status error" style="margin:0 0 8px;display:inline-block">차단 요인: ' + escapeHTML((rd.blockers || []).join(' · ')) + '</div>' : '';
+      const dep = (lifeResp.deprecated || []).length
+        ? '<table><thead><tr><th>group/version</th><th>제거</th><th>대체</th></tr></thead><tbody>' +
+          (lifeResp.deprecated || []).map(d => '<tr><td><span class="status error" style="font-size:9px">' + escapeHTML(d.group_version) + '</span></td><td>k8s ' + escapeHTML(d.removed_in) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(d.replacement) + '</td></tr>').join('') + '</tbody></table>'
+        : '<div class="muted" style="font-size:11px">deprecated API 없음 (또는 API 탐색 미수집)</div>';
+      return card('플랫폼 생명주기 (Platform Lifecycle · 업그레이드 준비도)',
+        '<div class="card-body"><div><span class="status ' + lvl + '">' + escapeHTML(rd.level) + '</span></div>' + kpis +
+        '<div class="muted" style="font-size:11px;margin:4px 0 8px">' + escapeHTML(lifeResp.note || '') + '</div>' + blockers + dep +
+        ((rd.version_skew || []).length ? '<div class="muted" style="font-size:11px;margin-top:6px">kubelet skew: ' + escapeHTML((rd.version_skew || []).join(', ')) + '</div>' : '') + '</div>');
+    }
+    // Built-in Observability Profile (CLU-OCP-10): template generator (OpenShift Monitoring style).
+    window.k8sGenObs = async (cid, st) => {
+      const out = document.getElementById('obs-out');
+      if (out) out.textContent = '생성 중…';
+      try {
+        const q = new URLSearchParams({ service_type: st });
+        const d = await api('/admin/k8s/observability?' + q.toString());
+        const p = d.profile || {};
+        const alerts = (p.alert_rules || []).map(a => '# [' + a.severity + '] ' + a.name + ' (for ' + a.for + ')\n# ' + a.summary + '\n' + a.expr).join('\n\n');
+        const slos = (p.slos || []).map(s => '- ' + s.name + ': ' + s.sli + ' → ' + s.objective + ' / ' + s.window).join('\n');
+        if (out) out.textContent = '# ServiceMonitor\n' + (p.service_monitor_yaml || '') + '\n# Alert Rules\n' + alerts + '\n\n# SLOs\n' + slos;
+      } catch (e) { if (out) out.textContent = '실패: ' + e.message; }
+    };
+    function renderObservabilityCard(cid) {
+      const types = ['web', 'api', 'batch', 'db_client', 'gpu', 'generic'];
+      const btns = types.map(t => '<button type="button" class="secondary" style="font-size:11px" onclick="k8sGenObs(\'' + escapeAttr(cid || '') + '\',\'' + t + '\')">' + t + '</button>').join(' ');
+      return card('관측 템플릿 (Observability Profile · OpenShift Monitoring 스타일)',
+        '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:6px">서비스 유형별 ServiceMonitor·Alert·SLO 템플릿을 생성합니다(클러스터 미변경, 적용은 운영자가 직접).</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">' + btns + '</div>' +
+        '<pre id="obs-out" style="max-height:280px;overflow:auto;font-size:11px;white-space:pre-wrap">서비스 유형을 선택하면 템플릿이 생성됩니다.</pre></div>');
     }
     function k8sRegisterGuideHTML() {
       return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">' +

@@ -1,3 +1,6 @@
+v0.9.29:
+- **Platform Lifecycle Center + Observability Profile (v0.9.29, CLU-OCP-08·10)**: (1) Platform Lifecycle: 클러스터 업그레이드 준비도를 deprecated/removed API 사용(Discovery 레이더 재사용)·노드 kubelet 버전 skew·미해결 critical incident로 종합해 ready/caution/blocked 점수와 차단 요인을 산출합니다(`GET /admin/k8s/lifecycle`). (2) Observability Profile: 서비스 유형(web·api·batch·db_client·gpu·generic)별 Prometheus-Operator ServiceMonitor·Alert 규칙·SLO 템플릿을 생성하는 순수 생성기입니다 — 클러스터를 변경하지 않고 적용용 YAML/템플릿만 반환합니다(`GET /admin/k8s/observability?service_type=`). 운영 홈에 업그레이드 준비도 카드와 관측 템플릿 생성 카드를 추가했습니다. 점수/생성 로직(`ScoreUpgradeReadiness`·`GenerateObservabilityProfile`)은 단위 테스트로 검증했습니다.
+
 v0.9.28:
 - **Image Stream Ledger (v0.9.28, CLU-OCP-04)**: OpenShift ImageStream 개념을 범용 digest 원장으로 흡수했습니다. 실행 중인 Pod의 컨테이너 이미지를 워크로드별로 추적해 registry·repository·tag·digest를 기록하고, mutable 태그(latest/main 등·digest 미고정)와 digest 고정 여부를 표시합니다. 핵심은 tag drift 탐지 — 같은 `repository:tag`가 클러스터 내에서 서로 다른 digest로 해석되는 경우(태그 이동, '한 파드는 되고 다른 파드는 안 되는' 함정)를 spec 이미지 + status containerStatuses의 imageID(해석된 digest)로 잡아냅니다(`GET /admin/k8s/image-ledger`). 운영 홈에 이미지 원장·tag drift 카드를 추가했습니다. 파싱·드리프트 로직(`BuildImageLedger`·`isMutableTag`)은 단위 테스트로 검증했습니다.
 
