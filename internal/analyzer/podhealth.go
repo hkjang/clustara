@@ -13,15 +13,18 @@ import (
 // PodHealthInput carries the parsed Pod signals (the caller maps its Pod view onto these primitives
 // so this stays decoupled from the proxy/store types).
 type PodHealthInput struct {
-	Phase            string   // Running | Pending | Failed | Succeeded | ...
-	ContainerCount   int      // total containers (init+app) with status
-	ReadyCount       int      // ready containers
-	RestartCount     int      // summed restart count
-	WarningEvents    int      // matched Warning events
-	RiskLevel        string   // inventory risk: low|medium|high|critical
-	RecentChange     bool     // a recent deploy/config change correlated to this pod
-	Deleting         bool     // has a deletion timestamp (Terminating)
-	ContainerReasons []string // waiting/terminated reasons across containers (current + last state)
+	Phase                 string   // Running | Pending | Failed | Succeeded | ...
+	ContainerCount        int      // total containers (init+app) with status
+	ReadyCount            int      // ready containers
+	RestartCount          int      // summed restart count
+	RecentRestartCount    int      // restart count that still has recent/current evidence
+	RestartRecencyKnown   bool     // when true, RestartCount without RecentRestartCount is treated as historical
+	RestartAlertThreshold int      // recent restart count at/above this value becomes a symptom (default 3)
+	WarningEvents         int      // matched Warning events
+	RiskLevel             string   // inventory risk: low|medium|high|critical
+	RecentChange          bool     // a recent deploy/config change correlated to this pod
+	Deleting              bool     // has a deletion timestamp (Terminating)
+	ContainerReasons      []string // waiting/terminated reasons across containers (current + last state)
 }
 
 // PodHealth is the scored result with an explainable breakdown.
@@ -88,10 +91,26 @@ func ScorePodHealth(in PodHealthInput) PodHealth {
 		}
 	}
 
-	if in.RestartCount > 0 {
-		p := minInt(30, in.RestartCount*5)
+	restartScoreCount := in.RestartCount
+	if in.RestartRecencyKnown {
+		restartScoreCount = in.RecentRestartCount
+	}
+	if restartScoreCount > 0 {
+		p := minInt(35, restartScoreCount*6)
 		score -= p
-		factors = append(factors, "재시작 "+strconv.Itoa(in.RestartCount)+"회 (-"+strconv.Itoa(p)+")")
+		factors = append(factors, "최근 재시작 징후 "+strconv.Itoa(restartScoreCount)+"회 (-"+strconv.Itoa(p)+")")
+		threshold := in.RestartAlertThreshold
+		if threshold <= 0 {
+			threshold = 3
+		}
+		if restartScoreCount >= threshold {
+			symptoms = append(symptoms, "RecentRestart")
+			if primary == "" {
+				primary = "RecentRestart"
+			}
+		}
+	} else if in.RestartRecencyKnown && in.RestartCount > 0 {
+		factors = append(factors, "과거 재시작 "+strconv.Itoa(in.RestartCount)+"회 — 현재 안정 상태로 보정")
 	}
 	if in.WarningEvents > 0 {
 		p := minInt(20, in.WarningEvents*5)

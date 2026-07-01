@@ -12,28 +12,31 @@ import (
 
 // RestartStormPod is one Pod's restart signal, mapped from the caller's Pod view.
 type RestartStormPod struct {
-	Namespace    string
-	Name         string
-	OwnerKind    string
-	OwnerName    string
-	RestartCount int
-	Unhealthy    bool         // crashloop/oom/not-ready/critical band
-	Resources    ResourceTags // container CPU/mem requests+limits (replicas share the template)
+	Namespace           string
+	Name                string
+	OwnerKind           string
+	OwnerName           string
+	RestartCount        int
+	RecentRestartCount  int
+	RestartRecencyKnown bool
+	Unhealthy           bool         // crashloop/oom/not-ready/critical band
+	Resources           ResourceTags // container CPU/mem requests+limits (replicas share the template)
 }
 
 // RestartStorm is a workload where multiple Pods are restarting/unhealthy together.
 type RestartStorm struct {
-	Namespace     string       `json:"namespace"`
-	OwnerKind     string       `json:"owner_kind"`
-	OwnerName     string       `json:"owner_name"`
-	PodCount      int          `json:"pod_count"`
-	AffectedPods  int          `json:"affected_pods"`
-	AffectedPct   int          `json:"affected_pct"`
-	TotalRestarts int          `json:"total_restarts"`
-	Severity      string       `json:"severity"` // high | critical
-	Reason        string       `json:"reason"`
-	SamplePods    []string     `json:"sample_pods"`
-	Resources     ResourceTags `json:"resources"` // representative container requests+limits
+	Namespace      string       `json:"namespace"`
+	OwnerKind      string       `json:"owner_kind"`
+	OwnerName      string       `json:"owner_name"`
+	PodCount       int          `json:"pod_count"`
+	AffectedPods   int          `json:"affected_pods"`
+	AffectedPct    int          `json:"affected_pct"`
+	TotalRestarts  int          `json:"total_restarts"`
+	RecentRestarts int          `json:"recent_restarts"`
+	Severity       string       `json:"severity"` // high | critical
+	Reason         string       `json:"reason"`
+	SamplePods     []string     `json:"sample_pods"`
+	Resources      ResourceTags `json:"resources"` // representative container requests+limits
 }
 
 // RestartStormOptions tunes thresholds. Zero values fall back to sensible defaults.
@@ -63,11 +66,11 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 	opts = opts.withDefaults()
 
 	type agg struct {
-		ns, kind, owner       string
-		total, affected, rest int
-		samples               []string
-		res                   ResourceTags
-		resSet                bool
+		ns, kind, owner               string
+		total, affected, rest, recent int
+		samples                       []string
+		res                           ResourceTags
+		resSet                        bool
 	}
 	groups := map[string]*agg{}
 	for _, p := range pods {
@@ -84,13 +87,18 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 		}
 		a.total++
 		a.rest += p.RestartCount
+		restartSignal := p.RestartCount
+		if p.RestartRecencyKnown {
+			restartSignal = p.RecentRestartCount
+		}
+		a.recent += restartSignal
 		if !a.resSet || (!a.res.HasReq && !a.res.HasLim) {
 			if p.Resources.HasReq || p.Resources.HasLim || !a.resSet {
 				a.res = p.Resources
 				a.resSet = true
 			}
 		}
-		if p.Unhealthy || p.RestartCount >= opts.RestartThreshold {
+		if p.Unhealthy || restartSignal >= opts.RestartThreshold {
 			a.affected++
 			if len(a.samples) < 5 {
 				a.samples = append(a.samples, p.Name)
@@ -113,10 +121,10 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 		}
 		out = append(out, RestartStorm{
 			Namespace: a.ns, OwnerKind: a.kind, OwnerName: a.owner,
-			PodCount: a.total, AffectedPods: a.affected, AffectedPct: pct, TotalRestarts: a.rest,
+			PodCount: a.total, AffectedPods: a.affected, AffectedPct: pct, TotalRestarts: a.rest, RecentRestarts: a.recent,
 			Severity: severity, SamplePods: a.samples, Resources: a.res,
 			Reason: a.kind + "/" + a.owner + " 워크로드에서 " + strconv.Itoa(a.affected) + "/" + strconv.Itoa(a.total) +
-				" Pod가 재시작/비정상 (" + strconv.Itoa(pct) + "%) — 단일 Pod가 아닌 서비스 장애로 판단",
+				" Pod가 최근 재시작/비정상 (" + strconv.Itoa(pct) + "%) — 단일 Pod가 아닌 서비스 장애로 판단",
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -145,7 +153,7 @@ func BuildRestartStormIncidents(storms []RestartStorm, clusterID string) []Incid
 		if len(s.SamplePods) > 0 {
 			ev = append(ev, "영향 Pod: "+strings.Join(s.SamplePods, ", "))
 		}
-		ev = append(ev, "총 재시작 "+strconv.Itoa(s.TotalRestarts)+"회")
+		ev = append(ev, "최근 재시작 신호 "+strconv.Itoa(s.RecentRestarts)+"회 · 누적 재시작 "+strconv.Itoa(s.TotalRestarts)+"회")
 		out = append(out, IncidentDraft{
 			Key: key, ClusterID: clusterID, Namespace: s.Namespace, Kind: s.OwnerKind, Name: s.OwnerName,
 			Condition: "RestartStorm", Severity: "critical",

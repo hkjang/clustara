@@ -93,7 +93,7 @@ func (s *Server) handleK8sResourceAdvisor(w http.ResponseWriter, r *http.Request
 			OOMKilled:           podHasOOM(view),
 			Pending:             strings.EqualFold(view.Phase, "Pending"),
 			PendingInsufficient: insufficient[item.Namespace+"/"+item.Name],
-			Restarting:          view.RestartCount >= 3,
+			Restarting:          view.RecentRestartCount >= 3,
 		}
 		adv, ok := analyzer.AdviseResources(in)
 		if !ok {
@@ -116,10 +116,10 @@ func (s *Server) handleK8sResourceAdvisor(w http.ResponseWriter, r *http.Request
 		counts[a.Severity]++
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"advice":   out,
-		"counts":   counts,
-		"total":    len(out),
-		"note":     "OOMKilled·Pending(자원 부족)·CPU throttling·반복 재시작 증상을 현재 request/limit·사용량과 연결한 권장값입니다. 적용은 Action Center 승인 흐름으로 진행하세요.",
+		"advice":            out,
+		"counts":            counts,
+		"total":             len(out),
+		"note":              "OOMKilled·Pending(자원 부족)·CPU throttling·반복 재시작 증상을 현재 request/limit·사용량과 연결한 권장값입니다. 적용은 Action Center 승인 흐름으로 진행하세요.",
 		"metrics_available": len(latest) > 0,
 	})
 }

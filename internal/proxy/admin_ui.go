@@ -7116,13 +7116,21 @@ const adminHTML = `<!doctype html>
         ]);
       } catch (_) {}
       // Top risky pods (health low) with deep links.
-      const riskyPods = ((pods && pods.pods) || []).filter(p => (p.health_band === 'critical' || p.health_band === 'warning' || (p.restart_count || 0) > 0)).slice(0, 20);
+      const devRestartCell = (p) => {
+        const sig = String(p.restart_signal || '').toLowerCase();
+        let note = '';
+        if (sig === 'recent') note = '<div class="muted" style="font-size:10px">최근 신호 ' + fmt(p.recent_restart_count || 0) + '</div>';
+        else if (sig === 'historical') note = '<div class="muted" style="font-size:10px">과거 누적</div>';
+        else if (sig === 'unknown') note = '<div class="muted" style="font-size:10px">시각 미확인</div>';
+        return fmt(p.restart_count || 0) + note;
+      };
+      const riskyPods = ((pods && pods.pods) || []).filter(p => (p.health_band === 'critical' || p.health_band === 'warning' || (p.recent_restart_count || 0) > 0)).slice(0, 20);
       const podRows = riskyPods.length ? riskyPods.map(p => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || cid, namespace: p.namespace || '', pod: p.name || '' }).toString();
         const cls = p.health_band === 'critical' ? 'error' : (p.health_band === 'warning' ? 'warn' : '');
         return '<tr><td><span class="status ' + cls + '">' + fmt(p.health_score || 0) + '</span></td>' +
           '<td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML((p.namespace || '-') + '/' + p.name) + '</strong></a></td>' +
-          '<td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + fmt(p.restart_count || 0) + '</td>' +
+          '<td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + devRestartCell(p) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(p.primary_symptom || '') + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="muted">위험 Pod 없음</td></tr>';
       const podCard = card('내 앱 위험 Pod (Health 낮은 순)',
@@ -7188,13 +7196,21 @@ const adminHTML = `<!doctype html>
         const sym = (p.primary_symptom && p.primary_symptom !== 'Healthy') ? '<div class="muted" style="font-size:11px">' + escapeHTML(p.primary_symptom) + '</div>' : '';
         return '<td data-num="' + fmt(p.health_score || 0) + '"><span class="status ' + cls + '">' + fmt(p.health_score || 0) + '</span>' + sym + '</td>';
       };
+      const restartCell = (p) => {
+        const sig = String(p.restart_signal || '').toLowerCase();
+        let note = '';
+        if (sig === 'recent') note = '<div class="muted" style="font-size:10px">최근 신호 ' + fmt(p.recent_restart_count || 0) + '</div>';
+        else if (sig === 'historical') note = '<div class="muted" style="font-size:10px">과거 누적</div>';
+        else if (sig === 'unknown') note = '<div class="muted" style="font-size:10px">시각 미확인</div>';
+        return '<td data-num="' + fmt(p.restart_count || 0) + '">' + fmt(p.restart_count || 0) + note + '</td>';
+      };
       const rows = (d.pods || []).length ? (d.pods || []).map(p => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || '', namespace: p.namespace || '', pod: p.name || '' }).toString();
         return '<tr>' + healthCell(p) + '<td>' + riskBadge(p.risk_level, p.status) + '</td><td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML(p.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML(p.cluster_id || '') + '</div></td>' +
-          '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td><td>' + fmt(p.restart_count || 0) + '</td>' +
+          '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td>' + restartCell(p) +
           '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td>' +
           '<td style="font-size:11px">' + (k8sResTags(p.resources) || '<span class="muted">미설정</span>') + '</td>' +
-          '<td>' + fmt(p.warning_events || 0) + '</td></tr>';
+          '<td>' + fmt(p.warning_events || 0) + ((p.recent_warning_events || 0) ? '<div class="muted" style="font-size:10px">최근 ' + fmt(p.recent_warning_events || 0) + '</div>' : '') + '</td></tr>';
       }).join('') : '<tr><td colspan="11" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
       const bmRows = ((d.bookmarks || []).concat(d.auto_bookmarks || [])).slice(0, 10).map(b => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: b.cluster_id || '', namespace: b.namespace || '', pod: b.pod || '' }).toString();
@@ -7212,7 +7228,7 @@ const adminHTML = `<!doctype html>
           '<td>' + escapeHTML(s.namespace || '-') + '</td>' +
           '<td>' + fmt(s.affected_pods || 0) + '/' + fmt(s.pod_count || 0) + ' (' + fmt(s.affected_pct || 0) + '%)</td>' +
           '<td>' + (k8sResTags(s.resources) || '<span class="muted" style="font-size:10px">미설정</span>') + '</td>' +
-          '<td>' + fmt(s.total_restarts || 0) + '</td>' +
+          '<td>' + fmt(s.recent_restarts || 0) + '<div class="muted" style="font-size:10px">누적 ' + fmt(s.total_restarts || 0) + '</div></td>' +
           '<td style="font-size:11px">' + (samplePodLinks(s.namespace, s.sample_pods) || '<span class="muted">-</span>') + '</td></tr>').join('') +
         '</tbody></table></div>') : '';
       const workloads = d.workloads || [];
@@ -7248,7 +7264,7 @@ const adminHTML = `<!doctype html>
         '<table><thead><tr><th>상태</th><th>대상</th><th>Namespace</th><th>매칭</th><th>위험/주의 Pod</th><th>증상</th><th></th></tr></thead><tbody>' + watchRows + '</tbody></table></div>');
       const svcCard = renderServiceImpactCard(svcImpact, clusterId);
       view.innerHTML =
-        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('감시 위험', fmt((watch && watch.summary && watch.summary.critical) || 0)) + kpi('재시작 합계', fmt((d.summary || {}).restarts || 0)) + '</div>') +
+        section('Pod 관리', '<div class="kpis">' + kpi('Pod', fmt((d.summary || {}).total || 0)) + kpi('워크로드', fmt(workloads.length)) + kpi('위험 Pod', fmt((d.summary || {}).risky || 0)) + kpi('Restart Storm', fmt((d.summary || {}).restart_storms || 0)) + kpi('최근 재시작', fmt((d.summary || {}).recent_restarts || 0)) + kpi('과거 누적 Pod', fmt((d.summary || {}).historical_restart_pods || 0)) + '</div>') +
         svcCard +
         watchCard +
         stormCard +
@@ -7294,13 +7310,20 @@ const adminHTML = `<!doctype html>
       try { d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '?' + qs.toString()); }
       catch (e) { view.innerHTML = section('Pod 상세', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       const p = d.pod || {};
-      const containers = (p.containers || []).length ? (p.containers || []).map(c => '<tr><td>' + escapeHTML(c.name || '-') + '</td><td>' + escapeHTML(c.image || '-') + '</td><td>' + (c.ready ? '<span class="status">ready</span>' : '<span class="status warn">not ready</span>') + '</td><td>' + fmt(c.restart_count || 0) + '</td><td>' + escapeHTML(c.state || '-') + '</td><td>' + escapeHTML(c.reason || c.last_reason || '-') + '</td></tr>').join('') : '<tr><td colspan="6" class="muted">컨테이너 상태가 없습니다.</td></tr>';
+      const restartNote = (x) => {
+        const sig = String(x.restart_signal || '').toLowerCase();
+        if (sig === 'recent') return '<div class="muted" style="font-size:10px">최근 신호</div>';
+        if (sig === 'historical') return '<div class="muted" style="font-size:10px">과거 누적</div>';
+        if (sig === 'unknown') return '<div class="muted" style="font-size:10px">시각 미확인</div>';
+        return '';
+      };
+      const containers = (p.containers || []).length ? (p.containers || []).map(c => '<tr><td>' + escapeHTML(c.name || '-') + '</td><td>' + escapeHTML(c.image || '-') + '</td><td>' + (c.ready ? '<span class="status">ready</span>' : '<span class="status warn">not ready</span>') + '</td><td>' + fmt(c.restart_count || 0) + restartNote(c) + '</td><td>' + escapeHTML(c.state || '-') + '</td><td>' + escapeHTML(c.reason || c.last_reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(c.started_at || '-') + '</td></tr>').join('') : '<tr><td colspan="7" class="muted">컨테이너 상태가 없습니다.</td></tr>';
       const containerOpts = (p.containers || []).map(c => '<option value="' + escapeAttr(c.name || '') + '">' + escapeHTML(c.name || '-') + '</option>').join('');
       const events = (d.events || []).length ? (d.events || []).map(e => '<tr><td>' + escapeHTML(e.type || '-') + '</td><td>' + escapeHTML(e.reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td><td>' + fmt(e.count || 0) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.last_seen || e.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">이벤트가 없습니다.</td></tr>';
       const metrics = (d.metrics || []).length ? (d.metrics || []).map(m => '<tr><td>' + fmt(m.cpu_millicores || 0) + 'm</td><td>' + fmt(Math.round((m.memory_bytes || 0) / 1024 / 1024)) + 'Mi</td><td class="muted" style="font-size:11px">' + escapeHTML(m.observed_at || '') + '</td></tr>').join('') : '<tr><td colspan="3" class="muted">최근 메트릭이 없습니다.</td></tr>';
       const logAudits = (d.log_queries || []).length ? (d.log_queries || []).map(q => '<tr><td>' + escapeHTML(q.stream ? 'stream' : (q.previous ? 'previous' : 'current')) + '</td><td>' + escapeHTML(q.container || '-') + '</td><td>' + fmt(q.tail_lines || 0) + '</td><td>' + escapeHTML(q.query || '-') + '</td><td>' + fmt(q.line_count || 0) + '</td><td>' + fmt(q.error_count || 0) + '</td><td>' + escapeHTML(q.requested_by || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(q.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="8" class="muted">최근 로그 조회 이력이 없습니다.</td></tr>';
       view.innerHTML =
-        section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Health', fmt(p.health_score || 0) + (p.primary_symptom && p.primary_symptom !== 'Healthy' ? ' · ' + escapeHTML(p.primary_symptom) : '')) + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0)) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
+        section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Health', fmt(p.health_score || 0) + (p.primary_symptom && p.primary_symptom !== 'Healthy' ? ' · ' + escapeHTML(p.primary_symptom) : '')) + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0) + (p.restart_signal === 'recent' ? ' · 최근 ' + fmt(p.recent_restart_count || 0) : (p.restart_signal === 'historical' ? ' · 과거 누적' : ''))) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
         (function () {
           const b = d.briefing; if (!b || !b.verdict) return '';
           const cls = b.severity === 'critical' ? 'error' : (b.severity === 'warning' ? 'warn' : '');
@@ -7318,7 +7341,7 @@ const adminHTML = `<!doctype html>
         card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
-        card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
+        card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th><th>StartedAt</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
         card('로그', '<div class="card-body"><div id="podlog-context" data-cluster="' + escapeHTML(clusterId || '') + '" data-ns="' + escapeHTML(ns || '') + '" data-pod="' + escapeHTML(pod || '') + '" style="display:none"></div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="podlog-container"><option value="">기본 컨테이너</option>' + containerOpts + '</select><label style="font-size:12px"><input id="podlog-prev" type="checkbox"> previous</label><input id="podlog-tail" value="200" style="width:70px" title="tail lines"><input id="podlog-since" placeholder="since 예: 5m, 1h" style="width:130px"><input id="podlog-q" placeholder="검색어" style="width:180px"><label style="font-size:12px"><input id="podlog-error" type="checkbox"> 에러만</label>' +

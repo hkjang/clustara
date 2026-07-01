@@ -11,6 +11,13 @@ func TestBuildPodBriefing(t *testing.T) {
 	if !strings.Contains(b.Verdict, "정상") || b.Severity != "healthy" {
 		t.Fatalf("healthy briefing: %+v", b)
 	}
+	b = BuildPodBriefing(PodBriefingInput{
+		Health:       PodHealth{Score: 100, Band: "healthy", PrimarySymptom: "Healthy"},
+		RestartCount: 8, RestartRecencyKnown: true,
+	})
+	if len(b.WatchOuts) == 0 || !strings.Contains(strings.Join(b.WatchOuts, " "), "안정 상태") {
+		t.Fatalf("healthy historical restart should be explained: %+v", b)
+	}
 
 	// CrashLoop + recent change → cause + change surfaced first.
 	b = BuildPodBriefing(PodBriefingInput{

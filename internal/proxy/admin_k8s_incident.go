@@ -68,7 +68,8 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 		pv := podView(it, events, false)
 		stormPods = append(stormPods, analyzer.RestartStormPod{
 			Namespace: pv.Namespace, Name: pv.Name, OwnerKind: pv.OwnerKind, OwnerName: pv.OwnerName,
-			RestartCount: pv.RestartCount, Unhealthy: pv.HealthBand == "critical",
+			RestartCount: pv.RestartCount, RecentRestartCount: pv.RecentRestartCount, RestartRecencyKnown: true,
+			Unhealthy: pv.HealthBand == "critical",
 		})
 	}
 	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})

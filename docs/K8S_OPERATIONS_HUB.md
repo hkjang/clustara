@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.38** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.39** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.38)
+## 기능 상태 (v0.9.39)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -21,8 +21,8 @@
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
 | Pod 관리 센터 — 목록·상세·위험 Pod 자동 북마크·최근 접근·현재/previous 로그·로그 프리셋·마스킹 리포트·스냅샷·동일 workload 병합·증적 번들·Golden Pod Diff·Health Replay·조치 안전성·플레이북 | ✅ |
-| Pod Health Score(0~100) + 문제 유형 자동 태깅(CrashLoop/OOM/ImagePull/Pending/ProbeFailing 등) · Health 낮은 순 정렬 | ✅ |
-| Restart Storm 탐지 — 같은 workload 다수 Pod 재시작/비정상 시 서비스 단위 장애로 묶어 경고(POD-RULE-06) · critical storm은 워크로드 incident 자동 생성 | ✅ |
+| Pod Health Score(0~100) + 문제 유형 자동 태깅(CrashLoop/OOM/ImagePull/Pending/ProbeFailing/RecentRestart 등) · Health 낮은 순 정렬 | ✅ |
+| Restart Storm 탐지 — 같은 workload 다수 Pod의 **최근** 재시작/비정상 신호를 서비스 단위 장애로 묶어 경고(POD-RULE-06) · critical storm은 워크로드 incident 자동 생성 | ✅ |
 | Pod 상세 One-Page 진단 요약 — 증상별 원인 후보·먼저 볼 것·최근 변경(롤백 검토)·참고 신호 합성(규칙 기반) | ✅ |
 | 워크로드 묶음 보기 — owner(ReplicaSet/StatefulSet/DaemonSet) 단위 Pod 상태·Health·증상 집계, 위험 순 정렬 | ✅ |
 | Pod Compare Matrix — 같은 워크로드 Pod를 필드 단위 비교, 다른 값·소수(outlier) Pod 강조 | ✅ |
@@ -81,6 +81,7 @@
 | Build Job Center 관리 계층 — 빌드 정의 저장 + Dockerfile 보안 게이트된 실행 요청 lifecycle(실제 러너 실행은 후속, `/admin/k8s/build-definitions`·`/build-runs`, CLU-NEXT-03·05) | ✅ (v0.9.36) |
 | 실행 브리지 (Extension 설치 · Node cordon) — install-plan→Stack Apply(SSA) / drain→Action Center cordon 등 기존 검증 executor로 연결(CLU-NEXT-06/07 브리지) | ✅ (v0.9.37) |
 | Build Runner (Kaniko/BuildKit Job 생성 + Stack Apply 실행) — 빌드 정의에서 인클러스터 빌드 Job 매니페스트 생성 후 기존 Stack Apply(SSA)로 실행(별도 executor 불필요, `/admin/k8s/build-runs`, CLU-NEXT-04/05) | ✅ (v0.9.38) |
+| Pod Restart Recency 보정 — `restartCount` 누적값은 표시용으로 유지하고 컨테이너 `startedAt`/현재 상태 기반 `recent_restart_count`·`restart_signal`로 알람·Health·Storm을 판단 | ✅ (v0.9.39) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -114,8 +115,8 @@
 | GET/POST | `/admin/k8s/config-changes` | ConfigMap/Secret 변경 요청 목록/생성. 생성 시 Config Impact 스냅샷 자동 첨부, Secret 또는 영향 workload가 있으면 승인 필요 |
 | GET | `/admin/k8s/config-changes/{id}` | 변경 요청 상세: 승인/적용/검증 상태, 영향 workload, 검증 이력 |
 | POST | `/admin/k8s/config-changes/{id}/approve`, `/reject`, `/apply`, `/verify` | 변경 요청 승인/반려, 외부/GitOps 적용 기록, 사후 검증. Secret 원문 payload는 저장하지 않음 |
-| GET | `/admin/k8s/pods` | Pod 관리 목록: 클러스터·namespace·node·owner·status·risk·검색 필터, restart/warning 요약 |
-| GET | `/admin/k8s/pods/{namespace}/{pod}` | Pod 상세: 상태, 컨테이너 상태, 관련 이벤트, Pod 메트릭, 로그 감사, 마스킹 manifest |
+| GET | `/admin/k8s/pods` | Pod 관리 목록: 클러스터·namespace·node·owner·status·risk·검색 필터, 누적 restart와 최근 restart 신호(`recent_restart_count`, `restart_signal`)·warning 요약 |
+| GET | `/admin/k8s/pods/{namespace}/{pod}` | Pod 상세: 상태, 컨테이너 상태(`started_at`, `restart_signal`), 관련 이벤트, Pod 메트릭, 로그 감사, 마스킹 manifest |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/logs` | Pod 로그 조회: `cluster_id`, `container`, `previous`, `tail_lines`, `since`, `since_time`, `q`, `error_only`, `timestamps` |
 | POST | `/admin/k8s/pods/{namespace}/{pod}/logs/analyze` | current/previous 로그를 마스킹 후 에러 패턴·근거 라인·조치 후보로 분석 |
 | GET | `/admin/k8s/pods/{namespace}/{pod}/logs/stream` | Pod 실시간 로그 tail(SSE): `follow=true`, `container`, `tail_lines`, `since`, `q`, `error_only`, `timestamps` |
@@ -345,9 +346,9 @@ curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 
 ## Pod 관리와 증적 번들
 
-`Pod 관리` 화면은 수집된 Pod 인벤토리 위에서 목록·상세·로그·조치 안전성·디버그 요청을 제공합니다. 목록에서는 클러스터, namespace, node, owner, status, risk, 검색어로 필터링하고 CrashLoop/OOM/ImagePull/Pending/Evicted 계열 Pod를 위험 Pod로 강조합니다. 위험 Pod, restart가 많은 Pod, Warning 이벤트가 붙은 Pod는 `system:auto` 북마크로 자동 고정되며, 상세·로그·exec·debug 접근은 최근 이력에 남아 운영자가 보던 흐름으로 바로 돌아갈 수 있습니다.
+`Pod 관리` 화면은 수집된 Pod 인벤토리 위에서 목록·상세·로그·조치 안전성·디버그 요청을 제공합니다. 목록에서는 클러스터, namespace, node, owner, status, risk, 검색어로 필터링하고 CrashLoop/OOM/ImagePull/Pending/Evicted 계열 Pod를 위험 Pod로 강조합니다. Kubernetes의 `restartCount`는 Pod 생애 누적값이므로 알람성 판단에는 그대로 쓰지 않고, 컨테이너 `state.running.startedAt`, 현재 waiting/terminated 상태, CrashLoop/OOM/ImagePull 사유를 결합해 최근 restart 신호를 산출합니다. 위험 Pod, 최근 restart 신호가 있는 Pod, 최근 Warning 이벤트가 붙은 Pod는 `system:auto` 북마크로 자동 고정되며, 상세·로그·exec·debug 접근은 최근 이력에 남아 운영자가 보던 흐름으로 바로 돌아갈 수 있습니다.
 
-상세에서는 ready, restart, node, owner, QoS, Pod IP, 컨테이너별 상태, 관련 이벤트, 최근 메트릭, 최근 로그 감사, 마스킹 manifest를 확인합니다. `Golden Pod Diff`는 같은 owner 또는 label workload 안에서 Running/Ready 상태가 좋고 restart/warning이 적은 Pod를 자동 기준으로 골라 장애 Pod와 비교합니다. `Pod Health Replay`는 상태 스냅샷, 컨테이너 상태, 이벤트, 메트릭, 리비전, 로그 조회 감사, RCA 후보를 하나의 시간축으로 묶어 장애 흐름을 재생합니다. `조치 안전성`은 delete/evict/restart/scale/debug 전에 owner 존재 여부, replica 여유, HPA, 최근 Warning 이벤트, restart 횟수를 함께 계산하고, `플레이북`은 Pod 상태와 이벤트에 맞는 확인·조치 순서를 제안합니다.
+상세에서는 ready, 누적 restart, 최근 restart 신호(recent/historical/unknown/none), 마지막 컨테이너 startedAt, node, owner, QoS, Pod IP, 컨테이너별 상태, 관련 이벤트, 최근 메트릭, 최근 로그 감사, 마스킹 manifest를 확인합니다. 현재 컨테이너가 1시간 이상 Running/Ready이고 startedAt 변화가 없으면 과거 restart로 보정되어 Health/Restart Storm/Resource Advisor 알람에서 제외됩니다. `Golden Pod Diff`는 같은 owner 또는 label workload 안에서 Running/Ready 상태가 좋고 최근 restart/warning이 적은 Pod를 자동 기준으로 골라 장애 Pod와 비교합니다. `Pod Health Replay`는 상태 스냅샷, 컨테이너 상태, 이벤트, 메트릭, 리비전, 로그 조회 감사, RCA 후보를 하나의 시간축으로 묶어 장애 흐름을 재생합니다. `조치 안전성`은 delete/evict/restart/scale/debug 전에 owner 존재 여부, replica 여유, HPA, 최근 Warning 이벤트, 최근 restart 신호를 함께 계산하고, `플레이북`은 Pod 상태와 이벤트에 맞는 확인·조치 순서를 제안합니다.
 
 로그 조회와 실시간 tail은 Kubernetes API의 `pods/log` subresource를 사용합니다. minikube처럼 관리자 kubeconfig를 등록한 경우 바로 사용할 수 있고, 운영망 전용 ServiceAccount를 쓰는 경우 위 RBAC 예시처럼 `pods/log`의 `get` 권한이 필요합니다. 로그 응답과 증적 번들 안의 로그는 서버에서 token, password, Authorization, 주민등록번호, 카드번호 등 민감 패턴을 마스킹한 뒤 반환합니다. 로그 분석은 current/previous 로그를 함께 읽어 Exception, OOM, timeout, DNS, network, auth, probe, image pull 계열 패턴을 그룹핑하고 근거 라인과 조치 후보를 반환합니다. v0.8.0부터는 로그 검색 프리셋, 마스킹 리포트/미리보기, 장애 시점 로그 스냅샷, 같은 workload의 다중 Pod 로그 병합도 제공합니다.
 

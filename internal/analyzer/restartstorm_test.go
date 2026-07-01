@@ -80,3 +80,21 @@ func TestBuildRestartStormIncidents(t *testing.T) {
 		t.Fatalf("evidence should include sample pods + restart total: %+v", d.Evidence)
 	}
 }
+
+func TestDetectRestartStormsIgnoresHistoricalRestarts(t *testing.T) {
+	storms := DetectRestartStorms([]RestartStormPod{
+		{Namespace: "prod", Name: "proxy-1", OwnerKind: "ReplicaSet", OwnerName: "proxy", RestartCount: 8, RestartRecencyKnown: true, RecentRestartCount: 0},
+		{Namespace: "prod", Name: "proxy-2", OwnerKind: "ReplicaSet", OwnerName: "proxy", RestartCount: 6, RestartRecencyKnown: true, RecentRestartCount: 0},
+	}, RestartStormOptions{})
+	if len(storms) != 0 {
+		t.Fatalf("historical cumulative restarts should not create restart storm: %+v", storms)
+	}
+
+	storms = DetectRestartStorms([]RestartStormPod{
+		{Namespace: "prod", Name: "proxy-1", OwnerKind: "ReplicaSet", OwnerName: "proxy", RestartCount: 8, RestartRecencyKnown: true, RecentRestartCount: 8},
+		{Namespace: "prod", Name: "proxy-2", OwnerKind: "ReplicaSet", OwnerName: "proxy", RestartCount: 6, RestartRecencyKnown: true, RecentRestartCount: 6},
+	}, RestartStormOptions{})
+	if len(storms) != 1 || storms[0].RecentRestarts != 14 {
+		t.Fatalf("recent restart signals should create storm with recent count: %+v", storms)
+	}
+}

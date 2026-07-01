@@ -59,4 +59,22 @@ func TestScorePodHealth(t *testing.T) {
 	if h.PrimarySymptom != "ProbeFailing" {
 		t.Fatalf("not-ready+warning should tag ProbeFailing: %+v", h)
 	}
+
+	// Restart count is cumulative in Kubernetes. When the caller can prove the restart is
+	// historical (stable current startedAt), it should not keep an otherwise healthy pod risky.
+	h = ScorePodHealth(PodHealthInput{
+		Phase: "Running", ContainerCount: 1, ReadyCount: 1, RestartCount: 8,
+		RestartRecencyKnown: true, RecentRestartCount: 0,
+	})
+	if h.Band != "healthy" || h.Score != 100 || h.PrimarySymptom != "Healthy" {
+		t.Fatalf("historical restarts should not degrade pod: %+v", h)
+	}
+
+	h = ScorePodHealth(PodHealthInput{
+		Phase: "Running", ContainerCount: 1, ReadyCount: 1, RestartCount: 8,
+		RestartRecencyKnown: true, RecentRestartCount: 8,
+	})
+	if h.Band != "warning" || h.PrimarySymptom != "RecentRestart" {
+		t.Fatalf("recent restart signal should warn: %+v", h)
+	}
 }

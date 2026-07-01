@@ -24,37 +24,48 @@ import (
 
 type k8sPodView struct {
 	store.K8sInventoryItem
-	Phase          string                   `json:"phase"`
-	Ready          string                   `json:"ready"`
-	ReadyCount     int                      `json:"ready_count"`
-	ContainerCount int                      `json:"container_count"`
-	RestartCount   int                      `json:"restart_count"`
-	NodeName       string                   `json:"node_name"`
-	PodIP          string                   `json:"pod_ip"`
-	QoSClass       string                   `json:"qos_class"`
-	OwnerKind      string                   `json:"owner_kind"`
-	OwnerName      string                   `json:"owner_name"`
-	Images         []string                 `json:"images"`
-	Age            string                   `json:"age"`
-	WarningEvents  int                      `json:"warning_events"`
-	HealthScore    int                      `json:"health_score"`
-	HealthBand     string                   `json:"health_band"`
-	PrimarySymptom string                   `json:"primary_symptom"`
-	Symptoms       []string                 `json:"symptoms,omitempty"`
-	Containers     []k8sContainerStatusView `json:"containers,omitempty"`
-	Resources      analyzer.ResourceTags    `json:"resources"`
+	Phase                string                   `json:"phase"`
+	Ready                string                   `json:"ready"`
+	ReadyCount           int                      `json:"ready_count"`
+	ContainerCount       int                      `json:"container_count"`
+	RestartCount         int                      `json:"restart_count"`
+	RecentRestartCount   int                      `json:"recent_restart_count"`
+	RestartSignal        string                   `json:"restart_signal"`
+	LastStartedAt        string                   `json:"last_started_at,omitempty"`
+	RestartWindowSeconds int                      `json:"restart_window_seconds"`
+	NodeName             string                   `json:"node_name"`
+	PodIP                string                   `json:"pod_ip"`
+	QoSClass             string                   `json:"qos_class"`
+	OwnerKind            string                   `json:"owner_kind"`
+	OwnerName            string                   `json:"owner_name"`
+	Images               []string                 `json:"images"`
+	Age                  string                   `json:"age"`
+	WarningEvents        int                      `json:"warning_events"`
+	RecentWarningEvents  int                      `json:"recent_warning_events"`
+	HealthScore          int                      `json:"health_score"`
+	HealthBand           string                   `json:"health_band"`
+	PrimarySymptom       string                   `json:"primary_symptom"`
+	Symptoms             []string                 `json:"symptoms,omitempty"`
+	Containers           []k8sContainerStatusView `json:"containers,omitempty"`
+	Resources            analyzer.ResourceTags    `json:"resources"`
 }
 
 type k8sContainerStatusView struct {
-	Name         string `json:"name"`
-	Image        string `json:"image"`
-	Ready        bool   `json:"ready"`
-	RestartCount int    `json:"restart_count"`
-	State        string `json:"state"`
-	Reason       string `json:"reason"`
-	ExitCode     int    `json:"exit_code"`
-	LastState    string `json:"last_state"`
-	LastReason   string `json:"last_reason"`
+	Name           string `json:"name"`
+	Image          string `json:"image"`
+	Ready          bool   `json:"ready"`
+	RestartCount   int    `json:"restart_count"`
+	RecentRestart  bool   `json:"recent_restart"`
+	RestartSignal  string `json:"restart_signal"`
+	State          string `json:"state"`
+	Reason         string `json:"reason"`
+	ExitCode       int    `json:"exit_code"`
+	StartedAt      string `json:"started_at,omitempty"`
+	FinishedAt     string `json:"finished_at,omitempty"`
+	LastState      string `json:"last_state"`
+	LastReason     string `json:"last_reason"`
+	LastStartedAt  string `json:"last_started_at,omitempty"`
+	LastFinishedAt string `json:"last_finished_at,omitempty"`
 }
 
 type k8sPodLogLine struct {
@@ -141,6 +152,8 @@ type podLogReader interface {
 type podLogStreamer interface {
 	PodLogsStream(ctx context.Context, namespace, pod string, opts kube.PodLogOptions) (io.ReadCloser, error)
 }
+
+const podRestartStabilityWindow = time.Hour
 
 func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
@@ -353,22 +366,29 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 	}
 	// Worst health first so the operator sees "어디부터 봐야 하는지" at the top.
 	sort.SliceStable(views, func(i, j int) bool { return views[i].HealthScore < views[j].HealthScore })
-	critical, warning, restarts := 0, 0, 0
+	critical, warning, restarts, recentRestarts, historicalRestartPods := 0, 0, 0, 0, 0
 	for _, p := range views {
-		if p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" || p.RestartCount > 0 || p.WarningEvents > 0 {
+		podRisky := p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" ||
+			p.HealthBand == "critical" || p.HealthBand == "warning" || p.RecentRestartCount > 0 || p.RecentWarningEvents > 0
+		if podRisky {
 			critical++
-			_ = s.upsertPodBookmark(r, p.ClusterID, p, true, "장애 Pod 자동 북마크", firstNonEmpty(p.RiskLevel, podStatusRisk(p.Status), "risky"))
+			_ = s.upsertPodBookmark(r, p.ClusterID, p, true, "장애 Pod 자동 북마크", firstNonEmpty(p.RiskLevel, podStatusRisk(p.Status), p.RestartSignal, "risky"))
 		}
-		if p.WarningEvents > 0 {
+		if p.RecentWarningEvents > 0 {
 			warning++
 		}
 		restarts += p.RestartCount
+		recentRestarts += p.RecentRestartCount
+		if p.RestartCount > 0 && p.RecentRestartCount == 0 {
+			historicalRestartPods++
+		}
 	}
 	stormPods := make([]analyzer.RestartStormPod, 0, len(views))
 	for _, p := range views {
 		stormPods = append(stormPods, analyzer.RestartStormPod{
 			Namespace: p.Namespace, Name: p.Name, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName,
-			RestartCount: p.RestartCount, Unhealthy: p.HealthBand == "critical", Resources: p.Resources,
+			RestartCount: p.RestartCount, RecentRestartCount: p.RecentRestartCount, RestartRecencyKnown: true,
+			Unhealthy: p.HealthBand == "critical", Resources: p.Resources,
 		})
 	}
 	storms := analyzer.DetectRestartStorms(stormPods, analyzer.RestartStormOptions{})
@@ -386,7 +406,7 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		"log_presets":    podLogFilterPresets(),
 		"summary": map[string]int{
 			"total": len(views), "risky": critical, "with_warning_events": warning, "restarts": restarts,
-			"restart_storms": len(storms),
+			"recent_restarts": recentRestarts, "historical_restart_pods": historicalRestartPods, "restart_storms": len(storms),
 		},
 	})
 }
@@ -398,7 +418,7 @@ func podViewsToWorkloadPods(views []k8sPodView) []analyzer.WorkloadPod {
 		out = append(out, analyzer.WorkloadPod{
 			Namespace: p.Namespace, OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, Name: p.Name,
 			HealthScore: p.HealthScore, HealthBand: p.HealthBand, PrimarySymptom: p.PrimarySymptom,
-			RestartCount: p.RestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
+			RestartCount: p.RestartCount, RecentRestartCount: p.RecentRestartCount, Ready: p.ContainerCount > 0 && p.ReadyCount == p.ContainerCount,
 			Resources: p.Resources,
 		})
 	}
@@ -486,7 +506,7 @@ func (s *Server) buildPodBriefing(ctx context.Context, clusterID string, item st
 	}
 	health := analyzer.PodHealth{Score: pv.HealthScore, Band: pv.HealthBand, PrimarySymptom: pv.PrimarySymptom, Symptoms: pv.Symptoms}
 	return analyzer.BuildPodBriefing(analyzer.PodBriefingInput{
-		Health: health, RestartCount: pv.RestartCount, WarningEvents: pv.WarningEvents,
+		Health: health, RestartCount: pv.RestartCount, RecentRestartCount: pv.RecentRestartCount, RestartRecencyKnown: true, WarningEvents: pv.RecentWarningEvents,
 		RecentChange: recentChange, ChangeSummary: changeSummary, TopEventReason: topEvent,
 		OwnerKind: pv.OwnerKind, OwnerName: pv.OwnerName,
 	})
@@ -1155,7 +1175,7 @@ func podEvidenceSummaryMarkdown(generatedAt, clusterID string, pod k8sPodView, e
 	b.WriteString("- Pod: " + pod.Namespace + "/" + pod.Name + "\n")
 	b.WriteString("- Phase: " + firstNonEmpty(pod.Phase, pod.Status, "-") + "\n")
 	b.WriteString("- Ready: " + firstNonEmpty(pod.Ready, "-") + "\n")
-	b.WriteString("- Restarts: " + strconv.Itoa(pod.RestartCount) + "\n")
+	b.WriteString("- Restarts: " + strconv.Itoa(pod.RestartCount) + " (recent signal " + strconv.Itoa(pod.RecentRestartCount) + ", " + firstNonEmpty(pod.RestartSignal, "none") + ")\n")
 	b.WriteString("- Node: " + firstNonEmpty(pod.NodeName, "-") + "\n")
 	owner := "-"
 	if pod.OwnerKind != "" || pod.OwnerName != "" {
@@ -1238,16 +1258,16 @@ func (s *Server) buildPodHealthReplay(ctx context.Context, clusterID string, ite
 		Category:  "status",
 		Severity:  replaySeverityFromRisk(firstNonEmpty(p.RiskLevel, podStatusRisk(firstNonEmpty(p.Status, p.Phase)))),
 		Title:     "Pod 상태 스냅샷",
-		Detail:    fmt.Sprintf("phase %s · ready %s · restarts %d · node %s", firstNonEmpty(p.Phase, p.Status, "-"), firstNonEmpty(p.Ready, "-"), p.RestartCount, firstNonEmpty(p.NodeName, "-")),
+		Detail:    fmt.Sprintf("phase %s · ready %s · restarts %d (recent signal %d) · node %s", firstNonEmpty(p.Phase, p.Status, "-"), firstNonEmpty(p.Ready, "-"), p.RestartCount, p.RecentRestartCount, firstNonEmpty(p.NodeName, "-")),
 		Namespace: namespace,
 		Name:      pod,
 	})
 	for _, c := range p.Containers {
-		if c.RestartCount == 0 && c.Ready && strings.EqualFold(c.State, "running") {
+		if !c.RecentRestart && c.Ready && strings.EqualFold(c.State, "running") {
 			continue
 		}
 		severity := "info"
-		if c.RestartCount > 0 || !c.Ready || c.State == "waiting" || c.State == "terminated" {
+		if c.RecentRestart || !c.Ready || c.State == "waiting" || c.State == "terminated" {
 			severity = "warning"
 		}
 		if strings.Contains(strings.ToLower(c.Reason+" "+c.LastReason), "crashloop") {
@@ -1481,6 +1501,9 @@ func (s *Server) selectGoldenPod(ctx context.Context, clusterID string, target s
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
 		}
+		if candidates[i].view.RecentRestartCount != candidates[j].view.RecentRestartCount {
+			return candidates[i].view.RecentRestartCount < candidates[j].view.RecentRestartCount
+		}
 		if candidates[i].view.RestartCount != candidates[j].view.RestartCount {
 			return candidates[i].view.RestartCount < candidates[j].view.RestartCount
 		}
@@ -1521,8 +1544,22 @@ func goldenPodScore(p k8sPodView) int {
 	case "medium", "warning":
 		score -= 35
 	}
-	score -= p.WarningEvents * 15
-	score -= p.RestartCount * 6
+	score -= p.RecentWarningEvents * 15
+	if p.WarningEvents > p.RecentWarningEvents {
+		historicalWarnings := p.WarningEvents - p.RecentWarningEvents
+		if historicalWarnings > 3 {
+			historicalWarnings = 3
+		}
+		score -= historicalWarnings
+	}
+	score -= p.RecentRestartCount * 6
+	if p.RestartCount > p.RecentRestartCount {
+		historicalPenalty := p.RestartCount - p.RecentRestartCount
+		if historicalPenalty > 5 {
+			historicalPenalty = 5
+		}
+		score -= historicalPenalty
+	}
 	if podStatusRisk(firstNonEmpty(p.Status, p.Phase)) == "high" {
 		score -= 80
 	}
@@ -1577,25 +1614,31 @@ func comparePodsForGoldenDiff(target, golden k8sPodView) []k8sPodGoldenDiffChang
 
 func podCompareFields(p k8sPodView) map[string]string {
 	fields := map[string]string{
-		"status.phase":         firstNonEmpty(p.Phase, p.Status),
-		"status.ready":         p.Ready,
-		"status.restart_count": strconv.Itoa(p.RestartCount),
-		"placement.node":       p.NodeName,
-		"placement.qos_class":  p.QoSClass,
-		"spec.service_account": firstNonEmpty(strAny(p.Spec["serviceAccountName"]), strAny(p.Spec["serviceAccount"])),
-		"spec.priority_class":  strAny(p.Spec["priorityClassName"]),
-		"spec.scheduler":       strAny(p.Spec["schedulerName"]),
-		"spec.images":          joinStableStrings(p.Images),
-		"spec.volumes":         podVolumeSignature(p.Spec),
-		"metadata.labels":      stringMapSignature(p.Labels),
-		"metadata.annotations": stringMapSignature(maskedStringMapToStringMap(p.Annotations)),
-		"container.names":      podContainerNameSignature(p.Spec),
-		"init_container.names": podInitContainerNameSignature(p.Spec),
+		"status.phase":                firstNonEmpty(p.Phase, p.Status),
+		"status.ready":                p.Ready,
+		"status.restart_count":        strconv.Itoa(p.RestartCount),
+		"status.recent_restart_count": strconv.Itoa(p.RecentRestartCount),
+		"status.restart_signal":       p.RestartSignal,
+		"status.last_started_at":      p.LastStartedAt,
+		"placement.node":              p.NodeName,
+		"placement.qos_class":         p.QoSClass,
+		"spec.service_account":        firstNonEmpty(strAny(p.Spec["serviceAccountName"]), strAny(p.Spec["serviceAccount"])),
+		"spec.priority_class":         strAny(p.Spec["priorityClassName"]),
+		"spec.scheduler":              strAny(p.Spec["schedulerName"]),
+		"spec.images":                 joinStableStrings(p.Images),
+		"spec.volumes":                podVolumeSignature(p.Spec),
+		"metadata.labels":             stringMapSignature(p.Labels),
+		"metadata.annotations":        stringMapSignature(maskedStringMapToStringMap(p.Annotations)),
+		"container.names":             podContainerNameSignature(p.Spec),
+		"init_container.names":        podInitContainerNameSignature(p.Spec),
 	}
 	for _, c := range p.Containers {
 		prefix := "container." + firstNonEmpty(c.Name, "-")
 		fields[prefix+".ready"] = strconv.FormatBool(c.Ready)
 		fields[prefix+".restart_count"] = strconv.Itoa(c.RestartCount)
+		fields[prefix+".recent_restart"] = strconv.FormatBool(c.RecentRestart)
+		fields[prefix+".restart_signal"] = c.RestartSignal
+		fields[prefix+".started_at"] = c.StartedAt
 		fields[prefix+".state"] = firstNonEmpty(c.State, "-")
 		fields[prefix+".reason"] = firstNonEmpty(c.Reason, c.LastReason)
 	}
@@ -1826,32 +1869,49 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 	containers := podContainerStatuses(spec, status)
 	ready := 0
 	restarts := 0
+	recentRestarts := 0
+	restartSignal := "none"
+	lastStartedAt := ""
 	images := []string{}
-	for _, c := range containers {
+	now := time.Now().UTC()
+	for i := range containers {
+		c := &containers[i]
 		if c.Ready {
 			ready++
 		}
 		restarts += c.RestartCount
+		c.RecentRestart, c.RestartSignal = assessContainerRestart(*c, now, podRestartStabilityWindow)
+		if c.RecentRestart {
+			recentRestarts += c.RestartCount
+		}
+		restartSignal = combineRestartSignal(restartSignal, c.RestartSignal)
+		lastStartedAt = newerPodTimestamp(lastStartedAt, c.StartedAt)
 		if c.Image != "" && !containsStringValue(images, c.Image) {
 			images = append(images, c.Image)
 		}
 	}
 	ownerKind, ownerName := podOwner(spec)
+	recentWarnings := countRecentWarningEvents(events, item.Namespace, item.Name, now, podRestartStabilityWindow)
 	view := k8sPodView{
-		K8sInventoryItem: item,
-		Phase:            firstNonEmpty(strAny(status["phase"]), item.Status),
-		ReadyCount:       ready,
-		ContainerCount:   len(containers),
-		RestartCount:     restarts,
-		NodeName:         strAny(spec["nodeName"]),
-		PodIP:            strAny(status["podIP"]),
-		QoSClass:         strAny(status["qosClass"]),
-		OwnerKind:        ownerKind,
-		OwnerName:        ownerName,
-		Images:           images,
-		Age:              ageFromTime(firstNonEmpty(strAny(status["startTime"]), item.ObservedAt)),
-		WarningEvents:    countWarningEvents(events, item.Namespace, item.Name),
-		Resources:        analyzer.SummarizePodResources(spec),
+		K8sInventoryItem:     item,
+		Phase:                firstNonEmpty(strAny(status["phase"]), item.Status),
+		ReadyCount:           ready,
+		ContainerCount:       len(containers),
+		RestartCount:         restarts,
+		RecentRestartCount:   recentRestarts,
+		RestartSignal:        restartSignal,
+		LastStartedAt:        lastStartedAt,
+		RestartWindowSeconds: int(podRestartStabilityWindow.Seconds()),
+		NodeName:             strAny(spec["nodeName"]),
+		PodIP:                strAny(status["podIP"]),
+		QoSClass:             strAny(status["qosClass"]),
+		OwnerKind:            ownerKind,
+		OwnerName:            ownerName,
+		Images:               images,
+		Age:                  ageFromTime(firstNonEmpty(strAny(status["startTime"]), item.ObservedAt)),
+		WarningEvents:        countWarningEvents(events, item.Namespace, item.Name),
+		RecentWarningEvents:  recentWarnings,
+		Resources:            analyzer.SummarizePodResources(spec),
 	}
 	view.Ready = fmt.Sprintf("%d/%d", ready, len(containers))
 	if includeContainers {
@@ -1867,13 +1927,14 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 		if c.Reason != "" {
 			reasons = append(reasons, c.Reason)
 		}
-		if c.LastReason != "" {
+		if c.LastReason != "" && (c.RecentRestart || c.RestartSignal != "historical") {
 			reasons = append(reasons, c.LastReason)
 		}
 	}
 	health := analyzer.ScorePodHealth(analyzer.PodHealthInput{
 		Phase: view.Phase, ContainerCount: view.ContainerCount, ReadyCount: view.ReadyCount,
-		RestartCount: view.RestartCount, WarningEvents: view.WarningEvents, RiskLevel: view.RiskLevel,
+		RestartCount: view.RestartCount, RecentRestartCount: view.RecentRestartCount, RestartRecencyKnown: true,
+		WarningEvents: view.RecentWarningEvents, RiskLevel: view.RiskLevel,
 		Deleting:         strAny(status["deletionTimestamp"]) != "" || metadataDeleting(item),
 		ContainerReasons: reasons,
 	})
@@ -1906,13 +1967,14 @@ func podContainerStatuses(spec, status map[string]any) []k8sContainerStatusView 
 	out := []k8sContainerStatusView{}
 	for _, raw := range append(asSliceAny(status["initContainerStatuses"]), asSliceAny(status["containerStatuses"])...) {
 		m := asMapAny(raw)
-		state, reason, exitCode := containerState(asMapAny(m["state"]))
-		lastState, lastReason, _ := containerState(asMapAny(m["lastState"]))
+		state := containerState(asMapAny(m["state"]))
+		lastState := containerState(asMapAny(m["lastState"]))
 		name := strAny(m["name"])
 		image := firstNonEmpty(strAny(m["image"]), imagesByName[name])
 		out = append(out, k8sContainerStatusView{
 			Name: name, Image: image, Ready: boolAny(m["ready"]), RestartCount: intAny(m["restartCount"]),
-			State: state, Reason: reason, ExitCode: exitCode, LastState: lastState, LastReason: lastReason,
+			State: state.State, Reason: state.Reason, ExitCode: state.ExitCode, StartedAt: state.StartedAt, FinishedAt: state.FinishedAt,
+			LastState: lastState.State, LastReason: lastState.Reason, LastStartedAt: lastState.StartedAt, LastFinishedAt: lastState.FinishedAt,
 		})
 	}
 	if len(out) == 0 {
@@ -1923,14 +1985,25 @@ func podContainerStatuses(spec, status map[string]any) []k8sContainerStatusView 
 	return out
 }
 
-func containerState(state map[string]any) (string, string, int) {
+type containerStateInfo struct {
+	State      string
+	Reason     string
+	ExitCode   int
+	StartedAt  string
+	FinishedAt string
+}
+
+func containerState(state map[string]any) containerStateInfo {
 	for _, key := range []string{"waiting", "terminated", "running"} {
 		if v, ok := state[key]; ok {
 			m := asMapAny(v)
-			return key, strAny(m["reason"]), intAny(m["exitCode"])
+			return containerStateInfo{
+				State: key, Reason: strAny(m["reason"]), ExitCode: intAny(m["exitCode"]),
+				StartedAt: strAny(m["startedAt"]), FinishedAt: strAny(m["finishedAt"]),
+			}
 		}
 	}
-	return "", "", 0
+	return containerStateInfo{}
 }
 
 func podOwner(spec map[string]any) (string, string) {
@@ -1970,6 +2043,108 @@ func countWarningEvents(events []store.K8sEvent, namespace, pod string) int {
 		}
 	}
 	return n
+}
+
+func countRecentWarningEvents(events []store.K8sEvent, namespace, pod string, now time.Time, window time.Duration) int {
+	n := 0
+	for _, e := range filterPodEvents(events, namespace, pod) {
+		if !strings.EqualFold(e.Type, "Warning") {
+			continue
+		}
+		if eventWithinWindow(e, now, window) {
+			n++
+		}
+	}
+	return n
+}
+
+func eventWithinWindow(e store.K8sEvent, now time.Time, window time.Duration) bool {
+	raw := firstNonEmpty(e.LastSeen, e.FirstSeen, e.CreatedAt)
+	t, ok := parsePodTimestamp(raw)
+	if !ok {
+		return true
+	}
+	d := now.Sub(t)
+	return d < 0 || d <= window
+}
+
+func assessContainerRestart(c k8sContainerStatusView, now time.Time, window time.Duration) (bool, string) {
+	if c.RestartCount <= 0 {
+		return false, "none"
+	}
+	if containerHasActiveFailure(c) {
+		return true, "recent"
+	}
+	if t, ok := parsePodTimestamp(c.StartedAt); ok {
+		d := now.Sub(t)
+		if d < 0 || d <= window {
+			return true, "recent"
+		}
+		return false, "historical"
+	}
+	if c.Ready && strings.EqualFold(c.State, "running") {
+		return false, "unknown"
+	}
+	return true, "unknown"
+}
+
+func containerHasActiveFailure(c k8sContainerStatusView) bool {
+	state := strings.ToLower(strings.TrimSpace(c.State))
+	reasonParts := []string{c.Reason}
+	if state != "running" {
+		reasonParts = append(reasonParts, c.LastReason)
+	}
+	reasons := strings.ToLower(strings.Join(reasonParts, " "))
+	if state == "waiting" || state == "terminated" {
+		return true
+	}
+	for _, token := range []string{"crashloop", "backoff", "oomkilled", "imagepull", "errimagepull", "createcontainer", "unhealthy"} {
+		if strings.Contains(reasons, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func combineRestartSignal(current, next string) string {
+	rank := map[string]int{"none": 0, "historical": 1, "unknown": 2, "recent": 3}
+	if rank[next] > rank[current] {
+		return next
+	}
+	if current == "" {
+		return next
+	}
+	return current
+}
+
+func newerPodTimestamp(current, candidate string) string {
+	if strings.TrimSpace(candidate) == "" {
+		return current
+	}
+	ct, cok := parsePodTimestamp(current)
+	nt, nok := parsePodTimestamp(candidate)
+	switch {
+	case !cok:
+		return candidate
+	case nok && nt.After(ct):
+		return candidate
+	default:
+		return current
+	}
+}
+
+func parsePodTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }
 
 func podMatchesFilters(p k8sPodView, q url.Values) bool {
@@ -2192,9 +2367,9 @@ func logInsightsFromPatterns(patterns []k8sPodLogAnalysisPattern, pod k8sPodView
 				[]string{"probe path, port, initialDelaySeconds, timeoutSeconds를 확인합니다.", "애플리케이션 시작 시간과 probe 시작 시점을 비교합니다.", "Endpoint 제외 여부와 서비스 영향도를 확인합니다."})
 		}
 	}
-	if pod.RestartCount > 0 && !seen["RestartCorrelatedLogs"] {
+	if pod.RecentRestartCount > 0 && !seen["RestartCorrelatedLogs"] {
 		add("RestartCorrelatedLogs", "medium", "Pod restart와 로그 오류가 같은 분석 범위에 있습니다.",
-			[]string{fmt.Sprintf("pod restarts: %d", pod.RestartCount)},
+			[]string{fmt.Sprintf("recent restart signal: %d (total restarts: %d)", pod.RecentRestartCount, pod.RestartCount)},
 			[]string{"previous 로그를 우선 확인합니다.", "컨테이너 last state와 exit code를 확인합니다.", "반복 재시작이면 Evidence Bundle을 생성해 장애 증적을 고정합니다."})
 	}
 	if len(out) == 0 {

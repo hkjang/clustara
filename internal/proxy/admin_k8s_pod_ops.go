@@ -376,7 +376,11 @@ func (s *Server) handleK8sPodExecBriefing(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cluster_id": clusterID, "namespace": namespace, "pod": pod, "command": command, "role": role,
 		"risk": map[string]string{"level": risk, "reason": reason}, "policy_result": eval,
-		"context":   map[string]any{"phase": view.Phase, "ready": view.Ready, "restarts": view.RestartCount, "node": view.NodeName, "owner": podOwnerLabel(view)},
+		"context": map[string]any{
+			"phase": view.Phase, "ready": view.Ready, "restarts": view.RestartCount,
+			"recent_restarts": view.RecentRestartCount, "restart_signal": view.RestartSignal,
+			"node": view.NodeName, "owner": podOwnerLabel(view),
+		},
 		"templates": terminalCommandTemplates(),
 		"warnings":  execRiskWarnings(risk, eval.RequireApproval, eval.Allowed),
 	})
@@ -623,14 +627,14 @@ func (s *Server) handleK8sPodActionSafety(w http.ResponseWriter, r *http.Request
 	if siblings == 0 {
 		warnings = append(warnings, "같은 workload의 Ready sibling Pod가 없어 endpoint 감소 영향이 클 수 있습니다.")
 	}
-	if view.WarningEvents > 0 || view.RestartCount > 0 {
+	if view.RecentWarningEvents > 0 || view.RecentRestartCount > 0 {
 		warnings = append(warnings, "최근 Warning 이벤트 또는 restart가 있어 조치 전 증적 번들을 권장합니다.")
 	}
 	actions := []map[string]any{
 		{"action": "evict_pod", "preferred": true, "risk": riskFromBlockers(blockers, warnings), "approval_required": true, "reason": "PDB 고려 조치가 가능하면 delete보다 evict를 우선 권장"},
 		{"action": "delete_pod", "preferred": false, "risk": riskFromBlockers(blockers, warnings), "approval_required": true, "reason": "ReplicaSet/owner가 있을 때 재생성을 유도"},
 		{"action": "rollout_restart_owner", "preferred": false, "risk": "medium", "approval_required": true, "reason": "owner 전체 restart로 config/image 문제를 일괄 재시도"},
-		{"action": "evidence_bundle", "preferred": siblings == 0 || view.RestartCount > 0, "risk": "low", "approval_required": false, "reason": "조치 전 로그/이벤트/manifest 증적 고정"},
+		{"action": "evidence_bundle", "preferred": siblings == 0 || view.RecentRestartCount > 0 || view.RecentWarningEvents > 0, "risk": "low", "approval_required": false, "reason": "조치 전 로그/이벤트/manifest 증적 고정"},
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cluster_id": clusterID, "namespace": namespace, "pod": pod, "owner": map[string]string{"kind": view.OwnerKind, "name": view.OwnerName},
@@ -689,7 +693,7 @@ func (s *Server) podHasRecentChange(ctx context.Context, clusterID string, item 
 func recommendedRunbookAction(view k8sPodView) string {
 	status := strings.ToLower(view.Status + " " + view.Phase)
 	switch {
-	case strings.Contains(status, "crashloop") || view.RestartCount > 0:
+	case strings.Contains(status, "crashloop") || view.RecentRestartCount > 0:
 		return "delete_pod_or_rollout_restart_owner"
 	case strings.Contains(status, "imagepull"):
 		return "fix_image_or_imagepullsecret_then_rollout"

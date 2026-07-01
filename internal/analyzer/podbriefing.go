@@ -12,14 +12,16 @@ import (
 
 // PodBriefingInput carries the already-derived Pod signals.
 type PodBriefingInput struct {
-	Health         PodHealth
-	RestartCount   int
-	WarningEvents  int
-	RecentChange   bool
-	ChangeSummary  string // e.g. "image x:1.2 → x:1.3" when a recent revision exists
-	TopEventReason string // most relevant warning event reason, if any
-	OwnerKind      string
-	OwnerName      string
+	Health              PodHealth
+	RestartCount        int
+	RecentRestartCount  int
+	RestartRecencyKnown bool
+	WarningEvents       int
+	RecentChange        bool
+	ChangeSummary       string // e.g. "image x:1.2 → x:1.3" when a recent revision exists
+	TopEventReason      string // most relevant warning event reason, if any
+	OwnerKind           string
+	OwnerName           string
 }
 
 // PodBriefing is the synthesized one-page diagnosis.
@@ -84,6 +86,9 @@ func BuildPodBriefing(in PodBriefingInput) PodBriefing {
 		b.Verdict = "정상 — 위험 신호 없음 (Health " + strconv.Itoa(in.Health.Score) + ")"
 		b.LikelyCause = "특이 증상이 감지되지 않았습니다."
 		b.FirstChecks = append(b.FirstChecks, "필요 시 최근 로그/이벤트만 확인")
+		if in.RestartRecencyKnown && in.RestartCount > 0 && in.RecentRestartCount == 0 {
+			b.WatchOuts = append(b.WatchOuts, "누적 재시작 "+strconv.Itoa(in.RestartCount)+"회는 있으나 최근 재시작 신호는 없어 안정 상태로 보정")
+		}
 		return b
 	}
 
@@ -97,7 +102,11 @@ func BuildPodBriefing(in PodBriefingInput) PodBriefing {
 	}
 	detail := ""
 	if in.RestartCount > 0 {
-		detail = " · 재시작 " + strconv.Itoa(in.RestartCount) + "회"
+		if in.RestartRecencyKnown {
+			detail = " · 최근 재시작 신호 " + strconv.Itoa(in.RecentRestartCount) + "회/누적 " + strconv.Itoa(in.RestartCount) + "회"
+		} else {
+			detail = " · 재시작 " + strconv.Itoa(in.RestartCount) + "회"
+		}
 	}
 	b.Verdict = label + ": " + sym + " (Health " + strconv.Itoa(in.Health.Score) + ")" + detail
 
@@ -121,6 +130,9 @@ func BuildPodBriefing(in PodBriefingInput) PodBriefing {
 
 	if in.WarningEvents > 0 {
 		b.WatchOuts = append(b.WatchOuts, "Warning 이벤트 "+strconv.Itoa(in.WarningEvents)+"건")
+	}
+	if in.RestartRecencyKnown && in.RestartCount > 0 && in.RecentRestartCount == 0 {
+		b.WatchOuts = append(b.WatchOuts, "누적 재시작 "+strconv.Itoa(in.RestartCount)+"회는 있으나 최근 재시작 신호는 없어 안정 상태로 보정")
 	}
 	if in.TopEventReason != "" {
 		b.WatchOuts = append(b.WatchOuts, "주요 이벤트: "+in.TopEventReason)
