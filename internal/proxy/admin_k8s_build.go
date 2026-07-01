@@ -124,8 +124,20 @@ func (s *Server) handleK8sBuildRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.auditAdmin(r, "k8s.build.run", run.ID, auditJSON(map[string]any{"definition": def.ID, "status": run.Status, "gate_pass": run.GatePass}))
-		writeJSON(w, http.StatusCreated, map[string]any{"run": run,
-			"note": "빌드 실행 요청이 등록되었습니다. Dockerfile 보안 게이트 실패 시 blocked로 차단됩니다. 실제 빌드 실행(러너)은 라이브 인프라 연결 후 진행됩니다."})
+		resp := map[string]any{"run": run,
+			"note": "빌드 실행 요청이 등록되었습니다. Dockerfile 보안 게이트 실패 시 blocked로 차단됩니다."}
+		// Execution via the safe path (CLU-NEXT-04/05): generate the in-cluster build Job (Kaniko/
+		// BuildKit) and bridge it to Stack Apply — reusing the verified SSA executor, not a new one.
+		if run.Status != "blocked" {
+			jm := analyzer.GenerateBuildJobManifest(analyzer.BuildJobRequest{
+				Name: def.Name, GitURL: def.GitURL, Branch: def.Branch, ContextPath: def.ContextPath,
+				Dockerfile: "Dockerfile", OutputImage: def.OutputImage, Provider: def.Provider,
+			})
+			resp["build_job"] = jm
+			resp["apply_bridge"] = map[string]any{"submit_to": "/admin/k8s/stacks", "manifest": jm.Manifest,
+				"note": "생성된 빌드 Job을 앱 배포(Stack)로 저장→검증→승인→적용하면 클러스터에서 실행됩니다(별도 빌드 executor 불필요). registry push 인증 Secret이 필요합니다."}
+		}
+		writeJSON(w, http.StatusCreated, resp)
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
