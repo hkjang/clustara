@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.39** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.40** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.39)
+## 기능 상태 (v0.9.40)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -82,6 +82,7 @@
 | 실행 브리지 (Extension 설치 · Node cordon) — install-plan→Stack Apply(SSA) / drain→Action Center cordon 등 기존 검증 executor로 연결(CLU-NEXT-06/07 브리지) | ✅ (v0.9.37) |
 | Build Runner (Kaniko/BuildKit Job 생성 + Stack Apply 실행) — 빌드 정의에서 인클러스터 빌드 Job 매니페스트 생성 후 기존 Stack Apply(SSA)로 실행(별도 executor 불필요, `/admin/k8s/build-runs`, CLU-NEXT-04/05) | ✅ (v0.9.38) |
 | Pod Restart Recency 보정 — `restartCount` 누적값은 표시용으로 유지하고 컨테이너 `startedAt`/현재 상태 기반 `recent_restart_count`·`restart_signal`로 알람·Health·Storm을 판단 | ✅ (v0.9.39) |
+| Action Center 가시성 + 역할별 개발자 요청 처리 — 액션 승인함 상단 노출, 개발자 뷰 `request`/`approve`/`execute` 모드, super_admin/admin 즉시 승인·실행, legacy `pending_approval` 호환 | ✅ (v0.9.40) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -196,8 +197,9 @@
 | GET/POST | `/admin/k8s/latency/config` | latency PromQL + 라벨 매핑(namespace/workload) 설정 |
 | GET | `/admin/k8s/connectivity` | Service selector↔Pod endpoint, Ingress backend/host/TLS, PVC Pending 점검 |
 | GET/POST | `/admin/k8s/actions` | 액션 요청 목록/생성. 생성 시 `idempotency_key`, `target_uid`, `target_resource_version`, `command_hash` 저장 |
-| POST | `/admin/k8s/actions/{id}/approve` | 액션 승인 (요청 생성 시 영향도 자동 산출 → dry_run_diff, blocker 시 승인 강제). 허용 전이: `pending|approval_required -> approved` |
+| POST | `/admin/k8s/actions/{id}/approve` | 액션 승인 (요청 생성 시 영향도 자동 산출 → dry_run_diff, blocker 시 승인 강제). 허용 전이: `pending|approval_required|pending_approval -> approved` |
 | POST | `/admin/k8s/actions/{id}/reject` | 액션 반려 |
+| GET/POST | `/admin/k8s/dev-requests` | 개발자 뷰 요청 생성. `mode=request|approve|execute`로 역할별 승인/즉시 실행 흐름 선택 |
 
 ## 클러스터 등록
 

@@ -662,9 +662,9 @@ func (s *SQLStore) UpdateK8sActionStatus(ctx context.Context, id, status, actor,
 	case "approved":
 		query += `, approved_by = ?, approved_at = ?`
 		args = append(args, actor, now)
-		allowedWhere = ` AND status IN ('pending', 'approval_required')`
+		allowedWhere = ` AND status IN ('pending', 'approval_required', 'pending_approval')`
 	case "rejected":
-		allowedWhere = ` AND status IN ('pending', 'approval_required')`
+		allowedWhere = ` AND status IN ('pending', 'approval_required', 'pending_approval')`
 	case "running":
 		query += `, executed_by = ?, executed_at = ?`
 		args = append(args, actor, now)

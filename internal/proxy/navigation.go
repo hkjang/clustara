@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 22
+const menuVersion = 23
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -39,6 +39,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_graph", Label: "리소스 그래프", Path: "#/k8s-graph", Tab: "k8s-graph", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_conn", Label: "연결성 점검", Path: "#/k8s-conn", Tab: "k8s-conn", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_actions", Label: "액션 승인함", Path: "#/k8s-actions", Tab: "k8s-actions", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_agentops", Label: "에이전트 품질", Path: "#/k8s-agentops", Tab: "k8s-agentops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_capacity", Label: "용량·자동확장", Path: "#/k8s-capacity", Tab: "k8s-capacity", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_meta", Label: "그룹·오너십", Path: "#/k8s-meta", Tab: "k8s-meta", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_ai", Label: "AI 분석", Path: "#/k8s-ai", Tab: "k8s-ai", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -52,6 +53,7 @@ var menuRegistry = []menuItem{
 	// 설정 영역.
 	{ID: "set.k8s_settings", Label: "운영 설정", Path: "#/k8s-settings", Tab: "k8s-settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.settings", Label: "설정", Path: "#/settings", Tab: "settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "set.k8s_configrollback", Label: "설정 롤백 센터", Path: "#/k8s-configrollback", Tab: "k8s-configrollback", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 }
 
 // childTabs maps a parent tab to the nested route tabs that share its permission. The

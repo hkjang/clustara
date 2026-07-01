@@ -1,3 +1,6 @@
+v0.9.40:
+- **Action Center 가시성 + 역할별 개발자 요청 처리 (v0.9.40)**: 액션 승인함을 상단 메뉴에 바로 노출하고 `/me/navigation` registry에 누락되어 인증 모드에서 숨겨질 수 있던 운영 탭을 보강했습니다. 개발자 뷰의 요청 생성은 `request`/`approve`/`execute` 모드를 지원하며, super_admin/admin은 실행 가능한 scale·rollout restart·cordon·uncordon·delete pod 요청을 역할 권한으로 승인 후 즉시 실행할 수 있습니다. developer/viewer는 기존처럼 승인 요청만 생성하고, ops_admin/operator/approver는 위험도에 따라 승인까지만 허용됩니다. 개발자 요청도 일반 Action Center 상태(`approval_required -> approved -> running -> executed|failed`)를 사용하도록 정리했고, 기존 `pending_approval` 액션 행은 계속 승인/반려 가능하도록 호환 전이를 유지합니다. Action Center 화면에는 `승인+실행` 빠른 버튼과 상태 추적 안내를 추가했습니다.
+
 v0.9.39:
 - **Pod Restart Recency 알람 보정 (v0.9.39)**: Kubernetes `restartCount`가 Pod 생애 동안 누적되어 오래전 기동 초기에만 재시작한 안정 Pod까지 계속 위험으로 보이던 문제를 보정했습니다. Pod view가 컨테이너 `state.running.startedAt`과 현재 상태/사유를 함께 평가해 `recent_restart_count`, `restart_signal`(recent/historical/unknown/none), `last_started_at`, `recent_warning_events`를 산출합니다. Pod Health Score, 자동 북마크, Restart Storm/incident 스캔, Resource Advisor, 조치 안전성/플레이북은 최근 restart 신호를 기준으로 판단하고, 누적 restart는 감사·상세 표시용으로 유지합니다. UI에는 Restarts 아래에 “최근 신호/과거 누적/시각 미확인”을 표시하고, 증적 번들과 Golden Diff/Compare Matrix에도 누적/최근 restart 맥락을 포함합니다. 오래 안정적으로 Running/Ready인 jupyterhub proxy 같은 Pod는 누적 restart가 남아 있어도 healthy로 보정되는 회귀 테스트를 추가했습니다.
 

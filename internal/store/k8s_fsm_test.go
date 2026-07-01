@@ -62,6 +62,17 @@ func TestK8sActionRequestFSMAndIdempotencyMetadata(t *testing.T) {
 	if err := db.UpdateK8sActionStatus(ctx, req.ID, "failed", "admin", "late"); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("terminal action should not be rewritten, got %v", err)
 	}
+
+	legacy := K8sActionRequest{
+		ID: "act_legacy", ClusterID: "k8scl_1", Namespace: "default", ResourceKind: "Deployment", ResourceName: "api",
+		Action: "rollout_restart", Status: "pending_approval", RequestedBy: "developer",
+	}
+	if err := db.InsertK8sActionRequest(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateK8sActionStatus(ctx, legacy.ID, "approved", "admin", "legacy approve"); err != nil {
+		t.Fatalf("legacy pending_approval should remain approvable: %v", err)
+	}
 }
 
 func TestK8sPodExecSessionFSM(t *testing.T) {

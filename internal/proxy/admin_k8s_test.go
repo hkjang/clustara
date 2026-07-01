@@ -236,6 +236,100 @@ func TestK8sAdminFlowRegistersClusterAndIngestsSnapshot(t *testing.T) {
 	}
 }
 
+func TestK8sDevRequestExecuteModeRunsApprovedAction(t *testing.T) {
+	var scalePatched bool
+	kubeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/apis/apps/v1/namespaces/default/deployments/api/scale":
+			if r.Method != http.MethodPatch {
+				t.Errorf("scale should use PATCH, got %s", r.Method)
+			}
+			scalePatched = true
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	}))
+	defer kubeAPI.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "devreq-cluster", "server_url": kubeAPI.URL, "auth_mode": "token", "token": "test-token",
+	})
+	defer resp.Body.Close()
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/dev-requests", "", map[string]any{
+		"type":          "scale",
+		"cluster_id":    created.Cluster.ID,
+		"namespace":     "default",
+		"resource_kind": "Deployment",
+		"resource_name": "api",
+		"replicas":      3,
+		"reason":        "capacity test",
+		"mode":          "execute",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("dev request status=%d body=%s", resp.StatusCode, body)
+	}
+	var out struct {
+		ActionID  string                 `json:"action_id"`
+		Status    string                 `json:"status"`
+		Mode      string                 `json:"mode"`
+		Role      string                 `json:"role"`
+		Action    store.K8sActionRequest `json:"action"`
+		Execution struct {
+			Status string `json:"status"`
+			Result string `json:"result"`
+			Error  string `json:"error"`
+		} `json:"execution"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Mode != "execute" || out.Role != "super_admin" || out.Status != "executed" || out.Execution.Status != "executed" || out.ActionID == "" {
+		t.Fatalf("expected role-aware immediate execution, got %+v", out)
+	}
+	if !scalePatched {
+		t.Fatalf("expected scale PATCH to be sent to Kubernetes API")
+	}
+
+	resp, err = http.Get(proxy.URL + "/admin/k8s/actions?cluster_id=" + created.Cluster.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var listed struct {
+		Actions []store.K8sActionRequest `json:"actions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Actions) != 1 || listed.Actions[0].Status != "executed" || listed.Actions[0].Action != "scale" {
+		t.Fatalf("action center should contain executed dev request, got %+v", listed.Actions)
+	}
+}
+
 func TestK8sConfigChangeControlCenter(t *testing.T) {
 	db := openTestStore(t)
 	defer db.Close()

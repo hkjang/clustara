@@ -713,6 +713,86 @@ func (s *Server) handleK8sActionByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": status})
 }
 
+type k8sActionRunResult struct {
+	ID              string
+	Status          string
+	Message         string
+	HTTPStatus      int
+	Err             error
+	ErrorType       string
+	ErrorCode       string
+	ExecutionFailed bool
+}
+
+func k8sActionRunErr(httpStatus int, msg, errType, errCode string, err error) k8sActionRunResult {
+	return k8sActionRunResult{HTTPStatus: httpStatus, Message: msg, ErrorType: errType, ErrorCode: errCode, Err: err}
+}
+
+func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act store.K8sActionRequest) k8sActionRunResult {
+	if act.Status != "approved" {
+		return k8sActionRunErr(http.StatusConflict, "action must be approved before execution (current: "+act.Status+")", "invalid_request_error", "action_not_approved", store.ErrInvalidTransition)
+	}
+	cluster, err := s.db.GetK8sCluster(ctx, act.ClusterID)
+	if err != nil {
+		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed", err)
+	}
+	client, err := s.k8sClientForCluster(ctx, cluster)
+	if err != nil {
+		return k8sActionRunErr(http.StatusBadRequest, "Kubernetes 연결 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed", err)
+	}
+	exec, ok := client.(kube.Executor)
+	if !ok {
+		return k8sActionRunErr(http.StatusNotImplemented, "이 클러스터 클라이언트는 실행을 지원하지 않습니다.", "invalid_request_error", "executor_unsupported", errors.New("executor unsupported"))
+	}
+	if !k8sActionExecutable(act.Action) {
+		return k8sActionRunErr(http.StatusBadRequest, "실행 가능한 액션이 아닙니다: "+act.Action+" (drain 등은 수동 처리)", "invalid_request_error", "action_not_executable", errors.New("action not executable"))
+	}
+	if err := s.db.UpdateK8sActionStatus(ctx, act.ID, "running", actor, "실행 중"); errors.Is(err, store.ErrInvalidTransition) {
+		return k8sActionRunErr(http.StatusConflict, "action is already running or closed", "invalid_request_error", "action_bad_state", err)
+	} else if errors.Is(err, store.ErrNotFound) {
+		return k8sActionRunErr(http.StatusNotFound, "action request not found: "+act.ID, "invalid_request_error", "action_not_found", err)
+	} else if err != nil {
+		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed", err)
+	}
+
+	var execErr error
+	switch strings.ToLower(act.Action) {
+	case "scale":
+		replicas := intFromParams(act.Parameters, "replicas", -1)
+		if replicas < 0 {
+			execErr = errors.New("scale 액션에 replicas 파라미터가 필요합니다")
+		} else {
+			execErr = exec.Scale(ctx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
+		}
+	case "rollout_restart":
+		execErr = exec.RolloutRestart(ctx, act.ResourceKind, act.Namespace, act.ResourceName)
+	case "cordon":
+		execErr = exec.SetCordon(ctx, act.ResourceName, true)
+	case "uncordon":
+		execErr = exec.SetCordon(ctx, act.ResourceName, false)
+	case "delete_pod":
+		execErr = exec.DeletePod(ctx, act.Namespace, act.ResourceName)
+	default:
+		execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
+	}
+
+	resultStatus, resultMsg := "executed", "실행 완료"
+	if execErr != nil {
+		resultStatus, resultMsg = "failed", "실행 실패: "+execErr.Error()
+	}
+	if err := s.db.UpdateK8sActionStatus(ctx, act.ID, resultStatus, actor, resultMsg); errors.Is(err, store.ErrInvalidTransition) {
+		return k8sActionRunErr(http.StatusConflict, "action finalization was already applied", "invalid_request_error", "action_bad_state", err)
+	} else if err != nil {
+		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
+	}
+	if execErr != nil {
+		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
+	}
+	// Change-aware burst: collect this cluster at high frequency briefly so the change verifies fast.
+	s.registerCollectBurst(ctx, act.ClusterID, act.Namespace, "action", "action:"+act.Action+" "+act.ResourceKind+"/"+act.ResourceName)
+	return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusOK}
+}
+
 // executeK8sAction runs an approved action against the live cluster (live executor). Only
 // status=="approved" actions and an allowlisted set of operations are permitted; the result is
 // recorded back on the request and audited.
@@ -726,80 +806,17 @@ func (s *Server) executeK8sAction(w http.ResponseWriter, r *http.Request, id str
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_failed")
 		return
 	}
-	if act.Status != "approved" {
-		writeOpenAIError(w, http.StatusConflict, "action must be approved before execution (current: "+act.Status+")", "invalid_request_error", "action_not_approved")
+	result := s.runApprovedK8sAction(r.Context(), adminID(r), act)
+	if result.Err != nil && !result.ExecutionFailed {
+		writeOpenAIError(w, result.HTTPStatus, result.Message, result.ErrorType, result.ErrorCode)
 		return
 	}
-	cluster, err := s.db.GetK8sCluster(r.Context(), act.ClusterID)
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed")
+	s.auditAdmin(r, "k8s.action.execute", "", auditJSON(map[string]any{"id": id, "action": act.Action, "status": result.Status}))
+	if result.ExecutionFailed {
+		writeJSON(w, result.HTTPStatus, map[string]any{"id": id, "status": result.Status, "error": result.Message})
 		return
 	}
-	client, err := s.k8sClientForCluster(r.Context(), cluster)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 연결 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed")
-		return
-	}
-	exec, ok := client.(kube.Executor)
-	if !ok {
-		writeOpenAIError(w, http.StatusNotImplemented, "이 클러스터 클라이언트는 실행을 지원하지 않습니다.", "invalid_request_error", "executor_unsupported")
-		return
-	}
-	if !k8sActionExecutable(act.Action) {
-		writeOpenAIError(w, http.StatusBadRequest, "실행 가능한 액션이 아닙니다: "+act.Action+" (drain 등은 수동 처리)", "invalid_request_error", "action_not_executable")
-		return
-	}
-	if err := s.db.UpdateK8sActionStatus(r.Context(), id, "running", adminID(r), "실행 중"); errors.Is(err, store.ErrInvalidTransition) {
-		writeOpenAIError(w, http.StatusConflict, "action is already running or closed", "invalid_request_error", "action_bad_state")
-		return
-	} else if errors.Is(err, store.ErrNotFound) {
-		writeOpenAIError(w, http.StatusNotFound, "action request not found: "+id, "invalid_request_error", "action_not_found")
-		return
-	} else if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed")
-		return
-	}
-
-	var execErr error
-	switch strings.ToLower(act.Action) {
-	case "scale":
-		replicas := intFromParams(act.Parameters, "replicas", -1)
-		if replicas < 0 {
-			execErr = errors.New("scale 액션에 replicas 파라미터가 필요합니다")
-		} else {
-			execErr = exec.Scale(r.Context(), act.ResourceKind, act.Namespace, act.ResourceName, replicas)
-		}
-	case "rollout_restart":
-		execErr = exec.RolloutRestart(r.Context(), act.ResourceKind, act.Namespace, act.ResourceName)
-	case "cordon":
-		execErr = exec.SetCordon(r.Context(), act.ResourceName, true)
-	case "uncordon":
-		execErr = exec.SetCordon(r.Context(), act.ResourceName, false)
-	case "delete_pod":
-		execErr = exec.DeletePod(r.Context(), act.Namespace, act.ResourceName)
-	default:
-		execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
-	}
-
-	resultStatus, resultMsg := "executed", "실행 완료"
-	if execErr != nil {
-		resultStatus, resultMsg = "failed", "실행 실패: "+execErr.Error()
-	}
-	if err := s.db.UpdateK8sActionStatus(r.Context(), id, resultStatus, adminID(r), resultMsg); errors.Is(err, store.ErrInvalidTransition) {
-		writeOpenAIError(w, http.StatusConflict, "action finalization was already applied", "invalid_request_error", "action_bad_state")
-		return
-	} else if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed")
-		return
-	}
-	s.auditAdmin(r, "k8s.action.execute", "", auditJSON(map[string]any{"id": id, "action": act.Action, "status": resultStatus}))
-	if execErr != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"id": id, "status": resultStatus, "error": resultMsg})
-		return
-	}
-	// Change-aware burst: collect this cluster at high frequency briefly so the change verifies fast.
-	s.registerCollectBurst(r.Context(), act.ClusterID, act.Namespace, "action", "action:"+act.Action+" "+act.ResourceKind+"/"+act.ResourceName)
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": resultStatus, "result": resultMsg})
+	writeJSON(w, result.HTTPStatus, map[string]any{"id": id, "status": result.Status, "result": result.Message})
 }
 
 func k8sActionExecutable(actionName string) bool {
