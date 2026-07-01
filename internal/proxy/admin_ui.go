@@ -7104,13 +7104,15 @@ const adminHTML = `<!doctype html>
       const opts = clusters.map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === cid ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
       const picker = card('클러스터', '<div class="card-body"><select onchange="k8sDevClusterGo(this.value)">' + (opts || '<option>등록된 클러스터 없음</option>') + '</select> <span class="muted" style="font-size:12px">개발자 관점: 담당 워크스페이스의 노출·이미지·위험 Pod를 한 화면에서 봅니다.</span></div>');
       if (!cid) { view.innerHTML = section('개발자 뷰', picker.replace('class="card"', 'class="card"')); return; }
-      let ws = null, exp = null, img = null, pods = null;
+      let ws = null, exp = null, img = null, pods = null, builds = null, buildRuns = null;
       try {
-        [ws, exp, img, pods] = await Promise.all([
+        [ws, exp, img, pods, builds, buildRuns] = await Promise.all([
           api('/admin/k8s/workspaces?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
           api('/admin/k8s/exposures?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
           api('/admin/k8s/image-ledger?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
           api('/admin/k8s/pods?cluster_id=' + encodeURIComponent(cid) + '&limit=300').catch(() => null),
+          api('/admin/k8s/build-definitions?cluster_id=' + encodeURIComponent(cid)).catch(() => null),
+          api('/admin/k8s/build-runs').catch(() => null),
         ]);
       } catch (_) {}
       // Top risky pods (health low) with deep links.
@@ -7134,7 +7136,31 @@ const adminHTML = `<!doctype html>
         renderWorkspaceCard(ws, clusters, cid) +
         renderExposureCard(exp) +
         renderImageLedgerCard(img) +
+        renderBuildCard(builds, buildRuns, cid) +
         podCard;
+    }
+    // Build Job Center (CLU-NEXT-03/05): definitions + Dockerfile-gated run requests.
+    window.k8sBuildDefCreate = async (cid) => {
+      const body = { cluster_id: cid, name: (document.getElementById('bd-name').value || '').trim(), git_url: (document.getElementById('bd-git').value || '').trim(), branch: (document.getElementById('bd-branch').value || '').trim(), output_image: (document.getElementById('bd-img').value || '').trim(), provider: document.getElementById('bd-provider').value, dockerfile: (document.getElementById('bd-dockerfile').value || '') };
+      try { await api('/admin/k8s/build-definitions', { method: 'POST', body: JSON.stringify(body) }); renderK8sDeveloper(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('빌드 정의 실패: ' + e.message); }
+    };
+    window.k8sBuildRun = async (defId) => {
+      try { const d = await api('/admin/k8s/build-runs', { method: 'POST', body: JSON.stringify({ definition_id: defId }) }); alert('빌드 요청: ' + d.run.status + (d.run.gate_pass ? '' : ' (Dockerfile 게이트 차단)')); renderK8sDeveloper(new URLSearchParams(location.hash.split('?')[1] || '')); }
+      catch (e) { alert('빌드 요청 실패: ' + e.message); }
+    };
+    function renderBuildCard(builds, runs, cid) {
+      const defs = (builds && builds.definitions) || [];
+      const rs = (runs && runs.runs) || [];
+      const provOpts = ['kaniko', 'buildkit', 'tekton', 'job'].map(p => '<option>' + p + '</option>').join('');
+      const defRows = defs.map(d => '<tr><td><strong>' + escapeHTML(d.name) + '</strong></td><td class="muted" style="font-size:11px">' + escapeHTML(d.git_url) + '@' + escapeHTML(d.branch) + '</td><td>' + escapeHTML(d.provider) + '</td><td>' + escapeHTML(d.output_image || '-') + '</td><td><button type="button" class="secondary" style="font-size:10px;padding:1px 6px" onclick="k8sBuildRun(\'' + d.id + '\')">빌드 요청</button></td></tr>').join('') || '<tr><td colspan="5" class="muted">정의 없음</td></tr>';
+      const runRows = rs.slice(0, 15).map(r => { const c = r.status === 'blocked' || r.status === 'failed' ? 'error' : (r.status === 'succeeded' ? '' : 'warn'); return '<tr><td><span class="status ' + c + '" style="font-size:10px">' + escapeHTML(r.status) + '</span></td><td class="muted" style="font-size:11px">' + escapeHTML(r.definition_id) + '</td><td>' + (r.gate_pass ? 'gate ✓' : '<span class="status error" style="font-size:9px">gate ✗</span>') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.failure_reason || '') + '</td></tr>'; }).join('') || '<tr><td colspan="4" class="muted">실행 요청 없음</td></tr>';
+      return card('빌드 (Build Job Center · 정의+보안 게이트 요청, CLU-NEXT-03/05)',
+        '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:6px">빌드 정의를 등록하고 실행을 요청하면 Dockerfile 보안 게이트(root·:latest·secret 등)를 통과해야 합니다. 실제 빌드 실행(러너)은 라이브 인프라 연결 후 단계입니다.</div>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><input id="bd-name" placeholder="이름" style="width:110px"><input id="bd-git" placeholder="git url" style="width:170px"><input id="bd-branch" placeholder="branch(main)" style="width:90px"><input id="bd-img" placeholder="output image" style="width:150px"><select id="bd-provider">' + provOpts + '</select><button type="button" onclick="k8sBuildDefCreate(\'' + escapeAttr(cid) + '\')">정의 저장</button></div>' +
+        '<textarea id="bd-dockerfile" placeholder="Dockerfile 내용(보안 게이트용, 선택)" style="width:100%;height:60px;font-size:11px"></textarea>' +
+        '<table style="margin-top:6px"><thead><tr><th>정의</th><th>소스</th><th>provider</th><th>이미지</th><th></th></tr></thead><tbody>' + defRows + '</tbody></table>' +
+        '<h4 style="margin:10px 0 4px">최근 빌드 요청</h4><table><thead><tr><th>상태</th><th>정의</th><th>게이트</th><th>사유</th></tr></thead><tbody>' + runRows + '</tbody></table></div>');
     }
     async function renderK8sPods(params) {
       const view = document.getElementById('view');

@@ -2164,6 +2164,35 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_image_promotions_cluster ON k8s_image_promotions(cluster_id, status)`,
+		`CREATE TABLE IF NOT EXISTS k8s_build_definitions (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			git_url TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			context_path TEXT NOT NULL DEFAULT '',
+			dockerfile TEXT NOT NULL DEFAULT '',
+			output_image TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS k8s_build_runs (
+			id TEXT PRIMARY KEY,
+			definition_id TEXT NOT NULL DEFAULT '',
+			cluster_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'requested',
+			trigger TEXT NOT NULL DEFAULT '',
+			gate_result TEXT NOT NULL DEFAULT '',
+			gate_pass INTEGER NOT NULL DEFAULT 0,
+			failure_reason TEXT NOT NULL DEFAULT '',
+			output_digest TEXT NOT NULL DEFAULT '',
+			requested_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_build_runs_def ON k8s_build_runs(definition_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_discovery_activations (
 			cluster_id TEXT NOT NULL,
 			kind TEXT NOT NULL,

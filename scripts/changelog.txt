@@ -1,3 +1,6 @@
+v0.9.36:
+- **Build Job Center 관리 계층 — 정의 + 보안 게이트 실행 요청 (v0.9.36, CLU-NEXT-03·05)**: OpenShift BuildConfig 스타일 빌드 관리의 안전 구축 가능한 계층을 추가했습니다. 빌드 정의(git url·branch·context·Dockerfile·output image·provider[kaniko/buildkit/tekton/job])를 저장하고(`GET/POST /admin/k8s/build-definitions`), 빌드 실행 요청 시 정의의 Dockerfile을 v0.9.30 보안 게이트(root 실행·:latest base·ENV/ARG 비밀값·ADD 원격 등)로 검사해 high-severity면 blocked, 아니면 requested로 등록합니다(`GET/POST /admin/k8s/build-runs`). 실행 lifecycle(requested→approved→running→succeeded/failed, blocked)을 영속화합니다. 개발자 뷰에 빌드 정의·요청·최근 실행 카드를 추가했습니다. 실제 빌드 실행(러너)은 라이브 빌드 인프라 의존으로 후속 단계이며, 이 릴리즈는 정의 관리 + 보안 게이트된 요청까지 제공합니다. store lifecycle은 gate 통과/차단 라이브로 검증했습니다.
+
 v0.9.35:
 - **Workspace Template + Exposure/Observability Apply Bridge (v0.9.35, CLU-NEXT-10·11·14)**: 생성→기존 Stack Apply 승인 흐름으로 잇는 세 가지를 추가했습니다. (10) Workspace 생성 템플릿: 신규 업무 namespace의 표준 매니페스트(Namespace+오너 라벨·ResourceQuota·LimitRange·옵션 default-deny NetworkPolicy)를 생성하는 순수 생성기(`GET /admin/k8s/workspace-template`). (14) Observability Apply: 생성된 ServiceMonitor 템플릿에 Stack Apply 제출 브리지(`apply_bridge`)를 추가해 적용 요청으로 전환. (11) Exposure Change: 외부 노출(Ingress/Gateway/Service) 변경을 수정 매니페스트의 Stack Apply(정책·위험 검증→승인) 흐름으로 안내하는 `change_bridge` 추가. 운영 홈에 Workspace 템플릿 생성 카드를 추가했습니다. 생성 로직(`GenerateWorkspaceTemplate`)은 단위 테스트로, 템플릿·apply bridge는 라이브로 검증했습니다. 어느 경로도 클러스터를 직접 변경하지 않고 Stack Apply 검증·승인을 거칩니다.
 
