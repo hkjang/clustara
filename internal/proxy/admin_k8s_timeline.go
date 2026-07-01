@@ -106,7 +106,7 @@ func (s *Server) writeRevisionLookupError(w http.ResponseWriter, err error, id s
 
 type k8sTimelineEntry struct {
 	At        string `json:"at"`
-	Category  string `json:"category"` // revision | event | action
+	Category  string `json:"category"` // revision | event | action | manifest_change
 	Title     string `json:"title"`
 	Detail    string `json:"detail"`
 	Severity  string `json:"severity"` // info | warning | critical
@@ -191,6 +191,24 @@ func (s *Server) handleK8sTimeline(w http.ResponseWriter, r *http.Request) {
 			At: a.CreatedAt, Category: "action", Title: a.Action,
 			Detail: a.Status + " · " + a.Result, Severity: actionSeverity(a.RiskLevel),
 			Ref: a.ID, Kind: a.ResourceKind, Namespace: a.Namespace, Name: a.ResourceName,
+		})
+	}
+
+	manifestChanges, err := s.db.ListK8sManifestChangeRequests(r.Context(), store.K8sManifestChangeFilter{
+		ClusterID: clusterID, Namespace: ns, Kind: q.Get("kind"), Limit: 200,
+	})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_changes_failed")
+		return
+	}
+	for _, cr := range manifestChanges {
+		if !matchesResource(ns, name, cr.Namespace, cr.Name, "") {
+			continue
+		}
+		entries = append(entries, k8sTimelineEntry{
+			At: cr.UpdatedAt, Category: "manifest_change", Title: "YAML 변경 " + cr.Status,
+			Detail:   cr.RiskLevel + " · fields " + itoa(len(cr.Diffs)) + " · " + firstNonEmpty(cr.Reason, cr.Result),
+			Severity: actionSeverity(cr.RiskLevel), Ref: cr.ID, Kind: cr.Kind, Namespace: cr.Namespace, Name: cr.Name,
 		})
 	}
 

@@ -1,0 +1,850 @@
+package proxy
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"clustara/internal/analyzer"
+	"clustara/internal/kube"
+	"clustara/internal/store"
+)
+
+// handleK8sManifestEditor returns the resource picker metadata for Manifest Change Studio.
+// GET /admin/k8s/manifests/editor?cluster_id=&kind=&namespace=
+func (s *Server) handleK8sManifestEditor(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	q := r.URL.Query()
+	clusters, _ := s.db.ListK8sClusters(r.Context())
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: strings.TrimSpace(q.Get("cluster_id")),
+		Kind:      strings.TrimSpace(q.Get("kind")),
+		Namespace: strings.TrimSpace(q.Get("namespace")),
+		Limit:     intParam(q.Get("limit"), 1000),
+	})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_editor_failed")
+		return
+	}
+	type resourceRow struct {
+		ClusterID  string `json:"cluster_id"`
+		Kind       string `json:"kind"`
+		APIVersion string `json:"api_version"`
+		Namespace  string `json:"namespace"`
+		Name       string `json:"name"`
+		Status     string `json:"status"`
+		RiskLevel  string `json:"risk_level"`
+		UpdatedAt  string `json:"updated_at"`
+	}
+	rows := make([]resourceRow, 0, len(items))
+	kindSet := map[string]bool{}
+	for _, it := range items {
+		kindSet[it.Kind] = true
+		rows = append(rows, resourceRow{
+			ClusterID: it.ClusterID, Kind: it.Kind, APIVersion: it.APIVersion, Namespace: it.Namespace,
+			Name: it.Name, Status: it.Status, RiskLevel: it.RiskLevel, UpdatedAt: it.UpdatedAt,
+		})
+	}
+	kinds := make([]string, 0, len(kindSet))
+	for k := range kindSet {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"clusters": clusters, "resources": rows, "resource_kinds": kinds,
+		"note": "Manifest Change Studio는 live manifest를 편집 요청으로 저장한 뒤 검증, 승인, Server-Side Apply, 사후 검증 흐름으로 처리합니다.",
+	})
+}
+
+// handleK8sManifestLive is the Manifest Studio alias of the read-only Manifest Viewer.
+// GET /admin/k8s/manifests/live?cluster_id=&kind=&namespace=&name=
+func (s *Server) handleK8sManifestLive(w http.ResponseWriter, r *http.Request) {
+	s.handleK8sManifest(w, r)
+}
+
+// handleK8sManifestChanges lists or creates auditable YAML change requests.
+// GET/POST /admin/k8s/manifest-changes
+func (s *Server) handleK8sManifestChanges(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		rows, err := s.db.ListK8sManifestChangeRequests(r.Context(), store.K8sManifestChangeFilter{
+			ClusterID: q.Get("cluster_id"), Status: q.Get("status"), Kind: q.Get("kind"),
+			Namespace: q.Get("namespace"), Limit: intParam(q.Get("limit"), 100),
+		})
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_changes_failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"requests": rows, "count": len(rows)})
+	case http.MethodPost:
+		s.createK8sManifestChange(w, r)
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
+}
+
+func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ClusterID      string `json:"cluster_id"`
+		Namespace      string `json:"namespace"`
+		Kind           string `json:"kind"`
+		APIVersion     string `json:"api_version"`
+		Name           string `json:"name"`
+		AfterYAML      string `json:"after_yaml"`
+		Reason         string `json:"reason"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	clusterID := strings.TrimSpace(in.ClusterID)
+	kind := strings.TrimSpace(in.Kind)
+	namespace := strings.TrimSpace(in.Namespace)
+	name := strings.TrimSpace(in.Name)
+	if clusterID == "" || kind == "" || name == "" || strings.TrimSpace(in.AfterYAML) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id, kind, name and after_yaml are required", "invalid_request_error", "missing_fields")
+		return
+	}
+	idempotencyKey := strings.TrimSpace(firstNonEmpty(in.IdempotencyKey, r.Header.Get("Idempotency-Key")))
+	if idempotencyKey != "" {
+		existing, err := s.db.GetK8sManifestChangeRequestByIdempotencyKey(r.Context(), idempotencyKey)
+		if err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"request": existing, "idempotent_replay": true})
+			return
+		}
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_idempotency_lookup_failed")
+			return
+		}
+	}
+	item, err := s.db.GetK8sInventoryItem(r.Context(), clusterID, kind, namespace, name)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "live resource not found", "invalid_request_error", "resource_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
+		return
+	}
+	afterDoc, err := parseSingleManifestDoc(in.AfterYAML)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "after_yaml parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	if err := validateManifestTarget(afterDoc, item); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "manifest_target_mismatch")
+		return
+	}
+	beforeDoc := sanitizeManifestDocForLedger(assembleManifest(item))
+	beforeYAML := mustManifestYAML(beforeDoc)
+	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
+	afterYAML := mustManifestYAML(storeAfterDoc)
+	diffs := diffManifestDocs(beforeDoc, storeAfterDoc)
+	policies, _ := s.db.ListK8sPolicies(r.Context())
+	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
+	impact, risk, requiresApproval := manifestChangeImpact(item, afterDoc, diffs, plan)
+	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
+		requiresApproval = true
+		risk = "critical"
+		impact["secret_payload_guard"] = "Secret data/stringData 원문은 Manifest Change Studio에 저장하거나 적용하지 않습니다. Secret 값 변경은 Config Change Control 또는 외부 Secret 관리 체계를 사용하세요."
+	}
+	req := store.K8sManifestChangeRequest{
+		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: item.Kind, APIVersion: firstNonEmpty(in.APIVersion, item.APIVersion),
+		Name: item.Name, Status: "draft", RiskLevel: risk, RequiresApproval: requiresApproval, Reason: strings.TrimSpace(in.Reason),
+		BeforeYAML: beforeYAML, AfterYAML: afterYAML, BeforeHash: manifestHash(beforeYAML), AfterHash: manifestHash(afterYAML),
+		Diffs: diffs, Impact: impact, CreatedBy: adminID(r), IdempotencyKey: idempotencyKey,
+		TargetUID: item.UID, TargetResourceVersion: k8sActionTargetResourceVersion(item),
+		Result: "변경 요청 생성됨. validate를 실행해 schema/policy/server dry-run을 확인하세요.",
+	}
+	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), req); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_save_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change.request", "", auditJSON(map[string]any{
+		"id": req.ID, "cluster_id": clusterID, "kind": kind, "namespace": namespace, "name": name, "risk": risk,
+	}))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"request": req, "impact": impact, "diffs": diffs,
+		"note": "요청이 draft로 저장되었습니다. validate 후 위험도에 따라 승인 또는 바로 적용할 수 있습니다.",
+	})
+}
+
+// handleK8sManifestChangeByID returns detail or dispatches validate/impact/approve/reject/apply/verify/export.
+// GET /admin/k8s/manifest-changes/{id}
+// POST /admin/k8s/manifest-changes/{id}/validate|impact|approve|reject|apply|verify|rollback
+func (s *Server) handleK8sManifestChangeByID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/manifest-changes/"), "/")
+	parts := strings.Split(rest, "/")
+	id := parts[0]
+	if id == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "manifest change id required", "invalid_request_error", "missing_manifest_change_id")
+		return
+	}
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.writeK8sManifestChangeDetail(w, r, id)
+		return
+	}
+	switch parts[1] {
+	case "evidence":
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.writeK8sManifestChangeEvidence(w, r, id)
+	case "git-patch":
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.writeK8sManifestChangePatch(w, r, id)
+	default:
+		if r.Method != http.MethodPost {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		switch parts[1] {
+		case "validate", "impact":
+			s.validateK8sManifestChange(w, r, id)
+		case "approve", "reject":
+			s.decideK8sManifestChange(w, r, id, parts[1])
+		case "apply":
+			s.applyK8sManifestChange(w, r, id)
+		case "verify":
+			s.verifyK8sManifestChange(w, r, id)
+		case "rollback":
+			s.rollbackK8sManifestChange(w, r, id)
+		default:
+			writeOpenAIError(w, http.StatusNotFound, "unknown manifest change command", "invalid_request_error", "unknown_manifest_change_command")
+		}
+	}
+}
+
+func (s *Server) writeK8sManifestChangeDetail(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"request": req})
+}
+
+func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	docs, err := decodeManifestDocs(req.AfterYAML)
+	if err != nil || len(docs) != 1 {
+		writeOpenAIError(w, http.StatusBadRequest, "stored manifest parse error", "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	policies, _ := s.db.ListK8sPolicies(r.Context())
+	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
+	validation := map[string]any{
+		"schema": map[string]any{"status": "basic_passed", "checked": []string{"apiVersion", "kind", "metadata.name"}},
+		"policy": map[string]any{"denied": plan.Denied, "violations": plan.PolicyViolations, "approval_reasons": plan.ApprovalReasons},
+	}
+	status := "validated"
+	result := "schema/policy passed"
+	requiresApproval := req.RequiresApproval || plan.RequiresApproval
+	risk := manifestRiskMax(req.RiskLevel, "low")
+	if strings.EqualFold(req.Kind, "Secret") && manifestContainsSecretPayload(docs[0]) {
+		validation["secret_payload_guard"] = map[string]any{
+			"status": "blocked",
+			"reason": "Secret data/stringData payload is not stored or applied by Manifest Change Studio",
+		}
+		status = "failed"
+		risk = "blocked"
+		requiresApproval = true
+		result = "Secret payload changes are blocked; use Config Change Control or an external Secret manager"
+	}
+	if plan.RequiresApproval && riskRank(risk) < riskRank("medium") {
+		risk = "medium"
+	}
+	if status == "failed" {
+		// Guarded before live dry-run so masked Secret bodies can never be sent back to the API server.
+	} else if plan.Denied {
+		status = "failed"
+		risk = "blocked"
+		result = "policy denied"
+	} else {
+		cluster, cErr := s.db.GetK8sCluster(r.Context(), req.ClusterID)
+		if cErr != nil {
+			validation["dry_run"] = map[string]any{"status": "skipped", "error": cErr.Error()}
+		} else if client, cErr := s.k8sClientForCluster(r.Context(), cluster); cErr != nil {
+			validation["dry_run"] = map[string]any{"status": "skipped", "error": cErr.Error()}
+		} else if applier, ok := client.(kube.StackApplier); !ok {
+			validation["dry_run"] = map[string]any{"status": "unsupported", "error": "cluster client does not support apply"}
+		} else {
+			yml := []byte(req.AfterYAML)
+			if aErr := applier.Apply(r.Context(), req.APIVersion, req.Kind, req.Namespace, req.Name, yml, true); aErr != nil {
+				validation["dry_run"] = map[string]any{"status": "failed", "error": aErr.Error()}
+				status = "failed"
+				risk = "blocked"
+				result = "server dry-run failed: " + aErr.Error()
+			} else {
+				validation["dry_run"] = map[string]any{"status": "passed", "mode": "dryRun=All"}
+			}
+		}
+	}
+	if status == "validated" && requiresApproval {
+		status = "approval_required"
+		result = "검증 통과, 승인 필요"
+	}
+	if err := s.db.UpdateK8sManifestChangeAnalysis(r.Context(), id, status, risk, requiresApproval, req.Impact, validation, result); errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition from current state", "invalid_request_error", "manifest_change_bad_state")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_validate_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change.validate", id, auditJSON(map[string]any{"status": status, "risk": risk}))
+	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "validation": validation, "plan": plan})
+}
+
+func (s *Server) decideK8sManifestChange(w http.ResponseWriter, r *http.Request, id, command string) {
+	var in struct {
+		Result string `json:"result"`
+		Note   string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	status := "approved"
+	if command == "reject" {
+		status = "rejected"
+	}
+	msg := strings.TrimSpace(firstNonEmpty(in.Result, in.Note))
+	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, status, adminID(r), msg); errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	} else if errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition from current state", "invalid_request_error", "manifest_change_bad_state")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_decision_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change."+command, id, auditJSON(map[string]any{"status": status}))
+	req, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{"request": req})
+}
+
+func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	if req.RequiresApproval && req.Status != "approved" {
+		writeOpenAIError(w, http.StatusPreconditionRequired, "approval required before apply (current: "+req.Status+")", "invalid_request_error", "manifest_change_approval_required")
+		return
+	}
+	if !req.RequiresApproval && req.Status != "validated" && req.Status != "approved" {
+		writeOpenAIError(w, http.StatusConflict, "manifest change must be validated or approved before apply (current: "+req.Status+")", "invalid_request_error", "manifest_change_not_ready")
+		return
+	}
+	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "running", adminID(r), "SSA apply running"); err != nil {
+		if errors.Is(err, store.ErrInvalidTransition) {
+			writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition to running", "invalid_request_error", "manifest_change_bad_state")
+			return
+		}
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_running_failed")
+		return
+	}
+	cluster, err := s.db.GetK8sCluster(r.Context(), req.ClusterID)
+	if err != nil {
+		s.finishManifestApplyFailure(r, id, map[string]any{"error": err.Error()})
+		writeOpenAIError(w, http.StatusBadRequest, "cluster not found: "+err.Error(), "invalid_request_error", "k8s_cluster_failed")
+		return
+	}
+	client, err := s.k8sClientForCluster(r.Context(), cluster)
+	if err != nil {
+		s.finishManifestApplyFailure(r, id, map[string]any{"error": err.Error()})
+		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 연결 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed")
+		return
+	}
+	applier, ok := client.(kube.StackApplier)
+	if !ok {
+		s.finishManifestApplyFailure(r, id, map[string]any{"error": "applier unsupported"})
+		writeOpenAIError(w, http.StatusNotImplemented, "이 클러스터 클라이언트는 apply를 지원하지 않습니다.", "invalid_request_error", "applier_unsupported")
+		return
+	}
+	applyYAML := []byte(req.AfterYAML)
+	if aErr := applier.Apply(r.Context(), req.APIVersion, req.Kind, req.Namespace, req.Name, applyYAML, false); aErr != nil {
+		result := map[string]any{"status": "failed", "error": aErr.Error(), "field_manager": "clustara"}
+		_ = s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "failed", adminID(r), result, aErr.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]any{"request_id": id, "status": "failed", "apply_result": result})
+		return
+	}
+	result := map[string]any{"status": "applied", "field_manager": "clustara", "applied_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	if err := s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "applied", adminID(r), result, "SSA apply succeeded"); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_finalize_failed")
+		return
+	}
+	s.registerCollectBurst(r.Context(), req.ClusterID, req.Namespace, "manifest_change", "manifest_change:"+req.Kind+"/"+req.Name)
+	s.auditAdmin(r, "k8s.manifest_change.apply", id, auditJSON(map[string]any{"status": "applied", "kind": req.Kind, "name": req.Name}))
+	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "apply_result": result})
+}
+
+func (s *Server) finishManifestApplyFailure(r *http.Request, id string, result map[string]any) {
+	if result["status"] == nil {
+		result["status"] = "failed"
+	}
+	_ = s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "failed", adminID(r), result, fmt.Sprint(result["error"]))
+}
+
+func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	if req.Status != "applied" && req.Status != "verify_failed" {
+		writeOpenAIError(w, http.StatusConflict, "manifest change must be applied before verification (current: "+req.Status+")", "invalid_request_error", "manifest_change_not_applied")
+		return
+	}
+	items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: req.ClusterID, Limit: 5000})
+	events, _ := s.db.ListK8sEvents(r.Context(), req.ClusterID, 500)
+	incidents, _ := s.db.ListK8sIncidents(r.Context(), store.K8sIncidentFilter{ClusterID: req.ClusterID, Status: "open", Limit: 200})
+	appliedAt := parseConfigChangeTime(firstNonEmpty(req.AppliedAt, req.UpdatedAt, req.CreatedAt))
+	found := false
+	refreshed := false
+	unhealthy := false
+	for _, it := range items {
+		if strings.EqualFold(it.Kind, req.Kind) && it.Namespace == req.Namespace && it.Name == req.Name {
+			found = true
+			if !appliedAt.IsZero() && !parseConfigChangeTime(firstNonEmpty(it.ObservedAt, it.UpdatedAt)).Before(appliedAt) {
+				refreshed = true
+			}
+			unhealthy = configChangeUnhealthy(it)
+			break
+		}
+	}
+	warnings := 0
+	for _, ev := range events {
+		if !appliedAt.IsZero() && parseConfigChangeTime(firstNonEmpty(ev.LastSeen, ev.CreatedAt)).Before(appliedAt) {
+			continue
+		}
+		if strings.EqualFold(ev.Type, "Warning") && ev.Namespace == req.Namespace &&
+			(strings.EqualFold(ev.InvolvedKind, req.Kind) && ev.InvolvedName == req.Name) {
+			warnings++
+		}
+	}
+	openIncidents := 0
+	for _, inc := range incidents {
+		if inc.ClusterID == req.ClusterID && inc.Namespace == req.Namespace && strings.EqualFold(inc.Kind, req.Kind) && inc.Name == req.Name {
+			openIncidents++
+		}
+	}
+	verifyStatus := "verified"
+	resultStatus := "passed"
+	if !found || unhealthy || warnings > 0 || openIncidents > 0 {
+		verifyStatus = "verify_failed"
+		resultStatus = "attention_required"
+	} else if !refreshed {
+		verifyStatus = "verify_failed"
+		resultStatus = "pending_observation"
+	}
+	result := map[string]any{
+		"status": resultStatus, "resource_found": found, "refreshed_after_apply": refreshed,
+		"unhealthy": unhealthy, "warning_events": warnings, "open_incidents": openIncidents,
+	}
+	if err := s.db.UpdateK8sManifestChangeVerifyResult(r.Context(), id, verifyStatus, adminID(r), result, "verification: "+resultStatus); err != nil {
+		if errors.Is(err, store.ErrInvalidTransition) {
+			writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition from current state", "invalid_request_error", "manifest_change_bad_state")
+			return
+		}
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_verify_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change.verify", id, auditJSON(result))
+	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "verification": result})
+}
+
+func (s *Server) rollbackK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	rollbackReq := store.K8sManifestChangeRequest{
+		ID: newID("k8smchg"), ClusterID: req.ClusterID, Namespace: req.Namespace, Kind: req.Kind, APIVersion: req.APIVersion,
+		Name: req.Name, Status: "draft", RiskLevel: req.RiskLevel, RequiresApproval: true,
+		Reason: "rollback request from " + req.ID, BeforeYAML: req.AfterYAML, AfterYAML: req.BeforeYAML,
+		BeforeHash: req.AfterHash, AfterHash: req.BeforeHash, Diffs: diffYAMLText(req.AfterYAML, req.BeforeYAML),
+		Impact:    map[string]any{"rollback_from": req.ID, "rollback_candidate": "before_yaml"},
+		CreatedBy: adminID(r), TargetUID: req.TargetUID, TargetResourceVersion: req.TargetResourceVersion,
+		Result: "Rollback 후보 요청 생성됨. validate 후 승인/적용하세요.",
+	}
+	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), rollbackReq); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_rollback_save_failed")
+		return
+	}
+	_ = s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "rollback_requested", adminID(r), "rollback request: "+rollbackReq.ID)
+	s.auditAdmin(r, "k8s.manifest_change.rollback", id, auditJSON(map[string]any{"rollback_request": rollbackReq.ID}))
+	writeJSON(w, http.StatusCreated, map[string]any{"request": rollbackReq, "source": req.ID})
+}
+
+func (s *Server) writeK8sManifestChangeEvidence(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	md := manifestChangeEvidenceMarkdown(req)
+	sum := sha256.Sum256([]byte(md))
+	writeJSON(w, http.StatusOK, map[string]any{"request_id": req.ID, "bundle_hash": hex.EncodeToString(sum[:]), "markdown": md})
+}
+
+func (s *Server) writeK8sManifestChangePatch(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	patch := manifestChangePseudoPatch(req)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(patch))
+}
+
+func parseSingleManifestDoc(raw string) (map[string]any, error) {
+	docs, err := decodeManifestDocs(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) != 1 {
+		return nil, fmt.Errorf("exactly one Kubernetes resource document is required")
+	}
+	if strings.TrimSpace(asStr(docs[0]["apiVersion"])) == "" || strings.TrimSpace(asStr(docs[0]["kind"])) == "" {
+		return nil, fmt.Errorf("apiVersion and kind are required")
+	}
+	meta, _ := docs[0]["metadata"].(map[string]any)
+	if strings.TrimSpace(asStr(meta["name"])) == "" {
+		return nil, fmt.Errorf("metadata.name is required")
+	}
+	return docs[0], nil
+}
+
+func validateManifestTarget(doc map[string]any, item store.K8sInventoryItem) error {
+	kind := strings.TrimSpace(asStr(doc["kind"]))
+	meta, _ := doc["metadata"].(map[string]any)
+	name := strings.TrimSpace(asStr(meta["name"]))
+	ns := strings.TrimSpace(asStr(meta["namespace"]))
+	if ns == "" {
+		ns = item.Namespace
+	}
+	if !strings.EqualFold(kind, item.Kind) || name != item.Name || ns != item.Namespace {
+		return fmt.Errorf("manifest target mismatch: expected %s/%s/%s, got %s/%s/%s", item.Kind, item.Namespace, item.Name, kind, ns, name)
+	}
+	return nil
+}
+
+func mustManifestYAML(doc map[string]any) string {
+	b, err := yaml.Marshal(doc)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func sanitizeManifestDocForLedger(doc map[string]any) map[string]any {
+	out := maskManifestValue(doc).(map[string]any)
+	delete(out, "status")
+	if meta, ok := out["metadata"].(map[string]any); ok {
+		for _, k := range []string{"uid", "resourceVersion", "generation", "managedFields", "creationTimestamp", "deletionTimestamp", "selfLink"} {
+			delete(meta, k)
+		}
+	}
+	return out
+}
+
+func manifestContainsSecretPayload(doc map[string]any) bool {
+	if !strings.EqualFold(asStr(doc["kind"]), "Secret") {
+		return false
+	}
+	_, hasData := doc["data"]
+	_, hasStringData := doc["stringData"]
+	return hasData || hasStringData
+}
+
+func manifestHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func diffManifestDocs(before, after map[string]any) []store.K8sManifestFieldDiff {
+	out := []store.K8sManifestFieldDiff{}
+	collectManifestDiffs("", before, after, &out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+func diffYAMLText(beforeYAML, afterYAML string) []store.K8sManifestFieldDiff {
+	before, bErr := parseSingleManifestDoc(beforeYAML)
+	after, aErr := parseSingleManifestDoc(afterYAML)
+	if bErr != nil || aErr != nil {
+		return []store.K8sManifestFieldDiff{{Path: "$", Type: "changed", Risk: "medium", OldValue: "previous manifest", NewValue: "rollback manifest"}}
+	}
+	return diffManifestDocs(before, after)
+}
+
+func collectManifestDiffs(path string, before, after any, out *[]store.K8sManifestFieldDiff) {
+	bm, bok := before.(map[string]any)
+	am, aok := after.(map[string]any)
+	if bok && aok {
+		keys := map[string]bool{}
+		for k := range bm {
+			keys[k] = true
+		}
+		for k := range am {
+			keys[k] = true
+		}
+		sorted := make([]string, 0, len(keys))
+		for k := range keys {
+			sorted = append(sorted, k)
+		}
+		sort.Strings(sorted)
+		for _, k := range sorted {
+			child := k
+			if path != "" {
+				child = path + "." + k
+			}
+			_, hasB := bm[k]
+			_, hasA := am[k]
+			switch {
+			case !hasB:
+				*out = append(*out, store.K8sManifestFieldDiff{Path: child, Type: "added", NewValue: manifestDiffValue(am[k]), Risk: manifestDiffRisk(child)})
+			case !hasA:
+				*out = append(*out, store.K8sManifestFieldDiff{Path: child, Type: "removed", OldValue: manifestDiffValue(bm[k]), Risk: manifestDiffRisk(child)})
+			default:
+				collectManifestDiffs(child, bm[k], am[k], out)
+			}
+		}
+		return
+	}
+	if !manifestValuesEqual(before, after) {
+		*out = append(*out, store.K8sManifestFieldDiff{Path: firstNonEmpty(path, "$"), Type: "changed", OldValue: manifestDiffValue(before), NewValue: manifestDiffValue(after), Risk: manifestDiffRisk(path)})
+	}
+}
+
+func manifestValuesEqual(a, b any) bool {
+	aj, _ := json.Marshal(a)
+	bj, _ := json.Marshal(b)
+	return string(aj) == string(bj)
+}
+
+func manifestDiffValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		if s == maskedValue {
+			return maskedValue
+		}
+		if len(s) > 160 {
+			return s[:160] + "..."
+		}
+		return s
+	}
+	b, _ := json.Marshal(v)
+	if len(b) > 220 {
+		return string(b[:220]) + "..."
+	}
+	return string(b)
+}
+
+func manifestDiffRisk(path string) string {
+	p := strings.ToLower(path)
+	switch {
+	case strings.Contains(p, "clusterrole"), strings.Contains(p, "privileged"), strings.Contains(p, "hostpath"),
+		strings.Contains(p, "hostnetwork"), strings.Contains(p, "secret"), strings.Contains(p, "networkpolicy"):
+		return "critical"
+	case strings.Contains(p, "selector"), strings.Contains(p, "ingress"), strings.Contains(p, "tls"),
+		strings.Contains(p, "replicas"), strings.Contains(p, "service.type"), strings.Contains(p, "pdb"):
+		return "high"
+	case strings.Contains(p, "env"), strings.Contains(p, "resources"), strings.Contains(p, "probe"), strings.Contains(p, "image"):
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func manifestChangeImpact(item store.K8sInventoryItem, after map[string]any, diffs []store.K8sManifestFieldDiff, plan analyzer.StackPlan) (map[string]any, string, bool) {
+	reasons := []string{}
+	risk := "low"
+	requiresApproval := plan.RequiresApproval
+	for _, d := range diffs {
+		risk = manifestRiskMax(risk, d.Risk)
+		if d.Risk == "high" || d.Risk == "critical" {
+			reasons = append(reasons, d.Path+"="+d.Risk)
+			requiresApproval = true
+		} else if d.Risk == "medium" {
+			reasons = append(reasons, d.Path+"=medium")
+			requiresApproval = true
+		}
+	}
+	switch strings.ToLower(item.Kind) {
+	case "secret", "clusterrole", "clusterrolebinding", "role", "rolebinding", "networkpolicy":
+		risk = manifestRiskMax(risk, "critical")
+		requiresApproval = true
+	case "ingress", "service", "persistentvolumeclaim", "poddisruptionbudget":
+		risk = manifestRiskMax(risk, "high")
+		requiresApproval = true
+	case "deployment", "statefulset", "daemonset", "job", "cronjob", "horizontalpodautoscaler":
+		if riskRank(risk) < riskRank("medium") {
+			risk = manifestRiskMax(risk, "medium")
+		}
+		requiresApproval = true
+	}
+	if len(plan.PolicyViolations) > 0 {
+		reasons = append(reasons, "policy_violations")
+	}
+	if plan.Denied {
+		risk = "blocked"
+		requiresApproval = true
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "low-risk metadata/spec change")
+	}
+	targets := resolveStackTargets([]map[string]any{after}, item.Namespace)
+	return map[string]any{
+		"target":         map[string]any{"cluster_id": item.ClusterID, "kind": item.Kind, "namespace": item.Namespace, "name": item.Name, "uid": item.UID},
+		"changed_fields": len(diffs), "approval_reasons": reasons, "stack_resources": targets,
+		"policy_denied": plan.Denied, "policy_violations": plan.PolicyViolations,
+	}, risk, requiresApproval
+}
+
+func manifestRiskMax(a, b string) string {
+	if riskRank(b) > riskRank(a) {
+		return b
+	}
+	return a
+}
+
+func riskRank(r string) int {
+	switch strings.ToLower(strings.TrimSpace(r)) {
+	case "blocked":
+		return 5
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func manifestChangeEvidenceMarkdown(req store.K8sManifestChangeRequest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Manifest Change Evidence\n\n")
+	fmt.Fprintf(&b, "- Request: `%s`\n- Target: `%s/%s/%s`\n- Status: `%s`\n- Risk: `%s`\n- Created by: `%s`\n- Reason: %s\n\n",
+		req.ID, req.Namespace, req.Kind, req.Name, req.Status, req.RiskLevel, req.CreatedBy, req.Reason)
+	fmt.Fprintf(&b, "## Hashes\n\n- Before: `%s`\n- After: `%s`\n\n", req.BeforeHash, req.AfterHash)
+	fmt.Fprintf(&b, "## Field Diff\n\n")
+	if len(req.Diffs) == 0 {
+		b.WriteString("- No semantic diff recorded.\n\n")
+	} else {
+		for _, d := range req.Diffs {
+			fmt.Fprintf(&b, "- `%s` %s (%s): `%s` -> `%s`\n", d.Path, d.Type, d.Risk, d.OldValue, d.NewValue)
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "## Validation\n\n```json\n%s\n```\n\n", prettyJSON(req.Validation))
+	fmt.Fprintf(&b, "## Apply Result\n\n```json\n%s\n```\n\n", prettyJSON(req.ApplyResult))
+	fmt.Fprintf(&b, "## Verification\n\n```json\n%s\n```\n", prettyJSON(req.VerifyResult))
+	return b.String()
+}
+
+func manifestChangePseudoPatch(req store.K8sManifestChangeRequest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- before/%s-%s-%s.yaml\n+++ after/%s-%s-%s.yaml\n", req.Namespace, req.Kind, req.Name, req.Namespace, req.Kind, req.Name)
+	beforeLines := strings.Split(req.BeforeYAML, "\n")
+	afterLines := strings.Split(req.AfterYAML, "\n")
+	b.WriteString("@@ manifest @@\n")
+	for _, line := range beforeLines {
+		if strings.TrimSpace(line) != "" {
+			fmt.Fprintf(&b, "-%s\n", line)
+		}
+	}
+	for _, line := range afterLines {
+		if strings.TrimSpace(line) != "" {
+			fmt.Fprintf(&b, "+%s\n", line)
+		}
+	}
+	return b.String()
+}
+
+func prettyJSON(v any) string {
+	if v == nil {
+		return "{}"
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}

@@ -2009,3 +2009,233 @@ func TestK8sClusterTestAndCollectUseLiveAPI(t *testing.T) {
 		t.Fatalf("unexpected collect response: %+v", collectResp)
 	}
 }
+
+func TestK8sManifestChangeStudioDryRunAndApplyUseSSA(t *testing.T) {
+	var dryRuns int
+	var applies int
+	var appliedBodies []string
+	kubeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/version":
+			_, _ = w.Write([]byte(`{"gitVersion":"v1.30.0"}`))
+		case "/api/v1/namespaces":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"default","uid":"ns1"}}]}`))
+		case "/api/v1/nodes":
+			_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"node-a","uid":"node1"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`))
+		case "/apis/apps/v1/deployments":
+			_, _ = w.Write([]byte(`{"items":[{"apiVersion":"apps/v1","metadata":{"namespace":"default","name":"api","uid":"dep1","resourceVersion":"41","labels":{"app":"api"}},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"api"}},"template":{"metadata":{"labels":{"app":"api"}},"spec":{"containers":[{"name":"app","image":"example/api:1.0"}]}}},"status":{"readyReplicas":2,"availableReplicas":2}}]}`))
+		case "/apis/apps/v1/namespaces/default/deployments/api":
+			if r.Method != http.MethodPatch {
+				t.Errorf("manifest change apply should use PATCH, got %s", r.Method)
+			}
+			if got := r.Header.Get("Content-Type"); !strings.Contains(got, "application/apply-patch+yaml") {
+				t.Errorf("manifest change should use SSA content type, got %q", got)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Errorf("Kubernetes request should include cluster token, got %q", got)
+			}
+			if got := r.URL.Query().Get("fieldManager"); got != "clustara" {
+				t.Errorf("fieldManager should be clustara, got %q", got)
+			}
+			if got := r.URL.Query().Get("force"); got != "true" {
+				t.Errorf("force should be true, got %q", got)
+			}
+			body, _ := io.ReadAll(r.Body)
+			bodyText := string(body)
+			appliedBodies = append(appliedBodies, bodyText)
+			if !strings.Contains(bodyText, "replicas: 3") {
+				t.Errorf("SSA manifest should contain edited replicas, body=%s", bodyText)
+			}
+			if strings.Contains(bodyText, "resourceVersion") || strings.Contains(bodyText, "\nstatus:") {
+				t.Errorf("SSA manifest should strip server-managed fields, body=%s", bodyText)
+			}
+			if r.URL.Query().Get("dryRun") == "All" {
+				dryRuns++
+			} else {
+				applies++
+			}
+			_, _ = w.Write([]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"namespace":"default","name":"api"}}`))
+		case "/api/v1/events":
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	}))
+	defer kubeAPI.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name":       "manifest-cluster",
+		"server_url": kubeAPI.URL,
+		"auth_mode":  "token",
+		"token":      "test-token",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("register cluster status=%d body=%s", resp.StatusCode, body)
+	}
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/clusters/"+created.Cluster.ID+"/collect", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("collect cluster status=%d body=%s", resp.StatusCode, body)
+	}
+
+	liveResp, err := http.Get(proxy.URL + "/admin/k8s/manifests/live?cluster_id=" + created.Cluster.ID + "&kind=Deployment&namespace=default&name=api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer liveResp.Body.Close()
+	if liveResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(liveResp.Body)
+		t.Fatalf("live manifest status=%d body=%s", liveResp.StatusCode, body)
+	}
+	var live struct {
+		YAML string `json:"yaml"`
+	}
+	if err := json.NewDecoder(liveResp.Body).Decode(&live); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(live.YAML, "replicas: 2") {
+		t.Fatalf("live manifest should expose current replicas, yaml=%s", live.YAML)
+	}
+
+	afterYAML := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: default
+  uid: dep1
+  resourceVersion: "41"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: app
+        image: example/api:1.0
+status:
+  availableReplicas: 2
+`
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes", "", map[string]any{
+		"cluster_id":      created.Cluster.ID,
+		"kind":            "Deployment",
+		"namespace":       "default",
+		"name":            "api",
+		"after_yaml":      afterYAML,
+		"reason":          "scale manifest through Studio",
+		"idempotency_key": "manifest-test-1",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create manifest change status=%d body=%s", resp.StatusCode, body)
+	}
+	var createOut struct {
+		Request store.K8sManifestChangeRequest `json:"request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&createOut); err != nil {
+		t.Fatal(err)
+	}
+	if createOut.Request.ID == "" || createOut.Request.Status != "draft" || createOut.Request.RiskLevel != "high" || !createOut.Request.RequiresApproval {
+		t.Fatalf("unexpected manifest change request: %+v", createOut.Request)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/validate", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("validate manifest change status=%d body=%s", resp.StatusCode, body)
+	}
+	var validateOut struct {
+		Request store.K8sManifestChangeRequest `json:"request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&validateOut); err != nil {
+		t.Fatal(err)
+	}
+	if validateOut.Request.Status != "approval_required" {
+		t.Fatalf("replica decrease/increase diff should require approval before apply, got %+v", validateOut.Request)
+	}
+	if dryRuns != 1 || applies != 0 {
+		t.Fatalf("validate should send exactly one dry-run apply, dryRuns=%d applies=%d", dryRuns, applies)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/approve", "", map[string]any{"note": "approved for rollout test"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("approve manifest change status=%d body=%s", resp.StatusCode, body)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/apply", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("apply manifest change status=%d body=%s", resp.StatusCode, body)
+	}
+	var applyOut struct {
+		Request store.K8sManifestChangeRequest `json:"request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&applyOut); err != nil {
+		t.Fatal(err)
+	}
+	if applyOut.Request.Status != "applied" || dryRuns != 1 || applies != 1 || len(appliedBodies) != 2 {
+		t.Fatalf("expected one dry-run and one real apply, request=%+v dryRuns=%d applies=%d bodies=%d", applyOut.Request, dryRuns, applies, len(appliedBodies))
+	}
+
+	timelineResp, err := http.Get(proxy.URL + "/admin/k8s/timeline?cluster_id=" + created.Cluster.ID + "&namespace=default&name=api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer timelineResp.Body.Close()
+	if timelineResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(timelineResp.Body)
+		t.Fatalf("timeline status=%d body=%s", timelineResp.StatusCode, body)
+	}
+	var timeline struct {
+		Entries []struct {
+			Category string `json:"category"`
+			Ref      string `json:"ref"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(timelineResp.Body).Decode(&timeline); err != nil {
+		t.Fatal(err)
+	}
+	foundManifestChange := false
+	for _, e := range timeline.Entries {
+		if e.Category == "manifest_change" && e.Ref == createOut.Request.ID {
+			foundManifestChange = true
+			break
+		}
+	}
+	if !foundManifestChange {
+		t.Fatalf("timeline should include manifest change %s, got %+v", createOut.Request.ID, timeline.Entries)
+	}
+}

@@ -361,6 +361,7 @@ const adminHTML = `<!doctype html>
         <div class="nav-group-menu">
           <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
       <a href="#/k8s-stacks" data-tab="k8s-stacks">앱 배포</a>
+          <a href="#/k8s-manifest-changes" data-tab="k8s-manifest-changes">YAML 변경</a>
           <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
           <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
           <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
@@ -1254,6 +1255,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-slo': await renderK8sSLO(params); break;
           case 'k8s-collector': await renderK8sCollector(params); break;
           case 'k8s-stacks': await renderK8sStacks(params); break;
+          case 'k8s-manifest-changes': await renderK8sManifestChanges(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
@@ -9577,6 +9579,152 @@ const adminHTML = `<!doctype html>
       if (!confirm('이 Stack과 모든 리비전을 삭제할까요?')) return;
       try { await api('/admin/k8s/stacks/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sStacks(new URLSearchParams(location.hash.split('?')[1] || ''));
+    };
+
+    // ---------- Manifest Change Studio ----------
+    async function renderK8sManifestChanges(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="empty">불러오는 중...</div>');
+      let editor, changes;
+      try {
+        [editor, changes] = await Promise.all([
+          api('/admin/k8s/manifests/editor?limit=1000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/manifest-changes?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+        ]);
+      } catch (e) {
+        view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const clusters = editor.clusters || [];
+      const resources = editor.resources || [];
+      window.k8sManifestResources = resources;
+      const clusterOpts = '<option value="">전체/클러스터 선택</option>' + clusters.map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name || cl.id) + '</option>').join('');
+      const resourceOpts = '<option value="">리소스 선택</option>' + resources.slice(0, 1000).map((r, i) =>
+        '<option value="' + i + '">' + escapeHTML((r.namespace || '-') + '/' + r.kind + '/' + r.name + ' · ' + (r.api_version || '')) + '</option>').join('');
+      const riskClass = (r) => r === 'blocked' || r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
+      const statusClass = (st) => ['failed', 'rejected', 'verify_failed'].includes(st) ? 'error' : (['draft', 'approval_required', 'approved', 'running'].includes(st) ? 'warn' : '');
+      const rows = (changes.requests || []).length ? (changes.requests || []).map(cr => {
+        const canValidate = cr.status === 'draft' || cr.status === 'validated' || cr.status === 'approval_required';
+        const canApprove = cr.status === 'validated' || cr.status === 'approval_required';
+        const canApply = cr.status === 'approved' || (!cr.requires_approval && cr.status === 'validated');
+        const canVerify = cr.status === 'applied' || cr.status === 'verify_failed';
+        const btns =
+          '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeDetail(\'' + escapeAttr(cr.id) + '\')">상세</button> ' +
+          (canValidate ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'validate\')">검증</button> ' : '') +
+          (canApprove ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'approve\')">승인</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'reject\')">반려</button> ' : '') +
+          (canApply ? '<button type="button" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'apply\')">적용</button> ' : '') +
+          (canVerify ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'verify\')">검증확인</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'rollback\')">롤백요청</button> ' : '') +
+          '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeEvidence(\'' + escapeAttr(cr.id) + '\')">증적</button> ' +
+          '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangePatch(\'' + escapeAttr(cr.id) + '\')">Patch</button>';
+        return '<tr><td><span class="status ' + statusClass(cr.status) + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
+          '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.kind + '/' + cr.name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.cluster_id || '') + '</div></td>' +
+          '<td><span class="status ' + riskClass(cr.risk_level) + '" style="font-size:10px">' + escapeHTML(cr.risk_level || '') + '</span></td>' +
+          '<td>' + fmt((cr.diffs || []).length) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.result || '') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + ago(cr.updated_at || cr.created_at) + '</td><td>' + btns + '</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">YAML 변경 요청이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('YAML 변경 (Manifest Change Studio)',
+          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, Ingress, HPA, RBAC, CRD 등 단일 리소스 YAML을 요청→검증→승인→Server-Side Apply→사후 검증 흐름으로 변경합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
+        card('리소스 선택과 변경 요청',
+          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
+          '<select id="mchg-cluster" onchange="k8sManifestChangeGo()">' + clusterOpts + '</select>' +
+          '<select id="mchg-resource" onchange="k8sManifestPickResource()">' + resourceOpts + '</select>' +
+          '<input id="mchg-kind" placeholder="Kind" style="min-width:120px"><input id="mchg-ns" placeholder="namespace" style="min-width:120px"><input id="mchg-name" placeholder="name" style="min-width:160px">' +
+          '<button type="button" class="secondary" onclick="k8sManifestLoadLive()">Live YAML</button></div>' +
+          '<textarea id="mchg-yaml" rows="13" placeholder="Live YAML을 불러온 뒤 수정하세요" style="width:100%;font-family:monospace"></textarea>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="mchg-reason" placeholder="변경 사유 / 장애번호 / 변경번호" style="min-width:280px"><button type="button" onclick="k8sManifestCreateChange()">변경 요청 생성</button></div>' +
+          '<div id="mchg-out" style="margin-top:8px"></div></div>') +
+        card('변경 요청 원장',
+          '<div class="card-body"><table><thead><tr><th>상태</th><th>대상</th><th>위험도</th><th>Diff</th><th>사유/결과</th><th>수정</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="mchg-detail" style="margin-top:10px"></div></div>');
+    }
+    window.k8sManifestChangeGo = () => {
+      const cl = document.getElementById('mchg-cluster').value;
+      location.hash = '#/k8s-manifest-changes' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+    window.k8sManifestPickResource = () => {
+      const idx = document.getElementById('mchg-resource').value;
+      const r = (window.k8sManifestResources || [])[Number(idx)];
+      if (!r) return;
+      document.getElementById('mchg-kind').value = r.kind || '';
+      document.getElementById('mchg-ns').value = r.namespace || '';
+      document.getElementById('mchg-name').value = r.name || '';
+      if (r.cluster_id) document.getElementById('mchg-cluster').value = r.cluster_id;
+    };
+    window.k8sManifestLoadLive = async () => {
+      const out = document.getElementById('mchg-out');
+      const body = k8sManifestFormTarget();
+      if (!body.cluster_id || !body.kind || !body.name) { out.innerHTML = '<span class="status warn">클러스터, Kind, 이름을 선택하세요</span>'; return; }
+      out.innerHTML = '<span class="muted">Live manifest 로딩 중...</span>';
+      try {
+        const q = new URLSearchParams({ cluster_id: body.cluster_id, kind: body.kind, name: body.name });
+        if (body.namespace) q.set('namespace', body.namespace);
+        const d = await api('/admin/k8s/manifests/live?' + q.toString());
+        document.getElementById('mchg-yaml').value = d.yaml || '';
+        out.innerHTML = '<span class="status">Live YAML 로드됨</span> <span class="muted" style="font-size:11px">' + escapeHTML(d.note || '') + '</span>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    function k8sManifestFormTarget() {
+      return {
+        cluster_id: (document.getElementById('mchg-cluster').value || '').trim(),
+        kind: (document.getElementById('mchg-kind').value || '').trim(),
+        namespace: (document.getElementById('mchg-ns').value || '').trim(),
+        name: (document.getElementById('mchg-name').value || '').trim()
+      };
+    }
+    window.k8sManifestCreateChange = async () => {
+      const out = document.getElementById('mchg-out');
+      const body = k8sManifestFormTarget();
+      body.after_yaml = (document.getElementById('mchg-yaml').value || '').trim();
+      body.reason = (document.getElementById('mchg-reason').value || '').trim();
+      if (!body.cluster_id || !body.kind || !body.name || !body.after_yaml) { out.innerHTML = '<span class="status warn">대상과 YAML이 필요합니다</span>'; return; }
+      out.innerHTML = '<span class="muted">변경 요청 생성 중...</span>';
+      try {
+        const d = await api('/admin/k8s/manifest-changes', { method: 'POST', body: JSON.stringify(body) });
+        out.innerHTML = '<span class="status">요청 생성됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((d.request || {}).id || '') + ' · 검증을 실행하세요.</span>';
+        await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sManifestChangeAction = async (id, action) => {
+      let body = '{}';
+      if (action === 'reject') body = JSON.stringify({ note: prompt('반려 사유를 입력하세요(선택):') || '' });
+      if (action === 'approve') body = JSON.stringify({ note: prompt('승인 의견을 입력하세요(선택):') || 'approved' });
+      if (action === 'apply' && !confirm('이 YAML 변경을 실제 클러스터에 Server-Side Apply로 적용할까요?')) return;
+      if (action === 'rollback' && !confirm('이 변경의 이전 YAML로 롤백 요청을 생성할까요?')) return;
+      try {
+        await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
+      } catch (e) {
+        alert(e.message);
+      }
+      await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
+    };
+    window.k8sManifestChangeDetail = async (id) => {
+      const out = document.getElementById('mchg-detail');
+      out.innerHTML = '<span class="muted">상세 조회 중...</span>';
+      try {
+        const d = await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id));
+        const r = d.request || {};
+        const diffs = (r.diffs || []).map(df => '<tr><td><code>' + escapeHTML(df.path || '') + '</code></td><td><span class="status ' + (df.risk === 'critical' || df.risk === 'high' ? 'error' : (df.risk === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(df.risk || '') + '</span></td><td>' + escapeHTML(df.type || '') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(df.old_value || '') + ' → ' + escapeHTML(df.new_value || '') + '</td></tr>').join('') || '<tr><td colspan="4" class="muted">필드 diff 없음</td></tr>';
+        out.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div><div class="kv">' + row('상태', escapeHTML(r.status || '')) + row('위험도', escapeHTML(r.risk_level || '')) + row('승인 필요', r.requires_approval ? 'yes' : 'no') + row('Before hash', '<code>' + escapeHTML((r.before_hash || '').slice(0, 16)) + '</code>') + row('After hash', '<code>' + escapeHTML((r.after_hash || '').slice(0, 16)) + '</code>') + '</div></div>' +
+          '<div><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto">' + escapeHTML(JSON.stringify({ impact: r.impact || {}, validation: r.validation || {}, apply: r.apply_result || {}, verify: r.verify_result || {} }, null, 2)) + '</pre></div></div>' +
+          '<h3 style="margin-top:10px">Field Diff</h3><table><thead><tr><th>Path</th><th>위험</th><th>유형</th><th>값</th></tr></thead><tbody>' + diffs + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sManifestChangeEvidence = async (id) => {
+      try {
+        const d = await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/evidence');
+        openModal('Manifest Change Evidence — ' + id, '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">bundle hash: <code>' + escapeHTML(d.bundle_hash || '') + '</code></div><pre style="white-space:pre-wrap;max-height:70vh;overflow:auto">' + escapeHTML(d.markdown || '') + '</pre></div>', null, { wide: true });
+      } catch (e) { openModal('증적 오류', '<div class="error-line">' + escapeHTML(e.message) + '</div>'); }
+    };
+    window.k8sManifestChangePatch = async (id) => {
+      try {
+        const res = await fetch('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/git-patch', { headers: headers() });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || res.statusText);
+        openModal('Git Patch Export — ' + id, '<div class="card-body"><pre style="white-space:pre-wrap;max-height:70vh;overflow:auto">' + escapeHTML(text || '') + '</pre></div>', null, { wide: true });
+      } catch (e) { openModal('Patch 오류', '<div class="error-line">' + escapeHTML(e.message) + '</div>'); }
     };
 
     // ---------- K8s Collector 상태 (Realtime Agent) ----------

@@ -113,3 +113,60 @@ func TestK8sPodExecSessionFSM(t *testing.T) {
 		t.Fatalf("terminal exec should not be rewritten, got %v", err)
 	}
 }
+
+func TestK8sManifestChangeFSMAndLedger(t *testing.T) {
+	ctx := context.Background()
+	db := openK8sFSMTestStore(t)
+	defer db.Close()
+
+	req := K8sManifestChangeRequest{
+		ID: "mchg_1", ClusterID: "k8scl_1", Namespace: "default", Kind: "Deployment", APIVersion: "apps/v1", Name: "api",
+		Status: "draft", RiskLevel: "medium", RequiresApproval: true, Reason: "scale api",
+		BeforeYAML: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: default\nspec:\n  replicas: 1\n",
+		AfterYAML:  "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: default\nspec:\n  replicas: 2\n",
+		BeforeHash: "before", AfterHash: "after", CreatedBy: "developer", IdempotencyKey: "idem_manifest_1",
+		TargetUID: "dep-uid", TargetResourceVersion: "rv-12",
+		Diffs:  []K8sManifestFieldDiff{{Path: "spec.replicas", OldValue: "1", NewValue: "2", Type: "changed", Risk: "medium"}},
+		Impact: map[string]any{"changed_fields": 1},
+	}
+	if err := db.CreateK8sManifestChangeRequest(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetK8sManifestChangeRequestByIdempotencyKey(ctx, "idem_manifest_1")
+	if err != nil || got.ID != req.ID || len(got.Diffs) != 1 || got.TargetUID != "dep-uid" {
+		t.Fatalf("idempotency lookup = %+v err=%v", got, err)
+	}
+	if err := db.UpdateK8sManifestChangeStatus(ctx, req.ID, "running", "admin", "too early"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("running before validation/approval should be invalid, got %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeAnalysis(ctx, req.ID, "approval_required", "medium", true, req.Impact, map[string]any{"dry_run": "passed"}, "approval needed"); err != nil {
+		t.Fatalf("analysis: %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeStatus(ctx, req.ID, "approved", "approver", "ok"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeStatus(ctx, req.ID, "approved", "approver", "again"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("double approve should be invalid, got %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeStatus(ctx, req.ID, "running", "operator", "apply"); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeApplyResult(ctx, req.ID, "applied", "operator", map[string]any{"status": "applied"}, "done"); err != nil {
+		t.Fatalf("applied: %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeStatus(ctx, req.ID, "running", "operator", "again"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("running after applied should be invalid, got %v", err)
+	}
+	if err := db.UpdateK8sManifestChangeVerifyResult(ctx, req.ID, "verified", "operator", map[string]any{"status": "passed"}, "verified"); err != nil {
+		t.Fatalf("verified: %v", err)
+	}
+	final, err := db.GetK8sManifestChangeRequest(ctx, req.ID)
+	if err != nil || final.Status != "verified" || final.AppliedBy != "operator" || final.VerifiedBy != "operator" {
+		t.Fatalf("final = %+v err=%v", final, err)
+	}
+
+	rows, err := db.ListK8sManifestChangeRequests(ctx, K8sManifestChangeFilter{ClusterID: "k8scl_1", Kind: "Deployment"})
+	if err != nil || len(rows) != 1 || rows[0].ID != req.ID {
+		t.Fatalf("list = %+v err=%v", rows, err)
+	}
+}
