@@ -84,10 +84,18 @@ func (s *Server) handleK8sExtensionInstallPlan(w http.ResponseWriter, r *http.Re
 		resources = append(resources, res)
 		created = append(created, map[string]any{"kind": kind, "name": name})
 	}
+	risk := analyzer.AnalyzeInstallPlan(resources)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"risk":    analyzer.AnalyzeInstallPlan(resources),
+		"risk":    risk,
 		"created": created,
-		"note":    "add-on 설치 시 생성될 리소스와 blast radius 위험입니다(CLU-OCP-06). Clustara는 설치를 실행하지 않습니다 — 설치 계획 미리보기/위험 점수만 제공합니다. 고위험은 승인 흐름으로 처리하세요.",
+		// Apply bridge (CLU-NEXT-06): an approved bundle installs through the EXISTING Stack Apply
+		// path (Server-Side Apply + policy Deny + approval), so no separate install executor is needed.
+		"apply_bridge": map[string]any{
+			"submit_to": "/admin/k8s/stacks", "method": "save-then-apply",
+			"requires_approval": risk.RequiresApproval,
+			"note":              "설치는 매니페스트 번들을 앱 배포(Stack)로 저장→검증(정책·dry-run)→승인→Server-Side Apply로 진행합니다. 고위험(admin/webhook/privileged)은 승인 필수입니다.",
+		},
+		"note": "add-on 설치 계획 미리보기·blast radius 위험입니다(CLU-OCP-06/CLU-NEXT-06). 실제 설치는 기존 Stack Apply 승인·SSA executor로 처리됩니다.",
 	})
 }
 
@@ -136,7 +144,16 @@ func (s *Server) handleK8sNodeDrain(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"impact": analyzer.AnalyzeDrainImpact(node, pods, pdbs),
-		"note":   "노드 drain 시 영향 분석입니다(CLU-OCP-07). Clustara는 노드를 변경하지 않습니다 — drain 전 영향/차단 요인만 분석합니다.",
+		// Cordon bridge (CLU-NEXT-07): the first, safe drain step (mark unschedulable) reuses the
+		// EXISTING Action Center cordon executor. Full eviction remains an operator/manual step.
+		"cordon_bridge": map[string]any{
+			"submit_to": "/admin/k8s/actions",
+			"request_payload": map[string]any{
+				"cluster_id": clusterID, "resource_kind": "Node", "resource_name": node, "action": "cordon",
+			},
+			"note": "drain의 1단계(cordon: 신규 스케줄 차단)는 기존 Action Center cordon executor로 승인 후 실행할 수 있습니다. Pod eviction은 영향 분석 확인 후 진행하세요.",
+		},
+		"note": "노드 drain 영향 분석입니다(CLU-OCP-07/CLU-NEXT-07). cordon은 기존 executor로 실행 가능하며, eviction은 영향/PDB 확인 후 진행합니다.",
 	})
 }
 

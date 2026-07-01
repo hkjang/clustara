@@ -1,3 +1,6 @@
+v0.9.37:
+- **실행 브리지 — Extension 설치·Node cordon을 기존 executor로 연결 (v0.9.37, CLU-NEXT-06/07 브리지)**: 새 위험한 executor를 만들지 않고, 이미 검증된 기존 실행 경로에 분석 결과를 연결했습니다. (06) Add-on install-plan 응답에 `apply_bridge`를 추가해 승인된 번들이 기존 Stack Apply(Server-Side Apply + 정책 Deny + 승인)로 설치되도록 안내합니다 — 별도 install executor 불필요. (07) Node drain 영향 응답에 `cordon_bridge`를 추가해 drain 1단계(cordon: 신규 스케줄 차단)를 기존 Action Center cordon executor로 승인·실행하도록 payload를 제공합니다. Pod eviction은 영향/PDB 확인 후 진행하는 안전 기본값을 유지합니다. 두 브리지 모두 기존 승인·executor를 재사용하므로 클러스터 변경은 항상 승인 흐름을 거칩니다.
+
 v0.9.36:
 - **Build Job Center 관리 계층 — 정의 + 보안 게이트 실행 요청 (v0.9.36, CLU-NEXT-03·05)**: OpenShift BuildConfig 스타일 빌드 관리의 안전 구축 가능한 계층을 추가했습니다. 빌드 정의(git url·branch·context·Dockerfile·output image·provider[kaniko/buildkit/tekton/job])를 저장하고(`GET/POST /admin/k8s/build-definitions`), 빌드 실행 요청 시 정의의 Dockerfile을 v0.9.30 보안 게이트(root 실행·:latest base·ENV/ARG 비밀값·ADD 원격 등)로 검사해 high-severity면 blocked, 아니면 requested로 등록합니다(`GET/POST /admin/k8s/build-runs`). 실행 lifecycle(requested→approved→running→succeeded/failed, blocked)을 영속화합니다. 개발자 뷰에 빌드 정의·요청·최근 실행 카드를 추가했습니다. 실제 빌드 실행(러너)은 라이브 빌드 인프라 의존으로 후속 단계이며, 이 릴리즈는 정의 관리 + 보안 게이트된 요청까지 제공합니다. store lifecycle은 gate 통과/차단 라이브로 검증했습니다.
 
