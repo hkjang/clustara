@@ -9612,6 +9612,7 @@ const adminHTML = `<!doctype html>
         const canVerify = cr.status === 'applied' || cr.status === 'verify_failed';
         const btns =
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeDetail(\'' + escapeAttr(cr.id) + '\')">상세</button> ' +
+          '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeBrief(\'' + escapeAttr(cr.id) + '\')">브리핑</button> ' +
           (canValidate ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'validate\')">검증</button> ' : '') +
           (canApprove ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'approve\')">승인</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'reject\')">반려</button> ' : '') +
           (canApply ? '<button type="button" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'apply\')">적용</button> ' : '') +
@@ -9695,9 +9696,46 @@ const adminHTML = `<!doctype html>
       try {
         await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
       } catch (e) {
+        if (action === 'apply') {
+          try {
+            const parsed = JSON.parse(e.message || '{}');
+            if (parsed && parsed.drift_guard && parsed.drift_guard.status === 'drift') {
+              const diffs = (parsed.drift_guard.current_diffs || []).slice(0, 5).map(d => (d.path || '$') + ': ' + (d.old_value || '') + ' → ' + (d.new_value || '')).join('\n');
+              const ok = confirm('적용 직전 live YAML drift가 감지되었습니다.\n\n' + diffs + '\n\n새 요청 생성이 권장됩니다. 그래도 force_drift로 적용할까요?');
+              if (ok) {
+                const note = prompt('force 적용 사유를 입력하세요:') || 'force drift override';
+                await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/apply', { method: 'POST', body: JSON.stringify({ force_drift: true, note }) });
+                await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
+                return;
+              }
+            }
+          } catch (_) {}
+        }
         alert(e.message);
       }
       await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
+    };
+    window.k8sManifestChangeBrief = async (id) => {
+      try {
+        const d = await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/brief');
+        const b = d.brief || {};
+        const sum = b.summary || {};
+        const dec = b.decision || {};
+        const guard = d.drift_guard || {};
+        const top = (b.top_changes || []).map(ch => '<tr><td><code>' + escapeHTML(ch.path || '') + '</code></td><td><span class="status ' + (ch.risk === 'critical' || ch.risk === 'high' ? 'error' : (ch.risk === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(ch.risk || '') + '</span></td><td class="muted" style="font-size:11px">' + escapeHTML(ch.old_value || '') + ' → ' + escapeHTML(ch.new_value || '') + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">중요 변경 없음</td></tr>';
+        const checklist = (b.operator_checklist || []).map(x => '<li>' + escapeHTML(x) + '</li>').join('');
+        const reasons = (b.approval_reasons || []).map(x => '<span class="pill">' + escapeHTML(x) + '</span>').join(' ') || '<span class="muted">특이 사유 없음</span>';
+        const guardBadge = guard.status === 'passed' ? '<span class="status">passed</span>' : (guard.status === 'drift' ? '<span class="status warn">drift</span>' : '<span class="status error">' + escapeHTML(guard.status || 'unknown') + '</span>');
+        openModal('YAML 변경 브리핑 — ' + id,
+          '<div class="card-body">' +
+          '<div class="kpis">' + kpi('상태', escapeHTML(sum.status || '-')) + kpi('위험도', escapeHTML(sum.risk_level || '-')) + kpi('다음 액션', escapeHTML(dec.next_action || '-')) + kpi('Drift Guard', guardBadge) + '</div>' +
+          '<div class="kv" style="margin-top:8px">' + row('대상', escapeHTML(sum.target || '-')) + row('승인 필요', sum.requires_approval ? 'yes' : 'no') + row('Dry-run', escapeHTML(dec.dry_run || '-')) + row('Policy', escapeHTML(dec.policy || '-')) + row('사유', escapeHTML(sum.reason || '-')) + '</div>' +
+          '<h3 style="margin-top:12px">승인 사유</h3><div style="margin-bottom:8px">' + reasons + '</div>' +
+          '<h3>상위 변경</h3><table><thead><tr><th>Path</th><th>위험</th><th>값</th></tr></thead><tbody>' + top + '</tbody></table>' +
+          '<h3 style="margin-top:12px">운영자 체크리스트</h3><ul style="margin-top:4px">' + checklist + '</ul>' +
+          '<h3 style="margin-top:12px">Drift Guard 원문</h3><pre style="white-space:pre-wrap;max-height:220px;overflow:auto">' + escapeHTML(JSON.stringify(guard, null, 2)) + '</pre>' +
+          '</div>', null, { wide: true });
+      } catch (e) { openModal('브리핑 오류', '<div class="error-line">' + escapeHTML(e.message) + '</div>'); }
     };
     window.k8sManifestChangeDetail = async (id) => {
       const out = document.getElementById('mchg-detail');

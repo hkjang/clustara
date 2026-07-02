@@ -72,11 +72,13 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 
 - **대상**: Deployment, StatefulSet, DaemonSet, Service, Ingress, HPA, PDB, RBAC, NetworkPolicy, CRD 인스턴스 등 인벤토리에 수집된 단일 리소스.
 - **검증**: basic schema(apiVersion/kind/name), 정책 팩, server dry-run(`dryRun=All`)을 수행합니다. 정책 Deny 또는 dry-run 실패는 `blocked/failed`로 중단됩니다.
+- **브리핑**: `브리핑` 버튼은 위험도 분포, 상위 diff, approval reasons, dry-run/policy/drift 상태, 다음 액션, 운영자 체크리스트를 한 번에 보여줍니다.
 - **승인**: workload, Service/Ingress, RBAC, Secret, NetworkPolicy 등 운영 영향이 있는 변경은 `approval_required`가 됩니다. 승인된 요청만 실제 apply할 수 있습니다.
 - **적용**: 기존 Application Stack과 같은 Server-Side Apply 실행 경로를 사용하고, 성공 시 change-aware burst 수집을 등록해 사후 검증을 빠르게 합니다.
+- **Drift Guard**: 적용 직전 현재 live manifest hash와 요청 생성 당시 before hash를 비교합니다. 요청 생성/승인 이후 리소스가 바뀌면 적용을 차단하고, 의도한 덮어쓰기만 `force_drift=true` 사유와 함께 재시도할 수 있습니다. UID 변경/리소스 삭제는 force도 차단합니다.
 - **보안**: Secret `data`/`stringData` 원문은 저장하거나 적용하지 않습니다. Secret 값 변경은 Config Change Control 또는 외부 Secret 관리 체계를 사용하세요.
 - **증적**: before/after YAML hash, field diff, impact, validation, apply result, verification을 Markdown evidence와 Git patch 형태로 확인할 수 있습니다.
-- API: `GET /admin/k8s/manifests/editor|live`, `GET/POST /admin/k8s/manifest-changes`, `POST /admin/k8s/manifest-changes/{id}/validate|approve|reject|apply|verify|rollback`, `GET /admin/k8s/manifest-changes/{id}/evidence|git-patch`
+- API: `GET /admin/k8s/manifests/editor|live`, `GET/POST /admin/k8s/manifest-changes`, `GET /admin/k8s/manifest-changes/{id}/brief`, `POST /admin/k8s/manifest-changes/{id}/validate|approve|reject|apply|verify|rollback`, `GET /admin/k8s/manifest-changes/{id}/evidence|git-patch`
 
 ## 6. 장애 분석 (`#/k8s-rca`)
 

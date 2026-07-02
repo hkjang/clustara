@@ -2239,3 +2239,122 @@ status:
 		t.Fatalf("timeline should include manifest change %s, got %+v", createOut.Request.ID, timeline.Entries)
 	}
 }
+
+func TestK8sManifestChangeDriftGuardBlocksStaleApply(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	ctx := context.Background()
+	beforeItem := store.K8sInventoryItem{
+		ID: "inv_manifest_before", ClusterID: "c1", Kind: "Deployment", Namespace: "default", Name: "api", UID: "dep1", APIVersion: "apps/v1",
+		Spec: map[string]any{
+			"replicas": float64(2),
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "api"}},
+			"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "api"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "app", "image": "example/api:1.0"}}}},
+		},
+		ObservedAt: "2026-06-24T00:00:00Z",
+		UpdatedAt:  "2026-06-24T00:00:00Z",
+	}
+	if err := db.UpsertK8sInventory(ctx, beforeItem); err != nil {
+		t.Fatal(err)
+	}
+	beforeYAML := mustManifestYAML(sanitizeManifestDocForLedger(assembleManifest(beforeItem)))
+	afterYAML := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: app
+        image: example/api:1.0
+`
+	if err := db.CreateK8sManifestChangeRequest(ctx, store.K8sManifestChangeRequest{
+		ID: "mchg_drift", ClusterID: "c1", Namespace: "default", Kind: "Deployment", APIVersion: "apps/v1", Name: "api",
+		Status: "approved", RiskLevel: "high", RequiresApproval: true, Reason: "scale api",
+		BeforeYAML: beforeYAML, AfterYAML: afterYAML, BeforeHash: manifestHash(beforeYAML), AfterHash: manifestHash(afterYAML),
+		Diffs:     []store.K8sManifestFieldDiff{{Path: "spec.replicas", OldValue: "2", NewValue: "3", Type: "changed", Risk: "high"}},
+		Impact:    map[string]any{"approval_reasons": []any{"spec.replicas=high"}},
+		CreatedBy: "developer", ApprovedBy: "approver", TargetUID: "dep1", TargetResourceVersion: "rv-before",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	currentItem := beforeItem
+	currentItem.ID = "inv_manifest_current"
+	currentItem.Spec = map[string]any{
+		"replicas": float64(4),
+		"selector": map[string]any{"matchLabels": map[string]any{"app": "api"}},
+		"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "api"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "app", "image": "example/api:1.1"}}}},
+	}
+	currentItem.ObservedAt = "2026-06-24T00:05:00Z"
+	currentItem.UpdatedAt = "2026-06-24T00:05:00Z"
+	if err := db.UpsertK8sInventory(ctx, currentItem); err != nil {
+		t.Fatal(err)
+	}
+
+	briefResp, err := http.Get(proxy.URL + "/admin/k8s/manifest-changes/mchg_drift/brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer briefResp.Body.Close()
+	if briefResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(briefResp.Body)
+		t.Fatalf("brief status=%d body=%s", briefResp.StatusCode, body)
+	}
+	var briefOut struct {
+		DriftGuard map[string]any `json:"drift_guard"`
+		Brief      struct {
+			Decision map[string]any `json:"decision"`
+		} `json:"brief"`
+	}
+	if err := json.NewDecoder(briefResp.Body).Decode(&briefOut); err != nil {
+		t.Fatal(err)
+	}
+	if briefOut.DriftGuard["status"] != "drift" || briefOut.Brief.Decision["next_action"] != "refresh_or_force_drift" {
+		t.Fatalf("brief should surface drift and next action, got %+v", briefOut)
+	}
+
+	applyResp := postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/mchg_drift/apply", "", map[string]any{})
+	defer applyResp.Body.Close()
+	if applyResp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(applyResp.Body)
+		t.Fatalf("stale apply should be blocked with 409, status=%d body=%s", applyResp.StatusCode, body)
+	}
+	var blocked struct {
+		Status     string         `json:"status"`
+		DriftGuard map[string]any `json:"drift_guard"`
+	}
+	if err := json.NewDecoder(applyResp.Body).Decode(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Status != "blocked" || blocked.DriftGuard["status"] != "drift" {
+		t.Fatalf("blocked response should include drift guard, got %+v", blocked)
+	}
+	got, err := db.GetK8sManifestChangeRequest(ctx, "mchg_drift")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "approved" {
+		t.Fatalf("blocked apply must not move request to running/failed, got %s", got.Status)
+	}
+}

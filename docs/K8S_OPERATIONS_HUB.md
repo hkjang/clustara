@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.41** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.42** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.41)
+## 기능 상태 (v0.9.42)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -84,6 +84,7 @@
 | Pod Restart Recency 보정 — `restartCount` 누적값은 표시용으로 유지하고 컨테이너 `startedAt`/현재 상태 기반 `recent_restart_count`·`restart_signal`로 알람·Health·Storm을 판단 | ✅ (v0.9.39) |
 | Action Center 가시성 + 역할별 개발자 요청 처리 — 액션 승인함 상단 노출, 개발자 뷰 `request`/`approve`/`execute` 모드, super_admin/admin 즉시 승인·실행, legacy `pending_approval` 호환 | ✅ (v0.9.40) |
 | Manifest Change Studio — live YAML 편집 요청, before/after diff·impact, schema/policy/server dry-run 검증, 승인 게이트, Server-Side Apply, burst 수집, 사후 검증, 롤백 요청, evidence/git patch export | ✅ (v0.9.41) |
+| Manifest Change Drift Guard + Approval Brief — 적용 직전 live manifest hash/UID drift 차단, force_drift 감사, 승인자 브리핑(`/brief`) | ✅ (v0.9.42) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -164,8 +165,9 @@
 | GET | `/admin/k8s/manifests/live` | YAML 변경용 live manifest 조회 alias. Secret/token/env 민감값 자동 마스킹 |
 | GET/POST | `/admin/k8s/manifest-changes` | 단일 리소스 YAML 변경 요청 목록/생성. before/after YAML, field diff, impact, 위험도, target UID/resourceVersion을 원장에 저장 |
 | GET | `/admin/k8s/manifest-changes/{id}` | YAML 변경 요청 상세: diff, impact, validation, apply, verify 결과 |
+| GET | `/admin/k8s/manifest-changes/{id}/brief` | 승인자 브리핑: 위험도 분포, 상위 diff, approval reasons, dry-run/policy/drift 상태, 다음 액션, 운영자 체크리스트 |
 | POST | `/admin/k8s/manifest-changes/{id}/validate` | schema basic check, 정책 검사, server dry-run(`dryRun=All`) 검증. Secret payload 원문 변경은 blocked 처리 |
-| POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성 |
+| POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, 적용 직전 drift guard 통과 후 Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성. 의도한 덮어쓰기는 `apply` body에 `force_drift=true`와 `note`를 남김 |
 | GET | `/admin/k8s/manifest-changes/{id}/evidence`, `/git-patch` | 변경 증적 Markdown bundle과 Git PR용 pseudo patch export |
 | GET | `/admin/k8s/resource-graph` | 인벤토리 selector/backend/volume/node/HPA 관계 기반 리소스 그래프·blast radius (`cluster_id`,`kind`,`namespace`,`name`,`radius`) |
 | GET | `/admin/k8s/security` | Pod Security 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백 포스처 |

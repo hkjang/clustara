@@ -1,3 +1,6 @@
+v0.9.42:
+- **Manifest Change Drift Guard + Approval Brief (v0.9.42)**: Manifest Change Studio에 적용 직전 drift guard와 승인자 브리핑을 추가했습니다. 변경 요청 생성 시 저장한 before YAML hash와 적용 직전 현재 인벤토리에서 다시 조립한 normalized live manifest hash를 비교해, 요청 생성/승인 이후 대상 리소스가 바뀐 경우 실제 Server-Side Apply 진입 전 `409`로 차단합니다. 단순 재수집으로 observed_at만 바뀐 경우는 통과하고, UID 변경/리소스 삭제는 hard block으로 force도 차단합니다. 의도한 덮어쓰기인 경우 `force_drift=true`와 사유를 남겨 재시도할 수 있으며 apply result에 drift guard 증적을 저장합니다. 신규 `GET /admin/k8s/manifest-changes/{id}/brief`는 위험도 분포, 상위 diff, approval reasons, dry-run/policy/drift 상태, 다음 액션, 운영자 체크리스트를 반환하고 UI에는 `브리핑` 버튼과 drift 차단 시 force 재시도 안내를 추가했습니다.
+
 v0.9.41:
 - **Manifest Change Studio (v0.9.41)**: live Manifest Viewer를 YAML 변경 요청 흐름으로 확장했습니다. `GET /admin/k8s/manifests/editor|live`, `GET/POST /admin/k8s/manifest-changes`, `/{id}/validate|approve|reject|apply|verify|rollback`, `/{id}/evidence|git-patch`를 추가해 Deployment, Service, Ingress, HPA, RBAC, CRD 등 단일 리소스 YAML을 요청→diff/impact→schema/policy/server dry-run 검증→승인→Server-Side Apply→burst 수집→사후 검증→증적/patch export로 관리합니다. 변경 원장(`k8s_manifest_change_requests`)은 before/after YAML, field diff, 위험도, 승인·적용·검증 결과, target UID/resourceVersion을 저장하고 상태 전이를 DB에서 차단합니다. UI에는 `YAML 변경` 메뉴를 추가해 리소스 picker, live YAML 로드, 요청 생성, 검증/승인/적용/검증확인, 롤백 요청, 증적과 Git patch export를 제공합니다. Secret data/stringData 원문은 저장하거나 적용하지 않고 blocked 검증으로 중단합니다.
 

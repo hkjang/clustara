@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -214,6 +215,12 @@ func (s *Server) handleK8sManifestChangeByID(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	switch parts[1] {
+	case "brief":
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.writeK8sManifestChangeBrief(w, r, id)
 	case "evidence":
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -259,6 +266,24 @@ func (s *Server) writeK8sManifestChangeDetail(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"request": req})
+}
+
+func (s *Server) writeK8sManifestChangeBrief(w http.ResponseWriter, r *http.Request, id string) {
+	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+		return
+	}
+	driftGuard := s.manifestChangeDriftGuard(r.Context(), req)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"request_id":  req.ID,
+		"brief":       manifestChangeBrief(req, driftGuard),
+		"drift_guard": driftGuard,
+	})
 }
 
 func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
@@ -368,6 +393,12 @@ func (s *Server) decideK8sManifestChange(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {
+	var in struct {
+		ForceDrift bool   `json:"force_drift"`
+		Force      bool   `json:"force"`
+		Note       string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
 	req, err := s.db.GetK8sManifestChangeRequest(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
@@ -384,6 +415,23 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 	if !req.RequiresApproval && req.Status != "validated" && req.Status != "approved" {
 		writeOpenAIError(w, http.StatusConflict, "manifest change must be validated or approved before apply (current: "+req.Status+")", "invalid_request_error", "manifest_change_not_ready")
 		return
+	}
+	driftGuard := s.manifestChangeDriftGuard(r.Context(), req)
+	forceDrift := in.ForceDrift || in.Force
+	if manifestChangeDriftBlocks(driftGuard, forceDrift) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"request_id":   id,
+			"status":       "blocked",
+			"error":        "live manifest changed after this request was created",
+			"drift_guard":  driftGuard,
+			"next_actions": []string{"새 live YAML을 다시 불러와 변경 요청을 재생성하세요.", "의도한 덮어쓰기라면 force_drift=true로 재시도할 수 있습니다. UID 변경이나 삭제는 force로도 차단됩니다."},
+		})
+		return
+	}
+	if forceDrift && strings.EqualFold(asStr(driftGuard["status"]), "drift") {
+		driftGuard["status"] = "overridden"
+		driftGuard["override_note"] = strings.TrimSpace(in.Note)
+		driftGuard["overridden_by"] = adminID(r)
 	}
 	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "running", adminID(r), "SSA apply running"); err != nil {
 		if errors.Is(err, store.ErrInvalidTransition) {
@@ -413,12 +461,12 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 	}
 	applyYAML := []byte(req.AfterYAML)
 	if aErr := applier.Apply(r.Context(), req.APIVersion, req.Kind, req.Namespace, req.Name, applyYAML, false); aErr != nil {
-		result := map[string]any{"status": "failed", "error": aErr.Error(), "field_manager": "clustara"}
+		result := map[string]any{"status": "failed", "error": aErr.Error(), "field_manager": "clustara", "drift_guard": driftGuard}
 		_ = s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "failed", adminID(r), result, aErr.Error())
 		writeJSON(w, http.StatusBadGateway, map[string]any{"request_id": id, "status": "failed", "apply_result": result})
 		return
 	}
-	result := map[string]any{"status": "applied", "field_manager": "clustara", "applied_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	result := map[string]any{"status": "applied", "field_manager": "clustara", "applied_at": time.Now().UTC().Format(time.RFC3339Nano), "drift_guard": driftGuard}
 	if err := s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "applied", adminID(r), result, "SSA apply succeeded"); err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_finalize_failed")
 		return
@@ -630,6 +678,195 @@ func manifestContainsSecretPayload(doc map[string]any) bool {
 func manifestHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
+}
+
+func (s *Server) manifestChangeDriftGuard(ctx context.Context, req store.K8sManifestChangeRequest) map[string]any {
+	guard := map[string]any{
+		"status":                  "passed",
+		"expected_before_hash":    req.BeforeHash,
+		"target_uid":              req.TargetUID,
+		"target_resource_version": req.TargetResourceVersion,
+		"checked_at":              time.Now().UTC().Format(time.RFC3339Nano),
+		"hash_source":             "normalized_manifest",
+	}
+	current, err := s.db.GetK8sInventoryItem(ctx, req.ClusterID, req.Kind, req.Namespace, req.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		guard["status"] = "blocked"
+		guard["hard_block"] = true
+		guard["reason"] = "live_resource_missing"
+		return guard
+	}
+	if err != nil {
+		guard["status"] = "unknown"
+		guard["reason"] = err.Error()
+		return guard
+	}
+	currentVersion := k8sActionTargetResourceVersion(current)
+	currentYAML := mustManifestYAML(sanitizeManifestDocForLedger(assembleManifest(current)))
+	currentHash := manifestHash(currentYAML)
+	guard["current_uid"] = current.UID
+	guard["current_resource_version"] = currentVersion
+	guard["current_hash"] = currentHash
+	guard["current_observed_at"] = current.ObservedAt
+	guard["current_updated_at"] = current.UpdatedAt
+	if req.TargetUID != "" && current.UID != "" && req.TargetUID != current.UID {
+		guard["status"] = "blocked"
+		guard["hard_block"] = true
+		guard["reason"] = "live_resource_uid_changed"
+		return guard
+	}
+	if req.BeforeHash != "" && currentHash != "" && req.BeforeHash != currentHash {
+		guard["status"] = "drift"
+		guard["hard_block"] = false
+		guard["reason"] = "live_manifest_changed_since_request"
+		guard["current_diffs"] = diffYAMLText(req.BeforeYAML, currentYAML)
+		return guard
+	}
+	guard["reason"] = "live_manifest_matches_request_baseline"
+	return guard
+}
+
+func manifestChangeDriftBlocks(guard map[string]any, force bool) bool {
+	status := strings.ToLower(strings.TrimSpace(asStr(guard["status"])))
+	if hard, ok := guard["hard_block"].(bool); ok && hard {
+		return true
+	}
+	switch status {
+	case "blocked":
+		return true
+	case "drift":
+		return !force
+	default:
+		return false
+	}
+}
+
+func manifestChangeBrief(req store.K8sManifestChangeRequest, driftGuard map[string]any) map[string]any {
+	riskCounts := map[string]int{"low": 0, "medium": 0, "high": 0, "critical": 0}
+	topChanges := []store.K8sManifestFieldDiff{}
+	for _, d := range req.Diffs {
+		r := strings.ToLower(strings.TrimSpace(d.Risk))
+		if _, ok := riskCounts[r]; !ok {
+			r = "low"
+		}
+		riskCounts[r]++
+		topChanges = append(topChanges, d)
+	}
+	sort.SliceStable(topChanges, func(i, j int) bool {
+		if riskRank(topChanges[i].Risk) == riskRank(topChanges[j].Risk) {
+			return topChanges[i].Path < topChanges[j].Path
+		}
+		return riskRank(topChanges[i].Risk) > riskRank(topChanges[j].Risk)
+	})
+	if len(topChanges) > 8 {
+		topChanges = topChanges[:8]
+	}
+	dryRunStatus := "not_run"
+	if v, ok := req.Validation["dry_run"].(map[string]any); ok {
+		dryRunStatus = firstNonEmpty(asStr(v["status"]), dryRunStatus)
+	}
+	policyStatus := "not_run"
+	if v, ok := req.Validation["policy"].(map[string]any); ok {
+		if denied, _ := v["denied"].(bool); denied {
+			policyStatus = "denied"
+		} else {
+			policyStatus = "checked"
+		}
+	}
+	nextAction := manifestChangeNextAction(req, driftGuard)
+	checklist := []string{
+		"변경 사유와 장애/변경번호가 충분한지 확인",
+		"High/Critical diff와 Service/RBAC/Secret/NetworkPolicy 영향 확인",
+		"server dry-run 결과와 admission warning 확인",
+		"적용 직전 drift guard 상태 확인",
+		"롤백 후보(before YAML 또는 이전 revision) 확보",
+	}
+	if strings.EqualFold(asStr(driftGuard["status"]), "drift") {
+		checklist = append(checklist, "요청 생성 이후 live manifest가 바뀌었습니다. 새 YAML로 재생성하거나 force_drift 사유를 남기세요.")
+	}
+	return map[string]any{
+		"summary": map[string]any{
+			"target":            req.Namespace + "/" + req.Kind + "/" + req.Name,
+			"status":            req.Status,
+			"risk_level":        req.RiskLevel,
+			"requires_approval": req.RequiresApproval,
+			"reason":            req.Reason,
+			"created_by":        req.CreatedBy,
+			"approved_by":       req.ApprovedBy,
+		},
+		"decision": map[string]any{
+			"next_action":   nextAction,
+			"dry_run":       dryRunStatus,
+			"policy":        policyStatus,
+			"drift_status":  asStr(driftGuard["status"]),
+			"force_allowed": strings.EqualFold(asStr(driftGuard["status"]), "drift"),
+		},
+		"risk_counts":        riskCounts,
+		"top_changes":        topChanges,
+		"approval_reasons":   manifestApprovalReasons(req.Impact),
+		"operator_checklist": checklist,
+		"evidence": map[string]any{
+			"before_hash": req.BeforeHash,
+			"after_hash":  req.AfterHash,
+			"diff_count":  len(req.Diffs),
+			"has_apply":   len(req.ApplyResult) > 0,
+			"has_verify":  len(req.VerifyResult) > 0,
+		},
+	}
+}
+
+func manifestChangeNextAction(req store.K8sManifestChangeRequest, driftGuard map[string]any) string {
+	if hard, ok := driftGuard["hard_block"].(bool); ok && hard {
+		return "refresh_or_recreate"
+	}
+	if manifestChangeDriftBlocks(driftGuard, false) && (req.Status == "approved" || req.Status == "validated") {
+		return "refresh_or_force_drift"
+	}
+	switch req.Status {
+	case "draft":
+		return "validate"
+	case "validated":
+		if req.RequiresApproval {
+			return "approve"
+		}
+		return "apply"
+	case "approval_required":
+		return "approve_or_reject"
+	case "approved":
+		return "apply"
+	case "applied", "verify_failed":
+		return "verify"
+	case "verified":
+		return "done"
+	case "failed":
+		return "fix_and_recreate"
+	case "rejected":
+		return "closed"
+	default:
+		return "inspect"
+	}
+}
+
+func manifestApprovalReasons(impact map[string]any) []string {
+	if impact == nil {
+		return nil
+	}
+	raw, ok := impact["approval_reasons"]
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	switch v := raw.(type) {
+	case []string:
+		out = append(out, v...)
+	case []any:
+		for _, it := range v {
+			if s := strings.TrimSpace(asStr(it)); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 func diffManifestDocs(before, after map[string]any) []store.K8sManifestFieldDiff {
