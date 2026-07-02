@@ -21,15 +21,43 @@ type Executor interface {
 }
 
 func workloadResourcePlural(kind string) (string, bool) {
-	switch kind {
-	case "Deployment":
+	switch normalizeWorkloadKind(kind) {
+	case "deployment":
 		return "deployments", true
-	case "StatefulSet":
+	case "statefulset":
 		return "statefulsets", true
-	case "DaemonSet":
+	case "daemonset":
 		return "daemonsets", true
 	}
 	return "", false
+}
+
+func normalizeWorkloadKind(kind string) string {
+	k := strings.ToLower(strings.TrimSpace(kind))
+	k = strings.TrimPrefix(k, "apps/v1/")
+	k = strings.TrimPrefix(k, "apps/v1 ")
+	k = strings.TrimPrefix(k, "apps/")
+	k = strings.TrimPrefix(k, "app/")
+	k = strings.TrimSuffix(k, ".apps")
+	k = strings.TrimSuffix(k, ".apps/v1")
+	k = strings.TrimSuffix(k, "s")
+	switch k {
+	case "deploy", "deployment":
+		return "deployment"
+	case "sts", "statefulset":
+		return "statefulset"
+	case "ds", "daemonset":
+		return "daemonset"
+	default:
+		return k
+	}
+}
+
+func unsupportedWorkloadKindError(action, kind string) error {
+	if strings.EqualFold(strings.TrimSpace(kind), "Pod") || strings.EqualFold(strings.TrimSpace(kind), "pods") {
+		return fmt.Errorf("%s unsupported for kind %q: Pod는 직접 rollout restart할 수 없습니다. owner Deployment/StatefulSet/DaemonSet을 대상으로 요청하세요", action, kind)
+	}
+	return fmt.Errorf("%s unsupported for kind %q: supported kinds are Deployment, StatefulSet, DaemonSet", action, kind)
 }
 
 // write performs a mutating request (PATCH/DELETE) and returns an error for non-2xx responses.
@@ -68,7 +96,7 @@ func (c *HTTPClient) write(ctx context.Context, method, path, contentType string
 func (c *HTTPClient) Scale(ctx context.Context, kind, namespace, name string, replicas int) error {
 	plural, ok := workloadResourcePlural(kind)
 	if !ok {
-		return fmt.Errorf("scale unsupported for kind %q", kind)
+		return unsupportedWorkloadKindError("scale", kind)
 	}
 	if replicas < 0 {
 		return fmt.Errorf("replicas must be >= 0")
@@ -81,7 +109,7 @@ func (c *HTTPClient) Scale(ctx context.Context, kind, namespace, name string, re
 func (c *HTTPClient) RolloutRestart(ctx context.Context, kind, namespace, name string) error {
 	plural, ok := workloadResourcePlural(kind)
 	if !ok {
-		return fmt.Errorf("rollout restart unsupported for kind %q", kind)
+		return unsupportedWorkloadKindError("rollout restart", kind)
 	}
 	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, plural, name)
 	ts := time.Now().UTC().Format(time.RFC3339)

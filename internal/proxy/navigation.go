@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 24
+const menuVersion = 25
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -31,6 +31,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s", Label: "클러스터", Path: "#/k8s", Tab: "k8s", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_collector", Label: "수집 상태", Path: "#/k8s-collector", Tab: "k8s-collector", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_pods", Label: "Pod 관리", Path: "#/k8s-pods", Tab: "k8s-pods", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_nodes", Label: "노드 관리", Path: "#/k8s-nodes", Tab: "k8s-nodes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_stacks", Label: "앱 배포", Path: "#/k8s-stacks", Tab: "k8s-stacks", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},

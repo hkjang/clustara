@@ -127,11 +127,37 @@ const adminHTML = `<!doctype html>
       height: auto; width: auto; min-width: 0; padding: 0; margin: 0 4px 0 0;
       vertical-align: middle; accent-color: var(--accent);
     }
+    textarea.yaml-editor-textarea {
+      height: auto; min-height: 260px;
+      line-height: 1.45; padding: 10px 12px; resize: vertical; overflow: hidden;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    .resource-preview {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px; margin: 8px 0 4px; width: 100%;
+    }
+    .resource-preview:empty { display: none; }
+    .resource-preview button {
+      height: auto; min-height: 58px; padding: 9px 10px; text-align: left;
+      background: var(--panel-alt); color: var(--ink); border-color: var(--line);
+      display: block; width: 100%; font-weight: 650;
+    }
+    .resource-preview button:hover { border-color: var(--accent); }
+    .resource-preview .rp-main { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .resource-preview .rp-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .resource-preview .rp-sub { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     button {
       cursor: pointer; background: var(--accent); border-color: var(--accent);
       color: #fff; font-weight: 650;
     }
     button.secondary { background: var(--panel); color: var(--ink); border-color: var(--line); }
+    a.secondary {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 34px; padding: 0 10px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--panel); color: var(--ink);
+      text-decoration: none; font-weight: 650; vertical-align: middle;
+    }
+    a.secondary:hover { border-color: var(--accent); }
     button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
     button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
     .kpis {
@@ -141,6 +167,28 @@ const adminHTML = `<!doctype html>
     .kpi { background: var(--panel); padding: 14px; min-height: 80px; }
     .kpi .label { color: var(--muted); font-size: 12px; font-weight: 700; }
     .kpi .value { margin-top: 8px; font-size: 22px; font-weight: 800; overflow-wrap: anywhere; }
+    .action-flow-board { display: grid; grid-template-columns: repeat(6, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+    .action-flow-lane {
+      border: 1px solid var(--line); border-top: 4px solid var(--line);
+      border-radius: 8px; background: var(--panel); min-width: 210px; overflow: hidden;
+    }
+    .action-flow-lane.attention { border-top-color: var(--bad); }
+    .action-flow-lane.approval { border-top-color: var(--warn); }
+    .action-flow-lane.ready { border-top-color: var(--good); }
+    .action-flow-lane.verify { border-top-color: var(--accent); }
+    .action-flow-lane.prepare { border-top-color: #64748b; }
+    .action-flow-lane.done { border-top-color: var(--muted); }
+    .action-flow-lane-head { padding: 10px 10px 8px; background: var(--panel-alt); border-bottom: 1px solid var(--line); }
+    .action-flow-lane-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-weight: 800; }
+    .action-flow-lane-desc { color: var(--muted); font-size: 11px; line-height: 1.35; margin-top: 5px; min-height: 30px; }
+    .action-flow-item { margin: 0; padding: 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .action-flow-item:last-child { border-bottom: none; }
+    .action-flow-item-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .action-flow-item-title strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-flow-meta, .action-flow-detail { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-flow-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 8px; }
+    .action-flow-cta { text-decoration: none; font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+    .action-flow-empty { color: var(--muted); font-size: 11px; padding: 10px; }
     .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
     .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
     .inline-form { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
@@ -351,6 +399,7 @@ const adminHTML = `<!doctype html>
         <div class="nav-group-menu">
           <a href="#/k8s" data-tab="k8s">클러스터</a>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
+          <a href="#/k8s-nodes" data-tab="k8s-nodes">노드 관리</a>
           <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
           <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
           <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
@@ -375,7 +424,6 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-rca" data-tab="k8s-rca">장애 분석</a>
           <a href="#/k8s-incidents" data-tab="k8s-incidents">장애 워룸</a>
           <a href="#/k8s-conn" data-tab="k8s-conn">연결성 점검</a>
-          <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
           <a href="#/k8s-agentops" data-tab="k8s-agentops">에이전트 품질</a>
         </div>
       </div>
@@ -1055,6 +1103,11 @@ const adminHTML = `<!doctype html>
       const safeIso = escapeHTML(iso);
       return '<span class="ago" data-ts="' + safeIso + '" title="' + safeIso + '">' + escapeHTML(rel) + '</span>';
     }
+    function safeInputValue(id, fallback) {
+      const el = document.getElementById(id);
+      if (!el || typeof el.value === 'undefined') return fallback || '';
+      return String(el.value == null ? (fallback || '') : el.value);
+    }
     setInterval(() => {
       document.querySelectorAll('.ago[data-ts]').forEach(el => {
         el.textContent = relativeTime(el.dataset.ts);
@@ -1238,6 +1291,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-home':  await renderK8sHome(params); break;
           case 'k8s':       await renderK8sOperations(); break;
           case 'k8s-pods': await renderK8sPods(params); break;
+          case 'k8s-nodes': await renderK8sNodes(params); break;
           case 'k8s-developer': await renderK8sDeveloper(params); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
@@ -6520,6 +6574,25 @@ const adminHTML = `<!doctype html>
       const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: namespace || '', pod: pod || '' }).toString();
       return '<a href="' + escapeAttr(href) + '">' + escapeHTML(label || pod || '') + '</a>';
     }
+    function k8sYamlChangeHref(clusterId, kind, namespace, name, autoload) {
+      const qs = new URLSearchParams();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      if (kind) qs.set('kind', kind);
+      if (namespace) qs.set('namespace', namespace);
+      if (name) qs.set('name', name);
+      if (autoload) qs.set('autoload', '1');
+      return '#/k8s-manifest-changes' + (qs.toString() ? '?' + qs.toString() : '');
+    }
+    function k8sYamlChangeLink(clusterId, kind, namespace, name, label) {
+      if (!kind || !name) return '';
+      return '<a href="' + escapeAttr(k8sYamlChangeHref(clusterId, kind, namespace, name, true)) + '">' + escapeHTML(label || 'YAML 변경') + '</a>';
+    }
+    function k8sYamlChangeLinkFromTarget(clusterId, target, label) {
+      const parts = String(target || '').split('/');
+      if (parts.length < 3) return '';
+      const ns = parts[0] === '-' ? '' : parts[0];
+      return k8sYamlChangeLink(clusterId, parts[1], ns, parts.slice(2).join('/'), label || 'YAML');
+    }
     // ---------- K8s 운영 홈: 위험 TOP5 / 장애후보 TOP10 / 최근변경 TOP10 (섹션 7) ----------
     async function renderK8sHome(params) {
       const view = document.getElementById('view');
@@ -6571,14 +6644,16 @@ const adminHTML = `<!doctype html>
         '<td>' + escapeHTML((f.cluster_name || '') + ' · ' + (f.namespace || '-') + '/' + f.resource_kind + '/' + f.resource_name) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(f.cause || '') + k8sResTags(f.resources) + '</td>' +
         '<td>' + (f.resource_kind === 'Pod' ? k8sPodLink(f.cluster_id, f.namespace, f.resource_name, 'Pod 상세') + ' · ' : '') +
-          '<a href="' + escapeAttr(tlHref(f)) + '">타임라인</a> · <a href="#/k8s-incidents' + (f.cluster_id ? '?cluster_id=' + encodeURIComponent(f.cluster_id) : '') + '">워룸</a></td></tr>').join('')
+          '<a href="' + escapeAttr(tlHref(f)) + '">타임라인</a> · ' +
+          k8sYamlChangeLink(f.cluster_id, f.resource_kind, f.namespace, f.resource_name, 'YAML') + ' · ' +
+          '<a href="#/k8s-incidents' + (f.cluster_id ? '?cluster_id=' + encodeURIComponent(f.cluster_id) : '') + '">워룸</a></td></tr>').join('')
         : '<tr><td colspan="5" class="muted">장애 후보 없음.</td></tr>';
 
       const changeRows = (d.recent_changes || []).length ? (d.recent_changes || []).map(c =>
         '<tr><td class="muted" style="font-size:11px">' + ago(c.observed_at) + '</td>' +
         '<td>' + escapeHTML((c.cluster_name || '') + ' · ' + (c.namespace || '-') + '/' + c.kind + '/' + c.name) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(c.image_set || 'spec 변경') + '</td>' +
-        '<td><a href="' + escapeAttr(tlHref(c)) + '">Diff</a></td></tr>').join('')
+        '<td><a href="' + escapeAttr(tlHref(c)) + '">Diff</a> · ' + k8sYamlChangeLink(c.cluster_id, c.kind, c.namespace, c.name, 'YAML') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">최근 변경 없음.</td></tr>';
 
       view.innerHTML =
@@ -6900,25 +6975,25 @@ const adminHTML = `<!doctype html>
       const invRows = (inventory.items || []).length ? (inventory.items || []).map(it =>
         '<tr><td>' + escapeHTML(it.kind) + '</td><td>' + escapeHTML(it.namespace || '-') + '</td><td>' + escapeHTML(it.name) + '</td>' +
         '<td>' + escapeHTML(it.status || '-') + '</td><td>' + fmt(it.health_score) + '</td><td>' + escapeHTML(it.risk_level || '-') + '</td>' +
-        '<td><a href="' + escapeAttr(timelineHref(it)) + '">이력·Diff</a></td></tr>'
+        '<td><a href="' + escapeAttr(timelineHref(it)) + '">이력·Diff</a> · ' + k8sYamlChangeLink(it.cluster_id, it.kind, it.namespace, it.name, 'YAML') + '</td></tr>'
       ).join('') : '<tr><td colspan="7" class="muted">수집된 리소스가 없습니다.</td></tr>';
       const findingRows = (findings.findings || []).length ? (findings.findings || []).map(f =>
         '<tr><td><span class="status ' + (f.severity === 'critical' || f.severity === 'high' ? 'error' : (f.severity === 'medium' ? 'warn' : '')) + '">' + escapeHTML(f.severity) + '</span></td>' +
-        '<td>' + escapeHTML(f.rule) + '</td><td>' + escapeHTML(f.namespace || '-') + '</td><td>' + escapeHTML(f.resource_kind + '/' + f.resource_name) + '</td>' +
+        '<td>' + escapeHTML(f.rule) + '</td><td>' + escapeHTML(f.namespace || '-') + '</td><td>' + escapeHTML(f.resource_kind + '/' + f.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(f.cluster_id, f.resource_kind, f.namespace, f.resource_name, 'YAML') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(f.message) + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">열린 Finding이 없습니다.</td></tr>';
       const actionRows = (actions.actions || []).length ? (actions.actions || []).map(a =>
-        '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.namespace || '-') + '</td><td>' + escapeHTML(a.resource_kind + '/' + a.resource_name) + '</td>' +
+        '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.namespace || '-') + '</td><td>' + escapeHTML(a.resource_kind + '/' + a.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.resource_kind, a.namespace, a.resource_name, 'YAML') + '</div></td>' +
         '<td><span class="status ' + (a.risk_level === 'critical' || a.risk_level === 'high' ? 'error' : 'warn') + '">' + escapeHTML(a.risk_level) + '</span></td>' +
         '<td>' + escapeHTML(a.status) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(a.result || '') + '</td></tr>'
       ).join('') : '<tr><td colspan="6" class="muted">액션 요청이 없습니다.</td></tr>';
       const eventRows = (events.events || []).length ? (events.events || []).map(e =>
         '<tr><td>' + escapeHTML(e.type || '-') + '</td><td>' + escapeHTML(e.reason || '-') + '</td><td>' + escapeHTML(e.namespace || '-') + '</td>' +
-        '<td>' + escapeHTML(e.involved_kind + '/' + e.involved_name) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td></tr>'
+        '<td>' + escapeHTML(e.involved_kind + '/' + e.involved_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(e.cluster_id, e.involved_kind, e.namespace, e.involved_name, 'YAML') + '</div></td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">이벤트가 없습니다.</td></tr>';
       const rcaRows = (rca.candidates || []).length ? (rca.candidates || []).map(x =>
         '<tr><td><span class="status ' + (x.severity === 'critical' || x.severity === 'high' ? 'error' : 'warn') + '">' + escapeHTML(x.severity) + '</span></td>' +
-        '<td>' + escapeHTML(x.condition) + '</td><td>' + escapeHTML((x.namespace || '-') + ' / ' + x.resource_kind + '/' + x.resource_name) + '</td>' +
+        '<td>' + escapeHTML(x.condition) + '</td><td>' + escapeHTML((x.namespace || '-') + ' / ' + x.resource_kind + '/' + x.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(x.cluster_id, x.resource_kind, x.namespace, x.resource_name, 'YAML') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(x.cause || '') + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML((x.actions || []).slice(0, 2).join(' · ')) + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">장애 분석 후보가 없습니다.</td></tr>';
@@ -7039,7 +7114,7 @@ const adminHTML = `<!doctype html>
       const rows = cards.slice(0, 80).map(c => {
         const hpa = c.hpa ? (fmt(c.hpa.current_replicas) + '/' + fmt(c.hpa.max_replicas) + (c.hpa.at_max ? ' <span class="status error" style="font-size:9px">MAX</span>' : '')) : '<span class="muted">-</span>';
         return '<tr><td>' + sevBadge(c.severity) + '</td>' +
-          '<td><strong>' + escapeHTML((c.kind || '') + '/' + c.workload) + '</strong>' + (c.exposed ? ' <span class="status warn" style="font-size:9px">노출</span>' : '') + '<div class="muted" style="font-size:11px">' + escapeHTML(c.namespace) + '</div></td>' +
+          '<td><strong>' + escapeHTML((c.kind || '') + '/' + c.workload) + '</strong>' + (c.exposed ? ' <span class="status warn" style="font-size:9px">노출</span>' : '') + '<div class="muted" style="font-size:11px">' + escapeHTML(c.namespace) + '</div><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, c.kind, c.namespace, c.workload, 'YAML') + '</div></td>' +
           '<td>' + fmt(c.ready_pods || 0) + '/' + fmt(c.pod_count || 0) + (c.critical_pods ? ' <span class="status error" style="font-size:9px">' + fmt(c.critical_pods) + ' crit</span>' : '') + '</td>' +
           '<td style="font-size:11px">' + ((c.services || []).map(escapeHTML).join(', ') || '-') + '</td>' +
           '<td style="font-size:11px">' + ((c.ingresses || []).map(escapeHTML).join(', ') || '-') + '</td>' +
@@ -7153,7 +7228,7 @@ const adminHTML = `<!doctype html>
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || cid, namespace: p.namespace || '', pod: p.name || '' }).toString();
         const cls = p.health_band === 'critical' ? 'error' : (p.health_band === 'warning' ? 'warn' : '');
         return '<tr><td><span class="status ' + cls + '">' + fmt(p.health_score || 0) + '</span></td>' +
-          '<td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML((p.namespace || '-') + '/' + p.name) + '</strong></a></td>' +
+          '<td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML((p.namespace || '-') + '/' + p.name) + '</strong></a><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(p.cluster_id || cid, 'Pod', p.namespace, p.name, 'YAML') + '</div></td>' +
           '<td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + devRestartCell(p) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(p.primary_symptom || '') + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="muted">위험 Pod 없음</td></tr>';
@@ -7230,7 +7305,7 @@ const adminHTML = `<!doctype html>
       };
       const rows = (d.pods || []).length ? (d.pods || []).map(p => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || '', namespace: p.namespace || '', pod: p.name || '' }).toString();
-        return '<tr>' + healthCell(p) + '<td>' + riskBadge(p.risk_level, p.status) + '</td><td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML(p.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML(p.cluster_id || '') + '</div></td>' +
+        return '<tr>' + healthCell(p) + '<td>' + riskBadge(p.risk_level, p.status) + '</td><td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML(p.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML(p.cluster_id || '') + '</div><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(p.cluster_id, 'Pod', p.namespace, p.name, 'YAML') + '</div></td>' +
           '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td>' + restartCell(p) +
           '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td>' +
           '<td style="font-size:11px">' + (k8sResTags(p.resources) || '<span class="muted">미설정</span>') + '</td>' +
@@ -7248,7 +7323,7 @@ const adminHTML = `<!doctype html>
       const samplePodLinks = (ns, pods) => (pods || []).map(p => k8sPodLink(clusterId, ns, p, p)).join(', ');
       const stormCard = storms.length ? card('⚠ Restart Storm — 서비스 단위 장애 의심', '<div class="card-body"><table><thead><tr><th>심각도</th><th>워크로드</th><th>Namespace</th><th>영향 Pod</th><th>자원</th><th>재시작</th><th>Pod 바로가기</th></tr></thead><tbody>' +
         storms.map(s => '<tr><td><span class="status ' + (s.severity === 'critical' ? 'error' : 'warn') + '">' + escapeHTML(s.severity) + '</span></td>' +
-          '<td><strong>' + escapeHTML((s.owner_kind || '-') + '/' + (s.owner_name || '-')) + '</strong></td>' +
+          '<td><strong>' + escapeHTML((s.owner_kind || '-') + '/' + (s.owner_name || '-')) + '</strong><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, s.owner_kind, s.namespace, s.owner_name, 'YAML') + '</div></td>' +
           '<td>' + escapeHTML(s.namespace || '-') + '</td>' +
           '<td>' + fmt(s.affected_pods || 0) + '/' + fmt(s.pod_count || 0) + ' (' + fmt(s.affected_pct || 0) + '%)</td>' +
           '<td>' + (k8sResTags(s.resources) || '<span class="muted" style="font-size:10px">미설정</span>') + '</td>' +
@@ -7260,7 +7335,7 @@ const adminHTML = `<!doctype html>
         workloads.slice(0, 50).map(w => {
           const cls = w.band === 'critical' ? 'error' : (w.band === 'warning' ? 'warn' : '');
           return '<tr><td><span class="status ' + cls + '">' + escapeHTML(w.band || 'healthy') + '</span></td>' +
-            '<td><strong>' + escapeHTML((w.owner_kind || '-') + '/' + (w.owner_name || '-')) + '</strong></td>' +
+            '<td><strong>' + escapeHTML((w.owner_kind || '-') + '/' + (w.owner_name || '-')) + '</strong><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, w.owner_kind, w.namespace, w.owner_name, 'YAML') + '</div></td>' +
             '<td>' + escapeHTML(w.namespace || '-') + '</td>' +
             '<td>' + fmt(w.ready_pods || 0) + '/' + fmt(w.pod_count || 0) + '</td>' +
             '<td>' + fmt(w.healthy_pods || 0) + ' / ' + fmt(w.warning_pods || 0) + ' / ' + fmt(w.critical_pods || 0) + '</td>' +
@@ -7326,6 +7401,174 @@ const adminHTML = `<!doctype html>
       try { await api('/admin/k8s/pod-watches/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sPods(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
+
+    function k8sNodeConditions(n) {
+      return (((n || {}).status_object || {}).conditions || []);
+    }
+    function k8sNodeCondition(n, type) {
+      return k8sNodeConditions(n).find(c => String(c.type || '') === type) || {};
+    }
+    function k8sNodeReady(n) {
+      const c = k8sNodeCondition(n, 'Ready');
+      if (String(c.status || '') === 'True') return 'Ready';
+      if (String(c.status || '') === 'False') return 'NotReady';
+      return n.status || 'Unknown';
+    }
+    function k8sNodePressure(n) {
+      return ['MemoryPressure', 'DiskPressure', 'PIDPressure'].filter(t => String(k8sNodeCondition(n, t).status || '') === 'True');
+    }
+    function k8sNodeUnschedulable(n) {
+      return !!(((n || {}).spec || {}).unschedulable);
+    }
+    function k8sNodeAlloc(n, key) {
+      const st = ((n || {}).status_object || {});
+      return ((st.allocatable || {})[key]) || ((st.capacity || {})[key]) || '-';
+    }
+    function k8sNodeInfo(n, key) {
+      return ((((n || {}).status_object || {}).nodeInfo || {})[key]) || '';
+    }
+    function k8sNodeRole(n) {
+      const labels = (n && n.labels) || {};
+      const roles = Object.keys(labels).filter(k => k.indexOf('node-role.kubernetes.io/') === 0).map(k => k.replace('node-role.kubernetes.io/', '') || 'worker');
+      return roles.length ? roles.join(', ') : 'worker';
+    }
+    function k8sNodePods(pods, nodeName, clusterId) {
+      return (pods || []).filter(p => (!clusterId || p.cluster_id === clusterId) && String(((p.spec || {}).nodeName) || '') === nodeName);
+    }
+    function k8sNodePacking(cap, nodeName) {
+      return (((cap || {}).report || {}).node_packing || []).find(x => x.node === nodeName) || {};
+    }
+    function k8sNodeStatusBadge(n) {
+      const ready = k8sNodeReady(n);
+      const pressure = k8sNodePressure(n);
+      const cordoned = k8sNodeUnschedulable(n);
+      const cls = ready !== 'Ready' || pressure.length ? 'error' : (cordoned ? 'warn' : '');
+      const bits = [ready];
+      if (cordoned) bits.push('cordoned');
+      if (pressure.length) bits.push(pressure.join('/'));
+      return '<span class="status ' + cls + '">' + escapeHTML(bits.join(' · ')) + '</span>';
+    }
+    async function renderK8sNodes(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const qText = (params && params.get('q')) || '';
+      view.innerHTML = section('노드 관리', '<div class="empty">불러오는 중...</div>');
+      let clusters, nodesResp, podsResp, capResp;
+      try {
+        [clusters, nodesResp, podsResp, capResp] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/inventory?kind=Node&limit=500' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/inventory?kind=Pod&limit=5000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/capacity' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ report: {} })),
+        ]);
+      } catch (e) {
+        view.innerHTML = section('노드 관리', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(c =>
+        '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+      let nodes = nodesResp.items || [];
+      const pods = podsResp.items || [];
+      if (qText) {
+        const q = qText.toLowerCase();
+        nodes = nodes.filter(n => [n.name, n.status, n.risk_level, k8sNodeRole(n), k8sNodeInfo(n, 'kubeletVersion'), JSON.stringify(n.labels || {})].join(' ').toLowerCase().includes(q));
+      }
+      nodes.sort((a, b) => {
+        const score = (n) => (k8sNodeReady(n) !== 'Ready' ? 0 : 10) + (k8sNodePressure(n).length ? 0 : 5) + (k8sNodeUnschedulable(n) ? 1 : 3);
+        return score(a) - score(b) || String(a.name || '').localeCompare(String(b.name || ''));
+      });
+      const total = nodes.length;
+      const notReady = nodes.filter(n => k8sNodeReady(n) !== 'Ready').length;
+      const cordoned = nodes.filter(k8sNodeUnschedulable).length;
+      const pressured = nodes.filter(n => k8sNodePressure(n).length).length;
+      const podTotal = pods.length;
+      const rows = nodes.length ? nodes.map(n => {
+        const nodePods = k8sNodePods(pods, n.name, n.cluster_id);
+        const pack = k8sNodePacking(capResp, n.name);
+        const cpuPct = pack.cpu_request_pct || 0;
+        const yaml = k8sYamlChangeLink(n.cluster_id, 'Node', '', n.name, 'YAML');
+        const podHref = '#/k8s-pods?' + new URLSearchParams({ cluster_id: n.cluster_id || '', node: n.name || '' }).toString();
+        const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '' }).toString();
+        const graphHref = '#/k8s-graph?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '', radius: '2' }).toString();
+        const readyCond = k8sNodeCondition(n, 'Ready');
+        return '<tr><td>' + k8sNodeStatusBadge(n) + '<div class="muted" style="font-size:10px">' + ago(n.observed_at || n.updated_at) + '</div></td>' +
+          '<td><strong>' + escapeHTML(n.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(n.cluster_id || '-') + ' · ' + escapeHTML(k8sNodeRole(n)) + '</div></td>' +
+          '<td>' + escapeHTML(k8sNodeInfo(n, 'kubeletVersion') || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(k8sNodeInfo(n, 'containerRuntimeVersion') || '') + '</div></td>' +
+          '<td>' + fmt(nodePods.length) + '<div class="muted" style="font-size:10px">req CPU ' + fmt(pack.requested_cpu_m || 0) + 'm</div></td>' +
+          '<td><span class="status ' + (cpuPct >= 90 ? 'error' : (cpuPct >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(cpuPct) + '%</span><div class="muted" style="font-size:10px">' + escapeHTML(k8sNodeAlloc(n, 'cpu')) + ' CPU · ' + escapeHTML(k8sNodeAlloc(n, 'memory')) + ' mem</div></td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(readyCond.reason || '-') + '<div>' + escapeHTML(readyCond.message || '') + '</div></td>' +
+          '<td><a href="' + escapeAttr(podHref) + '">Pod</a> · <a href="' + escapeAttr(tlHref) + '">타임라인</a> · <a href="' + escapeAttr(graphHref) + '">그래프</a> · ' + yaml +
+          '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' +
+          '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeDrainPreview(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\')">Drain 분석</button>' +
+          (k8sNodeUnschedulable(n)
+            ? '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeAction(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\',\'uncordon\',this)">Uncordon 요청</button>'
+            : '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeAction(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\',\'cordon\',this)">Cordon 요청</button>') +
+          '</div></td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">노드가 없습니다. 클러스터 수집 또는 agent 상태를 확인하세요.</td></tr>';
+      const packRows = (((capResp || {}).report || {}).node_packing || []).slice(0, 20).map(p =>
+        '<tr><td>' + escapeHTML(p.node || '-') + '</td><td>' + fmt(p.pods || 0) + '</td><td>' + fmt(p.requested_cpu_m || 0) + 'm / ' + fmt(p.allocatable_cpu_m || 0) + 'm</td><td><span class="status ' + ((p.cpu_request_pct || 0) >= 90 ? 'error' : ((p.cpu_request_pct || 0) >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(p.cpu_request_pct || 0) + '%</span></td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">노드 packing 데이터 없음.</td></tr>';
+      view.innerHTML =
+        section('노드 관리', '<div class="kpis">' +
+          kpi('노드', fmt(total)) + kpi('NotReady', fmt(notReady)) + kpi('Cordoned', fmt(cordoned)) + kpi('Pressure', fmt(pressured)) + kpi('Pod', fmt(podTotal)) + '</div>') +
+        card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<select id="node-cluster">' + clusterOpts + '</select><input id="node-q" placeholder="node / role / version / label 검색" value="' + escapeAttr(qText) + '" style="min-width:260px">' +
+          '<button type="button" onclick="k8sNodeFilter()">적용</button><button type="button" class="secondary" onclick="k8sNodeCapacityGo()">용량 화면</button>' +
+          '<span class="muted" style="font-size:11px">cordon/uncordon은 액션 승인함에 요청으로 등록됩니다. drain은 먼저 영향 분석만 제공합니다.</span></div>') +
+        card('노드 목록', '<div class="card-body"><table><thead><tr><th>상태</th><th>노드</th><th>버전</th><th>Pod</th><th>CPU 요청률</th><th>Ready 메시지</th><th>작업</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        card('노드 Bin Packing', '<div class="card-body"><table><thead><tr><th>노드</th><th>Pod</th><th>요청/가용 CPU</th><th>요청률</th></tr></thead><tbody>' + packRows + '</tbody></table></div>');
+    }
+    window.k8sNodeFilter = () => {
+      const q = new URLSearchParams();
+      const cl = safeInputValue('node-cluster').trim();
+      const text = safeInputValue('node-q').trim();
+      if (cl) q.set('cluster_id', cl);
+      if (text) q.set('q', text);
+      location.hash = '#/k8s-nodes' + (q.toString() ? '?' + q.toString() : '');
+    };
+    window.k8sNodeCapacityGo = () => {
+      const cl = safeInputValue('node-cluster').trim();
+      location.hash = '#/k8s-capacity' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
+    window.k8sNodeDrainPreview = async (clusterId, node) => {
+      if (!clusterId || !node) { alert('cluster_id와 node가 필요합니다.'); return; }
+      try {
+        const d = await api('/admin/k8s/node-drain?cluster_id=' + encodeURIComponent(clusterId) + '&node=' + encodeURIComponent(node));
+        const im = d.impact || {};
+        const reasons = (im.reasons || []).map(r => '<li>' + escapeHTML(r) + '</li>').join('') || '<li class="muted">사유 없음</li>';
+        const owners = (im.affected_owners || []).map(o => '<span class="pill">' + escapeHTML(o) + '</span>').join(' ') || '<span class="muted">-</span>';
+        const pdbs = (im.blocking_pdbs || []).map(o => '<span class="status error" style="font-size:10px">' + escapeHTML(o) + '</span>').join(' ') || '<span class="muted">없음</span>';
+        openModal('Node Drain 영향 분석 — ' + node,
+          '<div class="kpis">' + kpi('Evict 대상', fmt(im.evicted_pods || 0)) + kpi('DaemonSet', fmt(im.daemonset_pods || 0)) + kpi('Critical Pod', fmt(im.critical_pods || 0)) + kpi('Bare Pod', fmt(im.bare_pods || 0)) + '</div>' +
+          '<div class="kv" style="margin-top:10px">' + row('위험도', '<span class="status ' + ((im.risk_level === 'high') ? 'error' : (im.risk_level === 'medium' ? 'warn' : '')) + '">' + escapeHTML(im.risk_level || '-') + '</span>') + row('영향 Owner', owners) + row('Blocking PDB', pdbs) + '</div>' +
+          '<h3 style="margin-top:12px">판단 근거</h3><ul>' + reasons + '</ul>' +
+          '<p class="muted" style="font-size:12px">Clustara는 drain 전체 실행 전 PDB와 bare Pod 위험을 먼저 보여줍니다. 실제 drain은 운영 절차에 따라 수행하고, 첫 단계인 cordon은 액션 승인함 요청으로 처리하세요.</p>',
+          null, { wide: true });
+      } catch (e) { alert(e.message); }
+    };
+    window.k8sNodeAction = async (clusterId, node, action, btn) => {
+      if (!clusterId || !node) { alert('cluster_id와 node가 필요합니다.'); return; }
+      const reason = prompt(action + ' 사유를 입력하세요:', 'node maintenance') || 'node maintenance';
+      if (btn) { btn.disabled = true; btn.textContent = '요청 중...'; }
+      try {
+        const d = await api('/admin/k8s/actions', { method: 'POST', body: JSON.stringify({
+          cluster_id: clusterId,
+          resource_kind: 'Node',
+          resource_name: node,
+          action,
+          parameters: { reason },
+          dry_run_diff: '요청 사유: ' + reason,
+          idempotency_key: 'node-' + action + '-' + clusterId + '-' + node + '-' + Date.now(),
+        }) });
+        const id = (d.action || {}).id || '';
+        alert('액션 승인함에 등록되었습니다.' + (id ? '\nAction ID: ' + id : ''));
+        location.hash = '#/k8s-actions?cluster_id=' + encodeURIComponent(clusterId);
+      } catch (e) {
+        alert(e.message);
+        if (btn) { btn.disabled = false; btn.textContent = action === 'cordon' ? 'Cordon 요청' : 'Uncordon 요청'; }
+      }
+    };
+
     async function renderK8sPodDetail(clusterId, ns, pod) {
       const view = document.getElementById('view');
       view.innerHTML = section('Pod 상세', '<div class="empty">불러오는 중...</div>');
@@ -7360,7 +7603,7 @@ const adminHTML = `<!doctype html>
             (watch ? '<div style="font-size:11px;color:var(--muted);margin-bottom:2px">참고 신호</div><ul style="margin:0;padding-left:16px">' + watch + '</ul>' : '') +
             '</div>');
         })() +
-        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
+        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
@@ -7531,8 +7774,14 @@ const adminHTML = `<!doctype html>
       const out = document.getElementById('podlog-analysis'); out.innerHTML = '<span class="muted">프리셋 불러오는 중...</span>';
       try {
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/logs/presets?cluster_id=' + encodeURIComponent(clusterId || ''));
-        out.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + (d.presets || []).map(p => '<button type="button" class="secondary" style="font-size:11px" onclick="document.getElementById(\'podlog-q\').value=\'' + escapeAttr(p.query || '') + '\';document.getElementById(\'podlog-error\').checked=' + (p.error_only ? 'true' : 'false') + '">' + escapeHTML(p.name || '-') + '</button>').join('') + '</div>';
+        out.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + (d.presets || []).map(p => '<button type="button" class="secondary" style="font-size:11px" data-query="' + escapeAttr(p.query || '') + '" data-error="' + (p.error_only ? 'true' : 'false') + '" onclick="k8sPodLogApplyPreset(this)">' + escapeHTML(p.name || '-') + '</button>').join('') + '</div>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sPodLogApplyPreset = (btn) => {
+      const q = document.getElementById('podlog-q');
+      const err = document.getElementById('podlog-error');
+      if (q) q.value = (btn && btn.dataset && btn.dataset.query) || '';
+      if (err) err.checked = !!(btn && btn.dataset && btn.dataset.error === 'true');
     };
     window.k8sPodMaskingReport = async (clusterId, ns, pod) => {
       const out = document.getElementById('podlog-analysis');
@@ -7752,6 +8001,9 @@ const adminHTML = `<!doctype html>
       if (ns) qs.set('namespace', ns);
       if (name) qs.set('name', name);
       if (kind) qs.set('kind', kind);
+      const yamlTargetLink = (clusterId && name && kind)
+        ? '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId, kind, ns, name, true)) + '">YAML 변경</a>'
+        : '<span class="muted" style="font-size:11px">cluster/kind/name 지정 시 YAML 변경으로 바로 이동할 수 있습니다.</span>';
 
       let timeline = { entries: [] }, diffResp = { diff: null }, manifestResp = { yaml: '' };
       try {
@@ -7776,6 +8028,7 @@ const adminHTML = `<!doctype html>
         '<input id="k8stl-name" placeholder="리소스 이름" value="' + escapeAttr(name) + '" style="min-width:200px">' +
         '<input id="k8stl-kind" placeholder="kind (예: Deployment)" value="' + escapeAttr(kind) + '" style="min-width:160px">' +
         '<button type="button" onclick="k8sTimelineGo()">조회</button>' +
+        yamlTargetLink +
         '</div><div class="muted" style="font-size:11px;margin-top:4px">배포·scale·pod 재생성·이벤트·액션을 한 시간축으로 보여줍니다. 민감 env/secret 값은 Diff에서 자동 마스킹됩니다.</div></div>';
 
       const sevClass = (s) => s === 'critical' ? 'error' : (s === 'warning' ? 'warn' : '');
@@ -7809,7 +8062,7 @@ const adminHTML = `<!doctype html>
       let manifestCard = '';
       if (manifestResp && manifestResp.yaml) {
         manifestCard = card('현재 Manifest (민감값 마스킹)',
-          '<div class="card-body"><pre style="margin:0;max-height:420px;overflow:auto;background:var(--panel-alt);padding:10px;border-radius:6px;font-size:11px;white-space:pre">' + escapeHTML(manifestResp.yaml) + '</pre></div>');
+          '<div class="card-body"><div style="display:flex;justify-content:flex-end;margin-bottom:8px">' + yamlTargetLink + '</div><pre style="margin:0;max-height:420px;overflow:auto;background:var(--panel-alt);padding:10px;border-radius:6px;font-size:11px;white-space:pre">' + escapeHTML(manifestResp.yaml) + '</pre></div>');
       } else if (name && manifestResp && manifestResp.note) {
         manifestCard = card('현재 Manifest', '<div class="card-body"><p class="muted" style="font-size:12px">' + escapeHTML(manifestResp.note) + '</p></div>');
       }
@@ -7865,20 +8118,21 @@ const adminHTML = `<!doctype html>
       list.sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
       const cards = list.length ? list.map(c => {
         const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: c.cluster_id || '', namespace: c.namespace || '', name: c.resource_name || '', kind: c.resource_kind || '' }).toString();
+        const yamlLink = k8sYamlChangeLink(c.cluster_id, c.resource_kind, c.namespace, c.resource_name, 'YAML 변경');
         const evid = (c.evidence || []).length ? '<div style="margin-top:6px"><strong style="font-size:11px">근거</strong><ul style="margin:2px 0 0;padding-left:16px">' + (c.evidence || []).map(x => '<li class="muted" style="font-size:11px">' + escapeHTML(x) + '</li>').join('') + '</ul></div>' : '';
         const checks = (c.check_resources || []).length ? '<div style="margin-top:6px"><strong style="font-size:11px">점검 대상</strong> <span class="muted" style="font-size:11px">' + escapeHTML((c.check_resources || []).join(' · ')) + '</span></div>' : '';
         const acts = (c.actions || []).length ? '<div style="margin-top:6px"><strong style="font-size:11px">조치 후보</strong><ul style="margin:2px 0 0;padding-left:16px">' + (c.actions || []).map(x => '<li style="font-size:11px">' + escapeHTML(x) + '</li>').join('') + '</ul></div>' : '';
         return card(
           (c.severity || '-') + ' ' + (c.condition || '') + ' — ' + ((c.namespace || '-') + '/' + c.resource_kind + '/' + c.resource_name),
           '<div class="card-body"><p style="margin:0 0 4px"><span class="status ' + sevClass(c.severity) + '" style="font-size:10px">' + escapeHTML(c.severity) + '</span> ' + escapeHTML(c.cause || '') + '</p>' + evid + checks + acts +
-          '<div style="margin-top:8px"><a href="' + escapeAttr(tlHref) + '">타임라인·Diff 보기 →</a></div></div>');
+          '<div style="margin-top:8px"><a href="' + escapeAttr(tlHref) + '">타임라인·Diff 보기 →</a>' + (yamlLink ? ' · ' + yamlLink : '') + '</div></div>');
       }).join('') : '<div class="card-body"><p class="muted">현재 장애 후보가 없습니다.</p></div>';
 
       const advList = (adv && adv.advice) || [];
       const advCard = advList.length ? card('권장 조치 Advisor',
         '<div class="card-body"><table><thead><tr><th>우선</th><th>대상</th><th>조건</th><th>권장 조치</th><th>위험도</th><th>승인</th><th>롤백</th></tr></thead><tbody>' +
         advList.map(a => '<tr><td>' + fmt(a.priority) + '</td>' +
-          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.kind + '/' + a.name) + '</td>' +
+          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.kind + '/' + a.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.kind, a.namespace, a.name, 'YAML') + '</div></td>' +
           '<td>' + escapeHTML(a.condition) + '</td>' +
           '<td>' + escapeHTML(a.recommended_action) + (a.actionable ? ' <span class="status" style="font-size:9px">실행가능</span>' : ' <span class="muted" style="font-size:10px">검토</span>') + '<div class="muted" style="font-size:11px">' + escapeHTML(a.rationale) + '</div></td>' +
           '<td>' + escapeHTML(a.risk_level || '-') + '</td>' +
@@ -7952,6 +8206,7 @@ const adminHTML = `<!doctype html>
             (n.team ? '<span class="pill">' + escapeHTML(n.team) + '</span>' : '') +
             (n.service ? '<span class="pill">' + escapeHTML(n.service) + '</span>' : '') +
           '</div>' +
+          '<div style="margin-top:7px;font-size:12px">' + k8sYamlChangeLink(n.cluster_id, n.kind, n.namespace, n.name, 'YAML 변경') + '</div>' +
         '</div>').join('') + '</div>' +
         (((g && g.nodes) || []).length > nodes.length ? '<p class="muted" style="font-size:12px;margin:8px 0 0">상위 ' + nodes.length + '개만 표시했습니다.</p>' : '');
     }
@@ -8016,6 +8271,7 @@ const adminHTML = `<!doctype html>
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '' }).toString();
       const graphHref = '#/k8s-graph?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '', radius: '2' }).toString();
+      const yamlBtn = (i.kind && i.name) ? '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(i.cluster_id || '', i.kind || '', i.namespace || '', i.name || '', true)) + '">YAML 변경</a> ' : '';
       const evid = (i.evidence || []).map(e => '<li style="font-size:12px">' + escapeHTML(e) + '</li>').join('') || '<li class="muted">근거 없음</li>';
       const actRows = (d.actions || []).length ? (d.actions || []).map(a =>
         '<tr><td>' + escapeHTML(a.action) + '</td><td>' + escapeHTML(a.status) + '</td><td><span class="status ' + sevClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td><td class="muted" style="font-size:11px">' + ago(a.created_at) + '</td></tr>').join('')
@@ -8047,6 +8303,7 @@ const adminHTML = `<!doctype html>
           '<div style="margin-top:8px">' +
           '<a href="' + escapeAttr(tlHref) + '"><button type="button" class="secondary">변경 타임라인·Diff</button></a> ' +
           '<a href="' + escapeAttr(graphHref) + '"><button type="button" class="secondary">영향도 그래프</button></a> ' +
+          yamlBtn +
           '<button type="button" class="secondary" onclick="k8sIncidentAI(\'' + escapeAttr(i.cluster_id) + '\',\'' + escapeAttr(i.namespace) + '\',\'' + escapeAttr(i.kind) + '\',\'' + escapeAttr(i.name) + '\')">AI 설명</button> ' +
           (i.status === 'open' ? '<button type="button" onclick="k8sIncidentResolve(\'' + escapeAttr(i.id) + '\')">해결 처리</button>' : '') +
           '</div><div id="inc-ai" style="margin-top:8px"></div></div>') +
@@ -8182,7 +8439,7 @@ const adminHTML = `<!doctype html>
         '<td>' + escapeHTML(f.check) + '</td>' +
         '<td>' + escapeHTML((f.namespace || '-') + '/' + f.resource_name) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(f.message || '') + '<br>' + escapeHTML((f.evidence || []).join(' · ')) + '</td>' +
-        '<td><a href="#/k8s-timeline?' + escapeAttr(new URLSearchParams({ cluster_id: f.cluster_id || '', namespace: f.namespace || '', name: f.resource_name || '', kind: f.resource_kind || '' }).toString()) + '">타임라인</a></td></tr>'
+        '<td><a href="#/k8s-timeline?' + escapeAttr(new URLSearchParams({ cluster_id: f.cluster_id || '', namespace: f.namespace || '', name: f.resource_name || '', kind: f.resource_kind || '' }).toString()) + '">타임라인</a> · ' + k8sYamlChangeLink(f.cluster_id, f.resource_kind, f.namespace, f.resource_name, 'YAML') + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">문제 없음.</td></tr>';
       const tbl = (title, arr) => card(title + ' (' + arr.length + ')',
         '<div class="card-body"><table><thead><tr><th>심각도</th><th>점검</th><th>리소스</th><th>내용</th><th></th></tr></thead><tbody>' + rowsFor(arr) + '</tbody></table></div>');
@@ -8203,6 +8460,22 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 액션 승인함 (ACT-01~10 안전장치) ----------
+    function k8sActionSetNotice(type, text) {
+      window._k8sActionNotice = { type, text };
+    }
+    function k8sActionNoticeHTML() {
+      const n = window._k8sActionNotice;
+      window._k8sActionNotice = null;
+      if (!n || !n.text) return '';
+      const cls = n.type === 'error' ? 'error' : (n.type === 'warn' ? 'warn' : '');
+      return '<div class="card-body" style="padding:0 4px 10px"><div style="border:1px solid var(--line);border-left:4px solid ' + (cls === 'error' ? 'var(--bad)' : (cls === 'warn' ? 'var(--warn)' : 'var(--good)')) + ';border-radius:8px;padding:10px;background:var(--panel)"><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(n.type || 'ok') + '</span> <strong style="font-size:12px">' + escapeHTML(n.text) + '</strong></div></div>';
+    }
+    function k8sActionButtonBusy(btn, label) {
+      if (!btn) return;
+      btn.disabled = true;
+      btn.dataset.originalText = btn.textContent || '';
+      btn.textContent = label;
+    }
     async function renderK8sActions(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -8228,14 +8501,14 @@ const adminHTML = `<!doctype html>
       const rows = acts.length ? acts.map(a => {
         const canDecide = a.status === 'pending' || a.status === 'approval_required' || a.status === 'pending_approval';
         const btns = canDecide
-          ? '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'approve\')">승인</button> ' +
-            '<button type="button" onclick="k8sActApproveExecute(\'' + escapeAttr(a.id) + '\')">승인+실행</button> ' +
-            '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'reject\')">반려</button>'
+          ? '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'approve\',this)">승인</button> ' +
+            '<button type="button" onclick="k8sActApproveExecute(\'' + escapeAttr(a.id) + '\',this)">승인+실행</button> ' +
+            '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'reject\',this)">반려</button>'
           : (a.status === 'approved'
-            ? '<button type="button" onclick="k8sActExecute(\'' + escapeAttr(a.id) + '\')">실행</button>'
+            ? '<button type="button" onclick="k8sActExecute(\'' + escapeAttr(a.id) + '\',this)">실행</button>'
             : '<span class="muted" style="font-size:11px">' + escapeHTML(a.approved_by || a.executed_by || '-') + '</span>');
         return '<tr><td>' + escapeHTML(a.action) + '</td>' +
-          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name) + '</td>' +
+          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.resource_kind, a.namespace, a.resource_name, 'YAML') + '</div></td>' +
           '<td><span class="status ' + riskClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td>' +
           '<td><span class="status ' + (a.status === 'approved' ? '' : (a.status === 'rejected' ? 'error' : 'warn')) + '" style="font-size:10px">' + escapeHTML(a.status) + '</span></td>' +
           '<td class="muted" style="font-size:11px;white-space:pre-wrap;max-width:340px">' + escapeHTML(a.dry_run_diff || a.result || '') + '</td>' +
@@ -8244,7 +8517,7 @@ const adminHTML = `<!doctype html>
       }).join('') : '<tr><td colspan="7" class="muted">액션 요청이 없습니다.</td></tr>';
 
       view.innerHTML =
-        section('K8s 액션 승인함', '<div class="kpis">' +
+        section('K8s 액션 승인함', k8sActionNoticeHTML() + '<div class="kpis">' +
           kpi('확인 필요', fmt(((flow.summary || {}).attention) || 0)) +
           kpi('승인 대기', fmt(((flow.summary || {}).approval) || pending.length)) +
           kpi('실행 가능', fmt(((flow.summary || {}).ready) || 0)) +
@@ -8268,54 +8541,69 @@ const adminHTML = `<!doctype html>
       const html = lanes.map(lane => {
         const items = (lane.items || []).slice(0, 5);
         const rows = items.map(it =>
-          '<div style="border-top:1px solid var(--border);padding:8px 0">' +
-          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
-          '<strong style="font-size:12px">' + escapeHTML(it.title || it.kind || '') + '</strong>' +
+          '<div class="action-flow-item">' +
+          '<div class="action-flow-item-title">' +
+          '<strong>' + escapeHTML(it.title || it.kind || '') + '</strong>' +
           '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
-          '<div class="muted" style="font-size:11px;margin-top:2px">' + escapeHTML(it.target || '-') + '</div>' +
-          '<div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">' + escapeHTML(it.detail || '') + '</div>' +
-          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px">' +
+          '<div class="action-flow-meta">' + escapeHTML(it.target || '-') + (k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') ? ' · ' + k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') : '') + '</div>' +
+          '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
+          '<div class="action-flow-foot">' +
           '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
-          '<a href="' + escapeAttr(it.href || '#/k8s-actions') + '" style="font-size:11px">' + escapeHTML(it.primary_label || '열기') + ' →</a>' +
+          '<a class="action-flow-cta" href="' + escapeAttr(it.href || '#/k8s-actions') + '" title="이 링크는 승인 실행이 아니라 처리 화면으로 이동합니다.">' + escapeHTML(it.primary_label ? '처리 화면' : '열기') + ' →</a>' +
           '</div></div>'
-        ).join('') || '<div class="muted" style="font-size:11px;border-top:1px solid var(--border);padding-top:8px">해당 단계 작업 없음</div>';
+        ).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
         const more = (lane.count || 0) > items.length ? '<div class="muted" style="font-size:10px;margin-top:6px">외 ' + fmt((lane.count || 0) - items.length) + '건</div>' : '';
-        return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;min-width:210px;flex:1;background:var(--card)">' +
-          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px"><strong>' + escapeHTML(lane.label || lane.id) + '</strong><span class="status ' + laneTone(lane.id) + '" style="font-size:10px">' + fmt(lane.count || 0) + '</span></div>' +
-          '<div class="muted" style="font-size:11px;min-height:30px">' + escapeHTML(lane.description || '') + '</div>' +
-          rows + more + '</div>';
+        return '<div class="action-flow-lane ' + escapeAttr(lane.id || '') + '">' +
+          '<div class="action-flow-lane-head"><div class="action-flow-lane-title"><span>' + escapeHTML(lane.label || lane.id) + '</span><span class="status ' + laneTone(lane.id) + '" style="font-size:10px">' + fmt(lane.count || 0) + '</span></div>' +
+          '<div class="action-flow-lane-desc">' + escapeHTML(lane.description || '') + '</div></div>' +
+          rows + (more ? '<div style="padding:0 10px 10px">' + more + '</div>' : '') + '</div>';
       }).join('');
       return card('다음 행동 흐름',
         '<div class="card-body">' +
         '<div class="muted" style="font-size:11px;margin-bottom:8px">Action, Config 변경, YAML 변경, Exec, Debug 요청을 메뉴가 아니라 사용자의 다음 행동 기준으로 묶었습니다. 버튼을 누르면 원래 처리 화면으로 이동합니다.</div>' +
-        '<div style="display:flex;gap:8px;align-items:stretch;overflow:auto;padding-bottom:4px">' + html + '</div></div>');
+        '<div class="action-flow-board">' + html + '</div></div>');
     }
     window.k8sActGo = () => {
       const cl = document.getElementById('k8sact-cluster').value;
       location.hash = '#/k8s-actions' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
     };
-    window.k8sActDecide = async (id, command) => {
+    window.k8sActDecide = async (id, command, btn) => {
       let body = '{}';
+      const label = command === 'approve' ? '승인' : (command === 'reject' ? '반려' : command);
       if (command === 'reject') {
         const reason = prompt('반려 사유를 입력하세요(선택):') || '';
         body = JSON.stringify({ result: reason });
       }
-      try { await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/' + command, { method: 'POST', body }); }
-      catch (e) { alert(e.message); }
+      k8sActionButtonBusy(btn, label + ' 중...');
+      try {
+        await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/' + command, { method: 'POST', body });
+        k8sActionSetNotice('ok', '액션 ' + id + ' ' + label + ' 완료');
+      } catch (e) {
+        k8sActionSetNotice('error', '액션 ' + id + ' ' + label + ' 실패: ' + e.message);
+      }
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
-    window.k8sActExecute = async (id) => {
+    window.k8sActExecute = async (id, btn) => {
       if (!confirm('이 액션을 실제 클러스터에 실행할까요? (되돌릴 수 없는 변경일 수 있습니다)')) return;
-      try { await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' }); }
-      catch (e) { alert(e.message); }
+      k8sActionButtonBusy(btn, '실행 중...');
+      try {
+        await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' });
+        k8sActionSetNotice('ok', '액션 ' + id + ' 실행 완료');
+      } catch (e) {
+        k8sActionSetNotice('error', '액션 ' + id + ' 실행 실패: ' + e.message);
+      }
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
-    window.k8sActApproveExecute = async (id) => {
+    window.k8sActApproveExecute = async (id, btn) => {
       if (!confirm('승인 후 즉시 실행할까요? 운영 클러스터에 변경이 적용됩니다.')) return;
+      k8sActionButtonBusy(btn, '승인+실행 중...');
       try {
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/approve', { method: 'POST', body: JSON.stringify({ result: 'approved for immediate execution' }) });
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' });
-      } catch (e) { alert(e.message); }
+        k8sActionSetNotice('ok', '액션 ' + id + ' 승인+실행 완료');
+      } catch (e) {
+        k8sActionSetNotice('error', '액션 ' + id + ' 승인+실행 실패: ' + e.message);
+      }
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
@@ -8354,14 +8642,14 @@ const adminHTML = `<!doctype html>
             ? '<button type="button" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'apply\')">적용 기록</button>'
             : (applied ? '<button type="button" class="secondary" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'verify\')">검증</button>' : '<span class="muted" style="font-size:11px">' + escapeHTML(cr.verified_by || cr.applied_by || cr.approved_by || '-') + '</span>'));
         return '<tr><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
-          '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.source_kind + '/' + cr.source_name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.proposed_summary || '') + '</div></td>' +
+          '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.source_kind + '/' + cr.source_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(cr.cluster_id, cr.source_kind, cr.namespace, cr.source_name, 'YAML') + '</div><div class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.proposed_summary || '') + '</div></td>' +
           '<td>' + fmt(cr.impact_count || 0) + '</td><td>' + fmt(cr.restart_needed || 0) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(cr.requested_by || '-') + '</td><td>' + btns + '</td></tr>';
       }).join('') : '<tr><td colspan="6" class="muted">Config 변경 요청이 없습니다.</td></tr>';
 
       const psRows = (r.pod_security || []).filter(p => p.level !== 'restricted').map(p =>
         '<tr><td><span class="status ' + lvlClass(p.level) + '" style="font-size:10px">' + escapeHTML(p.level) + '</span></td>' +
-        '<td>' + escapeHTML((p.namespace || '-') + '/' + p.kind + '/' + p.name) + '</td>' +
+        '<td>' + escapeHTML((p.namespace || '-') + '/' + p.kind + '/' + p.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(p.cluster_id, p.kind, p.namespace, p.name, 'YAML') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML((p.violations || []).join(' · ')) + '</td></tr>').join('')
         || '<tr><td colspan="3" class="muted">restricted 미만 워크로드 없음.</td></tr>';
 
@@ -8369,7 +8657,7 @@ const adminHTML = `<!doctype html>
         const rows = (arr || []).length ? (arr || []).map(f =>
           '<tr><td><span class="status ' + sevClass(f.severity) + '" style="font-size:10px">' + escapeHTML(f.severity) + '</span></td>' +
           '<td>' + escapeHTML(f.rule) + '</td>' +
-          '<td>' + escapeHTML((f.namespace || '-') + '/' + f.resource_kind + '/' + f.resource_name) + '</td>' +
+          '<td>' + escapeHTML((f.namespace || '-') + '/' + f.resource_kind + '/' + f.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(f.cluster_id, f.resource_kind, f.namespace, f.resource_name, 'YAML') + '</div></td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(f.message + ' ' + (f.evidence || []).join(', ')) + '</td></tr>').join('')
           : '<tr><td colspan="4" class="muted">없음.</td></tr>';
         return card(title, '<div class="card-body"><table><thead><tr><th>심각도</th><th>규칙</th><th>리소스</th><th>내용</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
@@ -8411,7 +8699,7 @@ const adminHTML = `<!doctype html>
         (function () {
           const es = (rbacDiff && rbacDiff.entries) || [];
           const rows = es.length ? es.map(e =>
-            '<tr><td>' + escapeHTML((e.namespace || '-') + '/' + e.kind + '/' + e.name) + '</td>' +
+            '<tr><td>' + escapeHTML((e.namespace || '-') + '/' + e.kind + '/' + e.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(e.cluster_id, e.kind, e.namespace, e.name, 'YAML') + '</div></td>' +
             '<td class="muted" style="font-size:11px">' + ago(e.to_observed_at) + '</td>' +
             '<td>' + ((e.risky || []).length ? '<span class="status error" style="font-size:10px">위험 ' + (e.risky || []).length + '</span> ' : '') + escapeHTML((e.added || []).join(', ')) + '</td></tr>').join('')
             : '<tr><td colspan="3" class="muted">권한 확대 변경 없음.</td></tr>';
@@ -8428,7 +8716,7 @@ const adminHTML = `<!doctype html>
           if (!tls.length) return '';
           const rows = tls.map(c =>
             '<tr><td><span class="status ' + sevClass(c.severity) + '" style="font-size:10px">' + escapeHTML(c.severity) + '</span></td>' +
-            '<td>' + escapeHTML((c.namespace || '-') + '/' + c.secret) + '</td>' +
+            '<td>' + escapeHTML((c.namespace || '-') + '/' + c.secret) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, 'Secret', c.namespace, c.secret, 'YAML') + '</div></td>' +
             '<td>' + escapeHTML(c.subject || '-') + '</td>' +
             '<td class="muted" style="font-size:11px">' + escapeHTML((c.dns_names || []).join(', ')) + '</td>' +
             '<td>' + fmt(c.days_left) + '일</td></tr>').join('');
@@ -8452,7 +8740,7 @@ const adminHTML = `<!doctype html>
         if (ns) q.set('namespace', ns);
         const d = await api('/admin/k8s/config-impact?' + q.toString());
         const im = d.impact || {};
-        const rows = (im.workloads || []).map(wl => '<tr><td>' + escapeHTML((wl.namespace || '-') + '/' + wl.kind + '/' + wl.name) + '</td><td class="muted" style="font-size:11px">' + escapeHTML((wl.via || []).join(', ')) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">참조 워크로드 없음</td></tr>';
+        const rows = (im.workloads || []).map(wl => '<tr><td>' + escapeHTML((wl.namespace || '-') + '/' + wl.kind + '/' + wl.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(cl, wl.kind, wl.namespace, wl.name, 'YAML') + '</div></td><td class="muted" style="font-size:11px">' + escapeHTML((wl.via || []).join(', ')) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">참조 워크로드 없음</td></tr>';
         out.innerHTML = '<div style="margin-bottom:4px">' + (im.restart_recommend ? '<span class="status warn">재시작 필요 ' + fmt(im.restart_needed || 0) + '</span>' : '<span class="status">재시작 불필요</span>') + ' <span class="muted" style="font-size:11px">참조 ' + fmt(im.count || 0) + '개</span></div>' +
           '<table><thead><tr><th>워크로드</th><th>참조 경로</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
@@ -8762,7 +9050,7 @@ const adminHTML = `<!doctype html>
         : '<tr><td colspan="5" class="muted">정책이 없습니다.</td></tr>';
       const compRows = (comp.violations || []).length ? (comp.violations || []).map(v =>
         '<tr><td><span class="status ' + (v.action === 'Deny' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(v.action) + '</span></td>' +
-        '<td>' + escapeHTML(v.rule_type) + '</td><td>' + escapeHTML((v.namespace || '-') + '/' + v.kind + '/' + v.name) + '</td>' +
+        '<td>' + escapeHTML(v.rule_type) + '</td><td>' + escapeHTML((v.namespace || '-') + '/' + v.kind + '/' + v.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(v.cluster_id, v.kind, v.namespace, v.name, 'YAML') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
       view.innerHTML =
@@ -9075,7 +9363,7 @@ const adminHTML = `<!doctype html>
           '<span class="status ' + (r.direction === 'up' ? 'warn' : (r.direction === 'down' ? '' : 'error')) + '" style="font-size:9px">' + escapeHTML(r.direction) + '</span>' +
           '<span class="muted"> · ' + escapeHTML(r.reason || '') + '</span></div>').join('');
         return '<tr><td>' + advisorSeverityBadge(a.severity) + '</td>' +
-          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.workload) + '<div class="muted" style="font-size:10px">' + escapeHTML(a.kind || '') + '</div></td>' +
+          '<td>' + escapeHTML((a.namespace || '-') + '/' + a.workload) + '<div class="muted" style="font-size:10px">' + escapeHTML(a.kind || '') + '</div><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, a.kind, a.namespace, a.workload, 'YAML') + '</div></td>' +
           '<td>' + (a.symptoms || []).map(s => '<span class="status warn" style="font-size:9px;margin:1px">' + escapeHTML(s) + '</span>').join(' ') + '</td>' +
           '<td>' + recs + '</td></tr>';
       }).join('');
@@ -9106,8 +9394,8 @@ const adminHTML = `<!doctype html>
       const r = data.report || {};
 
       const hpaRows = (r.hpas || []).length ? (r.hpas || []).map(h =>
-        '<tr><td>' + escapeHTML((h.namespace || '-') + '/' + h.name) + '</td>' +
-        '<td>' + escapeHTML(h.target_kind + '/' + h.target_name) + '</td>' +
+        '<tr><td>' + escapeHTML((h.namespace || '-') + '/' + h.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, 'HorizontalPodAutoscaler', h.namespace, h.name, 'YAML') + '</div></td>' +
+        '<td>' + escapeHTML(h.target_kind + '/' + h.target_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, h.target_kind, h.namespace, h.target_name, '대상 YAML') + '</div></td>' +
         '<td>' + fmt(h.min_replicas) + ' ~ ' + fmt(h.max_replicas) + '</td>' +
         '<td>' + fmt(h.current_replicas) + ' → ' + fmt(h.desired_replicas) + '</td>' +
         '<td>' + (h.at_max ? '<span class="status error" style="font-size:10px">확장 한계 도달</span>' : '<span class="status" style="font-size:10px">정상</span>') + '</td></tr>').join('')
@@ -9115,7 +9403,7 @@ const adminHTML = `<!doctype html>
 
       const allocRows = (r.allocation || []).length ? (r.allocation || []).map(a =>
         '<tr><td><span class="status ' + (a.issue === 'under_provisioned' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(a.issue) + '</span></td>' +
-        '<td>' + escapeHTML((a.namespace || '-') + '/' + a.name) + '</td>' +
+        '<td>' + escapeHTML((a.namespace || '-') + '/' + a.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, a.kind || 'Pod', a.namespace, a.name, 'YAML') + '</div></td>' +
         '<td>' + fmt(a.cpu_usage_m) + 'm / ' + fmt(a.cpu_request_m) + 'm</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(a.message || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">할당 이상 없음.</td></tr>';
@@ -9238,7 +9526,7 @@ const adminHTML = `<!doctype html>
           const save = recs.total_monthly_savings_krw || 0;
           const rows = rs.slice(0, 30).map(x =>
             '<tr><td><span class="status ' + (x.direction === 'down' ? '' : 'warn') + '" style="font-size:10px">' + escapeHTML(x.direction) + '</span></td>' +
-            '<td>' + escapeHTML((x.namespace || '-') + '/' + x.name) + '</td>' +
+            '<td>' + escapeHTML((x.namespace || '-') + '/' + x.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, 'Pod', x.namespace, x.name, 'YAML') + '</div></td>' +
             '<td>' + fmt(x.usage_cpu_m) + 'm / req ' + fmt(x.current_cpu_m) + 'm → ' + fmt(x.recommended_cpu_m) + 'm</td>' +
             '<td>' + fmt(x.usage_mem_mb) + 'Mi / req ' + fmt(x.current_mem_mb) + 'Mi → ' + fmt(x.recommended_mem_mb) + 'Mi</td>' +
             '<td>' + (x.monthly_savings_krw > 0 ? '<span class="status">' + fmt(Math.round(x.monthly_savings_krw)) + ' KRW</span>' : '-') + '</td></tr>').join('');
@@ -9626,6 +9914,10 @@ const adminHTML = `<!doctype html>
     async function renderK8sManifestChanges(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
+      const targetKind = (params && params.get('kind')) || '';
+      const targetNs = (params && params.get('namespace')) || '';
+      const targetName = (params && params.get('name')) || '';
+      const shouldAutoload = !!(params && (params.get('autoload') === '1' || params.get('live') === '1'));
       view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="empty">불러오는 중...</div>');
       let editor, changes;
       try {
@@ -9673,13 +9965,37 @@ const adminHTML = `<!doctype html>
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
           '<select id="mchg-cluster" onchange="k8sManifestChangeGo()">' + clusterOpts + '</select>' +
           '<select id="mchg-resource" onchange="k8sManifestPickResource()">' + resourceOpts + '</select>' +
+          '<input id="mchg-resource-search" placeholder="namespace / kind / name 검색" style="min-width:260px;flex:1" oninput="k8sManifestSearchResources()" onfocus="k8sManifestSearchResources()">' +
           '<input id="mchg-kind" placeholder="Kind" style="min-width:120px"><input id="mchg-ns" placeholder="namespace" style="min-width:120px"><input id="mchg-name" placeholder="name" style="min-width:160px">' +
           '<button type="button" class="secondary" onclick="k8sManifestLoadLive()">Live YAML</button></div>' +
-          '<textarea id="mchg-yaml" rows="13" placeholder="Live YAML을 불러온 뒤 수정하세요" style="width:100%;font-family:monospace"></textarea>' +
+          '<div id="mchg-resource-preview" class="resource-preview"></div>' +
+          '<textarea id="mchg-yaml" class="yaml-editor-textarea" rows="13" placeholder="Live YAML을 불러온 뒤 수정하세요" style="width:100%" oninput="resizeK8sManifestYaml()"></textarea>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="mchg-reason" placeholder="변경 사유 / 장애번호 / 변경번호" style="min-width:280px"><button type="button" onclick="k8sManifestCreateChange()">변경 요청 생성</button></div>' +
           '<div id="mchg-out" style="margin-top:8px"></div></div>') +
         card('변경 요청 원장',
           '<div class="card-body"><table><thead><tr><th>상태</th><th>대상</th><th>위험도</th><th>Diff</th><th>사유/결과</th><th>수정</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="mchg-detail" style="margin-top:10px"></div></div>');
+      if (targetKind || targetName || targetNs) {
+        const matchIdx = resources.findIndex(r =>
+          (!targetKind || String(r.kind || '').toLowerCase() === targetKind.toLowerCase()) &&
+          (!targetNs || String(r.namespace || '') === targetNs) &&
+          (!targetName || String(r.name || '') === targetName) &&
+          (!clusterId || String(r.cluster_id || '') === clusterId)
+        );
+        if (matchIdx >= 0) {
+          k8sManifestApplyResource(resources[matchIdx], matchIdx);
+        } else {
+          document.getElementById('mchg-kind').value = targetKind;
+          document.getElementById('mchg-ns').value = targetNs;
+          document.getElementById('mchg-name').value = targetName;
+          const search = document.getElementById('mchg-resource-search');
+          if (search) search.value = (targetNs || '-') + '/' + targetKind + '/' + targetName;
+          k8sManifestSearchResources();
+        }
+        if (shouldAutoload && targetKind && targetName) {
+          setTimeout(() => window.k8sManifestLoadLive && window.k8sManifestLoadLive(), 0);
+        }
+      }
+      setTimeout(() => window.resizeK8sManifestYaml && window.resizeK8sManifestYaml(), 0);
     }
     window.k8sManifestChangeGo = () => {
       const cl = document.getElementById('mchg-cluster').value;
@@ -9689,10 +10005,43 @@ const adminHTML = `<!doctype html>
       const idx = document.getElementById('mchg-resource').value;
       const r = (window.k8sManifestResources || [])[Number(idx)];
       if (!r) return;
+      k8sManifestApplyResource(r, Number(idx));
+    };
+    function k8sManifestApplyResource(r, idx) {
       document.getElementById('mchg-kind').value = r.kind || '';
       document.getElementById('mchg-ns').value = r.namespace || '';
       document.getElementById('mchg-name').value = r.name || '';
       if (r.cluster_id) document.getElementById('mchg-cluster').value = r.cluster_id;
+      const sel = document.getElementById('mchg-resource');
+      if (sel && Number.isFinite(idx)) sel.value = String(idx);
+      const search = document.getElementById('mchg-resource-search');
+      if (search) search.value = (r.namespace || '-') + '/' + (r.kind || '') + '/' + (r.name || '');
+      const preview = document.getElementById('mchg-resource-preview');
+      if (preview) preview.innerHTML = '';
+    }
+    window.k8sManifestSearchResources = () => {
+      const input = document.getElementById('mchg-resource-search');
+      const preview = document.getElementById('mchg-resource-preview');
+      if (!input || !preview) return;
+      const q = (input.value || '').trim().toLowerCase();
+      const selectedCluster = (document.getElementById('mchg-cluster').value || '').trim();
+      const terms = q.split(/\s+/).filter(Boolean);
+      const resources = (window.k8sManifestResources || []);
+      const matches = resources.map((r, idx) => ({ r, idx, hay: [r.namespace || '-', r.kind || '', r.name || '', r.api_version || '', r.cluster_id || '', r.status || ''].join(' ').toLowerCase() }))
+        .filter(x => (!selectedCluster || x.r.cluster_id === selectedCluster) && (!terms.length || terms.every(t => x.hay.includes(t))))
+        .slice(0, 8);
+      preview.innerHTML = matches.map(x =>
+        '<button type="button" onclick="k8sManifestSearchPick(' + x.idx + ')">' +
+        '<span class="rp-main"><span class="rp-target">' + escapeHTML((x.r.namespace || '-') + '/' + x.r.kind + '/' + x.r.name) + '</span>' +
+        '<span class="status ' + ((x.r.risk_level === 'high' || x.r.risk_level === 'critical') ? 'error' : (x.r.risk_level === 'medium' ? 'warn' : '')) + '" style="font-size:9px">' + escapeHTML(x.r.risk_level || x.r.status || '-') + '</span></span>' +
+        '<span class="rp-sub">' + escapeHTML((x.r.api_version || '-') + ' · ' + (x.r.cluster_id || '-') + ' · ' + (x.r.status || '-')) + '</span>' +
+        '</button>'
+      ).join('');
+    };
+    window.k8sManifestSearchPick = (idx) => {
+      const r = (window.k8sManifestResources || [])[Number(idx)];
+      if (!r) return;
+      k8sManifestApplyResource(r, Number(idx));
     };
     window.k8sManifestLoadLive = async () => {
       const out = document.getElementById('mchg-out');
@@ -9704,8 +10053,17 @@ const adminHTML = `<!doctype html>
         if (body.namespace) q.set('namespace', body.namespace);
         const d = await api('/admin/k8s/manifests/live?' + q.toString());
         document.getElementById('mchg-yaml').value = d.yaml || '';
+        resizeK8sManifestYaml();
         out.innerHTML = '<span class="status">Live YAML 로드됨</span> <span class="muted" style="font-size:11px">' + escapeHTML(d.note || '') + '</span>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.resizeK8sManifestYaml = () => {
+      const el = document.getElementById('mchg-yaml');
+      if (!el) return;
+      el.style.height = 'auto';
+      const next = Math.max(el.scrollHeight + 4, 260);
+      el.style.height = next + 'px';
+      el.style.overflowY = 'hidden';
     };
     function k8sManifestFormTarget() {
       return {
@@ -16042,7 +16400,7 @@ const adminHTML = `<!doctype html>
           '<button class="secondary" type="button" onclick="skillScanAll()">보안 스캔</button>' +
           '<button class="secondary" type="button" onclick="skillRecommend()">Skill 추천</button>' +
           '<button class="secondary" type="button" onclick="skillExport()">내보내기</button>' +
-          '<button class="secondary" type="button" onclick="document.getElementById(\'skill-import-file\').click()">가져오기</button>' +
+          '<button class="secondary" type="button" onclick="skillPickImportFile()">가져오기</button>' +
           '<input type="file" id="skill-import-file" accept="application/json" style="display:none" onchange="skillImport(this)">' +
           '<span id="skill-action-result" class="muted"></span>' +
         '</div></div>';
@@ -16117,9 +16475,17 @@ const adminHTML = `<!doctype html>
           '<label class="muted" style="flex:1">daily_limit (0=무제한) <input id="sk-daily_limit" type="number" min="0" style="width:100%" value="' + (sk.daily_limit || 0) + '"></label>' +
         '</div>' +
         '<label class="muted" style="display:block">instructions <textarea id="sk-instructions" style="width:100%;min-height:120px">' + escapeHTML(sk.instructions || '') + '</textarea></label>' +
-        '<div style="margin-top:8px"><button type="button" onclick="skillSave()">저장</button> <button class="secondary" type="button" onclick="document.getElementById(\'skill-editor\').style.display=\'none\'">닫기</button></div>' +
+        '<div style="margin-top:8px"><button type="button" onclick="skillSave()">저장</button> <button class="secondary" type="button" onclick="skillEditorClose()">닫기</button></div>' +
         '</div>';
       ed.scrollIntoView({ behavior: 'smooth' });
+    };
+    window.skillPickImportFile = () => {
+      const el = document.getElementById('skill-import-file');
+      if (el) el.click();
+    };
+    window.skillEditorClose = () => {
+      const el = document.getElementById('skill-editor');
+      if (el) el.style.display = 'none';
     };
     window.skillSave = async () => {
       const val = (id) => (document.getElementById('sk-' + id) || {}).value || '';

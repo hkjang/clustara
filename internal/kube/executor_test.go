@@ -64,6 +64,34 @@ func TestExecutorRolloutRestart(t *testing.T) {
 	}
 }
 
+func TestExecutorAcceptsWorkloadKindAliases(t *testing.T) {
+	tests := []struct {
+		kind string
+		path string
+	}{
+		{"deployment", "/apis/apps/v1/namespaces/ns/deployments/api"},
+		{"deployments", "/apis/apps/v1/namespaces/ns/deployments/api"},
+		{"deployment.apps", "/apis/apps/v1/namespaces/ns/deployments/api"},
+		{"apps/v1 Deployment", "/apis/apps/v1/namespaces/ns/deployments/api"},
+		{"statefulsets", "/apis/apps/v1/namespaces/ns/statefulsets/api"},
+		{"daemonset.apps", "/apis/apps/v1/namespaces/ns/daemonsets/api"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			var cap capturedReq
+			srv := executorTestServer(t, &cap)
+			defer srv.Close()
+			c := newExecClient(t, srv.URL)
+			if err := c.RolloutRestart(context.Background(), tt.kind, "ns", "api"); err != nil {
+				t.Fatal(err)
+			}
+			if cap.path != tt.path {
+				t.Fatalf("path = %s, want %s", cap.path, tt.path)
+			}
+		})
+	}
+}
+
 func TestExecutorCordonAndDelete(t *testing.T) {
 	var cap capturedReq
 	srv := executorTestServer(t, &cap)
@@ -89,5 +117,13 @@ func TestExecutorScaleRejectsBadKind(t *testing.T) {
 	c := newExecClient(t, "http://unused.invalid")
 	if err := c.Scale(context.Background(), "Pod", "default", "p", 3); err == nil {
 		t.Fatal("scale should reject non-workload kind")
+	}
+}
+
+func TestExecutorRolloutRestartRejectsPodWithGuidance(t *testing.T) {
+	c := newExecClient(t, "http://unused.invalid")
+	err := c.RolloutRestart(context.Background(), "Pod", "default", "p")
+	if err == nil || !strings.Contains(err.Error(), "owner Deployment/StatefulSet/DaemonSet") {
+		t.Fatalf("pod rollout restart should explain owner target guidance, got %v", err)
 	}
 }
