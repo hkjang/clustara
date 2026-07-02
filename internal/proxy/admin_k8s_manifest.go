@@ -77,13 +77,29 @@ func assembleManifest(item store.K8sInventoryItem) map[string]any {
 		"metadata":   metadata,
 	}
 	if len(item.Spec) > 0 {
-		manifest["spec"] = maskManifestValue(item.Spec)
+		if manifestUsesTopLevelSpecFields(item.Kind) {
+			for k, v := range item.Spec {
+				manifest[k] = maskManifestValue(v)
+			}
+		} else {
+			manifest["spec"] = maskManifestValue(item.Spec)
+		}
 	}
 	if strings.EqualFold(item.Kind, "Secret") {
-		// Secret bodies live under data/stringData at the top level in the stored spec.
+		// Secret bodies are never stored in clear text. If a future inventory source includes
+		// data/stringData keys, keep masking them before returning YAML to the browser.
 		maskSecretBodies(manifest)
 	}
 	return manifest
+}
+
+func manifestUsesTopLevelSpecFields(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "configmap", "secret", "serviceaccount", "role", "clusterrole", "rolebinding", "clusterrolebinding":
+		return true
+	default:
+		return false
+	}
 }
 
 func stringMapToAny(in map[string]string) map[string]any {

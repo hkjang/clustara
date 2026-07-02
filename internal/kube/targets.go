@@ -20,6 +20,8 @@ func DefaultInventoryTargets() []ResourceTarget {
 		{Path: "/apis/apps/v1/deployments", Kind: "Deployment", APIVersion: "apps/v1"},
 		{Path: "/apis/apps/v1/statefulsets", Kind: "StatefulSet", APIVersion: "apps/v1"},
 		{Path: "/apis/apps/v1/daemonsets", Kind: "DaemonSet", APIVersion: "apps/v1"},
+		{Path: "/api/v1/configmaps", Kind: "ConfigMap", APIVersion: "v1"},
+		{Path: "/api/v1/serviceaccounts", Kind: "ServiceAccount", APIVersion: "v1"},
 		{Path: "/api/v1/services", Kind: "Service", APIVersion: "v1"},
 		{Path: "/apis/networking.k8s.io/v1/ingresses", Kind: "Ingress", APIVersion: "networking.k8s.io/v1", Optional: true},
 		{Path: "/apis/networking.k8s.io/v1/networkpolicies", Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Optional: true},

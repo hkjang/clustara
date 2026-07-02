@@ -1,3 +1,6 @@
+v0.9.45:
+- **Manifest Change Studio 대상 확장 (ConfigMap, Secret, ServiceAccount 지원 및 UI 자동완성/정렬 보강) (v0.9.45)**: live YAML 편집 및 변경 요청(Studio)의 대상 리소스 범위를 ConfigMap, Secret, ServiceAccount로 대폭 확장했습니다. 이 리소스들은 Kubernetes 표준상 별도 `.spec` 필드가 아닌 top-level에 데이터가 정의되므로, 수집 시 필드를 Spec으로 임시 폴딩해 revisions/diff 분석이 작동하게 하고 웹 UI에 노출 및 Server-Side Apply 시에는 다시 top-level로 복원해 정상 렌더링/적용되도록 보완했습니다. 또한 YAML 변경 요청 화면의 리소스 picker에 sort 정렬(Deployment, Service, Ingress 등 우선 노출)을 더하고 검색어 입력 시 `cm`, `sa`, `pvc`, `netpol` 등의 단축 앨리어스(alias) 자동완성과 Canonicalization을 지원해 운영 편의성을 강화했습니다.
+
 v0.9.44:
 - **Node Management + 운영 UX 안정화 (v0.9.44)**: 리소스 관리 메뉴에 `노드 관리` 화면을 추가해 Ready/NotReady, cordoned, Pressure, kubelet/runtime 버전, Pod 수, CPU 요청률, Ready 메시지를 한 화면에서 확인할 수 있게 했습니다. 노드별 Pod 목록·타임라인·리소스 그래프·YAML 변경 딥링크를 제공하고, drain은 영향 분석 모달로 먼저 검토하며 cordon/uncordon은 Action Center 승인 요청으로 연결해 요청 사유를 `parameters`와 dry-run 설명에 남깁니다. 인증 모드에서 새 메뉴가 숨겨지지 않도록 `/me/navigation` registry와 capability 카탈로그, 권한 테스트를 갱신했습니다. 또한 노드 관리 진입 시 inline handler가 렌더링 중 DOM `.value`를 즉시 읽어 발생하던 null 오류를 null-safe helper와 함수 호출형 버튼으로 수정하고, Pod 로그 프리셋/Skill 버튼의 inline DOM 접근도 안전하게 정리했습니다. `rollout restart`는 Deployment/StatefulSet/DaemonSet kind 표기 변형을 정규화하고, Pod 대상 요청에는 owner workload를 지정하라는 안내를 반환합니다.
 

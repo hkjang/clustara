@@ -425,9 +425,13 @@ func inventoryFromObject(kind, apiVersion string, obj map[string]any) store.K8sI
 		next["ownerReferences"] = refs
 		spec = next
 	}
-	// RBAC objects carry their permissions at the top level (rules / roleRef / subjects),
-	// not under .spec — fold them into Spec so the analyzers (SEC-02) and revisions see them.
+	// Some resources carry their editable body outside .spec. Fold those fields into Spec so
+	// analyzers/revisions can diff them, then Manifest Viewer expands them back to top level.
 	switch kind {
+	case "ConfigMap":
+		spec = topLevelResourceBody(obj, "data", "binaryData", "immutable")
+	case "ServiceAccount":
+		spec = topLevelResourceBody(obj, "automountServiceAccountToken", "secrets", "imagePullSecrets")
 	case "Role", "ClusterRole":
 		if obj["rules"] != nil {
 			spec = map[string]any{"rules": obj["rules"]}
@@ -459,6 +463,16 @@ func inventoryFromObject(kind, apiVersion string, obj map[string]any) store.K8sI
 		Labels:       stringMap(meta["labels"]),
 		Annotations:  stringMap(meta["annotations"]),
 	}
+}
+
+func topLevelResourceBody(obj map[string]any, keys ...string) map[string]any {
+	out := map[string]any{}
+	for _, key := range keys {
+		if v, ok := obj[key]; ok {
+			out[key] = v
+		}
+	}
+	return out
 }
 
 func eventFromObject(obj map[string]any) store.K8sEvent {

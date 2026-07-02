@@ -9922,7 +9922,7 @@ const adminHTML = `<!doctype html>
       let editor, changes;
       try {
         [editor, changes] = await Promise.all([
-          api('/admin/k8s/manifests/editor?limit=1000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/manifests/editor?limit=10000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/manifest-changes?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
         ]);
       } catch (e) {
@@ -9960,12 +9960,12 @@ const adminHTML = `<!doctype html>
       }).join('') : '<tr><td colspan="7" class="muted">YAML 변경 요청이 없습니다.</td></tr>';
       view.innerHTML =
         section('YAML 변경 (Manifest Change Studio)',
-          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, Ingress, HPA, RBAC, CRD 등 단일 리소스 YAML을 요청→검증→승인→Server-Side Apply→사후 검증 흐름으로 변경합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
+          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, CRD 등 단일 리소스 YAML을 요청→검증→승인→Server-Side Apply→사후 검증 흐름으로 변경합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
         card('리소스 선택과 변경 요청',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
           '<select id="mchg-cluster" onchange="k8sManifestChangeGo()">' + clusterOpts + '</select>' +
           '<select id="mchg-resource" onchange="k8sManifestPickResource()">' + resourceOpts + '</select>' +
-          '<input id="mchg-resource-search" placeholder="namespace / kind / name 검색" style="min-width:260px;flex:1" oninput="k8sManifestSearchResources()" onfocus="k8sManifestSearchResources()">' +
+          '<input id="mchg-resource-search" placeholder="namespace / kind / name 검색 (cm, sa, pvc, netpol 가능)" style="min-width:320px;flex:1" oninput="k8sManifestSearchResources()" onfocus="k8sManifestSearchResources()">' +
           '<input id="mchg-kind" placeholder="Kind" style="min-width:120px"><input id="mchg-ns" placeholder="namespace" style="min-width:120px"><input id="mchg-name" placeholder="name" style="min-width:160px">' +
           '<button type="button" class="secondary" onclick="k8sManifestLoadLive()">Live YAML</button></div>' +
           '<div id="mchg-resource-preview" class="resource-preview"></div>' +
@@ -10027,7 +10027,7 @@ const adminHTML = `<!doctype html>
       const selectedCluster = (document.getElementById('mchg-cluster').value || '').trim();
       const terms = q.split(/\s+/).filter(Boolean);
       const resources = (window.k8sManifestResources || []);
-      const matches = resources.map((r, idx) => ({ r, idx, hay: [r.namespace || '-', r.kind || '', r.name || '', r.api_version || '', r.cluster_id || '', r.status || ''].join(' ').toLowerCase() }))
+      const matches = resources.map((r, idx) => ({ r, idx, hay: k8sManifestSearchHaystack(r) }))
         .filter(x => (!selectedCluster || x.r.cluster_id === selectedCluster) && (!terms.length || terms.every(t => x.hay.includes(t))))
         .slice(0, 8);
       preview.innerHTML = matches.map(x =>
@@ -10043,6 +10043,58 @@ const adminHTML = `<!doctype html>
       if (!r) return;
       k8sManifestApplyResource(r, Number(idx));
     };
+    function k8sManifestSearchHaystack(r) {
+      return [
+        r.namespace || '-',
+        r.kind || '',
+        k8sManifestCanonicalKind(r.kind || ''),
+        k8sManifestKindAliases(r.kind || '').join(' '),
+        r.name || '',
+        r.api_version || '',
+        r.cluster_id || '',
+        r.status || ''
+      ].join(' ').toLowerCase();
+    }
+    function k8sManifestKindAliases(kind) {
+      const k = String(kind || '').toLowerCase();
+      switch (k) {
+        case 'configmap': return ['cm', 'configmaps'];
+        case 'secret': return ['secrets'];
+        case 'serviceaccount': return ['sa', 'serviceaccounts'];
+        case 'service': return ['svc', 'services'];
+        case 'persistentvolumeclaim': return ['pvc', 'pvcs', 'persistentvolumeclaims', 'persistancevolumeclaim', 'persistancevolumeclaims'];
+        case 'ingress': return ['ing', 'ingresses'];
+        case 'networkpolicy': return ['netpol', 'networkpolicies'];
+        case 'rolebinding': return ['rb', 'rolebindings'];
+        case 'clusterrolebinding': return ['crb', 'clusterrolebindings'];
+        case 'clusterrole': return ['cr', 'clusterroles'];
+        case 'horizontalpodautoscaler': return ['hpa', 'horizontalpodautoscalers'];
+        case 'serviceaccounttoken': return ['satoken'];
+        default: return [];
+      }
+    }
+    function k8sManifestCanonicalKind(kind) {
+      const normalized = String(kind || '').trim().toLowerCase().replace(/[\s_.-]/g, '');
+      const map = {
+        cm: 'ConfigMap', configmap: 'ConfigMap', configmaps: 'ConfigMap',
+        secret: 'Secret', secrets: 'Secret',
+        sa: 'ServiceAccount', serviceaccount: 'ServiceAccount', serviceaccounts: 'ServiceAccount',
+        svc: 'Service', service: 'Service', services: 'Service',
+        pvc: 'PersistentVolumeClaim', pvcs: 'PersistentVolumeClaim', persistentvolumeclaim: 'PersistentVolumeClaim', persistentvolumeclaims: 'PersistentVolumeClaim', persistancevolumeclaim: 'PersistentVolumeClaim', persistancevolumeclaims: 'PersistentVolumeClaim',
+        ingress: 'Ingress', ingresses: 'Ingress', ing: 'Ingress',
+        netpol: 'NetworkPolicy', networkpolicy: 'NetworkPolicy', networkpolicies: 'NetworkPolicy',
+        role: 'Role', roles: 'Role',
+        rb: 'RoleBinding', rolebinding: 'RoleBinding', rolebindings: 'RoleBinding',
+        cr: 'ClusterRole', clusterrole: 'ClusterRole', clusterroles: 'ClusterRole',
+        crb: 'ClusterRoleBinding', clusterrolebinding: 'ClusterRoleBinding', clusterrolebindings: 'ClusterRoleBinding',
+        hpa: 'HorizontalPodAutoscaler', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+        deployment: 'Deployment', deployments: 'Deployment',
+        statefulset: 'StatefulSet', statefulsets: 'StatefulSet',
+        daemonset: 'DaemonSet', daemonsets: 'DaemonSet',
+        pod: 'Pod', pods: 'Pod'
+      };
+      return map[normalized] || String(kind || '').trim();
+    }
     window.k8sManifestLoadLive = async () => {
       const out = document.getElementById('mchg-out');
       const body = k8sManifestFormTarget();
@@ -10068,7 +10120,7 @@ const adminHTML = `<!doctype html>
     function k8sManifestFormTarget() {
       return {
         cluster_id: (document.getElementById('mchg-cluster').value || '').trim(),
-        kind: (document.getElementById('mchg-kind').value || '').trim(),
+        kind: k8sManifestCanonicalKind((document.getElementById('mchg-kind').value || '').trim()),
         namespace: (document.getElementById('mchg-ns').value || '').trim(),
         name: (document.getElementById('mchg-name').value || '').trim()
       };

@@ -36,7 +36,7 @@ func (s *Server) handleK8sManifestEditor(w http.ResponseWriter, r *http.Request)
 		ClusterID: strings.TrimSpace(q.Get("cluster_id")),
 		Kind:      strings.TrimSpace(q.Get("kind")),
 		Namespace: strings.TrimSpace(q.Get("namespace")),
-		Limit:     intParam(q.Get("limit"), 1000),
+		Limit:     manifestEditorLimit(q.Get("limit")),
 	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_editor_failed")
@@ -54,6 +54,9 @@ func (s *Server) handleK8sManifestEditor(w http.ResponseWriter, r *http.Request)
 	}
 	rows := make([]resourceRow, 0, len(items))
 	kindSet := map[string]bool{}
+	for _, k := range manifestEditorPreferredKinds() {
+		kindSet[k] = true
+	}
 	for _, it := range items {
 		kindSet[it.Kind] = true
 		rows = append(rows, resourceRow{
@@ -61,6 +64,22 @@ func (s *Server) handleK8sManifestEditor(w http.ResponseWriter, r *http.Request)
 			Name: it.Name, Status: it.Status, RiskLevel: it.RiskLevel, UpdatedAt: it.UpdatedAt,
 		})
 	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		pi, pj := manifestEditorKindPriority(rows[i].Kind), manifestEditorKindPriority(rows[j].Kind)
+		if pi != pj {
+			return pi < pj
+		}
+		if rows[i].ClusterID != rows[j].ClusterID {
+			return rows[i].ClusterID < rows[j].ClusterID
+		}
+		if rows[i].Namespace != rows[j].Namespace {
+			return rows[i].Namespace < rows[j].Namespace
+		}
+		if rows[i].Kind != rows[j].Kind {
+			return rows[i].Kind < rows[j].Kind
+		}
+		return rows[i].Name < rows[j].Name
+	})
 	kinds := make([]string, 0, len(kindSet))
 	for k := range kindSet {
 		kinds = append(kinds, k)
@@ -70,6 +89,30 @@ func (s *Server) handleK8sManifestEditor(w http.ResponseWriter, r *http.Request)
 		"clusters": clusters, "resources": rows, "resource_kinds": kinds,
 		"note": "Manifest Change Studio는 live manifest를 편집 요청으로 저장한 뒤 검증, 승인, Server-Side Apply, 사후 검증 흐름으로 처리합니다.",
 	})
+}
+
+func manifestEditorLimit(raw string) int {
+	if strings.TrimSpace(raw) == "" {
+		return 10000
+	}
+	return intParam(raw, 10000)
+}
+
+func manifestEditorPreferredKinds() []string {
+	return []string{
+		"Deployment", "StatefulSet", "DaemonSet", "Service", "Ingress", "ConfigMap", "Secret",
+		"ServiceAccount", "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding",
+		"PersistentVolumeClaim", "NetworkPolicy", "HorizontalPodAutoscaler", "Pod", "Node",
+	}
+}
+
+func manifestEditorKindPriority(kind string) int {
+	for i, k := range manifestEditorPreferredKinds() {
+		if strings.EqualFold(k, kind) {
+			return i
+		}
+	}
+	return 1000
 }
 
 // handleK8sManifestLive is the Manifest Studio alias of the read-only Manifest Viewer.

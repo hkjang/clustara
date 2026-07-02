@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1869,10 +1870,30 @@ func TestK8sManifestMasksSensitiveValues(t *testing.T) {
 		Kind: "Secret", Namespace: "default", Name: "db", APIVersion: "v1",
 		Spec: map[string]any{"data": map[string]any{"password": "c3VwZXI=", "user": "YWRtaW4="}},
 	})
-	spec := secret["spec"].(map[string]any)
-	data := spec["data"].(map[string]any)
+	data := secret["data"].(map[string]any)
 	if data["password"] != maskedValue || data["user"] != maskedValue {
 		t.Fatalf("secret data must be masked: %+v", data)
+	}
+	cm := assembleManifest(store.K8sInventoryItem{
+		Kind: "ConfigMap", Namespace: "default", Name: "app-config", APIVersion: "v1",
+		Spec: map[string]any{"data": map[string]any{"APP_MODE": "prod"}},
+	})
+	if cm["spec"] != nil || cm["data"].(map[string]any)["APP_MODE"] != "prod" {
+		t.Fatalf("ConfigMap data should be top-level, got %+v", cm)
+	}
+	role := assembleManifest(store.K8sInventoryItem{
+		Kind: "Role", Namespace: "default", Name: "reader", APIVersion: "rbac.authorization.k8s.io/v1",
+		Spec: map[string]any{"rules": []any{map[string]any{"apiGroups": []any{""}, "resources": []any{"pods"}, "verbs": []any{"get"}}}},
+	})
+	if role["spec"] != nil || role["rules"] == nil {
+		t.Fatalf("Role rules should be top-level, got %+v", role)
+	}
+	sa := assembleManifest(store.K8sInventoryItem{
+		Kind: "ServiceAccount", Namespace: "default", Name: "builder", APIVersion: "v1",
+		Spec: map[string]any{"imagePullSecrets": []any{map[string]any{"name": "regcred"}}},
+	})
+	if sa["spec"] != nil || sa["imagePullSecrets"] == nil {
+		t.Fatalf("ServiceAccount fields should be top-level, got %+v", sa)
 	}
 
 	// Deployment: container env values and token-like keys masked; image kept.
@@ -2237,6 +2258,106 @@ status:
 	}
 	if !foundManifestChange {
 		t.Fatalf("timeline should include manifest change %s, got %+v", createOut.Request.ID, timeline.Entries)
+	}
+}
+
+func TestK8sManifestEditorKeepsEditableKindsBeyondPodHeavyPage(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 16, filepath.Join(t.TempDir(), "manifest-editor.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	if err := db.UpsertK8sCluster(ctx, store.K8sCluster{ID: "c1", Name: "cluster", ServerURL: "https://k8s.example", AuthMode: "token", Status: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1100; i++ {
+		if err := db.UpsertK8sInventory(ctx, store.K8sInventoryItem{
+			ID:        fmt.Sprintf("pod_%04d", i),
+			ClusterID: "c1",
+			Kind:      "Pod",
+			Namespace: "busy",
+			Name:      fmt.Sprintf("pod-%04d", i),
+			UpdatedAt: fmt.Sprintf("2026-07-02T12:%02d:%02dZ", i%60, i%60),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	editable := []struct {
+		kind       string
+		apiVersion string
+		namespace  string
+		name       string
+	}{
+		{"ConfigMap", "v1", "default", "app-config"},
+		{"Secret", "v1", "default", "app-secret"},
+		{"ServiceAccount", "v1", "default", "builder"},
+		{"Role", "rbac.authorization.k8s.io/v1", "default", "reader"},
+		{"RoleBinding", "rbac.authorization.k8s.io/v1", "default", "reader-binding"},
+		{"PersistentVolumeClaim", "v1", "default", "data"},
+		{"Ingress", "networking.k8s.io/v1", "default", "web"},
+		{"NetworkPolicy", "networking.k8s.io/v1", "default", "deny-all"},
+	}
+	for _, it := range editable {
+		if err := db.UpsertK8sInventory(ctx, store.K8sInventoryItem{
+			ID:         "editable_" + strings.ToLower(it.kind),
+			ClusterID:  "c1",
+			Kind:       it.kind,
+			APIVersion: it.apiVersion,
+			Namespace:  it.namespace,
+			Name:       it.name,
+			Status:     "Observed",
+			UpdatedAt:  "2026-07-01T00:00:00Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp, err := http.Get(proxy.URL + "/admin/k8s/manifests/editor?cluster_id=c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("manifest editor status=%d body=%s", resp.StatusCode, body)
+	}
+	var out struct {
+		Resources []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"resources"`
+		ResourceKinds []string `json:"resource_kinds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range out.Resources {
+		seen[r.Kind+"/"+r.Name] = true
+	}
+	for _, it := range editable {
+		key := it.kind + "/" + it.name
+		if !seen[key] {
+			t.Fatalf("manifest editor resources missing %s among %d resources", key, len(out.Resources))
+		}
+	}
+	kindSet := map[string]bool{}
+	for _, k := range out.ResourceKinds {
+		kindSet[k] = true
+	}
+	for _, it := range editable {
+		if !kindSet[it.kind] {
+			t.Fatalf("manifest editor resource_kinds missing %s", it.kind)
+		}
 	}
 }
 
