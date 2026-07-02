@@ -24,7 +24,7 @@
 | **변경 추적** | 리소스 spec 리비전(append-only), Resource Diff, 변경 타임라인, Manifest Viewer(민감값 마스킹) |
 | **장애 분석(RCA)** | CrashLoop·OOM·ImagePull·Pending·Unavailable + Readiness/Liveness probe·DNS·NodePressure(노드 condition) + 직전 Config 변경·배포 후 오류 연계, 근거 기반 장애 분석 센터 |
 | **연결성 점검** | Service selector↔Endpoint, Ingress backend/host/TLS, PVC, Rollout, Job/CronJob |
-| **액션 센터** | 영향도 분석·승인·감사 공통화 + 실클러스터 executor(scale / rollout restart / cordon / uncordon / delete pod) — 승인 게이트 |
+| **액션 센터** | 영향도 분석·승인·감사 공통화 + 실클러스터 executor(scale / rollout restart / cordon / uncordon / delete pod) — Action/Config/YAML/Exec/Debug 요청을 다음 행동 흐름으로 묶는 승인 게이트 |
 | **보안·정책** | Pod Security 등급, RBAC 위험·RBAC Diff, 이미지 태그, Secret 참조, NetworkPolicy 공백, TLS 인증서 만료, 감사 이상, 정책 센터(Admission 시뮬레이터 + 정책 팩) |
 | **용량·자동확장** | HPA 진단, 과소/과다 할당, 노드 bin packing, GPU, 노드 용량 예측, replica 시뮬레이션 |
 | **비용(FinOps)** | request×단가 기반 월 비용 추정 — namespace/팀/클러스터 그룹/비용센터별 |

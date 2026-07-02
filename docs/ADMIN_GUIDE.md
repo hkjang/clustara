@@ -116,12 +116,13 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 
 메뉴 위치는 상단 **액션 승인함** 바로가기 또는 **장애 및 대응 → 액션 승인함**입니다. 개발자 뷰에서 생성된 액션 요청도 이 화면에 모입니다.
 
+- 상단 **다음 행동 흐름**은 Action, Config 변경, YAML 변경, Exec 세션, Debug Container 요청을 한곳에 모아 `확인 필요`, `승인 대기`, `실행 가능`, `검증 필요`, `준비/검증`, `완료` 레인으로 보여줍니다. 각 카드의 버튼은 원래 처리 화면(Action Center, 보안 Config 변경, YAML 변경, 운영 설정)으로 이동합니다.
 - 요청 생성 시 영향도가 자동 산출되어 `dry_run_diff`에 기록되고, blocker(standalone Pod 삭제·drain·허용 외 patch 필드 등)가 있으면 자동으로 **승인 필수**로 격상됩니다.
 - 요청에는 `idempotency_key`, `target_uid`, `target_resource_version`, `command_hash`가 저장됩니다. 같은 idempotency key로 재시도하면 기존 요청을 반환합니다.
 - **승인**된 액션은 `approved -> running -> executed|failed` 전이만 허용되며 **실행** 버튼으로 실클러스터에 반영합니다: `scale`/`rollout_restart`/`cordon`/`uncordon`/`delete_pod`. 같은 승인 건의 중복 실행은 차단되고 drain은 수동입니다.
 - 개발자 뷰 요청 생성은 `request`(승인 요청), `approve`(승인까지), `execute`(승인 후 즉시 실행) 모드를 지원합니다. `super_admin`/`admin`은 실행 가능한 작업을 즉시 실행할 수 있고, 개발자/조회자는 승인 요청만 생성합니다. `ops_admin`/`operator`/`approver`는 위험도에 따라 승인까지만 허용됩니다.
 - 과거 개발자 뷰에서 생성된 `pending_approval` 액션도 호환 상태로 남아 있어 승인/반려할 수 있습니다.
-- API: `GET/POST /admin/k8s/actions`, `POST /admin/k8s/actions/{id}/approve|reject|execute`
+- API: `GET /admin/k8s/action-flow`, `GET/POST /admin/k8s/actions`, `POST /admin/k8s/actions/{id}/approve|reject|execute`
 
 ## 11. 용량·자동확장 (`#/k8s-capacity`)
 

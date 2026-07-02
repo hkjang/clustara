@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.42** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.43** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.42)
+## 기능 상태 (v0.9.43)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -85,6 +85,7 @@
 | Action Center 가시성 + 역할별 개발자 요청 처리 — 액션 승인함 상단 노출, 개발자 뷰 `request`/`approve`/`execute` 모드, super_admin/admin 즉시 승인·실행, legacy `pending_approval` 호환 | ✅ (v0.9.40) |
 | Manifest Change Studio — live YAML 편집 요청, before/after diff·impact, schema/policy/server dry-run 검증, 승인 게이트, Server-Side Apply, burst 수집, 사후 검증, 롤백 요청, evidence/git patch export | ✅ (v0.9.41) |
 | Manifest Change Drift Guard + Approval Brief — 적용 직전 live manifest hash/UID drift 차단, force_drift 감사, 승인자 브리핑(`/brief`) | ✅ (v0.9.42) |
+| Action Flow Navigator — Action/Config/YAML/Exec/Debug 요청을 다음 행동 레인(확인 필요·승인 대기·실행 가능·검증 필요·준비/검증·완료)으로 집계해 액션 승인함 상단에 표시 | ✅ (v0.9.43) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
 
@@ -203,6 +204,7 @@
 | GET | `/admin/k8s/findings` | health/security finding 조회 |
 | GET | `/admin/k8s/rca` | Pending, CrashLoop, ImagePull, OOM, unavailable + Readiness/Liveness probe, DNS, NodePressure, 직전 config 변경·배포 후 오류·배포 후 latency 회귀 연계 원인 후보 |
 | GET | `/admin/k8s/remediation/advice` | RCA별 권장 조치 Advisor — 권장 액션·근거·위험도·승인 필요·롤백 가능성·우선순위 |
+| GET | `/admin/k8s/action-flow` | Action/Config/YAML/Exec/Debug 요청을 사용자 다음 행동 기준으로 집계. `?cluster_id=&limit=`. 응답은 `lanes`, `items`, `summary`와 원래 처리 화면 href를 포함 |
 | POST | `/admin/k8s/latency/collect` | Prometheus에서 워크로드 latency 수집·적재 (RCA-10 latency, `PROMETHEUS_URL` 필요) |
 | GET/POST | `/admin/k8s/latency/config` | latency PromQL + 라벨 매핑(namespace/workload) 설정 |
 | GET | `/admin/k8s/connectivity` | Service selector↔Pod endpoint, Ingress backend/host/TLS, PVC Pending 점검 |

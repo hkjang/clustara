@@ -8207,11 +8207,12 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 액션 승인함', '<div class="empty">불러오는 중...</div>');
-      let clusters, data;
+      let clusters, data, flow;
       try {
-        [clusters, data] = await Promise.all([
+        [clusters, data, flow] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/actions?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/action-flow?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ lanes: [], summary: {} })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 액션 승인함', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -8243,11 +8244,51 @@ const adminHTML = `<!doctype html>
       }).join('') : '<tr><td colspan="7" class="muted">액션 요청이 없습니다.</td></tr>';
 
       view.innerHTML =
-        section('K8s 액션 승인함', '<div class="kpis">' + kpi('대기 중', fmt(pending.length)) + kpi('전체', fmt(acts.length)) + '</div>') +
+        section('K8s 액션 승인함', '<div class="kpis">' +
+          kpi('확인 필요', fmt(((flow.summary || {}).attention) || 0)) +
+          kpi('승인 대기', fmt(((flow.summary || {}).approval) || pending.length)) +
+          kpi('실행 가능', fmt(((flow.summary || {}).ready) || 0)) +
+          kpi('검증 필요', fmt(((flow.summary || {}).verify) || 0)) +
+          kpi('전체', fmt(((flow.summary || {}).total) || acts.length)) + '</div>') +
         card('필터', filterBar) +
+        renderK8sActionFlow(flow) +
         card('액션 요청',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">상단 바로가기 또는 장애 및 대응 &gt; 액션 승인함에서 요청을 승인·반려·실행합니다. super_admin/admin은 개발자 뷰에서 실행 가능한 요청을 즉시 실행할 수도 있습니다.</div>' +
           '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    function renderK8sActionFlow(flow) {
+      const lanes = (flow && flow.lanes) || [];
+      const total = ((flow && flow.summary) || {}).total || 0;
+      const riskClass = (r) => r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
+      const laneTone = (lane) => lane === 'attention' ? 'error' : (lane === 'approval' || lane === 'ready' || lane === 'verify' ? 'warn' : '');
+      const kindLabel = { action: '액션', config_change: 'Config', manifest_change: 'YAML', exec_session: 'Exec', debug_session: 'Debug' };
+      if (!total) {
+        return card('다음 행동 흐름', '<div class="card-body"><div class="empty">진행 중인 운영 작업이 없습니다.</div></div>');
+      }
+      const html = lanes.map(lane => {
+        const items = (lane.items || []).slice(0, 5);
+        const rows = items.map(it =>
+          '<div style="border-top:1px solid var(--border);padding:8px 0">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
+          '<strong style="font-size:12px">' + escapeHTML(it.title || it.kind || '') + '</strong>' +
+          '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px">' + escapeHTML(it.target || '-') + '</div>' +
+          '<div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">' + escapeHTML(it.detail || '') + '</div>' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px">' +
+          '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
+          '<a href="' + escapeAttr(it.href || '#/k8s-actions') + '" style="font-size:11px">' + escapeHTML(it.primary_label || '열기') + ' →</a>' +
+          '</div></div>'
+        ).join('') || '<div class="muted" style="font-size:11px;border-top:1px solid var(--border);padding-top:8px">해당 단계 작업 없음</div>';
+        const more = (lane.count || 0) > items.length ? '<div class="muted" style="font-size:10px;margin-top:6px">외 ' + fmt((lane.count || 0) - items.length) + '건</div>' : '';
+        return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;min-width:210px;flex:1;background:var(--card)">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px"><strong>' + escapeHTML(lane.label || lane.id) + '</strong><span class="status ' + laneTone(lane.id) + '" style="font-size:10px">' + fmt(lane.count || 0) + '</span></div>' +
+          '<div class="muted" style="font-size:11px;min-height:30px">' + escapeHTML(lane.description || '') + '</div>' +
+          rows + more + '</div>';
+      }).join('');
+      return card('다음 행동 흐름',
+        '<div class="card-body">' +
+        '<div class="muted" style="font-size:11px;margin-bottom:8px">Action, Config 변경, YAML 변경, Exec, Debug 요청을 메뉴가 아니라 사용자의 다음 행동 기준으로 묶었습니다. 버튼을 누르면 원래 처리 화면으로 이동합니다.</div>' +
+        '<div style="display:flex;gap:8px;align-items:stretch;overflow:auto;padding-bottom:4px">' + html + '</div></div>');
     }
     window.k8sActGo = () => {
       const cl = document.getElementById('k8sact-cluster').value;
