@@ -69,6 +69,19 @@ func TestOpsStatusReportsConfigAndDisk(t *testing.T) {
 	if got.GeneratedAt == "" {
 		t.Error("expected generated_at timestamp")
 	}
+	if got.Overall == "" || len(got.Components) == 0 {
+		t.Fatalf("expected readiness v2 overall/components, got overall=%q components=%d", got.Overall, len(got.Components))
+	}
+	seenComponent := map[string]OpsComponentStatus{}
+	for _, c := range got.Components {
+		seenComponent[c.Name] = c
+	}
+	if seenComponent["database"].Status != "ok" {
+		t.Fatalf("expected database component ok, got %+v", seenComponent["database"])
+	}
+	if _, ok := seenComponent["k8s_collector"]; !ok {
+		t.Fatalf("expected k8s_collector component, got %+v", got.Components)
+	}
 }
 
 func TestOpsWorkersExposeWorkerHealthAndAliases(t *testing.T) {

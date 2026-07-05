@@ -476,6 +476,7 @@ const adminHTML = `<!doctype html>
         <button class="nav-group-toggle" type="button">설정</button>
         <div class="nav-group-menu">
           <a href="#/enterprise" data-tab="enterprise">엔터프라이즈</a>
+          <a href="#/governance" data-tab="governance">Governance Hub</a>
           <a href="#/k8s-settings" data-tab="k8s-settings">운영 설정</a>
           <a href="#/settings" data-tab="settings">설정</a>
           <a href="#/k8s-configrollback" data-tab="k8s-configrollback">설정 롤백 센터</a>
@@ -994,6 +995,7 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-security', href: '#/k8s-security', label: '보안', group: '보안', tags: 'security posture image rbac tls policy' },
       { tab: 'k8s-policy', href: '#/k8s-policy', label: '정책 센터', group: '보안', tags: 'policy pack exception simulation' },
       { tab: 'enterprise', href: '#/enterprise', label: '엔터프라이즈', group: '설정', tags: 'org workspace project catalog access binding' },
+      { tab: 'governance', href: '#/governance', label: 'Governance Hub', group: '설정', tags: 'audit evidence ticket cmdb risk executive report' },
       { tab: 'k8s-settings', href: '#/k8s-settings', label: '운영 설정', group: '설정', tags: 'terminal policy masking mattermost cost' },
       { tab: 'settings', href: '#/settings', label: '시스템 설정', group: '설정', tags: 'settings runtime sso secret' },
     ];
@@ -1590,6 +1592,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
           case 'enterprise': await renderEnterpriseFoundation(params); break;
+          case 'governance': await renderGovernanceHub(params); break;
           case 'privacy-ledger': await renderPrivacyLedgerView(); break;
           case 'prompts':       await renderPromptsView(params); break;
           case 'prompt-assets': await renderPromptAssets(params); break;
@@ -10279,6 +10282,63 @@ const adminHTML = `<!doctype html>
       const cl = el ? el.value : '';
       location.hash = '#/gitops' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
     };
+
+    // ---------- Governance Hub ----------
+    async function renderGovernanceHub(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('Governance Hub', '<div class="empty">불러오는 중...</div>');
+      let report, evidence, tickets, risks, audits, cmdb;
+      try {
+        [report, evidence, tickets, risks, audits, cmdb] = await Promise.all([
+          api('/admin/governance/executive-report'),
+          api('/admin/governance/evidence'),
+          api('/admin/governance/tickets'),
+          api('/admin/governance/risk-register'),
+          api('/admin/governance/audit-search?limit=80'),
+          api('/admin/governance/cmdb-links'),
+        ]);
+      } catch (e) {
+        view.innerHTML = section('Governance Hub', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const sum = (report && report.data && report.data.summary) || report.summary || {};
+      const evidenceRows = ((evidence.data && evidence.data.evidence) || evidence.evidence || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">증적 없음.</td></tr>';
+      const ticketRows = ((tickets.data && tickets.data.tickets) || tickets.tickets || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">티켓 없음.</td></tr>';
+      const riskRows = ((risks.data && risks.data.risks) || risks.risks || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">등록된 위험 없음.</td></tr>';
+      const cmdbRows = ((cmdb.data && cmdb.data.links) || cmdb.links || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">CMDB 링크 없음.</td></tr>';
+      const auditRows = ((audits.data && audits.data.events) || audits.events || []).slice(0, 30).map(ev =>
+        '<tr><td>' + escapeHTML(ev.source || '-') + '</td><td>' + escapeHTML(ev.actor || '-') + '</td><td>' + escapeHTML(ev.action || '-') + '</td><td>' + escapeHTML(ev.target || '-') + '</td><td>' + escapeHTML(ev.result || ev.detail || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(ev.created_at || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">감사 이벤트 없음.</td></tr>';
+      view.innerHTML =
+        section('Governance Hub', '<div class="card-body">' +
+          '<div class="kpis">' +
+            kpi('Clusters', fmt(sum.clusters || 0)) +
+            kpi('Open Incidents', fmt(sum.open_incidents || 0)) +
+            kpi('Security Findings', fmt(sum.open_security_findings || 0)) +
+            kpi('Monthly Cost', fmt(Math.round(sum.monthly_k8s_cost_krw || 0)) + ' KRW') +
+            kpi('Tickets', fmt(sum.open_tickets || 0)) +
+            kpi('Accepted Risks', fmt(sum.accepted_risks || 0)) +
+          '</div>' +
+          '<div class="toolbar" style="margin-top:12px">' +
+            '<a class="button secondary" href="#/enterprise">조직·권한</a>' +
+            '<a class="button secondary" href="#/k8s-actions">액션 승인함</a>' +
+            '<a class="button secondary" href="#/problems">Problem Inbox</a>' +
+            '<a class="button secondary" href="#/finops">FinOps</a>' +
+            '<a class="button secondary" href="#/gitops">GitOps</a>' +
+          '</div></div>') +
+        '<div class="grid cols-2">' +
+          card('Evidence Chain', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + evidenceRows + '</tbody></table></div>') +
+          card('ITSM Tickets', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + ticketRows + '</tbody></table></div>') +
+          card('Risk Register', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
+          card('CMDB Links', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + cmdbRows + '</tbody></table></div>') +
+        '</div>' +
+        card('Audit Search', '<div class="card-body"><table><thead><tr><th>Source</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Time</th></tr></thead><tbody>' + auditRows + '</tbody></table></div>');
+      makeSortable('#view', 'governance');
+    }
+    function governanceRecordRow(rec) {
+      const scope = ((rec.scope_type || '-') + ':' + (rec.scope_id || '-'));
+      return '<tr><td><span class="status">' + escapeHTML(rec.status || '-') + '</span></td><td><strong>' + escapeHTML(rec.name || rec.id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(rec.kind || '-') + '</div></td><td>' + escapeHTML(scope) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(rec.evidence_id || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(rec.updated_at || rec.created_at || '-') + '</td></tr>';
+    }
 
     // ---------- K8s 비용 대시보드 (DW-08 / FinOps) ----------
     async function renderK8sCost(params) {

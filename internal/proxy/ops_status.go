@@ -18,11 +18,22 @@ const opsStatusWindow = time.Hour
 // adequacy, security configuration risk, and disk headroom.
 type OpsStatus struct {
 	GeneratedAt string                      `json:"generated_at"`
+	Overall     string                      `json:"overall"`
 	Providers   []store.ProviderHealthScore `json:"providers"`
 	Logging     OpsLoggingStatus            `json:"logging"`
 	Fallback    OpsFallbackStatus           `json:"fallback"`
 	Security    OpsSecurityStatus           `json:"security"`
 	Disk        OpsDiskStatus               `json:"disk"`
+	Components  []OpsComponentStatus        `json:"components"`
+}
+
+// OpsComponentStatus is the v2 readiness model used by /admin/ops/status. It is
+// intentionally coarser than liveness: API can be ready while integrations are degraded.
+type OpsComponentStatus struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"` // ok | degraded | failed | disabled
+	Detail    string `json:"detail"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 // OpsLoggingStatus surfaces async audit-log queue pressure. Dropped > 0 means the
@@ -115,8 +126,89 @@ func (s *Server) opsStatusSnapshot(ctx context.Context) OpsStatus {
 	if ok && total > 0 {
 		status.Disk.UsedPercent = float64(total-free) / float64(total) * 100
 	}
+	status.Components = s.opsComponents(ctx, status)
+	status.Overall = opsComponentOverall(status.Components)
 
 	return status
+}
+
+func (s *Server) opsComponents(ctx context.Context, status OpsStatus) []OpsComponentStatus {
+	now := time.Now().UTC().Format(time.RFC3339)
+	components := []OpsComponentStatus{}
+	if err := s.db.Ping(ctx); err != nil {
+		components = append(components, OpsComponentStatus{Name: "database", Status: "failed", Detail: err.Error(), UpdatedAt: now})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "database", Status: "ok", Detail: "primary store reachable", UpdatedAt: now})
+	}
+	if status.Logging.Dropped > 0 {
+		components = append(components, OpsComponentStatus{Name: "async_logger", Status: "degraded", Detail: fmtCount(status.Logging.Dropped) + " dropped audit records", UpdatedAt: now})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "async_logger", Status: "ok", Detail: "queue_depth=" + itoaProxy(status.Logging.QueueDepth), UpdatedAt: now})
+	}
+	ch := s.chConf()
+	if ch.URL == "" {
+		components = append(components, OpsComponentStatus{Name: "clickhouse", Status: "disabled", Detail: "CLICKHOUSE_URL not configured"})
+	} else if n, err := s.db.CountClickHouseFactRetries(ctx); err == nil && n > 0 {
+		components = append(components, OpsComponentStatus{Name: "clickhouse", Status: "degraded", Detail: itoaProxy(n) + " fact retry batches pending", UpdatedAt: now})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "clickhouse", Status: "ok", Detail: "configured", UpdatedAt: now})
+	}
+	clusters, err := s.db.ListK8sClusters(ctx)
+	if err != nil {
+		components = append(components, OpsComponentStatus{Name: "k8s_collector", Status: "failed", Detail: err.Error(), UpdatedAt: now})
+	} else {
+		stale := 0
+		for _, c := range clusters {
+			if c.LastConnectedAt == "" || fleetFreshnessSeconds(c.LastConnectedAt) > 3600 {
+				stale++
+			}
+		}
+		switch {
+		case len(clusters) == 0:
+			components = append(components, OpsComponentStatus{Name: "k8s_collector", Status: "disabled", Detail: "no clusters registered"})
+		case stale > 0:
+			components = append(components, OpsComponentStatus{Name: "k8s_collector", Status: "degraded", Detail: itoaProxy(stale) + "/" + itoaProxy(len(clusters)) + " clusters stale", UpdatedAt: now})
+		default:
+			components = append(components, OpsComponentStatus{Name: "k8s_collector", Status: "ok", Detail: itoaProxy(len(clusters)) + " clusters fresh", UpdatedAt: now})
+		}
+	}
+	mm := s.mattermostConfig(ctx)
+	if !mm.enabled {
+		components = append(components, OpsComponentStatus{Name: "mattermost", Status: "disabled", Detail: "notifications disabled"})
+	} else if mm.webhookURL == "" {
+		components = append(components, OpsComponentStatus{Name: "mattermost", Status: "degraded", Detail: "enabled without webhook URL", UpdatedAt: now})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "mattermost", Status: "ok", Detail: "webhook configured", UpdatedAt: now})
+	}
+	if s.retention != nil {
+		components = append(components, OpsComponentStatus{Name: "retention", Status: "ok", Detail: "last_run=" + s.retention.LastRun(), UpdatedAt: now})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "retention", Status: "disabled", Detail: "retention worker not attached"})
+	}
+	if aw := s.alertWorker.Load(); aw != nil {
+		st := aw.Status()
+		compStatus := "ok"
+		if !st.Running {
+			compStatus = "degraded"
+		}
+		components = append(components, OpsComponentStatus{Name: "alert_worker", Status: compStatus, Detail: "fired=" + fmtCount(st.FiredCount) + ", errors=" + fmtCount(st.ErrorCount), UpdatedAt: st.LastRun})
+	} else {
+		components = append(components, OpsComponentStatus{Name: "alert_worker", Status: "disabled", Detail: "alert worker not attached"})
+	}
+	return components
+}
+
+func opsComponentOverall(components []OpsComponentStatus) string {
+	overall := "ok"
+	for _, c := range components {
+		switch c.Status {
+		case "failed":
+			return "failed"
+		case "degraded":
+			overall = "degraded"
+		}
+	}
+	return overall
 }
 
 // OpsRiskFactor is one contributor to the overall operational risk score.

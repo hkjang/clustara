@@ -92,3 +92,32 @@ func TestEnterpriseFoundationCRUD(t *testing.T) {
 		t.Fatalf("no-match decision mismatch decision=%+v err=%v", noMatch, err)
 	}
 }
+
+func TestEnterpriseRecordLedger(t *testing.T) {
+	db := openAggTestStore(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	rec := EnterpriseRecord{
+		ID: "ev_1", Kind: "evidence_chain", ScopeType: "incident", ScopeID: "inc1",
+		Name: "incident evidence", Status: "open", OwnerTeamID: "team_platform",
+		EvidenceID: "ev_1", CreatedBy: "tester", Payload: map[string]any{
+			"input_hash": "abc", "policy_version": "v1",
+		},
+	}
+	if err := db.UpsertEnterpriseRecord(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	rec.Status = "closed"
+	rec.Payload["result_hash"] = "def"
+	if err := db.UpsertEnterpriseRecord(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.ListEnterpriseRecords(ctx, EnterpriseRecordFilter{Kind: "evidence_chain", ScopeType: "incident", ScopeID: "inc1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "closed" || rows[0].Payload["result_hash"] != "def" {
+		t.Fatalf("record ledger mismatch: %+v", rows)
+	}
+}
