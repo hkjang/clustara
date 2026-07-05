@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.45"
+const AppVersion = "v0.9.46"
 
 type Server struct {
 	cfg            config.Config
@@ -260,6 +260,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/users/", s.handleUserDetail)
 	mux.HandleFunc("/admin/teams", s.handleTeams)
 	mux.HandleFunc("/admin/teams/", s.handleTeamDetail)
+	mux.HandleFunc("/admin/fleet/overview", s.handleFleetOverview)
+	mux.HandleFunc("/admin/fleet/search", s.handleFleetSearch)
+	mux.HandleFunc("/admin/security/posture", s.handleSecurityPosture)
+	mux.HandleFunc("/admin/problems", s.handleAIOpsProblems)
+	mux.HandleFunc("/admin/finops/overview", s.handleFinOpsOverview)
+	mux.HandleFunc("/admin/finops/costs", s.handleFinOpsCosts)
+	mux.HandleFunc("/admin/finops/anomalies", s.handleFinOpsAnomalies)
+	mux.HandleFunc("/admin/finops/rightsizing", s.handleFinOpsRightsizing)
+	mux.HandleFunc("/admin/orgs", s.handleEnterpriseOrganizations)
+	mux.HandleFunc("/admin/workspaces", s.handleEnterpriseWorkspaces)
+	mux.HandleFunc("/admin/projects", s.handleEnterpriseProjects)
+	mux.HandleFunc("/admin/catalog/entities", s.handleCatalogEntities)
+	mux.HandleFunc("/admin/access-bindings/evaluate", s.handleAccessBindingEvaluate)
+	mux.HandleFunc("/admin/access-bindings", s.handleAccessBindings)
 	mux.HandleFunc("/admin/ips", s.handleIPs)
 	mux.HandleFunc("/admin/ips/", s.handleIPDetail)
 	mux.HandleFunc("/admin/requests/", s.handleRequestDetail)
@@ -522,6 +536,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/savings", s.handleSavings)
 	mux.HandleFunc("/admin/model-migration", s.handleModelMigration)
 	mux.HandleFunc("/admin/invoices", s.handleInvoices)
+	mux.HandleFunc("/admin/ai/governance/overview", s.handleAIGatewayGovernanceOverview)
+	mux.HandleFunc("/admin/gitops/overview", s.handleGitOpsOverview)
 	mux.HandleFunc("/admin/personalization/coaching", s.handlePersonalizationCoaching)
 	mux.HandleFunc("/admin/personalization/model-affinity", s.handlePersonalizationModelAffinity)
 	mux.HandleFunc("/admin/personalization/mcp-affinity", s.handlePersonalizationMCPAffinity)

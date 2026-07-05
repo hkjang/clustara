@@ -53,7 +53,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// ai_admin: admin:read but NOT security:read → ops tabs + settings, but no security.
 	aiTabs := tabSet(roleScopes["ai_admin"], features)
-	for _, want := range []string{"k8s-home", "k8s", "k8s-pods", "k8s-nodes", "k8s-rca", "settings"} {
+	for _, want := range []string{"k8s-home", "fleet", "k8s", "k8s-pods", "k8s-nodes", "gitops", "problems", "k8s-rca", "finops", "ai-governance", "enterprise", "settings"} {
 		if !aiTabs[want] {
 			t.Errorf("ai_admin should see %q", want)
 		}
@@ -64,7 +64,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// admin: every K8s area incl. security + nested settings children.
 	adminTabs := tabSet(roleScopes["admin"], features)
-	for _, want := range []string{"k8s-home", "k8s-timeline", "k8s-conn", "k8s-actions", "k8s-nodes", "k8s-meta", "k8s-security", "settings"} {
+	for _, want := range []string{"k8s-home", "fleet", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "k8s-meta", "finops", "ai-governance", "k8s-security", "enterprise", "settings"} {
 		if !adminTabs[want] {
 			t.Errorf("admin should see %q", want)
 		}
@@ -111,7 +111,7 @@ func TestMeNavigationLegacyModeReturnsFullMenu(t *testing.T) {
 	for _, tb := range nav.AllowedTabs {
 		tabs[tb] = true
 	}
-	for _, want := range []string{"k8s-home", "settings", "k8s-nodes", "k8s-security", "runtimesettings"} {
+	for _, want := range []string{"k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "k8s-nodes", "k8s-security", "runtimesettings"} {
 		if !tabs[want] {
 			t.Errorf("legacy allowed_tabs missing %q", want)
 		}

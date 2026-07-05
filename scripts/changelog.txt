@@ -1,3 +1,6 @@
+v0.9.46:
+- **Enterprise Operations Hubs + Quick Access UX (v0.9.46)**: Enterprise Foundation(조직·워크스페이스·프로젝트·서비스 카탈로그·접근 바인딩), FleetOps overview/global search, SecOps posture, AIOps Problem Inbox, FinOps overview/cost/anomaly/rightsizing, AI Gateway Governance, GitOps Change Manager overview를 관리 API와 UI 메뉴로 추가했습니다. 기존 K8s 운영 허브 위에 엔터프라이즈 제품군의 1차 진입점을 만들고, `/me/navigation` capability registry와 OpenAPI에도 반영했습니다. 또한 모든 화면에서 `빠른 이동` 패널(Ctrl/Cmd+K 또는 `/`), 최근 방문·자주 쓰는 기능, 화면별 상황 액션 바를 제공해 YAML 변경, 액션 승인함, Pod/노드/보안/비용/AI 거버넌스 같은 고빈도 작업으로 바로 이동할 수 있게 했습니다.
+
 v0.9.45:
 - **Manifest Change Studio 대상 확장 (ConfigMap, Secret, ServiceAccount 지원 및 UI 자동완성/정렬 보강) (v0.9.45)**: live YAML 편집 및 변경 요청(Studio)의 대상 리소스 범위를 ConfigMap, Secret, ServiceAccount로 대폭 확장했습니다. 이 리소스들은 Kubernetes 표준상 별도 `.spec` 필드가 아닌 top-level에 데이터가 정의되므로, 수집 시 필드를 Spec으로 임시 폴딩해 revisions/diff 분석이 작동하게 하고 웹 UI에 노출 및 Server-Side Apply 시에는 다시 top-level로 복원해 정상 렌더링/적용되도록 보완했습니다. 또한 YAML 변경 요청 화면의 리소스 picker에 sort 정렬(Deployment, Service, Ingress 등 우선 노출)을 더하고 검색어 입력 시 `cm`, `sa`, `pvc`, `netpol` 등의 단축 앨리어스(alias) 자동완성과 Canonicalization을 지원해 운영 편의성을 강화했습니다.
 

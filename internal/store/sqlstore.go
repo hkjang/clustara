@@ -150,6 +150,68 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			PRIMARY KEY (user_id, team_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS enterprise_organizations (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT NOT NULL DEFAULT '',
+			source_idp TEXT NOT NULL DEFAULT '',
+			sync_status TEXT NOT NULL DEFAULT 'manual',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS enterprise_workspaces (
+			id TEXT PRIMARY KEY,
+			organization_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_enterprise_workspaces_org_name ON enterprise_workspaces(organization_id, name)`,
+		`CREATE INDEX IF NOT EXISTS idx_enterprise_workspaces_org ON enterprise_workspaces(organization_id)`,
+		`CREATE TABLE IF NOT EXISTS enterprise_projects (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT '',
+			cost_center TEXT NOT NULL DEFAULT '',
+			owner_team_id TEXT NOT NULL DEFAULT '',
+			criticality TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_enterprise_projects_ws_name ON enterprise_projects(workspace_id, name)`,
+		`CREATE INDEX IF NOT EXISTS idx_enterprise_projects_owner ON enterprise_projects(owner_team_id)`,
+		`CREATE TABLE IF NOT EXISTS catalog_entities (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			name TEXT NOT NULL,
+			project_id TEXT NOT NULL DEFAULT '',
+			owner_team_id TEXT NOT NULL DEFAULT '',
+			runtime_ref TEXT NOT NULL DEFAULT '',
+			repo_url TEXT NOT NULL DEFAULT '',
+			docs_url TEXT NOT NULL DEFAULT '',
+			criticality TEXT NOT NULL DEFAULT '',
+			tags TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_entities_identity ON catalog_entities(kind, name, project_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_catalog_entities_owner ON catalog_entities(owner_team_id)`,
+		`CREATE TABLE IF NOT EXISTS access_bindings (
+			id TEXT PRIMARY KEY,
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			resource_type TEXT NOT NULL,
+			resource_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			effect TEXT NOT NULL DEFAULT 'allow',
+			conditions_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_bindings_subject ON access_bindings(subject_type, subject_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_bindings_resource ON access_bindings(resource_type, resource_id)`,
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,

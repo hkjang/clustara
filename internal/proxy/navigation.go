@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 25
+const menuVersion = 31
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -28,6 +28,7 @@ type menuItem struct {
 var menuRegistry = []menuItem{
 	// 운영 영역 — Kubernetes 운영 허브 (admin:read).
 	{ID: "ops.k8s_home", Label: "운영 홈", Path: "#/k8s-home", Tab: "k8s-home", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.fleet", Label: "FleetOps", Path: "#/fleet", Tab: "fleet", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s", Label: "클러스터", Path: "#/k8s", Tab: "k8s", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_collector", Label: "수집 상태", Path: "#/k8s-collector", Tab: "k8s-collector", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_pods", Label: "Pod 관리", Path: "#/k8s-pods", Tab: "k8s-pods", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -35,7 +36,9 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_stacks", Label: "앱 배포", Path: "#/k8s-stacks", Tab: "k8s-stacks", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.gitops", Label: "GitOps", Path: "#/gitops", Tab: "gitops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_timeline", Label: "변경 타임라인", Path: "#/k8s-timeline", Tab: "k8s-timeline", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.problems", Label: "Problem Inbox", Path: "#/problems", Tab: "problems", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_rca", Label: "장애 분석", Path: "#/k8s-rca", Tab: "k8s-rca", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_incidents", Label: "장애 워룸", Path: "#/k8s-incidents", Tab: "k8s-incidents", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_graph", Label: "리소스 그래프", Path: "#/k8s-graph", Tab: "k8s-graph", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -48,11 +51,14 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_reports", Label: "리포트 센터", Path: "#/k8s-reports", Tab: "k8s-reports", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_slo", Label: "SLO 센터", Path: "#/k8s-slo", Tab: "k8s-slo", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	// 비용 영역.
+	{ID: "bill.finops", Label: "FinOps", Path: "#/finops", Tab: "finops", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "bill.k8s_cost", Label: "비용", Path: "#/k8s-cost", Tab: "k8s-cost", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ai.gateway_governance", Label: "AI Governance", Path: "#/ai-governance", Tab: "ai-governance", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
 	// 보안 영역.
 	{ID: "sec.k8s_security", Label: "보안", Path: "#/k8s-security", Tab: "k8s-security", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_policy", Label: "정책 센터", Path: "#/k8s-policy", Tab: "k8s-policy", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	// 설정 영역.
+	{ID: "set.enterprise", Label: "엔터프라이즈", Path: "#/enterprise", Tab: "enterprise", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.k8s_settings", Label: "운영 설정", Path: "#/k8s-settings", Tab: "k8s-settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.settings", Label: "설정", Path: "#/settings", Tab: "settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.k8s_configrollback", Label: "설정 롤백 센터", Path: "#/k8s-configrollback", Tab: "k8s-configrollback", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
