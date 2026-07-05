@@ -67,6 +67,8 @@ func (s *Server) handleGovernanceExecutiveReport(w http.ResponseWriter, r *http.
 	findings, _ := s.db.ListK8sSecurityFindings(r.Context(), store.K8sFindingFilter{Status: "open", Limit: 1000})
 	risks, _ := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: "risk_register", Limit: 500})
 	tickets, _ := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: "itsm_ticket", Limit: 500})
+	gapExceptions, _ := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: "catalog_gap_exception", Limit: 1000})
+	gapExceptionStats := catalogGapExceptionStats(gapExceptions, time.Now().UTC())
 	report, recs, anomalies, budgets, _ := s.finOpsSnapshot(r, strings.TrimSpace(r.URL.Query().Get("cluster_id")))
 	criticalFindings := 0
 	for _, f := range findings {
@@ -91,9 +93,14 @@ func (s *Server) handleGovernanceExecutiveReport(w http.ResponseWriter, r *http.
 			"open_incidents": len(incidents), "critical_incidents": criticalIncidents,
 			"open_security_findings": len(findings), "critical_security_findings": criticalFindings,
 			"monthly_k8s_cost_krw": report.TotalMonthlyKRW, "cost_anomalies": len(anomalies),
-			"budget_warnings":         countFinOpsBudgetViolations(budgets),
-			"rightsizing_savings_krw": roundMoney(totalSavings),
-			"open_tickets":            len(tickets), "accepted_risks": len(risks),
+			"budget_warnings":                 countFinOpsBudgetViolations(budgets),
+			"rightsizing_savings_krw":         roundMoney(totalSavings),
+			"open_tickets":                    len(tickets),
+			"accepted_risks":                  len(risks),
+			"catalog_gap_exceptions":          gapExceptionStats["active"],
+			"expiring_catalog_gap_exceptions": gapExceptionStats["expiring_soon"],
+			"expired_catalog_gap_exceptions":  gapExceptionStats["expired"],
+			"governance_debt":                 len(risks) + len(tickets) + gapExceptionStats["active"],
 		},
 		"sections":     []string{"stability", "security", "finops", "change_risk", "governance"},
 		"generated_at": time.Now().UTC().Format(time.RFC3339),

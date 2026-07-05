@@ -38,21 +38,26 @@ type fleetGroupHealth struct {
 }
 
 type fleetSearchResult struct {
-	ClusterID   string            `json:"cluster_id"`
-	ClusterName string            `json:"cluster_name"`
-	GroupID     string            `json:"group_id"`
-	GroupName   string            `json:"group_name"`
-	Kind        string            `json:"kind"`
-	Namespace   string            `json:"namespace"`
-	Name        string            `json:"name"`
-	Status      string            `json:"status"`
-	RiskLevel   string            `json:"risk_level"`
-	HealthScore int               `json:"health_score"`
-	Owner       string            `json:"owner"`
-	Team        string            `json:"team"`
-	ServiceName string            `json:"service_name"`
-	Labels      map[string]string `json:"labels"`
-	UpdatedAt   string            `json:"updated_at"`
+	ClusterID     string            `json:"cluster_id"`
+	ClusterName   string            `json:"cluster_name"`
+	GroupID       string            `json:"group_id"`
+	GroupName     string            `json:"group_name"`
+	Kind          string            `json:"kind"`
+	Namespace     string            `json:"namespace"`
+	Name          string            `json:"name"`
+	Status        string            `json:"status"`
+	RiskLevel     string            `json:"risk_level"`
+	HealthScore   int               `json:"health_score"`
+	Owner         string            `json:"owner"`
+	Team          string            `json:"team"`
+	ServiceName   string            `json:"service_name"`
+	CatalogID     string            `json:"catalog_id"`
+	ProjectID     string            `json:"project_id"`
+	RuntimeRef    string            `json:"runtime_ref"`
+	CatalogStatus string            `json:"catalog_status"`
+	CatalogGapKey string            `json:"catalog_gap_key"`
+	Labels        map[string]string `json:"labels"`
+	UpdatedAt     string            `json:"updated_at"`
 }
 
 func (s *Server) handleFleetOverview(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +237,7 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "fleet_search_inventory_failed")
 		return
 	}
+	catalogs, _ := s.db.ListCatalogEntities(r.Context(), store.CatalogEntityFilter{Limit: 2000})
 	terms := strings.Fields(strings.ToLower(strings.TrimSpace(q.Get("q"))))
 	ownerFilter := strings.ToLower(strings.TrimSpace(q.Get("owner")))
 	imageFilter := strings.ToLower(strings.TrimSpace(q.Get("image")))
@@ -243,12 +249,27 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 		c := clusterByID[it.ClusterID]
 		g := groupByID[c.GroupID]
 		owner := owners[it.ClusterID+"/"+it.Namespace]
-		hay := fleetSearchHaystack(it, c, g, owner)
+		catalog := fleetCatalogForItem(it, catalogs)
+		hay := fleetSearchHaystack(it, c, g, owner, catalog)
 		if imageFilter != "" && !strings.Contains(strings.ToLower(fleetJSON(it.Spec)), imageFilter) {
 			continue
 		}
-		if ownerFilter != "" && !strings.Contains(strings.ToLower(owner.Team+" "+owner.Owner+" "+owner.ServiceName), ownerFilter) {
+		ownerText := strings.Join([]string{owner.Team, owner.Owner, owner.ServiceName, catalog.OwnerTeamID, catalog.Name, catalog.ProjectID}, " ")
+		if ownerFilter != "" && !strings.Contains(strings.ToLower(ownerText), ownerFilter) {
 			continue
+		}
+		team := firstNonEmptyStr(owner.Team, catalog.OwnerTeamID)
+		serviceName := firstNonEmptyStr(owner.ServiceName, catalog.Name)
+		itemRef := it.ClusterID + "/" + it.Namespace + "/" + it.Kind + "/" + it.Name
+		catalogStatus := "linked"
+		gapKey := ""
+		if catalog.ID == "" {
+			if catalogRuntimeCandidateKind(it.Kind) && it.Namespace != "" {
+				catalogStatus = "unlinked_runtime"
+				gapKey = catalogGapKey("unlinked_runtime", itemRef)
+			} else {
+				catalogStatus = "untracked"
+			}
 		}
 		if len(terms) > 0 {
 			ok := true
@@ -263,21 +284,26 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		results = append(results, fleetSearchResult{
-			ClusterID:   it.ClusterID,
-			ClusterName: c.Name,
-			GroupID:     c.GroupID,
-			GroupName:   g.Name,
-			Kind:        it.Kind,
-			Namespace:   it.Namespace,
-			Name:        it.Name,
-			Status:      it.Status,
-			RiskLevel:   it.RiskLevel,
-			HealthScore: it.HealthScore,
-			Owner:       owner.Owner,
-			Team:        owner.Team,
-			ServiceName: owner.ServiceName,
-			Labels:      it.Labels,
-			UpdatedAt:   it.UpdatedAt,
+			ClusterID:     it.ClusterID,
+			ClusterName:   c.Name,
+			GroupID:       c.GroupID,
+			GroupName:     g.Name,
+			Kind:          it.Kind,
+			Namespace:     it.Namespace,
+			Name:          it.Name,
+			Status:        it.Status,
+			RiskLevel:     it.RiskLevel,
+			HealthScore:   it.HealthScore,
+			Owner:         owner.Owner,
+			Team:          team,
+			ServiceName:   serviceName,
+			CatalogID:     catalog.ID,
+			ProjectID:     catalog.ProjectID,
+			RuntimeRef:    firstNonEmptyStr(catalog.RuntimeRef, itemRef),
+			CatalogStatus: catalogStatus,
+			CatalogGapKey: gapKey,
+			Labels:        it.Labels,
+			UpdatedAt:     it.UpdatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results)})
@@ -303,13 +329,34 @@ func (s *Server) fleetBaseData(r *http.Request) ([]store.K8sCluster, []store.K8s
 	return clusters, groups, owners, nil
 }
 
-func fleetSearchHaystack(it store.K8sInventoryItem, c store.K8sCluster, g store.K8sClusterGroup, o store.K8sNamespaceOwnership) string {
+func fleetSearchHaystack(it store.K8sInventoryItem, c store.K8sCluster, g store.K8sClusterGroup, o store.K8sNamespaceOwnership, catalog store.CatalogEntity) string {
 	return strings.ToLower(strings.Join([]string{
 		it.ClusterID, c.Name, c.Description, c.GroupID, g.Name, g.Kind,
 		it.Kind, it.Namespace, it.Name, it.Status, it.RiskLevel, it.APIVersion,
 		o.Team, o.Owner, o.ServiceName, o.Criticality, o.CostCenter,
+		catalog.ID, catalog.Kind, catalog.Name, catalog.ProjectID, catalog.OwnerTeamID, catalog.RuntimeRef, catalog.RepoURL, catalog.DocsURL, catalog.Criticality, strings.Join(catalog.Tags, " "),
 		fleetJSON(it.Labels), fleetJSON(it.Annotations), fleetJSON(it.Spec),
 	}, " "))
+}
+
+func fleetCatalogForItem(it store.K8sInventoryItem, catalogs []store.CatalogEntity) store.CatalogEntity {
+	itemRef := it.ClusterID + "/" + it.Namespace + "/" + it.Kind + "/" + it.Name
+	for _, catalog := range catalogs {
+		rt, ok := parseCatalogRuntimeRef(catalog.RuntimeRef)
+		if !ok {
+			continue
+		}
+		if catalog.RuntimeRef == itemRef {
+			return catalog
+		}
+		if it.ClusterID == rt.ClusterID && it.Namespace == rt.Namespace && strings.EqualFold(it.Kind, rt.Kind) && it.Name == rt.Name {
+			return catalog
+		}
+		if it.ClusterID == rt.ClusterID && it.Namespace == rt.Namespace && strings.EqualFold(it.Kind, "Pod") && strings.Contains(strings.ToLower(it.Name), strings.ToLower(rt.Name)) {
+			return catalog
+		}
+	}
+	return store.CatalogEntity{}
 }
 
 func fleetJSON(value any) string {

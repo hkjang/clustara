@@ -66,9 +66,16 @@ const adminHTML = `<!doctype html>
     nav { display: flex; gap: 2px; flex-wrap: wrap; }
     nav a {
       text-decoration: none; color: var(--muted); padding: 8px 12px;
-      border-radius: 6px; font-weight: 700;
+      border-radius: 6px; font-weight: 700; position: relative;
     }
     nav a.active { background: var(--ink); color: var(--bg); }
+    .nav-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px;
+      border-radius: 999px; background: var(--bad); color: #fff;
+      font-size: 10px; font-weight: 900; line-height: 1;
+    }
+    .nav-badge.warn { background: var(--warn); color: #111827; }
     /* "대시보드" grouped dropdown in the top nav */
     .nav-group { position: relative; }
     .nav-group > .nav-group-toggle {
@@ -392,8 +399,49 @@ const adminHTML = `<!doctype html>
     }
     .quick-access-item:hover { border-color: var(--accent); }
     .quick-access-item small { color: var(--muted); font-size: 11px; }
+    .quick-access-resource-card {
+      display: flex; flex-direction: column; gap: 7px;
+      padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--panel-alt);
+    }
+    .quick-access-resource-main {
+      display: flex; justify-content: space-between; gap: 10px; align-items: center;
+      color: var(--ink); text-decoration: none;
+    }
+    .quick-access-resource-main small { color: var(--muted); font-size: 11px; }
+    .quick-access-resource-card:hover { border-color: var(--accent); }
+    .quick-access-resource-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+    .quick-access-resource-actions a {
+      border: 1px solid var(--line-strong); border-radius: 5px;
+      padding: 4px 7px; background: var(--panel); color: var(--ink);
+      text-decoration: none; font-size: 11px;
+    }
+    .quick-access-resource-actions a:hover { border-color: var(--accent); }
+    .quick-access-work-item {
+      display: block; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--panel-alt); color: var(--ink);
+      text-decoration: none;
+    }
+    .quick-access-work-item:hover { border-color: var(--accent); }
+    .quick-access-work-item strong {
+      display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 12px;
+    }
+    .quick-access-work-meta {
+      margin-top: 4px; color: var(--muted); font-size: 11px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .quick-access-side { display: flex; flex-direction: column; gap: 10px; }
     .quick-access-side h4 { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+    .quick-access-section-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin-bottom: 4px;
+    }
+    .quick-access-section-head h4 { margin: 0; }
+    .quick-access-section-head button {
+      font-size: 11px; padding: 3px 7px; border-radius: 5px;
+    }
+    #quick-pin-current.pinned { border-color: var(--accent); color: var(--accent); }
     .ux-context {
       display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
       margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line);
@@ -407,6 +455,22 @@ const adminHTML = `<!doctype html>
       background: var(--panel);
     }
     .ux-context a:hover { border-color: var(--accent); }
+    .toast-host {
+      position: fixed; right: 18px; top: 72px; z-index: 10000;
+      display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 36px));
+      pointer-events: none;
+    }
+    .toast {
+      border: 1px solid var(--line-strong); border-left: 5px solid var(--good);
+      border-radius: 8px; background: var(--panel); color: var(--ink);
+      box-shadow: 0 10px 28px rgba(0,0,0,.18); padding: 10px 12px;
+      pointer-events: auto; font-size: 13px;
+    }
+    .toast.warn { border-left-color: var(--warn); }
+    .toast.error { border-left-color: var(--bad); }
+    .toast .toast-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 800; }
+    .toast .toast-body { color: var(--muted); font-size: 12px; margin-top: 4px; word-break: break-word; }
+    .toast button { padding: 0 4px; border: 0; background: transparent; color: var(--muted); }
 
     @media (max-width: 960px) {
       header { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -425,7 +489,7 @@ const adminHTML = `<!doctype html>
     <h1>Clustara</h1>
     <nav id="tabs">
       <a href="#/k8s-home" data-tab="k8s-home" class="active">운영 홈</a>
-      <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함</a>
+      <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함<span id="k8s-action-nav-badge" class="nav-badge warn" style="display:none"></span></a>
       <a href="#/fleet" data-tab="fleet">FleetOps</a>
       <div class="nav-group">
         <button class="nav-group-toggle" type="button">리소스 관리</button>
@@ -434,6 +498,7 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
           <a href="#/k8s-nodes" data-tab="k8s-nodes">노드 관리</a>
           <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
+          <a href="#/service-catalog" data-tab="service-catalog">서비스 카탈로그</a>
           <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
           <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
         </div>
@@ -486,17 +551,40 @@ const adminHTML = `<!doctype html>
     <div class="header-tools">
       <div class="quick-access-wrap">
         <button id="quick-access-toggle" class="secondary" type="button" title="빠른 이동">빠른 이동</button>
+        <button id="quick-pin-current" class="secondary" type="button" title="현재 화면을 빠른 이동에 고정">고정</button>
+        <button id="quick-share-current" class="secondary" type="button" title="현재 화면 링크 복사">링크 복사</button>
         <div id="quick-access-panel" class="quick-access-panel">
           <input id="quick-access-input" placeholder="메뉴, 리소스, 작업 검색" autocomplete="off">
           <div class="quick-access-grid">
             <div>
               <div class="muted" style="font-size:11px;margin-bottom:6px">검색 결과</div>
               <div id="quick-access-results" class="quick-access-list"></div>
+              <div class="muted" style="font-size:11px;margin:10px 0 6px">리소스 미리보기</div>
+              <div id="quick-access-resource-results" class="quick-access-list"></div>
             </div>
             <div class="quick-access-side">
               <div>
+                <h4>고정</h4>
+                <div id="quick-access-pinned" class="quick-access-list"></div>
+              </div>
+              <div>
+                <div class="quick-access-section-head">
+                  <h4>처리 대기</h4>
+                  <button id="quick-access-action-refresh" class="secondary" type="button">새로고침</button>
+                </div>
+                <div id="quick-access-action-queue" class="quick-access-list"></div>
+              </div>
+              <div>
                 <h4>최근 방문</h4>
                 <div id="quick-access-recent" class="quick-access-list"></div>
+              </div>
+              <div>
+                <h4>고정 리소스</h4>
+                <div id="quick-access-pinned-resources" class="quick-access-list"></div>
+              </div>
+              <div>
+                <h4>최근 리소스</h4>
+                <div id="quick-access-recent-resources" class="quick-access-list"></div>
               </div>
               <div>
                 <h4>자주 사용</h4>
@@ -540,6 +628,7 @@ const adminHTML = `<!doctype html>
     <div id="ux-context" class="ux-context"></div>
     <div id="view"></div>
   </main>
+  <div id="toast-host" class="toast-host"></div>
 
   <div id="login-backdrop" class="login-backdrop">
     <form class="login-card" id="login-form" autocomplete="on">
@@ -969,6 +1058,26 @@ const adminHTML = `<!doctype html>
     function escapeAttr(value) {
       return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[<>&"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
     }
+    function showToast(type, title, body, timeout) {
+      const host = document.getElementById('toast-host');
+      if (!host) return;
+      const id = 'toast_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      const cls = type === 'error' ? 'error' : (type === 'warn' ? 'warn' : '');
+      const el = document.createElement('div');
+      el.className = 'toast ' + cls;
+      el.id = id;
+      el.innerHTML = '<div class="toast-title"><span>' + escapeHTML(title || '알림') + '</span><button type="button" aria-label="닫기">×</button></div>' +
+        (body ? '<div class="toast-body">' + escapeHTML(body) + '</div>' : '');
+      const close = el.querySelector('button');
+      if (close) close.addEventListener('click', () => dismissToast(id));
+      host.prepend(el);
+      const ttl = timeout || (type === 'error' ? 9000 : 4500);
+      window.setTimeout(() => dismissToast(id), ttl);
+    }
+    window.dismissToast = (id) => {
+      const el = document.getElementById(id);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    };
 
     // ---------- UX shortcuts: quick access, recent visits, context actions ----------
     const UX_COMMANDS = [
@@ -979,6 +1088,7 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-pods', href: '#/k8s-pods', label: 'Pod 관리', group: '리소스', tags: 'pod logs exec restart crashloop' },
       { tab: 'k8s-nodes', href: '#/k8s-nodes', label: '노드 관리', group: '리소스', tags: 'node pressure cordon capacity' },
       { tab: 'k8s-developer', href: '#/k8s-developer', label: '개발자 뷰', group: '리소스', tags: 'developer request self service' },
+      { tab: 'service-catalog', href: '#/service-catalog', label: '서비스 카탈로그', group: '리소스', tags: 'service catalog owner repo runtime scorecard developer platform' },
       { tab: 'k8s-stacks', href: '#/k8s-stacks', label: '앱 배포', group: '변경', tags: 'stack apply deploy rollback manifest' },
       { tab: 'k8s-manifest-changes', href: '#/k8s-manifest-changes', label: 'YAML 변경', group: '변경', tags: 'yaml manifest edit apply dryrun approval' },
       { tab: 'gitops', href: '#/gitops', label: 'GitOps', group: '변경', tags: 'git drift rollback stack pr' },
@@ -991,7 +1101,6 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-collector', href: '#/k8s-collector', label: '수집 상태', group: '운영', tags: 'collector agent freshness heartbeat' },
       { tab: 'finops', href: '#/finops', label: 'FinOps', group: '비용', tags: 'cost budget rightsizing anomaly' },
       { tab: 'k8s-cost', href: '#/k8s-cost', label: 'K8s 비용 상세', group: '비용', tags: 'cost price namespace team' },
-      { tab: 'ai-governance', href: '#/ai-governance', label: 'AI Governance', group: 'AI', tags: 'ai gateway key budget provider routing' },
       { tab: 'k8s-security', href: '#/k8s-security', label: '보안', group: '보안', tags: 'security posture image rbac tls policy' },
       { tab: 'k8s-policy', href: '#/k8s-policy', label: '정책 센터', group: '보안', tags: 'policy pack exception simulation' },
       { tab: 'enterprise', href: '#/enterprise', label: '엔터프라이즈', group: '설정', tags: 'org workspace project catalog access binding' },
@@ -1001,6 +1110,13 @@ const adminHTML = `<!doctype html>
     ];
     const UX_RECENT_KEY = 'clustara.ux.recent';
     const UX_FREQ_KEY = 'clustara.ux.frequent';
+    const UX_PIN_KEY = 'clustara.ux.pinned';
+    const UX_RECENT_RESOURCE_KEY = 'clustara.ux.recent.resources';
+    const UX_PINNED_RESOURCE_KEY = 'clustara.ux.pinned.resources';
+    let uxResourceSearchTimer = null;
+    let uxResourceSearchSeq = 0;
+    let uxActionQueueSeq = 0;
+    let uxActionQueueCache = { ts: 0, html: '' };
     function uxTabFromHref(href) {
       const raw = String(href || '').replace(/^#\//, '');
       return raw.split('?')[0].split('/')[0] || 'k8s-home';
@@ -1026,14 +1142,154 @@ const adminHTML = `<!doctype html>
         '<span><strong>' + escapeHTML(item.label || item.href) + '</strong><br><small>' + escapeHTML(item.group || '') + '</small></span>' +
         '<small>' + escapeHTML(item.href || '') + '</small></a>';
     }
+    function uxActionQueueHTML(flow) {
+      const lanes = ((flow && flow.lanes) || []).filter(l => ['attention', 'approval', 'ready', 'verify'].includes(l.id));
+      const items = [];
+      lanes.forEach(lane => {
+        ((lane.items || []).slice(0, 2)).forEach(it => items.push({
+          lane: lane.label || lane.id,
+          title: it.title || it.kind || '작업',
+          target: it.target || '-',
+          status: it.status || '-',
+          href: it.href || '#/k8s-actions'
+        }));
+      });
+      if (!items.length) return '<div class="empty" style="padding:10px">처리 대기 없음</div>';
+      return items.slice(0, 6).map(it =>
+        '<a class="quick-access-work-item" href="' + escapeAttr(it.href) + '" onclick="uxCloseQuickAccess()">' +
+          '<strong>' + escapeHTML(it.title) + '</strong>' +
+          '<div class="quick-access-work-meta">' + escapeHTML(it.lane + ' · ' + it.status) + '</div>' +
+          '<div class="quick-access-work-meta">' + escapeHTML(it.target) + '</div>' +
+        '</a>'
+      ).join('');
+    }
+    function uxResourceKey(item) {
+      return [item.cluster_id || '', item.namespace || '', item.kind || '', item.name || '', item.catalog_id || ''].join('|');
+    }
+    function uxResourceStorePayload(item) {
+      return {
+        cluster_id: item.cluster_id || '',
+        cluster_name: item.cluster_name || '',
+        namespace: item.namespace || '',
+        kind: item.kind || '',
+        name: item.name || '',
+        catalog_id: item.catalog_id || '',
+        service_name: item.service_name || '',
+        team: item.team || '',
+        owner: item.owner || '',
+        status: item.status || '',
+        risk_level: item.risk_level || '',
+        catalog_status: item.catalog_status || '',
+        ts: Date.now()
+      };
+    }
+    function uxRememberResource(item) {
+      if (!item || !item.kind || !item.name) return;
+      const payload = uxResourceStorePayload(item);
+      const key = uxResourceKey(payload);
+      let rows = uxJSONRead(UX_RECENT_RESOURCE_KEY, []);
+      rows = [payload].concat(rows.filter(x => uxResourceKey(x) !== key)).slice(0, 10);
+      uxJSONWrite(UX_RECENT_RESOURCE_KEY, rows);
+      const host = document.getElementById('quick-access-recent-resources');
+      if (host) host.innerHTML = uxListRecentResources().map(x => uxResourceHTML(x, true)).join('') || '<div class="empty" style="padding:10px">없음</div>';
+    }
+    window.uxRememberResource = uxRememberResource;
+    function uxPinnedResource(item) {
+      const key = uxResourceKey(uxResourceStorePayload(item || {}));
+      return uxJSONRead(UX_PINNED_RESOURCE_KEY, []).some(x => uxResourceKey(x) === key);
+    }
+    function uxSetPinnedResource(item, pinned) {
+      if (!item || !item.kind || !item.name) return;
+      const payload = uxResourceStorePayload(item);
+      const key = uxResourceKey(payload);
+      let rows = uxJSONRead(UX_PINNED_RESOURCE_KEY, []).filter(x => uxResourceKey(x) !== key);
+      if (pinned) rows = [payload].concat(rows).slice(0, 12);
+      uxJSONWrite(UX_PINNED_RESOURCE_KEY, rows);
+    }
+    function uxToggleResourcePin(item) {
+      if (!item || !item.kind || !item.name) return;
+      const next = !uxPinnedResource(item);
+      uxSetPinnedResource(item, next);
+      uxRememberResource(item);
+      showToast('ok', next ? '리소스 고정됨' : '리소스 고정 해제됨', (item.kind || '-') + '/' + (item.name || '-'));
+      uxRenderQuickAccess();
+    }
+    window.uxToggleResourcePin = uxToggleResourcePin;
+    function uxCurrentLink() {
+      const url = new URL(window.location.href);
+      if (!url.hash) url.hash = '#/k8s-home';
+      return url.toString();
+    }
+    async function uxCopyCurrentLink() {
+      const link = uxCurrentLink();
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(link);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = link;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        showToast('ok', '링크 복사됨', link);
+      } catch (e) {
+        showToast('error', '링크 복사 실패', e.message || String(e));
+      }
+    }
+    window.uxCopyCurrentLink = uxCopyCurrentLink;
+    function uxResourceOnClick(item) {
+      return 'uxRememberResource(' + JSON.stringify(uxResourceStorePayload(item)) + ');uxCloseQuickAccess()';
+    }
+    function uxResourceHTML(item) {
+      const qs = new URLSearchParams();
+      if (item.cluster_id) qs.set('cluster_id', item.cluster_id);
+      if (item.namespace) qs.set('namespace', item.namespace);
+      if (item.kind) qs.set('kind', item.kind);
+      if (item.name) qs.set('name', item.name);
+      qs.set('autoload', '1');
+      const yamlHref = '#/k8s-manifest-changes?' + qs.toString();
+      const timelineHref = '#/k8s-timeline?' + qs.toString();
+      const graphHref = '#/k8s-graph?' + qs.toString();
+      const primaryHref = item.kind === 'Pod'
+        ? '#/k8s-pods?' + new URLSearchParams({ cluster_id: item.cluster_id || '', namespace: item.namespace || '', pod: item.name || '' }).toString()
+        : (item.catalog_id ? '#/service-catalog?entity_id=' + encodeURIComponent(item.catalog_id) : yamlHref);
+      const risk = item.risk_level || item.catalog_status || '';
+      const links = [];
+      const remember = escapeAttr(uxResourceOnClick(item));
+      const pinAction = escapeAttr('uxToggleResourcePin(' + JSON.stringify(uxResourceStorePayload(item)) + ');return false');
+      const add = (label, href, tab) => { if (uxAllowed(tab)) links.push('<a href="' + escapeAttr(href) + '" onclick="' + remember + '">' + escapeHTML(label) + '</a>'); };
+      if (item.kind === 'Pod') add('Pod 상세', primaryHref, 'k8s-pods');
+      if (item.catalog_id) add('카탈로그', '#/service-catalog?entity_id=' + encodeURIComponent(item.catalog_id), 'service-catalog');
+      add('YAML 변경', yamlHref, 'k8s-manifest-changes');
+      add('타임라인', timelineHref, 'k8s-timeline');
+      add('그래프', graphHref, 'k8s-graph');
+      links.push('<a href="#" onclick="' + pinAction + '">' + (uxPinnedResource(item) ? '고정 해제' : '고정') + '</a>');
+      return '<div class="quick-access-resource-card">' +
+        '<a class="quick-access-resource-main" href="' + escapeAttr(primaryHref) + '" onclick="' + remember + '">' +
+          '<span><strong>' + escapeHTML((item.kind || '-') + '/' + (item.name || '-')) + '</strong><br><small>' +
+            escapeHTML((item.cluster_name || item.cluster_id || '-') + ' · ' + (item.namespace || '-') + ' · ' + (item.service_name || item.team || item.owner || '-')) +
+          '</small></span>' +
+          '<small>' + escapeHTML(risk || item.status || '-') + '</small></a>' +
+        '<div class="quick-access-resource-actions">' + links.join('') + '</div>' +
+      '</div>';
+    }
     function uxCurrentCommand(tab) {
       return UX_COMMANDS.find(c => c.tab === tab) || { tab, href: '#/' + tab, label: tab || '운영 홈', group: '화면' };
     }
+    function uxCurrentItem(tab) {
+      const cmd = uxCurrentCommand(tab || uxTabFromHref(location.hash || '#/k8s-home'));
+      const href = location.hash || cmd.href;
+      return { href, tab: uxTabFromHref(href), label: cmd.label, group: cmd.group, ts: Date.now() };
+    }
     function uxRecordVisit(tab) {
       if (!tab || tab === 'me') return;
-      const cmd = uxCurrentCommand(tab || 'k8s-home');
-      const href = location.hash || cmd.href;
-      const item = { href, tab: uxTabFromHref(href), label: cmd.label, group: cmd.group, ts: Date.now() };
+      const item = uxCurrentItem(tab || 'k8s-home');
+      const href = item.href;
       let recent = uxJSONRead(UX_RECENT_KEY, []);
       recent = [item].concat(recent.filter(x => x.href !== href)).slice(0, 12);
       uxJSONWrite(UX_RECENT_KEY, recent);
@@ -1046,11 +1302,53 @@ const adminHTML = `<!doctype html>
     function uxListRecent() {
       return uxJSONRead(UX_RECENT_KEY, []).filter(x => uxAllowed(x.tab || uxTabFromHref(x.href))).slice(0, 6);
     }
+    function uxListRecentResources() {
+      return uxJSONRead(UX_RECENT_RESOURCE_KEY, [])
+        .filter(x => x && x.kind && x.name)
+        .slice(0, 6);
+    }
+    function uxListPinnedResources() {
+      return uxJSONRead(UX_PINNED_RESOURCE_KEY, [])
+        .filter(x => x && x.kind && x.name)
+        .slice(0, 8);
+    }
     function uxListFrequent() {
       return Object.values(uxJSONRead(UX_FREQ_KEY, {}))
         .filter(x => uxAllowed(x.tab || uxTabFromHref(x.href)))
         .sort((a, b) => (b.count - a.count) || (b.last - a.last))
         .slice(0, 6);
+    }
+    function uxListPinned() {
+      return uxJSONRead(UX_PIN_KEY, [])
+        .filter(x => uxAllowed(x.tab || uxTabFromHref(x.href)))
+        .slice(0, 8);
+    }
+    function uxPinned(href) {
+      return uxListPinned().some(x => x.href === href);
+    }
+    function uxSetPinned(item, pinned) {
+      if (!item || !item.href) return;
+      let pinnedItems = uxJSONRead(UX_PIN_KEY, []);
+      pinnedItems = pinnedItems.filter(x => x.href !== item.href);
+      if (pinned) pinnedItems = [item].concat(pinnedItems).slice(0, 16);
+      uxJSONWrite(UX_PIN_KEY, pinnedItems);
+    }
+    function uxUpdatePinButton(tab) {
+      const btn = document.getElementById('quick-pin-current');
+      if (!btn) return;
+      const item = uxCurrentItem(tab || uxTabFromHref(location.hash || '#/k8s-home'));
+      const isPinned = uxPinned(item.href);
+      btn.textContent = isPinned ? '고정됨' : '고정';
+      btn.classList.toggle('pinned', isPinned);
+      btn.title = isPinned ? '현재 화면 고정 해제' : '현재 화면을 빠른 이동에 고정';
+    }
+    function uxTogglePinCurrent() {
+      const { parts } = parseHash();
+      const tab = parts[0] || 'k8s-home';
+      const item = uxCurrentItem(tab);
+      uxSetPinned(item, !uxPinned(item.href));
+      uxUpdatePinButton(tab);
+      uxRenderQuickAccess();
     }
     function uxRenderQuickAccess() {
       const q = (document.getElementById('quick-access-input') || {}).value || '';
@@ -1059,11 +1357,87 @@ const adminHTML = `<!doctype html>
       const commands = uxVisibleCommands().filter(c => !query || hay(c).includes(query)).slice(0, 12);
       const empty = '<div class="empty" style="padding:10px">없음</div>';
       const results = document.getElementById('quick-access-results');
+      const pinned = document.getElementById('quick-access-pinned');
+      const actionQueue = document.getElementById('quick-access-action-queue');
       const recent = document.getElementById('quick-access-recent');
+      const pinnedResources = document.getElementById('quick-access-pinned-resources');
+      const recentResources = document.getElementById('quick-access-recent-resources');
       const frequent = document.getElementById('quick-access-frequent');
       if (results) results.innerHTML = commands.map(uxCommandHTML).join('') || empty;
+      if (pinned) pinned.innerHTML = uxListPinned().map(uxCommandHTML).join('') || empty;
+      if (actionQueue) {
+        if (uxAllowed('k8s-actions')) {
+          actionQueue.innerHTML = uxActionQueueCache.html || '<div class="empty" style="padding:10px">확인 중...</div>';
+          uxRenderActionQueue();
+        } else {
+          actionQueue.innerHTML = empty;
+        }
+      }
       if (recent) recent.innerHTML = uxListRecent().map(uxCommandHTML).join('') || empty;
+      if (pinnedResources) pinnedResources.innerHTML = uxListPinnedResources().map(x => uxResourceHTML(x)).join('') || empty;
+      if (recentResources) recentResources.innerHTML = uxListRecentResources().map(x => uxResourceHTML(x)).join('') || empty;
       if (frequent) frequent.innerHTML = uxListFrequent().map(uxCommandHTML).join('') || empty;
+      uxScheduleResourcePreview(query);
+    }
+    async function uxRenderActionQueue(force) {
+      const host = document.getElementById('quick-access-action-queue');
+      if (!host || !uxAllowed('k8s-actions')) return;
+      const now = Date.now();
+      if (!force && uxActionQueueCache.html && now - uxActionQueueCache.ts < 15000) {
+        host.innerHTML = uxActionQueueCache.html;
+        return;
+      }
+      const seq = ++uxActionQueueSeq;
+      try {
+        const flow = await api('/admin/k8s/action-flow?limit=12');
+        if (seq !== uxActionQueueSeq) return;
+        const html = uxActionQueueHTML(flow);
+        uxActionQueueCache = { ts: Date.now(), html };
+        host.innerHTML = html;
+      } catch (e) {
+        if (seq !== uxActionQueueSeq) return;
+        host.innerHTML = '<div class="empty" style="padding:10px">' + escapeHTML(e.message) + '</div>';
+      }
+    }
+    function uxInvalidateActionQueue() {
+      uxActionQueueCache = { ts: 0, html: '' };
+      updateK8sActionNavBadge();
+      const panel = document.getElementById('quick-access-panel');
+      const host = document.getElementById('quick-access-action-queue');
+      if (panel && panel.classList.contains('open') && host) {
+        host.innerHTML = '<div class="empty" style="padding:10px">갱신 중...</div>';
+        uxRenderActionQueue(true);
+      }
+    }
+    function uxRefreshActionQueue() {
+      const host = document.getElementById('quick-access-action-queue');
+      uxActionQueueCache = { ts: 0, html: '' };
+      if (host) host.innerHTML = '<div class="empty" style="padding:10px">갱신 중...</div>';
+      updateK8sActionNavBadge();
+      uxRenderActionQueue(true);
+      showToast('ok', '처리 대기 갱신 요청됨', '액션 승인함 배지도 함께 갱신합니다.');
+    }
+    function uxScheduleResourcePreview(query) {
+      const host = document.getElementById('quick-access-resource-results');
+      if (!host) return;
+      if (uxResourceSearchTimer) clearTimeout(uxResourceSearchTimer);
+      if (!query || query.length < 2) {
+        host.innerHTML = '<div class="empty" style="padding:10px">검색어 2자 이상 입력</div>';
+        return;
+      }
+      const seq = ++uxResourceSearchSeq;
+      host.innerHTML = '<div class="empty" style="padding:10px">검색 중...</div>';
+      uxResourceSearchTimer = setTimeout(async () => {
+        try {
+          const data = await api('/admin/fleet/search?' + new URLSearchParams({ q: query, limit: '8' }).toString());
+          if (seq !== uxResourceSearchSeq) return;
+          const rows = (data.results || []).slice(0, 8);
+          host.innerHTML = rows.map(uxResourceHTML).join('') || '<div class="empty" style="padding:10px">리소스 없음</div>';
+        } catch (e) {
+          if (seq !== uxResourceSearchSeq) return;
+          host.innerHTML = '<div class="empty" style="padding:10px">' + escapeHTML(e.message) + '</div>';
+        }
+      }, 250);
     }
     function uxOpenQuickAccess() {
       const panel = document.getElementById('quick-access-panel');
@@ -1088,6 +1462,10 @@ const adminHTML = `<!doctype html>
       if (actions.some(a => a.href === href)) return;
       actions.push({ label, href });
     }
+    function uxAddActionScript(actions, label, onclick) {
+      if (!onclick || actions.some(a => a.onclick === onclick)) return;
+      actions.push({ label, href: '#', onclick });
+    }
     function uxWithCluster(href, clusterId) {
       if (!clusterId) return href;
       return href + (href.includes('?') ? '&' : '?') + 'cluster_id=' + encodeURIComponent(clusterId);
@@ -1100,6 +1478,7 @@ const adminHTML = `<!doctype html>
       const kind = g('kind');
       const name = g('name');
       const actions = [];
+      uxAddActionScript(actions, '현재 링크 복사', 'uxCopyCurrentLink();return false');
       uxAddAction(actions, '액션 승인함', uxWithCluster('#/k8s-actions', cluster), 'k8s-actions');
       uxAddAction(actions, 'YAML 변경', uxWithCluster('#/k8s-manifest-changes', cluster), 'k8s-manifest-changes');
       uxAddAction(actions, '변경 타임라인', uxWithCluster('#/k8s-timeline', cluster), 'k8s-timeline');
@@ -1113,6 +1492,11 @@ const adminHTML = `<!doctype html>
         uxAddAction(actions, 'Pod YAML', uxWithCluster('#/k8s-manifest-changes?kind=Pod&namespace=' + encodeURIComponent(ns) + '&name=' + encodeURIComponent(pod), cluster), 'k8s-manifest-changes');
       } else if (kind && name) {
         uxAddAction(actions, '이 리소스 YAML', uxWithCluster('#/k8s-manifest-changes?kind=' + encodeURIComponent(kind) + '&namespace=' + encodeURIComponent(ns) + '&name=' + encodeURIComponent(name), cluster), 'k8s-manifest-changes');
+      }
+      const routeResource = uxResourceFromRoute(tab, params);
+      if (routeResource) {
+        const pinLabel = uxPinnedResource(routeResource) ? '현재 리소스 고정 해제' : '현재 리소스 고정';
+        uxAddActionScript(actions, pinLabel, 'uxToggleResourcePin(' + JSON.stringify(uxResourceStorePayload(routeResource)) + ');return false');
       }
       switch (tab) {
       case 'k8s-home':
@@ -1134,10 +1518,6 @@ const adminHTML = `<!doctype html>
         uxAddAction(actions, '비용 상세', uxWithCluster('#/k8s-cost', cluster), 'k8s-cost');
         uxAddAction(actions, '운영 설정', '#/k8s-settings', 'k8s-settings');
         break;
-      case 'ai-governance':
-        uxAddAction(actions, '정책 Advisor', '#/policy-advisor', 'policy-advisor');
-        uxAddAction(actions, 'MCP Gateway', '#/gateway-mcp', 'gateway-mcp');
-        break;
       }
       return actions.slice(0, 8);
     }
@@ -1150,18 +1530,37 @@ const adminHTML = `<!doctype html>
         return;
       }
       el.innerHTML = '<span class="ux-title">빠른 작업</span>' + actions.map(a =>
-        '<a href="' + escapeAttr(a.href) + '">' + escapeHTML(a.label) + '</a>'
+        '<a href="' + escapeAttr(a.href) + '"' + (a.onclick ? ' onclick="' + escapeAttr(a.onclick) + '"' : '') + '>' + escapeHTML(a.label) + '</a>'
       ).join('');
+    }
+    function uxResourceFromRoute(tab, params) {
+      if (!params || !params.get) return null;
+      const cluster = params.get('cluster_id') || '';
+      const ns = params.get('namespace') || '';
+      const pod = params.get('pod') || '';
+      const node = params.get('node') || '';
+      const kind = params.get('kind') || '';
+      const name = params.get('name') || '';
+      if (pod) return { cluster_id: cluster, namespace: ns, kind: 'Pod', name: pod, status: 'route' };
+      if (node) return { cluster_id: cluster, namespace: '', kind: 'Node', name: node, status: 'route' };
+      if (kind && name) return { cluster_id: cluster, namespace: ns, kind, name, status: 'route' };
+      return null;
     }
     function uxOnRoute(tab, params) {
       const activeTab = tab || 'k8s-home';
       uxRecordVisit(activeTab);
       uxRenderContext(activeTab, params);
+      const routeResource = uxResourceFromRoute(activeTab, params);
+      if (routeResource) uxRememberResource(routeResource);
+      uxUpdatePinButton(activeTab);
       const panel = document.getElementById('quick-access-panel');
       if (panel && panel.classList.contains('open')) uxRenderQuickAccess();
     }
     document.getElementById('quick-access-toggle').addEventListener('click', uxToggleQuickAccess);
+    document.getElementById('quick-pin-current').addEventListener('click', uxTogglePinCurrent);
+    document.getElementById('quick-share-current').addEventListener('click', uxCopyCurrentLink);
     document.getElementById('quick-access-input').addEventListener('input', uxRenderQuickAccess);
+    document.getElementById('quick-access-action-refresh').addEventListener('click', uxRefreshActionQueue);
     document.addEventListener('keydown', (e) => {
       const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
       const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
@@ -1411,6 +1810,33 @@ const adminHTML = `<!doctype html>
         history.replaceState(null, '', next);
       }
     }
+    async function updateK8sActionNavBadge() {
+      const badge = document.getElementById('k8s-action-nav-badge');
+      if (!badge) return;
+      if (!uxAllowed('k8s-actions')) {
+        badge.style.display = 'none';
+        return;
+      }
+      try {
+        const flow = await api('/admin/k8s/action-flow?limit=1');
+        const s = (flow && flow.summary) || {};
+        const attention = Number(s.attention || 0);
+        const approval = Number(s.approval || 0);
+        const ready = Number(s.ready || 0);
+        const verify = Number(s.verify || 0);
+        const count = attention + approval + ready + verify;
+        if (!count) {
+          badge.style.display = 'none';
+          return;
+        }
+        badge.textContent = String(count > 99 ? '99+' : count);
+        badge.classList.toggle('warn', attention === 0);
+        badge.title = '확인 필요 ' + attention + ' · 승인 대기 ' + approval + ' · 실행 가능 ' + ready + ' · 검증 필요 ' + verify;
+        badge.style.display = 'inline-flex';
+      } catch (_) {
+        badge.style.display = 'none';
+      }
+    }
     // subNav renders a secondary tab bar (used for tabs that nest sub-views).
     function subNav(items) {
       return '<nav class="subtabs">' + items.map(it =>
@@ -1567,6 +1993,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-pods': await renderK8sPods(params); break;
           case 'k8s-nodes': await renderK8sNodes(params); break;
           case 'k8s-developer': await renderK8sDeveloper(params); break;
+          case 'service-catalog': await renderServiceCatalog(params); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'problems': await renderAIOpsProblems(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
@@ -1635,10 +2062,12 @@ const adminHTML = `<!doctype html>
       } catch (err) {
         document.getElementById('view').innerHTML = '<div class="error-line">' + escapeHTML(err.message) + '</div>';
       }
+      updateK8sActionNavBadge();
       uxOnRoute(navTab || 'k8s-home', params);
       agentOnRoute();
     }
     window.addEventListener('hashchange', route);
+    setInterval(updateK8sActionNavBadge, 30000);
 
     // ---------- Floating Ops Agent (Page Context SDK + drawer) ----------
     var agentState = { sessionId: null, ctx: {}, open: false };
@@ -6111,13 +6540,18 @@ const adminHTML = `<!doctype html>
     }
 
     async function renderEnterpriseFoundation(params) {
-      const [orgsResp, workspacesResp, projectsResp, entitiesResp, bindingsResp, teamsResp] = await Promise.all([
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const ownershipQS = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+      const [orgsResp, workspacesResp, projectsResp, entitiesResp, bindingsResp, teamsResp, ownershipResp, enforcementResp, clustersResp] = await Promise.all([
         api('/admin/orgs').catch(() => ({ organizations: [] })),
         api('/admin/workspaces').catch(() => ({ workspaces: [] })),
         api('/admin/projects').catch(() => ({ projects: [] })),
         api('/admin/catalog/entities?limit=200').catch(() => ({ entities: [] })),
         api('/admin/access-bindings?limit=200').catch(() => ({ access_bindings: [] })),
         api('/admin/teams').catch(() => ({ auth_teams: [] })),
+        api('/admin/catalog/ownership-map' + ownershipQS).catch(() => ({ governance_findings: {}, namespace_ownership: [], catalog_entities: [] })),
+        api('/admin/enterprise/enforcement').catch(() => ({ guarded_prefixes: [], excluded_prefixes: [] })),
+        api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
       ]);
       const orgs = orgsResp.organizations || [];
       const workspaces = workspacesResp.workspaces || [];
@@ -6125,16 +6559,23 @@ const adminHTML = `<!doctype html>
       const entities = entitiesResp.entities || [];
       const bindings = bindingsResp.access_bindings || [];
       const teams = teamsResp.auth_teams || [];
+      const clusters = clustersResp.clusters || [];
+      const ownershipFindings = ownershipResp.governance_findings || {};
+      const ownerlessNamespaces = ownershipFindings.ownerless_namespaces || [];
+      const ownerlessWorkloads = ownershipFindings.ownerless_workloads || [];
       const teamOptions = '<option value="">팀 없음</option>' + teams.map(t => '<option value="' + escapeAttr(t.id) + '">' + escapeHTML(t.name) + ' · ' + escapeHTML(t.id) + '</option>').join('');
       const orgOptions = '<option value="">조직 선택</option>' + orgs.map(o => '<option value="' + escapeAttr(o.id) + '">' + escapeHTML(o.name) + '</option>').join('');
       const wsOptions = '<option value="">워크스페이스 선택</option>' + workspaces.map(w => '<option value="' + escapeAttr(w.id) + '">' + escapeHTML(w.name) + ' · ' + escapeHTML(w.organization_id) + '</option>').join('');
       const projectOptions = '<option value="">프로젝트 없음</option>' + projects.map(p => '<option value="' + escapeAttr(p.id) + '">' + escapeHTML(p.name) + ' · ' + escapeHTML(p.environment || '-') + '</option>').join('');
+      const clusterOptions = '<option value="">전체 클러스터</option>' + clusters.map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
       const kpis = '<div class="kpis">' +
         kpi('Organizations', fmt(orgs.length)) +
         kpi('Workspaces', fmt(workspaces.length)) +
         kpi('Projects', fmt(projects.length)) +
         kpi('Catalog Entities', fmt(entities.length)) +
         kpi('Access Bindings', fmt(bindings.length)) +
+        kpi('Ownerless NS', fmt(ownerlessNamespaces.length)) +
+        kpi('Ownerless Workloads', fmt(ownerlessWorkloads.length)) +
       '</div>';
       const orgTable = orgs.length ? '<table><thead><tr><th>조직</th><th>ID</th><th>IdP</th><th>Sync</th><th>Updated</th></tr></thead><tbody>' +
         orgs.map(o => '<tr><td><strong>' + escapeHTML(o.name) + '</strong><div class="muted">' + escapeHTML(o.description || '') + '</div></td><td><code>' + escapeHTML(o.id) + '</code></td><td>' + escapeHTML(o.source_idp || '-') + '</td><td>' + escapeHTML(o.sync_status || '-') + '</td><td>' + ago(o.updated_at) + '</td></tr>').join('') +
@@ -6151,17 +6592,25 @@ const adminHTML = `<!doctype html>
       const bindingTable = bindings.length ? '<table><thead><tr><th>Subject</th><th>Resource</th><th>Role</th><th>Effect</th><th>Conditions</th></tr></thead><tbody>' +
         bindings.map(b => '<tr><td><code>' + escapeHTML(b.subject_type) + ':' + escapeHTML(b.subject_id) + '</code></td><td><code>' + escapeHTML(b.resource_type) + ':' + escapeHTML(b.resource_id) + '</code></td><td>' + escapeHTML(b.role) + '</td><td><span class="status ' + (b.effect === 'deny' ? 'error' : '') + '">' + escapeHTML(b.effect || 'allow') + '</span></td><td><code>' + escapeHTML(JSON.stringify(b.conditions || {})) + '</code></td></tr>').join('') +
         '</tbody></table>' : '<div class="empty">접근 바인딩 없음</div>';
+      const enforcementRows = (enforcementResp.guarded_prefixes || []).map(p => '<tr><td><span class="status">guarded</span></td><td><code>' + escapeHTML(p) + '</code></td></tr>').join('') +
+        (enforcementResp.excluded_prefixes || []).map(p => '<tr><td><span class="status warn">excluded</span></td><td><code>' + escapeHTML(p) + '</code></td></tr>').join('');
+      const ownershipRows = ownerlessNamespaces.slice(0, 20).map(x => '<tr><td><span class="status warn">namespace</span></td><td><code>' + escapeHTML(x) + '</code></td></tr>').join('') +
+        ownerlessWorkloads.slice(0, 20).map(x => '<tr><td><span class="status warn">workload</span></td><td><code>' + escapeHTML(x) + '</code></td></tr>').join('');
       document.getElementById('view').innerHTML =
-        section('Enterprise Foundation', '<div class="card-body">' + kpis + '<p class="muted" style="font-size:12px;margin:8px 0 0">조직·워크스페이스·프로젝트·서비스 카탈로그·ABAC 바인딩의 최소 기준 데이터입니다. 기존 팀/RBAC는 유지하고, 이 화면의 소유권 메타데이터가 FleetOps·SecOps·FinOps·AIOps의 공통 기준이 됩니다.</p></div>') +
+        section('Enterprise Foundation', '<div class="card-body">' + kpis + '<div class="inline-form" style="grid-template-columns:minmax(180px,1fr) 80px auto auto auto;margin-top:12px"><select id="ent-owner-cluster">' + clusterOptions + '</select><button type="button" onclick="enterpriseClusterGo()">필터</button><a class="button secondary" href="#/fleet' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">FleetOps</a><a class="button secondary" href="#/governance">Governance Hub</a><a class="button secondary" href="#/k8s-manifest-changes' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 변경</a></div><p class="muted" style="font-size:12px;margin:8px 0 0">조직·워크스페이스·프로젝트·서비스 카탈로그·ABAC 바인딩의 최소 기준 데이터입니다. 기존 팀/RBAC는 유지하고, 이 화면의 소유권 메타데이터가 FleetOps·SecOps·FinOps·AIOps의 공통 기준이 됩니다.</p></div>') +
+        '<div class="grid2">' +
+          card('권한 집행 상태', '<div class="card-body"><div class="kpis" style="margin-bottom:10px">' + kpi('Auth Enabled', enforcementResp.auth_enabled ? 'YES' : 'NO') + kpi('Bindings', enforcementResp.bindings_present ? 'present' : 'empty') + kpi('Admin Bypass', ((enforcementResp.admin_bypass_roles || []).join(', ') || '-')) + '</div><table><thead><tr><th>상태</th><th>Prefix</th></tr></thead><tbody>' + (enforcementRows || '<tr><td colspan="2" class="muted">enforcement 데이터 없음</td></tr>') + '</tbody></table></div>') +
+          card('소유권 Coverage', '<div class="card-body"><table><thead><tr><th>유형</th><th>Owner 없는 대상</th></tr></thead><tbody>' + (ownershipRows || '<tr><td colspan="2" class="muted">ownerless 대상 없음</td></tr>') + '</tbody></table></div>') +
+        '</div>' +
         '<div class="grid2">' +
           card('조직', '<div class="card-body"><form id="ent-org-form" class="inline-form" style="grid-template-columns: minmax(120px,1fr) minmax(140px,1fr) minmax(100px,1fr) 80px;"><input id="ent-org-name" placeholder="조직명" required><input id="ent-org-desc" placeholder="설명"><input id="ent-org-idp" placeholder="IdP source"><button type="submit">저장</button></form>' + orgTable + '</div>') +
           card('워크스페이스', '<div class="card-body"><form id="ent-ws-form" class="inline-form" style="grid-template-columns: minmax(120px,1fr) minmax(120px,1fr) minmax(140px,1fr) 80px;"><select id="ent-ws-org">' + orgOptions + '</select><input id="ent-ws-name" placeholder="워크스페이스" required><input id="ent-ws-desc" placeholder="설명"><button type="submit">저장</button></form>' + workspaceTable + '</div>') +
         '</div>' +
         '<div class="grid2">' +
-          card('프로젝트', '<div class="card-body"><form id="ent-project-form" class="inline-form" style="grid-template-columns: minmax(120px,1fr) minmax(120px,1fr) 100px 120px 110px 80px;"><select id="ent-prj-ws">' + wsOptions + '</select><input id="ent-prj-name" placeholder="프로젝트" required><input id="ent-prj-env" placeholder="prod/dev"><select id="ent-prj-team">' + teamOptions + '</select><input id="ent-prj-cost" placeholder="비용센터"><button type="submit">저장</button></form>' + projectTable + '</div>') +
-          card('서비스 카탈로그', '<div class="card-body"><form id="ent-catalog-form" class="inline-form" style="grid-template-columns: 90px minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) 80px;"><input id="ent-cat-kind" placeholder="Service" value="Service"><input id="ent-cat-name" placeholder="엔티티명" required><select id="ent-cat-project">' + projectOptions + '</select><select id="ent-cat-team">' + teamOptions + '</select><input id="ent-cat-runtime" placeholder="cluster/ns/kind/name"><button type="submit">저장</button></form>' + entityTable + '</div>') +
+          card('프로젝트', '<div class="card-body"><form id="ent-project-form" class="inline-form" style="grid-template-columns: minmax(120px,1fr) minmax(120px,1fr) 90px 120px 100px 100px 80px;"><select id="ent-prj-ws">' + wsOptions + '</select><input id="ent-prj-name" placeholder="프로젝트" required><input id="ent-prj-env" placeholder="prod/dev"><select id="ent-prj-team">' + teamOptions + '</select><input id="ent-prj-cost" placeholder="비용센터"><input id="ent-prj-criticality" placeholder="criticality"><button type="submit">저장</button></form>' + projectTable + '</div>') +
+          card('서비스 카탈로그', '<div class="card-body"><form id="ent-catalog-form" class="inline-form" style="grid-template-columns: 90px minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) 100px 100px 80px;"><input id="ent-cat-kind" placeholder="Service" value="Service"><input id="ent-cat-name" placeholder="엔티티명" required><select id="ent-cat-project">' + projectOptions + '</select><select id="ent-cat-team">' + teamOptions + '</select><input id="ent-cat-runtime" placeholder="cluster/ns/kind/name"><input id="ent-cat-repo" placeholder="repo url"><input id="ent-cat-docs" placeholder="docs url"><input id="ent-cat-criticality" placeholder="criticality"><input id="ent-cat-tags" placeholder="tags comma"><button type="submit">저장</button></form>' + entityTable + '</div>') +
         '</div>' +
-        section('접근 바인딩 (RBAC + ABAC)', '<div class="card-body"><form id="ent-binding-form" class="inline-form" style="grid-template-columns: 100px minmax(120px,1fr) 100px minmax(120px,1fr) 100px 100px minmax(140px,1fr) 80px;"><select id="ent-bind-subject-type"><option value="team">team</option><option value="user">user</option><option value="role">role</option><option value="api_key">api_key</option></select><input id="ent-bind-subject" placeholder="subject id" required><select id="ent-bind-resource-type"><option value="organization">organization</option><option value="workspace">workspace</option><option value="project">project</option><option value="cluster">cluster</option><option value="namespace">namespace</option><option value="service">service</option><option value="ai_gateway">ai_gateway</option></select><input id="ent-bind-resource" placeholder="resource id" required><input id="ent-bind-role" placeholder="viewer/operator" required><select id="ent-bind-effect"><option value="allow">allow</option><option value="deny">deny</option></select><input id="ent-bind-cond" placeholder=\'{"environment":"prod"}\'><button type="submit">저장</button></form>' + bindingTable + '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"><h3 style="margin:0 0 10px;font-size:14px">정책 시뮬레이터</h3><form id="ent-binding-eval-form" class="inline-form" style="grid-template-columns: 100px minmax(120px,1fr) 100px minmax(120px,1fr) 100px minmax(180px,1fr) 86px;"><select id="ent-bind-eval-subject-type"><option value="team">team</option><option value="user">user</option><option value="role">role</option><option value="api_key">api_key</option></select><input id="ent-bind-eval-subject" placeholder="subject id" required><select id="ent-bind-eval-resource-type"><option value="organization">organization</option><option value="workspace">workspace</option><option value="project">project</option><option value="cluster">cluster</option><option value="namespace">namespace</option><option value="service">service</option><option value="ai_gateway">ai_gateway</option></select><input id="ent-bind-eval-resource" placeholder="resource id" required><input id="ent-bind-eval-role" placeholder="operator" required><input id="ent-bind-eval-context" placeholder=\'{"environment":"prod","risk_level":"medium"}\'><button type="submit">평가</button></form><div id="ent-bind-eval-result" class="empty" style="margin-top:10px">평가할 subject, resource, role, context를 입력하세요.</div></div></div>');
+        section('접근 바인딩 (RBAC + ABAC)', '<div class="card-body"><form id="ent-binding-form" class="inline-form" style="grid-template-columns: 100px minmax(120px,1fr) 100px minmax(120px,1fr) 100px 100px minmax(140px,1fr) 80px;"><select id="ent-bind-subject-type"><option value="team">team</option><option value="user">user</option><option value="role">role</option><option value="api_key">api_key</option></select><input id="ent-bind-subject" placeholder="subject id" required><select id="ent-bind-resource-type"><option value="organization">organization</option><option value="workspace">workspace</option><option value="project">project</option><option value="cluster">cluster</option><option value="namespace">namespace</option><option value="service">service</option><option value="fleet">fleet</option><option value="security">security</option><option value="finops">finops</option><option value="gitops">gitops</option><option value="governance">governance</option></select><input id="ent-bind-resource" placeholder="resource id" required><input id="ent-bind-role" placeholder="viewer/operator" required><select id="ent-bind-effect"><option value="allow">allow</option><option value="deny">deny</option></select><input id="ent-bind-cond" placeholder=\'{"environment":"prod"}\'><button type="submit">저장</button></form>' + bindingTable + '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"><h3 style="margin:0 0 10px;font-size:14px">정책 시뮬레이터</h3><form id="ent-binding-eval-form" class="inline-form" style="grid-template-columns: 100px minmax(120px,1fr) 100px minmax(120px,1fr) 100px minmax(180px,1fr) 86px;"><select id="ent-bind-eval-subject-type"><option value="team">team</option><option value="user">user</option><option value="role">role</option><option value="api_key">api_key</option></select><input id="ent-bind-eval-subject" placeholder="subject id" required><select id="ent-bind-eval-resource-type"><option value="organization">organization</option><option value="workspace">workspace</option><option value="project">project</option><option value="cluster">cluster</option><option value="namespace">namespace</option><option value="service">service</option><option value="fleet">fleet</option><option value="security">security</option><option value="finops">finops</option><option value="gitops">gitops</option><option value="governance">governance</option></select><input id="ent-bind-eval-resource" placeholder="resource id" required><input id="ent-bind-eval-role" placeholder="operator" required><input id="ent-bind-eval-context" placeholder=\'{"environment":"prod","risk_level":"medium"}\'><button type="submit">평가</button></form><div id="ent-bind-eval-result" class="empty" style="margin-top:10px">평가할 subject, resource, role, context를 입력하세요.</div></div></div>');
       document.getElementById('ent-org-form').addEventListener('submit', saveEnterpriseOrg);
       document.getElementById('ent-ws-form').addEventListener('submit', saveEnterpriseWorkspace);
       document.getElementById('ent-project-form').addEventListener('submit', saveEnterpriseProject);
@@ -6170,6 +6619,11 @@ const adminHTML = `<!doctype html>
       document.getElementById('ent-binding-eval-form').addEventListener('submit', evaluateAccessBinding);
       makeSortable('#view', 'enterprise');
     }
+    window.enterpriseClusterGo = () => {
+      const el = document.getElementById('ent-owner-cluster');
+      const cl = el ? el.value : '';
+      location.hash = '#/enterprise' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+    };
     async function saveEnterpriseOrg(e) {
       e.preventDefault();
       await api('/admin/orgs', { method: 'POST', body: JSON.stringify({
@@ -6196,6 +6650,7 @@ const adminHTML = `<!doctype html>
         environment: document.getElementById('ent-prj-env').value.trim(),
         owner_team_id: document.getElementById('ent-prj-team').value,
         cost_center: document.getElementById('ent-prj-cost').value.trim(),
+        criticality: document.getElementById('ent-prj-criticality').value.trim(),
       }) });
       route();
     }
@@ -6207,6 +6662,10 @@ const adminHTML = `<!doctype html>
         project_id: document.getElementById('ent-cat-project').value,
         owner_team_id: document.getElementById('ent-cat-team').value,
         runtime_ref: document.getElementById('ent-cat-runtime').value.trim(),
+        repo_url: document.getElementById('ent-cat-repo').value.trim(),
+        docs_url: document.getElementById('ent-cat-docs').value.trim(),
+        criticality: document.getElementById('ent-cat-criticality').value.trim(),
+        tags: document.getElementById('ent-cat-tags').value.split(',').map(x => x.trim()).filter(Boolean),
       }) });
       route();
     }
@@ -6262,6 +6721,356 @@ const adminHTML = `<!doctype html>
       } catch (err) {
         result.innerHTML = '<span class="status error">평가 실패</span> ' + escapeHTML(err.message || String(err));
       }
+    }
+
+    async function renderServiceCatalog(params) {
+      const q = ((params && params.get('q')) || '').trim().toLowerCase();
+      const kind = (params && params.get('kind')) || '';
+      const team = (params && params.get('team')) || '';
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const entityId = (params && params.get('entity_id')) || '';
+      const qs = new URLSearchParams({ limit: '1000' });
+      if (kind) qs.set('kind', kind);
+      if (team) qs.set('owner_team_id', team);
+      const scoreQS = new URLSearchParams(qs);
+      if (clusterId) scoreQS.set('cluster_id', clusterId);
+      const [entitiesResp, projectsResp, teamsResp, ownershipResp, problemsResp, finopsResp, securityResp, clustersResp, scoreResp, actionResp, candidateResp, coverageResp, gapsResp, gapExceptionResp, detailResp] = await Promise.all([
+        api('/admin/catalog/entities?' + qs.toString()).catch(() => ({ entities: [] })),
+        api('/admin/projects').catch(() => ({ projects: [] })),
+        api('/admin/teams').catch(() => ({ auth_teams: [] })),
+        api('/admin/catalog/ownership-map' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ governance_findings: {} })),
+        api('/admin/problems?limit=500' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ problems: [] })),
+        api('/admin/finops/overview' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ summary: {}, cost: {} })),
+        api('/admin/security/posture').catch(() => ({ clusters: [] })),
+        api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+        api('/admin/catalog/scorecards?' + scoreQS.toString()).catch(() => ({ scorecards: [], summary: {} })),
+        api('/admin/catalog/self-service-actions?limit=100').catch(() => ({ actions: [] })),
+        api('/admin/catalog/runtime-candidates?limit=200' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ candidates: [] })),
+        api('/admin/catalog/coverage' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ summary: {}, buckets: [] })),
+        api('/admin/catalog/gaps?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ gaps: [], summary: {} })),
+        api('/admin/catalog/gap-exceptions?limit=100').catch(() => ({ exceptions: [] })),
+        entityId ? api('/admin/catalog/entities/' + encodeURIComponent(entityId) + '/runtime').catch(e => ({ error: e.message || String(e) })) : Promise.resolve(null),
+      ]);
+      const projects = projectsResp.projects || [];
+      const projectByID = {};
+      projects.forEach(p => { projectByID[p.id] = p; });
+      const teams = teamsResp.auth_teams || [];
+      const teamByID = {};
+      teams.forEach(t => { teamByID[t.id] = t; });
+      const clusters = clustersResp.clusters || [];
+      const ownerless = (ownershipResp.governance_findings || {});
+      const clusterOpts = '<option value="">전체 클러스터</option>' + clusters.map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+      const kindOpts = ['','Service','Application','Component','API','Worker','Job','Database','Platform'].map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k || '전체 Kind') + '</option>').join('');
+      const teamOpts = '<option value="">전체 팀</option>' + teams.map(t => '<option value="' + escapeAttr(t.id) + '"' + (t.id === team ? ' selected' : '') + '>' + escapeHTML(t.name || t.id) + '</option>').join('');
+      const runtimeParts = (ref) => {
+        const p = String(ref || '').split('/').filter(Boolean);
+        if (p.length < 4) return null;
+        return { cluster_id: p[0], namespace: p[1], kind: p[2], name: p.slice(3).join('/') };
+      };
+      const serviceLinks = (e) => {
+        const rt = runtimeParts(e.runtime_ref);
+        const links = [];
+        if (rt) {
+          links.push(k8sYamlChangeLink(rt.cluster_id, rt.kind, rt.namespace, rt.name, 'YAML'));
+          links.push('<a href="#/k8s-graph?cluster_id=' + encodeURIComponent(rt.cluster_id) + '&namespace=' + encodeURIComponent(rt.namespace) + '&kind=' + encodeURIComponent(rt.kind) + '&name=' + encodeURIComponent(rt.name) + '">Graph</a>');
+          links.push('<a href="#/problems?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">Problems</a>');
+          links.push('<a href="#/finops?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">FinOps</a>');
+          links.push('<a href="#/gitops?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">GitOps</a>');
+          links.push('<a href="#/k8s-security?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">Security</a>');
+        }
+        if (e.repo_url) links.push('<a href="' + escapeAttr(e.repo_url) + '" target="_blank" rel="noopener">Repo</a>');
+        if (e.docs_url) links.push('<a href="' + escapeAttr(e.docs_url) + '" target="_blank" rel="noopener">Docs</a>');
+        return links.filter(Boolean).join(' · ') || '<span class="muted">runtime/ref 없음</span>';
+      };
+      const scores = scoreResp.scorecards || [];
+      const scoreByEntity = {};
+      scores.forEach(s => { scoreByEntity[s.entity_id] = s; });
+      const scoreCell = (e) => {
+        const s = scoreByEntity[e.id] || {};
+        const score = Number(s.score || 0);
+        const cls = score >= 85 ? 'ok' : (score >= 70 ? '' : (score >= 55 ? 'warn' : 'error'));
+        const recs = (s.recommendations || []).slice(0, 2).join(' · ');
+        return '<span class="status ' + cls + '">' + escapeHTML(s.maturity || '-') + '</span>' +
+          '<div style="font-weight:700;margin-top:4px">' + (score ? fmt(score) : '-') + '</div>' +
+          '<div class="muted" style="font-size:11px">' + escapeHTML(recs || '-') + '</div>';
+      };
+      const entityLink = (e) => {
+        const next = new URLSearchParams();
+        if (q) next.set('q', q);
+        if (kind) next.set('kind', kind);
+        if (team) next.set('team', team);
+        if (clusterId) next.set('cluster_id', clusterId);
+        next.set('entity_id', e.id);
+        return '#/service-catalog?' + next.toString();
+      };
+      let entities = entitiesResp.entities || [];
+      if (q) {
+        entities = entities.filter(e => [e.kind, e.name, e.project_id, e.owner_team_id, e.runtime_ref, e.repo_url, e.docs_url, (e.tags || []).join(' ')].join(' ').toLowerCase().includes(q));
+      }
+      const criticalCount = entities.filter(e => ['critical','high','tier1','tier-1'].includes(String(e.criticality || '').toLowerCase())).length;
+      const runtimeLinked = entities.filter(e => e.runtime_ref).length;
+      const problems = problemsResp.problems || [];
+      const finSummary = finopsResp.summary || {};
+      const secClusters = securityResp.clusters || [];
+      const rows = entities.length ? entities.slice(0, 300).map(e => {
+        const p = projectByID[e.project_id] || {};
+        const t = teamByID[e.owner_team_id] || {};
+        const rt = runtimeParts(e.runtime_ref);
+        return '<tr><td><span class="status">' + escapeHTML(e.kind || '-') + '</span></td>' +
+          '<td><a href="' + escapeAttr(entityLink(e)) + '"><strong>' + escapeHTML(e.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML((p.name || e.project_id || '-') + ' · ' + (p.environment || '-')) + '</div></td>' +
+          '<td>' + escapeHTML(t.name || e.owner_team_id || '-') + '</td>' +
+          '<td>' + scoreCell(e) + '</td>' +
+          '<td><span class="status ' + (criticalCount && ['critical','high','tier1','tier-1'].includes(String(e.criticality || '').toLowerCase()) ? 'warn' : '') + '">' + escapeHTML(e.criticality || p.criticality || '-') + '</span></td>' +
+          '<td><code>' + escapeHTML(e.runtime_ref || '-') + '</code><div class="muted" style="font-size:11px">' + escapeHTML(rt ? (rt.namespace + '/' + rt.kind + '/' + rt.name) : '') + '</div></td>' +
+          '<td>' + ((e.tags || []).map(tag => '<span class="pill">' + escapeHTML(tag) + '</span>').join('') || '-') + '</td>' +
+          '<td>' + serviceLinks(e) + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">서비스 카탈로그 엔티티 없음</td></tr>';
+      const actionEntityOpts = '<option value="">서비스 선택</option>' + entities.map(e => '<option value="' + escapeAttr(e.id) + '">' + escapeHTML(e.name || e.id) + '</option>').join('');
+      const actionRows = (actionResp.actions || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">셀프서비스 액션 초안 없음</td></tr>';
+      const detailHTML = serviceCatalogRuntimeDetailHTML(detailResp);
+      const candidates = candidateResp.candidates || [];
+      window.__svcCatalogCandidates = candidates;
+      const coverageSummary = coverageResp.summary || {};
+      const coverageRows = (coverageResp.buckets || []).slice(0, 20).map(b =>
+        '<tr><td><strong>' + escapeHTML((b.cluster_id || '-') + ' · ' + (b.namespace || '-')) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(b.team || '-') + '</div></td>' +
+        '<td>' + escapeHTML(b.kind || '-') + '</td>' +
+        '<td data-num="' + (b.coverage_pct || 0) + '"><span class="status ' + ((b.coverage_pct || 0) < 50 ? 'error' : ((b.coverage_pct || 0) < 80 ? 'warn' : 'ok')) + '">' + fmt(b.coverage_pct || 0) + '%</span></td>' +
+        '<td data-num="' + (b.total || 0) + '">' + fmt(b.linked || 0) + ' / ' + fmt(b.total || 0) + '</td>' +
+        '<td data-num="' + (b.unlinked || 0) + '">' + (b.unlinked ? '<span class="status warn">' + fmt(b.unlinked) + '</span>' : '0') + '</td>' +
+        '<td data-num="' + (b.high_risk || 0) + '">' + (b.high_risk ? '<span class="status error">' + fmt(b.high_risk) + '</span>' : '0') + '</td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">coverage 데이터 없음</td></tr>';
+      const gapSummary = gapsResp.summary || {};
+      const gaps = gapsResp.gaps || [];
+      window.__svcCatalogGaps = gaps;
+      const gapRows = gaps.slice(0, 40).map((g, idx) => {
+        const sev = String(g.severity || '').toLowerCase();
+        const cls = sev === 'high' || sev === 'critical' ? 'error' : (sev === 'medium' ? 'warn' : '');
+        const target = g.entity_id
+          ? '<a href="#/service-catalog?entity_id=' + encodeURIComponent(g.entity_id) + '">' + escapeHTML(g.entity_name || g.entity_id) + '</a>'
+          : '<code>' + escapeHTML(g.target || g.runtime_ref || '-') + '</code>';
+        return '<tr><td><span class="status ' + cls + '">' + escapeHTML(g.severity || '-') + '</span></td>' +
+          '<td>' + escapeHTML(g.type || '-') + '</td>' +
+          '<td>' + target + '</td>' +
+          '<td>' + escapeHTML(g.message || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(g.recommendation || '-') + '</div></td>' +
+          '<td>' + (g.runtime_ref ? k8sYamlChangeLink((g.runtime || {}).cluster_id || g.cluster_id || '', (g.runtime || {}).kind || g.kind || '', (g.runtime || {}).namespace || g.namespace || '', (g.runtime || {}).name || g.name || '', 'YAML') : '-') + '</td>' +
+          '<td><button type="button" class="secondary" onclick="serviceCatalogCreateGapException(' + idx + ')">예외</button></td></tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">처리할 catalog gap 없음</td></tr>';
+      const exceptionRows = (gapExceptionResp.exceptions || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">등록된 gap 예외 없음</td></tr>';
+      const candidateRows = candidates.slice(0, 30).map((c, idx) =>
+        '<tr><td><input type="checkbox" class="svc-candidate-check" value="' + idx + '"></td>' +
+        '<td><span class="status">' + escapeHTML(c.kind || '-') + '</span><div class="muted" style="font-size:11px">' + escapeHTML(c.status || '-') + '</div></td>' +
+        '<td><code>' + escapeHTML(c.runtime_ref || '-') + '</code></td>' +
+        '<td>' + escapeHTML(c.suggested_name || c.name || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML((c.suggested_team || c.suggested_team_id || '-') + ' · ' + (c.suggested_project || c.suggested_project_id || 'project 없음') + ' · confidence ' + (c.confidence || 0)) + '</div></td>' +
+        '<td><span class="status ' + (String(c.risk_level || '').toLowerCase() === 'high' || String(c.risk_level || '').toLowerCase() === 'critical' ? 'error' : (String(c.risk_level || '').toLowerCase() === 'medium' ? 'warn' : '')) + '">' + escapeHTML(c.risk_level || '-') + '</span></td>' +
+        '<td><button type="button" class="secondary" onclick="serviceCatalogCreateFromCandidate(' + idx + ')">카탈로그 등록</button></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">연결 후보 없음</td></tr>';
+      const ownerlessRows = []
+        .concat((ownerless.ownerless_namespaces || []).slice(0, 15).map(x => ({ type: 'namespace', value: x })))
+        .concat((ownerless.ownerless_workloads || []).slice(0, 15).map(x => ({ type: 'workload', value: x })))
+        .map(x => '<tr><td><span class="status warn">' + escapeHTML(x.type) + '</span></td><td><code>' + escapeHTML(x.value) + '</code></td><td><a href="#/enterprise' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">소유권 등록</a></td></tr>').join('') || '<tr><td colspan="3" class="muted">ownerless 대상 없음</td></tr>';
+      document.getElementById('view').innerHTML =
+        section('서비스 카탈로그', '<div class="card-body">' +
+          '<div class="kpis">' +
+            kpi('Entities', fmt(entities.length)) +
+            kpi('Runtime Linked', fmt(runtimeLinked)) +
+            kpi('Critical', fmt(criticalCount)) +
+            kpi('Open Problems', fmt(problems.length)) +
+            kpi('Monthly Cost', fmt(Math.round(finSummary.estimated_monthly_krw || 0)) + ' KRW') +
+            kpi('Security Clusters', fmt(secClusters.length)) +
+            kpi('Gold/Silver', fmt((scoreResp.summary || {}).gold || 0) + ' / ' + fmt((scoreResp.summary || {}).silver || 0)) +
+            kpi('Unlinked Runtime', fmt(candidates.length)) +
+            kpi('Coverage', fmt(coverageSummary.coverage_pct || 0) + '%') +
+            kpi('High Gaps', fmt(gapSummary.high || 0)) +
+          '</div>' +
+          '<form id="svc-catalog-filter" class="inline-form" style="grid-template-columns:minmax(180px,1fr) 120px 160px 180px 82px auto;margin-top:12px">' +
+            '<input id="svc-cat-q" placeholder="서비스, repo, runtime, tag 검색" value="' + escapeAttr(q) + '">' +
+            '<select id="svc-cat-kind">' + kindOpts + '</select>' +
+            '<select id="svc-cat-team">' + teamOpts + '</select>' +
+            '<select id="svc-cat-cluster">' + clusterOpts + '</select>' +
+            '<button type="submit">검색</button>' +
+            '<a class="button secondary" href="#/enterprise' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">카탈로그 등록</a>' +
+          '</form></div>') +
+        card('서비스 운영 테이블', '<div class="card-body"><table><thead><tr><th>Kind</th><th>서비스</th><th>Owner</th><th>Scorecard</th><th>중요도</th><th>Runtime</th><th>Tags</th><th>운영 진입점</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        detailHTML +
+        card('Catalog Coverage', '<div class="card-body"><table><thead><tr><th>Scope</th><th>Kind</th><th>Coverage</th><th>Linked</th><th>Unlinked</th><th>High Risk</th></tr></thead><tbody>' + coverageRows + '</tbody></table></div>') +
+        card('Catalog Gap Queue', '<div class="card-body"><table><thead><tr><th>Severity</th><th>Type</th><th>Target</th><th>내용</th><th></th><th>예외</th></tr></thead><tbody>' + gapRows + '</tbody></table></div>') +
+        card('Catalog Gap Exceptions', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + exceptionRows + '</tbody></table></div>') +
+        card('셀프서비스 액션 초안', '<div class="card-body"><form id="svc-action-form" class="inline-form" style="grid-template-columns:minmax(160px,1fr) 150px 110px minmax(180px,1fr) 80px;margin-bottom:12px">' +
+          '<select id="svc-action-entity">' + actionEntityOpts + '</select>' +
+          '<select id="svc-action-type"><option value="scale_request">Scale 요청</option><option value="namespace_request">Namespace 요청</option><option value="preview_environment">Preview 환경</option><option value="access_request">권한 요청</option><option value="observability_template">관측성 템플릿</option></select>' +
+          '<select id="svc-action-risk"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>' +
+          '<input id="svc-action-reason" placeholder="요청 사유 또는 변경번호">' +
+          '<button type="submit">초안</button>' +
+          '</form><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + actionRows + '</tbody></table></div>') +
+        card('Runtime 연결 후보', '<div class="card-body"><div class="toolbar" style="margin-bottom:10px"><button type="button" class="secondary" onclick="serviceCatalogCreateSelectedCandidates()">선택 후보 등록</button></div><table><thead><tr><th style="width:32px"></th><th>Kind</th><th>Runtime</th><th>추천 서비스</th><th>Risk</th><th></th></tr></thead><tbody>' + candidateRows + '</tbody></table></div>') +
+        card('Ownerless Runtime Coverage', '<div class="card-body"><table><thead><tr><th>유형</th><th>대상</th><th></th></tr></thead><tbody>' + ownerlessRows + '</tbody></table></div>');
+      document.getElementById('svc-catalog-filter').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const next = new URLSearchParams();
+        const qv = document.getElementById('svc-cat-q').value.trim();
+        const kv = document.getElementById('svc-cat-kind').value;
+        const tv = document.getElementById('svc-cat-team').value;
+        const cv = document.getElementById('svc-cat-cluster').value;
+        if (qv) next.set('q', qv);
+        if (kv) next.set('kind', kv);
+        if (tv) next.set('team', tv);
+        if (cv) next.set('cluster_id', cv);
+        location.hash = '#/service-catalog' + (next.toString() ? '?' + next.toString() : '');
+      });
+      document.getElementById('svc-action-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const entityID = document.getElementById('svc-action-entity').value;
+        const entity = entities.find(x => x.id === entityID);
+        if (!entity) { showToast('warn', '서비스 선택 필요', '셀프서비스 액션 초안을 만들 서비스를 먼저 선택하세요.'); return; }
+        const actionType = document.getElementById('svc-action-type').value;
+        const risk = document.getElementById('svc-action-risk').value;
+        const reason = document.getElementById('svc-action-reason').value.trim();
+        await api('/admin/catalog/self-service-actions', { method: 'POST', body: JSON.stringify({
+          scope_type: 'catalog_entity',
+          scope_id: entity.id,
+          name: actionType + ' · ' + (entity.name || entity.id),
+          status: 'draft',
+          owner_team_id: entity.owner_team_id || '',
+          source_ref: entity.runtime_ref || entity.id,
+          payload: {
+            action_type: actionType,
+            risk_level: risk,
+            approval_required: risk !== 'low',
+            reason,
+            runtime_ref: entity.runtime_ref || '',
+            project_id: entity.project_id || ''
+          }
+        }) });
+        showToast('ok', '셀프서비스 액션 초안 저장', (entity.name || entity.id) + ' · ' + actionType);
+        await renderServiceCatalog(params);
+      });
+      makeSortable('#view', 'service-catalog');
+    }
+
+    window.serviceCatalogCreateFromCandidate = async (idx) => {
+      const candidates = window.__svcCatalogCandidates || [];
+      const c = candidates[idx];
+      if (!c) { showToast('warn', '후보 없음', '선택한 runtime 후보를 찾을 수 없습니다.'); return; }
+      try {
+        await serviceCatalogCreateCandidate(c);
+        showToast('ok', '서비스 카탈로그 등록 완료', c.runtime_ref || c.name || '');
+        await route();
+      } catch (e) {
+        showToast('error', '카탈로그 등록 실패', e.message);
+      }
+    };
+    window.serviceCatalogCreateGapException = async (idx) => {
+      const gaps = window.__svcCatalogGaps || [];
+      const g = gaps[idx];
+      if (!g) { showToast('warn', 'Gap 없음', '선택한 catalog gap을 찾을 수 없습니다.'); return; }
+      const reason = prompt('예외 사유를 입력하세요', g.recommendation || '');
+      if (reason === null) return;
+      const expiresAt = prompt('만료일(선택, RFC3339 예: 2026-12-31T00:00:00Z)', '');
+      try {
+        await api('/admin/catalog/gap-exceptions', { method: 'POST', body: JSON.stringify({
+          scope_type: 'catalog_gap',
+          scope_id: g.gap_key || (g.type + '|' + (g.entity_id || g.target || g.runtime_ref || '')),
+          name: 'gap exception · ' + (g.type || 'catalog_gap'),
+          status: 'active',
+          owner_team_id: g.owner_team_id || '',
+          source_ref: g.runtime_ref || g.entity_id || g.target || '',
+          payload: {
+            gap_key: g.gap_key || (g.type + '|' + (g.entity_id || g.target || g.runtime_ref || '')),
+            gap_type: g.type || '',
+            target: g.target || g.entity_id || g.runtime_ref || '',
+            reason: reason || '',
+            expires_at: expiresAt || ''
+          }
+        }) });
+        showToast('ok', 'Catalog gap 예외 등록', g.gap_key || g.type || '');
+        await route();
+      } catch (e) {
+        showToast('error', '예외 등록 실패', e.message);
+      }
+    };
+    async function serviceCatalogCreateCandidate(c) {
+      await api('/admin/catalog/entities', { method: 'POST', body: JSON.stringify({
+        kind: c.suggested_kind || 'Service',
+        name: c.suggested_name || c.name,
+        project_id: c.suggested_project_id || '',
+        owner_team_id: c.suggested_team_id || c.suggested_team || '',
+        runtime_ref: c.runtime_ref || '',
+        criticality: c.suggested_criticality || '',
+        tags: c.suggested_tags || []
+      }) });
+    }
+    window.serviceCatalogCreateSelectedCandidates = async () => {
+      const candidates = window.__svcCatalogCandidates || [];
+      const selected = Array.from(document.querySelectorAll('.svc-candidate-check:checked')).map(el => candidates[Number(el.value)]).filter(Boolean);
+      if (!selected.length) { showToast('warn', '선택 후보 없음', '등록할 runtime 후보를 선택하세요.'); return; }
+      let ok = 0;
+      try {
+        for (const c of selected) {
+          await serviceCatalogCreateCandidate(c);
+          ok++;
+        }
+        showToast('ok', '선택 후보 등록 완료', ok + '건 등록');
+        await route();
+      } catch (e) {
+        showToast('error', '선택 후보 등록 중 오류', ok + '건 완료, 오류=' + e.message);
+        await route();
+      }
+    };
+
+    function serviceCatalogRuntimeDetailHTML(detail) {
+      if (!detail) return '';
+      if (detail.error) {
+        return card('서비스 Runtime 상세', '<div class="card-body"><span class="status error">load failed</span> ' + escapeHTML(detail.error) + '</div>');
+      }
+      const e = detail.entity || {};
+      const rt = detail.runtime || {};
+      const sc = detail.scorecard || {};
+      const sum = detail.summary || {};
+      const score = Number(sc.score || 0);
+      const scoreCls = score >= 85 ? 'ok' : (score >= 70 ? '' : (score >= 55 ? 'warn' : 'error'));
+      const invRows = (detail.inventory || []).slice(0, 12).map(it =>
+        '<tr><td>' + escapeHTML(it.kind || '-') + '</td><td><code>' + escapeHTML(it.namespace || '-') + '/' + escapeHTML(it.name || '-') + '</code></td><td>' + escapeHTML(it.status || '-') + '</td><td>' + escapeHTML(it.risk_level || '-') + '</td><td>' + ago(it.updated_at || it.observed_at) + '</td></tr>'
+      ).join('') || '<tr><td colspan="5" class="muted">연결된 runtime inventory 없음</td></tr>';
+      const incRows = (detail.open_incidents || []).slice(0, 8).map(inc =>
+        '<tr><td><span class="status ' + (String(inc.severity || '').toLowerCase() === 'critical' ? 'error' : 'warn') + '">' + escapeHTML(inc.severity || '-') + '</span></td><td>' + escapeHTML(inc.title || inc.condition || '-') + '</td><td><code>' + escapeHTML(inc.kind || '-') + '/' + escapeHTML(inc.name || '-') + '</code></td><td>' + ago(inc.updated_at || inc.opened_at) + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">open incident 없음</td></tr>';
+      const findingRows = (detail.security_findings || []).slice(0, 8).map(f =>
+        '<tr><td><span class="status ' + (['critical','high'].includes(String(f.severity || '').toLowerCase()) ? 'error' : 'warn') + '">' + escapeHTML(f.severity || '-') + '</span></td><td>' + escapeHTML(f.rule || '-') + '</td><td>' + escapeHTML(f.message || '-') + '</td><td>' + ago(f.last_seen || f.first_seen) + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">open security finding 없음</td></tr>';
+      const k8sActionRows = (detail.k8s_actions || []).slice(0, 8).map(a =>
+        '<tr><td><span class="status">' + escapeHTML(a.status || '-') + '</span></td><td>' + escapeHTML(a.action || '-') + '</td><td>' + escapeHTML(a.risk_level || '-') + '</td><td><a href="#/k8s-actions?cluster_id=' + encodeURIComponent(a.cluster_id || '') + '">' + escapeHTML(a.id || '-') + '</a></td><td>' + ago(a.updated_at || a.created_at) + '</td></tr>'
+      ).join('') || '<tr><td colspan="5" class="muted">관련 K8s 액션 없음</td></tr>';
+      const draftRows = (detail.self_service_actions || []).slice(0, 8).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">셀프서비스 액션 초안 없음</td></tr>';
+      const runtimeLinks = detail.runtime_valid
+        ? '<div class="toolbar" style="margin-top:10px">' +
+            k8sYamlChangeLink(rt.cluster_id, rt.kind, rt.namespace, rt.name, 'YAML 변경') +
+            '<a class="button secondary" href="#/k8s-graph?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '&namespace=' + encodeURIComponent(rt.namespace || '') + '&kind=' + encodeURIComponent(rt.kind || '') + '&name=' + encodeURIComponent(rt.name || '') + '">Graph</a>' +
+            '<a class="button secondary" href="#/problems?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">Problem Inbox</a>' +
+            '<a class="button secondary" href="#/finops?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">FinOps</a>' +
+            '<a class="button secondary" href="#/k8s-security?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">Security</a>' +
+          '</div>'
+        : '<p class="muted">runtime_ref가 유효하지 않아 runtime 상세를 연결할 수 없습니다.</p>';
+      return section('서비스 Runtime 상세 · ' + escapeHTML(e.name || e.id || '-'), '<div class="card-body">' +
+          '<div class="kpis">' +
+            kpi('Score', '<span class="status ' + scoreCls + '">' + escapeHTML(sc.maturity || '-') + '</span> ' + (score ? fmt(score) : '-')) +
+            kpi('Inventory', fmt(sum.inventory || 0)) +
+            kpi('Open Incidents', fmt(sum.open_incidents || 0)) +
+            kpi('Security Findings', fmt(sum.security_findings || 0)) +
+            kpi('K8s Actions', fmt(sum.k8s_actions || 0)) +
+            kpi('Self-service Drafts', fmt(sum.self_service_actions || 0)) +
+          '</div>' +
+          '<div class="kv" style="margin-top:12px">' +
+            row('Entity', '<code>' + escapeHTML(e.id || '-') + '</code> · ' + escapeHTML(e.kind || '-')) +
+            row('Runtime', '<code>' + escapeHTML(e.runtime_ref || '-') + '</code>') +
+            row('권고', escapeHTML((sc.recommendations || []).join(' · ') || '-')) +
+          '</div>' + runtimeLinks + '</div>') +
+        '<div class="grid2">' +
+          card('Runtime Inventory', '<div class="card-body"><table><thead><tr><th>Kind</th><th>Resource</th><th>Status</th><th>Risk</th><th>Updated</th></tr></thead><tbody>' + invRows + '</tbody></table></div>') +
+          card('Open Incidents', '<div class="card-body"><table><thead><tr><th>Sev</th><th>Title</th><th>Resource</th><th>Updated</th></tr></thead><tbody>' + incRows + '</tbody></table></div>') +
+          card('Security Findings', '<div class="card-body"><table><thead><tr><th>Sev</th><th>Rule</th><th>Message</th><th>Last Seen</th></tr></thead><tbody>' + findingRows + '</tbody></table></div>') +
+          card('K8s Actions', '<div class="card-body"><table><thead><tr><th>Status</th><th>Action</th><th>Risk</th><th>ID</th><th>Updated</th></tr></thead><tbody>' + k8sActionRows + '</tbody></table></div>') +
+        '</div>' +
+        card('셀프서비스 액션 초안', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + draftRows + '</tbody></table></div>');
     }
 
     async function renderTeamDetail(team) {
@@ -7037,7 +7846,7 @@ const adminHTML = `<!doctype html>
       const kind = (params && params.get('kind')) || '';
       const owner = (params && params.get('owner')) || '';
       view.innerHTML = section('FleetOps', '<div class="empty">불러오는 중...</div>');
-      let overview, search;
+      let overview, search, lifecycle, score, progressive;
       try {
         const qs = new URLSearchParams();
         if (query) qs.set('q', query);
@@ -7045,9 +7854,12 @@ const adminHTML = `<!doctype html>
         if (kind) qs.set('kind', kind);
         if (owner) qs.set('owner', owner);
         qs.set('limit', '300');
-        [overview, search] = await Promise.all([
+        [overview, search, lifecycle, score, progressive] = await Promise.all([
           api('/admin/fleet/overview'),
           api('/admin/fleet/search?' + qs.toString()),
+          api('/admin/fleet/lifecycle').catch(() => ({ data: { clusters: [] } })),
+          api('/admin/fleet/score').catch(() => ({ data: { clusters: [] } })),
+          api('/admin/fleet/progressive-actions').catch(() => ({ progressive_actions: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('FleetOps', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -7060,6 +7872,11 @@ const adminHTML = `<!doctype html>
         '<option value="' + escapeAttr(g.group.id) + '"' + (g.group.id === groupId ? ' selected' : '') + '>' + escapeHTML(g.group.name || g.group.id) + '</option>').join('');
       const kindOpts = ['','Deployment','StatefulSet','DaemonSet','Pod','Service','Ingress','ConfigMap','Secret','Node','PersistentVolumeClaim','Role','RoleBinding','NetworkPolicy']
         .map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k || '전체 Kind') + '</option>').join('');
+      const fleetClusterOpts = '<option value="">클러스터 선택</option>' + clusters.map(c => {
+        const cl = c.cluster || {};
+        const id = cl.id || c.cluster_id || '';
+        return '<option value="' + escapeAttr(id) + '">' + escapeHTML(cl.name || id || '-') + '</option>';
+      }).join('');
       const riskClass = (score) => score >= 70 ? 'error' : (score >= 35 ? 'warn' : '');
       const groupRows = groups.length ? groups.map(g =>
         '<tr><td><strong>' + escapeHTML((g.group && g.group.name) || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((g.group && g.group.kind) || '') + '</div></td>' +
@@ -7082,13 +7899,39 @@ const adminHTML = `<!doctype html>
       const resultRows = results.length ? results.map(r => {
         const target = (r.namespace || '-') + '/' + r.kind + '/' + r.name;
         const primary = r.kind === 'Pod' ? k8sPodLink(r.cluster_id, r.namespace, r.name, r.name) : '<strong>' + escapeHTML(r.name || '-') + '</strong>';
+        const ownerCell = r.catalog_id
+          ? '<a href="#/service-catalog?entity_id=' + encodeURIComponent(r.catalog_id) + '">' + escapeHTML(r.service_name || r.catalog_id) + '</a><div class="muted" style="font-size:11px">' + escapeHTML((r.team || '-') + ' · ' + (r.project_id || '-')) + '</div>'
+          : escapeHTML(r.team || r.owner || r.service_name || '-');
+        const catalogQS = new URLSearchParams();
+        if (r.cluster_id) catalogQS.set('cluster_id', r.cluster_id);
+        const catalogHref = '#/service-catalog' + (catalogQS.toString() ? '?' + catalogQS.toString() : '');
+        const catalogCell = r.catalog_id
+          ? '<span class="status">linked</span><div class="muted" style="font-size:11px">' + escapeHTML(r.catalog_id || '-') + '</div>'
+          : '<span class="status warn">' + escapeHTML(r.catalog_status || 'unlinked') + '</span><div style="font-size:11px"><a href="' + escapeAttr(catalogHref) + '">후보 등록</a> · <a href="' + escapeAttr(catalogHref) + '">Gap Queue</a></div>' + (r.catalog_gap_key ? '<div class="muted" style="font-size:10px">' + escapeHTML(r.catalog_gap_key) + '</div>' : '');
         return '<tr><td>' + primary + '<div class="muted" style="font-size:11px">' + escapeHTML(target) + '</div></td>' +
           '<td>' + escapeHTML(r.cluster_name || r.cluster_id || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(r.group_name || '미분류') + '</div></td>' +
           '<td>' + escapeHTML(r.status || '-') + '</td>' +
           '<td><span class="status ' + (r.risk_level === 'critical' || r.risk_level === 'high' ? 'error' : (r.risk_level === 'medium' ? 'warn' : '')) + '">' + escapeHTML(r.risk_level || '-') + '</span></td>' +
-          '<td>' + escapeHTML(r.team || r.owner || r.service_name || '-') + '</td>' +
+          '<td>' + ownerCell + '</td>' +
+          '<td>' + catalogCell + '</td>' +
           '<td>' + k8sYamlChangeLink(r.cluster_id, r.kind, r.namespace, r.name, 'YAML') + '</td></tr>';
-      }).join('') : '<tr><td colspan="6" class="muted">검색 결과 없음</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">검색 결과 없음</td></tr>';
+      const lifeRows = (((lifecycle && lifecycle.data && lifecycle.data.clusters) || lifecycle.clusters || [])).slice(0, 20).map(x => {
+        const c = x.cluster || {};
+        const statusClass = x.collection_freshness === 'stale' || x.rbac_status === 'insufficient' ? 'warn' : '';
+        return '<tr><td><strong>' + escapeHTML(c.name || c.id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(x.group_name || '미분류') + '</div></td>' +
+          '<td><span class="status ' + statusClass + '">' + escapeHTML(x.collection_freshness || '-') + '</span></td>' +
+          '<td><span class="status ' + (x.rbac_status === 'insufficient' ? 'error' : '') + '">' + escapeHTML(x.rbac_status || '-') + '</span></td>' +
+          '<td>' + escapeHTML(x.credential_status || '-') + '</td>' +
+          '<td>' + escapeHTML(x.upgrade_readiness || '-') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML((x.recommendations || []).join(', ') || '-') + '</td></tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">lifecycle 데이터 없음</td></tr>';
+      const scoreRows = (((score && score.data && score.data.clusters) || score.clusters || [])).slice(0, 20).map(x =>
+        '<tr><td><strong>' + escapeHTML(x.cluster_name || x.cluster_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(x.group_id || '미분류') + '</div></td>' +
+        '<td data-num="' + (x.score || 0) + '"><span class="status ' + ((x.score || 0) < 60 ? 'error' : ((x.score || 0) < 85 ? 'warn' : '')) + '">' + fmt(x.score || 0) + '</span></td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((x.reasons || []).join(', ') || 'ok') + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">score 데이터 없음</td></tr>';
+      const progressiveRows = (((progressive && progressive.progressive_actions) || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">progressive action 없음</td></tr>';
       view.innerHTML =
         section('FleetOps', '<div class="card-body">' +
           '<div class="kpis">' +
@@ -7107,8 +7950,17 @@ const adminHTML = `<!doctype html>
         '<div class="grid2">' +
           card('그룹 Health', '<div class="card-body"><table><thead><tr><th>그룹</th><th>클러스터</th><th>정상</th><th>위험</th><th>리소스</th><th>Unhealthy</th><th>Finding</th></tr></thead><tbody>' + groupRows + '</tbody></table></div>') +
           card('클러스터 Risk', '<div class="card-body"><table><thead><tr><th>클러스터</th><th>상태</th><th>Risk</th><th>리소스</th><th>Unhealthy</th><th>Warning 24h</th><th>사유</th></tr></thead><tbody>' + clusterRows + '</tbody></table></div>') +
+          card('Cluster Lifecycle', '<div class="card-body"><table><thead><tr><th>Cluster</th><th>Freshness</th><th>RBAC</th><th>Credential</th><th>Upgrade</th><th>권장</th></tr></thead><tbody>' + lifeRows + '</tbody></table></div>') +
+          card('Fleet Score', '<div class="card-body"><table><thead><tr><th>Cluster</th><th>Score</th><th>사유</th></tr></thead><tbody>' + scoreRows + '</tbody></table></div>') +
         '</div>' +
-        card('Global Resource Search', '<div class="card-body"><table><thead><tr><th>Resource</th><th>Cluster</th><th>Status</th><th>Risk</th><th>Owner</th><th></th></tr></thead><tbody>' + resultRows + '</tbody></table></div>');
+        card('Fleet Operations Tools', '<div class="card-body">' +
+          '<div class="grid2">' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">Cluster Compare</h3><div class="inline-form" style="grid-template-columns:1fr 1fr 80px"><select id="fleet-cmp-left">' + fleetClusterOpts + '</select><select id="fleet-cmp-right">' + fleetClusterOpts + '</select><button type="button" onclick="fleetCompare()">비교</button></div><div id="fleet-compare-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">Blast Radius</h3><div class="inline-form" style="grid-template-columns:1fr 80px"><input id="fleet-blast-q" placeholder="image, secret, config, ingress, CVE"><button type="button" onclick="fleetBlast()">분석</button></div><div id="fleet-blast-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">Action Dry-run</h3><div class="inline-form" style="grid-template-columns:1fr 120px 120px 120px 1fr 100px 80px"><select id="fleet-dry-cluster">' + fleetClusterOpts + '</select><input id="fleet-dry-action" placeholder="action"><input id="fleet-dry-ns" placeholder="namespace"><input id="fleet-dry-kind" placeholder="kind"><input id="fleet-dry-name" placeholder="name"><select id="fleet-dry-risk"><option>low</option><option>medium</option><option>high</option><option>critical</option></select><button type="button" onclick="fleetDryRun()">검증</button></div><div id="fleet-dry-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">Progressive Actions</h3><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + progressiveRows + '</tbody></table></div>' +
+          '</div></div>') +
+        card('Global Resource Search', '<div class="card-body"><table><thead><tr><th>Resource</th><th>Cluster</th><th>Status</th><th>Risk</th><th>Owner</th><th>Catalog</th><th></th></tr></thead><tbody>' + resultRows + '</tbody></table></div>');
       document.getElementById('fleet-search-form').addEventListener('submit', (e) => {
         e.preventDefault();
         const qs = new URLSearchParams();
@@ -7124,6 +7976,49 @@ const adminHTML = `<!doctype html>
       });
       makeSortable('#view', 'fleet');
     }
+    window.fleetCompare = async () => {
+      const out = document.getElementById('fleet-compare-out');
+      const left = (document.getElementById('fleet-cmp-left') || {}).value || '';
+      const right = (document.getElementById('fleet-cmp-right') || {}).value || '';
+      if (!out) return;
+      if (!left || !right) { out.innerHTML = '<span class="status warn">좌우 클러스터를 선택하세요</span>'; return; }
+      try {
+        const d = await api('/admin/fleet/compare?left_cluster_id=' + encodeURIComponent(left) + '&right_cluster_id=' + encodeURIComponent(right));
+        const rows = (((d.data && d.data.diffs) || d.diffs || [])).slice(0, 20).map(x => '<tr><td>' + escapeHTML(x.state || '-') + '</td><td>' + escapeHTML(x.key || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML((x.left_status || '-') + ' / ' + (x.right_status || '-')) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">차이 없음</td></tr>';
+        out.innerHTML = '<table><thead><tr><th>상태</th><th>리소스</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.fleetBlast = async () => {
+      const out = document.getElementById('fleet-blast-out');
+      const q = ((document.getElementById('fleet-blast-q') || {}).value || '').trim();
+      if (!out) return;
+      try {
+        const d = await api('/admin/fleet/blast-radius?' + new URLSearchParams({ image: q }).toString());
+        const rows = (((d.data && d.data.affected) || d.affected || [])).slice(0, 30).map(x =>
+          '<tr><td><span class="status ' + (x.risk_level === 'high' || x.risk_level === 'critical' ? 'error' : (x.risk_level === 'medium' ? 'warn' : '')) + '">' + escapeHTML(x.risk_level || '-') + '</span></td><td>' + escapeHTML((x.cluster_id || '-') + ' · ' + (x.namespace || '-') + '/' + (x.kind || '-') + '/' + (x.name || '-')) + '</td><td>' + escapeHTML(x.team || x.service || '-') + '</td></tr>'
+        ).join('') || '<tr><td colspan="3" class="muted">영향 리소스 없음</td></tr>';
+        out.innerHTML = '<table><thead><tr><th>위험</th><th>리소스</th><th>Owner</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.fleetDryRun = async () => {
+      const out = document.getElementById('fleet-dry-out');
+      if (!out) return;
+      const body = {
+        cluster_id: ((document.getElementById('fleet-dry-cluster') || {}).value || '').trim(),
+        action: ((document.getElementById('fleet-dry-action') || {}).value || '').trim(),
+        namespace: ((document.getElementById('fleet-dry-ns') || {}).value || '').trim(),
+        kind: ((document.getElementById('fleet-dry-kind') || {}).value || '').trim(),
+        name: ((document.getElementById('fleet-dry-name') || {}).value || '').trim(),
+        risk_level: ((document.getElementById('fleet-dry-risk') || {}).value || 'low')
+      };
+      try {
+        const d = await api('/admin/fleet/actions/dry-run', { method: 'POST', body: JSON.stringify(body) });
+        out.innerHTML = (d.allowed ? '<span class="status">allowed</span>' : '<span class="status error">blocked</span>') +
+          ' <span class="muted">evidence ' + escapeHTML(d.evidence_ref || '-') + '</span>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">blockers: ' + escapeHTML((d.blockers || []).join(', ') || '-') + '</div>' +
+          '<div class="muted" style="font-size:11px">warnings: ' + escapeHTML((d.warnings || []).join(', ') || '-') + '</div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
 
     // ---------- AIOps Problem Inbox ----------
     async function renderAIOpsProblems(params) {
@@ -7154,7 +8049,7 @@ const adminHTML = `<!doctype html>
         '<td data-num="' + (p.confidence || 0) + '">' + fmt(p.confidence || 0) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML((p.affected_resources || []).slice(0, 6).join(', ') || '-') + '</td>' +
         '<td>' + escapeHTML(p.routing_hint || '-') + '</td>' +
-        '<td><a href="#/k8s-incidents?' + (p.cluster_id ? 'cluster_id=' + encodeURIComponent(p.cluster_id) : '') + '">워룸</a></td></tr>'
+        '<td><button type="button" class="secondary" onclick="aiopsProblemDetail(\'' + escapeAttr(p.id || '') + '\')">상세</button> <a href="#/k8s-incidents?' + (p.cluster_id ? 'cluster_id=' + encodeURIComponent(p.cluster_id) : '') + '">워룸</a></td></tr>'
       ).join('') : '<tr><td colspan="7" class="muted">Problem 없음</td></tr>';
       view.innerHTML =
         section('Problem Inbox', '<div class="card-body">' +
@@ -7169,7 +8064,8 @@ const adminHTML = `<!doctype html>
             '<select id="problem-status">' + statusOpts + '</select>' +
             '<button type="button" onclick="aiopsProblemGo()">필터</button>' +
           '</div><p class="muted" style="font-size:12px;margin:8px 0 0">' + escapeHTML(data.note || '') + '</p></div>') +
-        card('Grouped Problems', '<div class="card-body"><table><thead><tr><th>심각도</th><th>Problem</th><th>Incident</th><th>Confidence</th><th>영향 리소스</th><th>라우팅</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        card('Grouped Problems', '<div class="card-body"><table><thead><tr><th>심각도</th><th>Problem</th><th>Incident</th><th>Confidence</th><th>영향 리소스</th><th>라우팅</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        card('Problem Detail', '<div class="card-body" id="problem-detail"><p class="muted" style="font-size:12px">Problem 행의 상세를 선택하면 confidence, timeline, runbook 초안, postmortem 초안을 여기서 확인합니다.</p></div>');
       makeSortable('#view', 'problems');
     }
     window.aiopsProblemGo = () => {
@@ -7179,6 +8075,64 @@ const adminHTML = `<!doctype html>
       if (c) qs.set('cluster_id', c);
       if (s) qs.set('status', s);
       location.hash = '#/problems' + (qs.toString() ? '?' + qs.toString() : '');
+    };
+    window.aiopsProblemDetail = async (id) => {
+      const out = document.getElementById('problem-detail');
+      if (!out || !id) return;
+      out.innerHTML = '<p class="muted" style="font-size:12px">상세 불러오는 중...</p>';
+      try {
+        const params = new URLSearchParams(location.hash.split('?')[1] || '');
+        const status = params.get('status') || 'open';
+        const res = await api('/admin/problems/' + encodeURIComponent(id) + '/detail?status=' + encodeURIComponent(status));
+        const d = (res && res.data) || res || {};
+        const p = d.problem || {};
+        const conf = d.confidence || {};
+        const rb = d.runbook_draft || {};
+        const graph = d.affected_graph || {};
+        const cls = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' || s === 'warning' || s === 'warn' ? 'warn' : '');
+        const tlRows = (d.timeline || []).slice(0, 40).map(ev =>
+          '<tr><td class="muted" style="font-size:11px">' + escapeHTML(ev.ts || '-') + '</td><td>' + escapeHTML(ev.type || '-') + '</td><td><span class="status ' + cls(ev.severity) + '">' + escapeHTML(ev.severity || '-') + '</span></td><td>' + escapeHTML(ev.title || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(ev.target || ev.message || ev.result || '-') + '</div></td></tr>'
+        ).join('') || '<tr><td colspan="4" class="muted">timeline 없음</td></tr>';
+        const stepRows = (rb.steps || []).map((s, idx) => '<tr><td data-num="' + (idx + 1) + '">' + fmt(idx + 1) + '</td><td>' + escapeHTML(s) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">runbook 단계 없음</td></tr>';
+        const actionRows = (rb.candidate_actions || []).map(a =>
+          '<tr><td>' + escapeHTML(a.action || '-') + '</td><td><span class="status ' + cls(a.risk) + '">' + escapeHTML(a.risk || '-') + '</span></td><td>' + (a.approval_required ? '<span class="status warn">approval</span>' : '<span class="status">none</span>') + '</td></tr>'
+        ).join('') || '<tr><td colspan="3" class="muted">후보 액션 없음</td></tr>';
+        out.innerHTML =
+          '<div class="kpis" style="margin-bottom:10px">' +
+            kpi('Confidence', fmt(conf.score || p.confidence || 0)) +
+            kpi('Evidence', fmt(conf.evidence_count || p.evidence_count || 0)) +
+            kpi('Graph Nodes', fmt(((graph.nodes || []).length))) +
+            kpi('Graph Edges', fmt(((graph.edges || []).length))) +
+          '</div>' +
+          '<div class="grid2">' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">' + escapeHTML(p.title || id) + '</h3><table><tbody><tr><th>범위</th><td>' + escapeHTML((p.cluster_id || '-') + ' / ' + (p.namespace || 'cluster')) + '</td></tr><tr><th>원인 후보</th><td>' + escapeHTML(p.condition || '-') + '</td></tr><tr><th>Confidence formula</th><td class="muted" style="font-size:11px">' + escapeHTML(conf.formula || '-') + '</td></tr><tr><th>Missing data</th><td class="muted" style="font-size:11px">' + escapeHTML((conf.missing_data || []).join(', ') || '-') + '</td></tr></tbody></table></div>' +
+            '<div><h3 style="margin:0 0 8px;font-size:14px">Runbook Draft</h3><table><thead><tr><th>#</th><th>단계</th></tr></thead><tbody>' + stepRows + '</tbody></table><div style="margin-top:8px"><table><thead><tr><th>액션</th><th>위험</th><th>승인</th></tr></thead><tbody>' + actionRows + '</tbody></table></div><div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(rb.rollback_hint || '') + '</div></div>' +
+          '</div>' +
+          '<div style="margin-top:12px"><button type="button" class="secondary" onclick="aiopsProblemPostmortem(\'' + escapeAttr(id) + '\')">Postmortem 초안</button> <a class="button secondary" href="#/k8s-incidents' + (p.cluster_id ? '?cluster_id=' + encodeURIComponent(p.cluster_id) : '') + '">Incident Workspace</a></div>' +
+          '<div id="problem-postmortem" style="margin-top:10px"></div>' +
+          '<div style="margin-top:12px"><table><thead><tr><th>시각</th><th>유형</th><th>심각도</th><th>내용</th></tr></thead><tbody>' + tlRows + '</tbody></table></div>';
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.aiopsProblemPostmortem = async (id) => {
+      const out = document.getElementById('problem-postmortem');
+      if (!out || !id) return;
+      out.innerHTML = '<p class="muted" style="font-size:12px">postmortem 초안 생성 중...</p>';
+      try {
+        const params = new URLSearchParams(location.hash.split('?')[1] || '');
+        const status = params.get('status') || 'open';
+        const res = await api('/admin/problems/' + encodeURIComponent(id) + '/postmortem?status=' + encodeURIComponent(status));
+        const pm = ((res && res.data) || res || {}).postmortem || {};
+        out.innerHTML = '<div style="white-space:pre-wrap;background:var(--panel-alt);padding:10px;border-radius:6px">' +
+          '<strong>' + escapeHTML(pm.title || 'Postmortem Draft') + '</strong>\n' +
+          'Summary: ' + escapeHTML(pm.summary || '-') + '\n' +
+          'Root cause candidate: ' + escapeHTML(pm.root_cause_candidate || '-') + '\n' +
+          'Followups: ' + escapeHTML((pm.followups || []).join(', ') || '-') +
+          '</div>';
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
     };
 
     // ---------- K8s 운영 홈: 위험 TOP5 / 장애후보 TOP10 / 최근변경 TOP10 (섹션 7) ----------
@@ -7755,6 +8709,7 @@ const adminHTML = `<!doctype html>
         const actionUI = d.action_ui || d.approval_ui;
         if (out) out.innerHTML = '<div style="white-space:pre-wrap">' + lines.map(escapeHTML).join('\n') + '</div>' +
           (actionUI ? '<button type="button" class="secondary" style="margin-top:6px" onclick="location.hash=\'' + escapeAttr(actionUI) + '\'">액션 승인함 열기</button>' : '');
+        uxInvalidateActionQueue();
       } catch (e) { if (out) out.textContent = '실패: ' + e.message; }
     };
     function renderDevRequestCard(cid) {
@@ -8119,7 +9074,7 @@ const adminHTML = `<!doctype html>
       location.hash = '#/k8s-capacity' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
     };
     window.k8sNodeDrainPreview = async (clusterId, node) => {
-      if (!clusterId || !node) { alert('cluster_id와 node가 필요합니다.'); return; }
+      if (!clusterId || !node) { showToast('warn', '노드 선택 필요', 'cluster_id와 node가 필요합니다.'); return; }
       try {
         const d = await api('/admin/k8s/node-drain?cluster_id=' + encodeURIComponent(clusterId) + '&node=' + encodeURIComponent(node));
         const im = d.impact || {};
@@ -8132,10 +9087,10 @@ const adminHTML = `<!doctype html>
           '<h3 style="margin-top:12px">판단 근거</h3><ul>' + reasons + '</ul>' +
           '<p class="muted" style="font-size:12px">Clustara는 drain 전체 실행 전 PDB와 bare Pod 위험을 먼저 보여줍니다. 실제 drain은 운영 절차에 따라 수행하고, 첫 단계인 cordon은 액션 승인함 요청으로 처리하세요.</p>',
           null, { wide: true });
-      } catch (e) { alert(e.message); }
+      } catch (e) { showToast('error', 'Drain 영향 분석 실패', e.message); }
     };
     window.k8sNodeAction = async (clusterId, node, action, btn) => {
-      if (!clusterId || !node) { alert('cluster_id와 node가 필요합니다.'); return; }
+      if (!clusterId || !node) { showToast('warn', '노드 선택 필요', 'cluster_id와 node가 필요합니다.'); return; }
       const reason = prompt(action + ' 사유를 입력하세요:', 'node maintenance') || 'node maintenance';
       if (btn) { btn.disabled = true; btn.textContent = '요청 중...'; }
       try {
@@ -8149,10 +9104,11 @@ const adminHTML = `<!doctype html>
           idempotency_key: 'node-' + action + '-' + clusterId + '-' + node + '-' + Date.now(),
         }) });
         const id = (d.action || {}).id || '';
-        alert('액션 승인함에 등록되었습니다.' + (id ? '\nAction ID: ' + id : ''));
+        showToast('ok', '액션 승인함 등록', (id ? 'Action ID: ' + id + ' · ' : '') + action + ' 요청');
+        uxInvalidateActionQueue();
         location.hash = '#/k8s-actions?cluster_id=' + encodeURIComponent(clusterId);
       } catch (e) {
-        alert(e.message);
+        showToast('error', '노드 액션 요청 실패', e.message);
         if (btn) { btn.disabled = false; btn.textContent = action === 'cordon' ? 'Cordon 요청' : 'Uncordon 요청'; }
       }
     };
@@ -8433,6 +9389,7 @@ const adminHTML = `<!doctype html>
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/debug/sessions?cluster_id=' + encodeURIComponent(clusterId || ''), { method: 'POST', body: JSON.stringify(payload) });
         const s = d.session || {}; const cls = s.status === 'blocked' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
         out.innerHTML = '<span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · image ' + escapeHTML(s.debug_image || '-') + ' · risk ' + escapeHTML(s.risk_level || '-');
+        uxInvalidateActionQueue();
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPodDebugSessions = async (clusterId, ns, pod) => {
@@ -8564,6 +9521,7 @@ const adminHTML = `<!doctype html>
         out.innerHTML = '<div><span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · risk ' + escapeHTML(s.risk_level || '-') + amBadge + ' · next ' + escapeHTML(d.next_action || '-') + '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(r.reason || s.reason || '') + '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:4px">matched policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + '</div>';
+        uxInvalidateActionQueue();
       } catch (e) {
         out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
       }
@@ -9050,6 +10008,7 @@ const adminHTML = `<!doctype html>
     // ---------- K8s 액션 승인함 (ACT-01~10 안전장치) ----------
     function k8sActionSetNotice(type, text) {
       window._k8sActionNotice = { type, text };
+      showToast(type === 'error' ? 'error' : (type === 'warn' ? 'warn' : 'ok'), type === 'error' ? '액션 처리 실패' : '액션 처리 완료', text);
     }
     function k8sActionNoticeHTML() {
       const n = window._k8sActionNotice;
@@ -9116,6 +10075,8 @@ const adminHTML = `<!doctype html>
         card('액션 요청',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">상단 바로가기 또는 장애 및 대응 &gt; 액션 승인함에서 요청을 승인·반려·실행합니다. super_admin/admin은 개발자 뷰에서 실행 가능한 요청을 즉시 실행할 수도 있습니다.</div>' +
           '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+      uxActionQueueCache = { ts: Date.now(), html: uxActionQueueHTML(flow) };
+      updateK8sActionNavBadge();
     }
     function renderK8sActionFlow(flow) {
       const lanes = (flow && flow.lanes) || [];
@@ -9169,6 +10130,7 @@ const adminHTML = `<!doctype html>
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' ' + label + ' 실패: ' + e.message);
       }
+      uxInvalidateActionQueue();
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
     window.k8sActExecute = async (id, btn) => {
@@ -9180,6 +10142,7 @@ const adminHTML = `<!doctype html>
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' 실행 실패: ' + e.message);
       }
+      uxInvalidateActionQueue();
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
     window.k8sActApproveExecute = async (id, btn) => {
@@ -9192,6 +10155,7 @@ const adminHTML = `<!doctype html>
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' 승인+실행 실패: ' + e.message);
       }
+      uxInvalidateActionQueue();
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
@@ -9200,15 +10164,22 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 보안', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, rbacDiff, imgs, cfgChanges, posture;
+      let clusters, data, rbacDiff, imgs, cfgChanges, posture, secImages, cves, signing, runtimeThreats, compliance, netGraph, secExceptions;
       try {
-        [clusters, data, rbacDiff, imgs, cfgChanges, posture] = await Promise.all([
+        [clusters, data, rbacDiff, imgs, cfgChanges, posture, secImages, cves, signing, runtimeThreats, compliance, netGraph, secExceptions] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/security' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/rbac-diff' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ entries: [] })),
           api('/admin/k8s/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ images: [] })),
           api('/admin/k8s/config-changes?limit=20' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ requests: [] })),
           api('/admin/security/posture').catch(() => ({ clusters: [] })),
+          api('/admin/security/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { ledger: { entries: [] } } })),
+          api('/admin/security/cves').catch(() => ({ data: { cves: [] } })),
+          api('/admin/security/signing' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { images: [] } })),
+          api('/admin/security/runtime-threats').catch(() => ({ data: { findings: [], imports: [] } })),
+          api('/admin/security/compliance').catch(() => ({ data: { controls: [] } })),
+          api('/admin/security/network-graph' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { nodes: [], edges: [] } })),
+          api('/admin/security/exceptions' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ exceptions: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('K8s 보안', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -9244,6 +10215,26 @@ const adminHTML = `<!doctype html>
           '<td>' + fmt(cr.impact_count || 0) + '</td><td>' + fmt(cr.restart_needed || 0) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(cr.requested_by || '-') + '</td><td>' + btns + '</td></tr>';
       }).join('') : '<tr><td colspan="6" class="muted">Config 변경 요청이 없습니다.</td></tr>';
+      const secLedger = (secImages && secImages.data && secImages.data.ledger) || secImages.ledger || {};
+      const secImageRows = (secLedger.entries || []).slice(0, 25).map(e =>
+        '<tr><td>' + (e.mutable ? '<span class="status warn">mutable</span>' : '<span class="status">pinned/observed</span>') + '</td>' +
+        '<td><strong>' + escapeHTML(e.repository || e.image || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((e.tag || '-') + ' · ' + (e.digest || '-')) + '</div></td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((e.workloads || []).slice(0, 4).join(', ') || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">이미지 원장 데이터 없음</td></tr>';
+      const cveRows = (((cves && cves.data && cves.data.cves) || cves.cves || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">CVE/SBOM import 없음</td></tr>';
+      const signingRows = (((signing && signing.data && signing.data.images) || signing.images || [])).slice(0, 18).map(im =>
+        '<tr><td><span class="status ' + (im.signature_status === 'unsigned_or_unpinned' ? 'warn' : '') + '">' + escapeHTML(im.signature_status || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(im.repository || im.image || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(im.digest || '-') + '</div></td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((im.workloads || []).slice(0, 3).join(', ') || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">서명 posture 데이터 없음</td></tr>';
+      const rtCount = (((runtimeThreats && runtimeThreats.data && runtimeThreats.data.findings) || []).length + ((runtimeThreats && runtimeThreats.data && runtimeThreats.data.imports) || []).length);
+      const complianceRows = (((compliance && compliance.data && compliance.data.controls) || compliance.controls || [])).slice(0, 12).map(c =>
+        '<tr><td><strong>' + escapeHTML(c.control || '-') + '</strong></td><td data-num="' + (c.open || 0) + '">' + fmt(c.open || 0) + '</td><td data-num="' + (c.critical || 0) + '">' + (c.critical ? '<span class="status error">' + fmt(c.critical) + '</span>' : '0') + '</td><td class="muted" style="font-size:11px">' + escapeHTML((c.evidence || []).slice(0, 4).join(', ') || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">컴플라이언스 finding 없음</td></tr>';
+      const ng = (netGraph && netGraph.data) || netGraph || {};
+      const exceptionRows = ((secExceptions && secExceptions.exceptions) || []).slice(0, 12).map(x =>
+        '<tr><td><span class="status ' + (x.status === 'pending' ? 'warn' : '') + '">' + escapeHTML(x.status || '-') + '</span></td><td>' + escapeHTML((x.namespace || '-') + '/' + (x.workload || '-')) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(x.finding || x.reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(x.expires_at || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">보안 예외 없음</td></tr>';
 
       const psRows = (r.pod_security || []).filter(p => p.level !== 'restricted').map(p =>
         '<tr><td><span class="status ' + lvlClass(p.level) + '" style="font-size:10px">' + escapeHTML(p.level) + '</span></td>' +
@@ -9271,6 +10262,13 @@ const adminHTML = `<!doctype html>
           kpi('네트워크 공백', fmt(sum.network_gaps || 0)) + '</div>') +
         card('필터', '<div class="card-body"><select id="k8ssec-cluster" onchange="k8sSecGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">' + escapeHTML(data.note || '') + '</span></div>') +
         card('Enterprise Security Posture', '<div class="card-body"><table><thead><tr><th>Cluster</th><th>Score</th><th>Critical</th><th>Privileged</th><th>Mutable Image</th><th>Network Gap</th><th>권장 조치</th></tr></thead><tbody>' + postureRows + '</tbody></table></div>') +
+        '<div class="grid2">' +
+          card('Image Ledger v2', '<div class="card-body"><table><thead><tr><th>상태</th><th>이미지</th><th>사용처</th></tr></thead><tbody>' + secImageRows + '</tbody></table></div>') +
+          card('Image Signing', '<div class="card-body"><table><thead><tr><th>서명/고정</th><th>이미지</th><th>사용처</th></tr></thead><tbody>' + signingRows + '</tbody></table></div>') +
+          card('CVE / SBOM Ledger', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + cveRows + '</tbody></table></div>') +
+          card('Compliance / Runtime', '<div class="card-body"><div class="kpis" style="margin-bottom:10px">' + kpi('Runtime Threats', fmt(rtCount)) + kpi('Network Nodes', fmt(ng.node_count || ((ng.nodes || []).length))) + kpi('Network Edges', fmt(ng.edge_count || ((ng.edges || []).length))) + '</div><table><thead><tr><th>Control</th><th>Open</th><th>Critical</th><th>Evidence</th></tr></thead><tbody>' + complianceRows + '</tbody></table></div>') +
+        '</div>' +
+        card('Admission Simulator / Exceptions', '<div class="card-body"><div class="grid2"><div><textarea id="secops-adm-yaml" rows="7" placeholder="Kubernetes YAML을 붙여넣고 정책 시뮬레이션" style="width:100%;font-family:ui-monospace,Consolas,monospace"></textarea><input type="hidden" id="secops-adm-cluster" value="' + escapeAttr(clusterId) + '"><div style="margin-top:6px"><button type="button" class="secondary" onclick="secOpsAdmissionSim()">시뮬레이션</button></div><div id="secops-adm-out" class="muted" style="font-size:12px;margin-top:8px"></div></div><div><table><thead><tr><th>상태</th><th>대상</th><th>Finding</th><th>만료</th></tr></thead><tbody>' + exceptionRows + '</tbody></table></div></div></div>') +
         card('Pod Security (restricted 미만)', '<div class="card-body"><table><thead><tr><th>등급</th><th>워크로드</th><th>위반</th></tr></thead><tbody>' + psRows + '</tbody></table></div>') +
         findTable('RBAC 위험 (SEC-02)', r.rbac) +
         findTable('이미지 태그 정책 (SEC-04)', r.images) +
@@ -9326,6 +10324,23 @@ const adminHTML = `<!doctype html>
       const cl = document.getElementById('k8ssec-cluster').value;
       location.hash = '#/k8s-security' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
     };
+    window.secOpsAdmissionSim = async () => {
+      const out = document.getElementById('secops-adm-out');
+      const manifest = ((document.getElementById('secops-adm-yaml') || {}).value || '').trim();
+      const cluster = ((document.getElementById('secops-adm-cluster') || {}).value || '').trim();
+      if (!out) return;
+      if (!manifest) { out.innerHTML = '<span class="status warn">YAML을 입력하세요</span>'; return; }
+      try {
+        const res = await api('/admin/security/admission/simulate', { method: 'POST', body: JSON.stringify({ cluster_id: cluster, manifest, mode: 'dry-run' }) });
+        const d = (res && res.data) || res || {};
+        out.innerHTML = '<span class="status ' + (d.decision === 'deny' ? 'error' : (d.decision === 'audit' ? 'warn' : '')) + '">' + escapeHTML(d.decision || '-') + '</span>' +
+          ' <span class="muted">evidence ' + escapeHTML(d.evidence_ref || '-') + '</span>' +
+          '<div class="muted" style="font-size:11px;margin-top:4px">blockers: ' + escapeHTML((d.blockers || []).join(', ') || '-') + '</div>' +
+          '<div class="muted" style="font-size:11px">warnings: ' + escapeHTML((d.warnings || []).join(', ') || '-') + '</div>';
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
     window.k8sConfigImpact = async () => {
       const out = document.getElementById('ci-out');
       const kind = document.getElementById('ci-kind').value;
@@ -9354,20 +10369,38 @@ const adminHTML = `<!doctype html>
         proposed_summary: (document.getElementById('ci-summary').value || '').trim(),
         reason: (document.getElementById('ci-reason').value || '').trim()
       };
-      if (!body.cluster_id) { out.innerHTML = '<span class="status warn">클러스터 필터를 먼저 선택하세요</span>'; return; }
-      if (!body.name) { out.innerHTML = '<span class="status warn">이름을 입력하세요</span>'; return; }
+      if (!body.cluster_id) {
+        out.innerHTML = '<span class="status warn">클러스터 필터를 먼저 선택하세요</span>';
+        showToast('warn', 'Config 변경 요청 준비 필요', '클러스터 필터를 먼저 선택하세요.');
+        return;
+      }
+      if (!body.name) {
+        out.innerHTML = '<span class="status warn">이름을 입력하세요</span>';
+        showToast('warn', 'Config 변경 요청 준비 필요', '대상 이름을 입력하세요.');
+        return;
+      }
       try {
         const res = await api('/admin/k8s/config-changes', { method: 'POST', body: JSON.stringify(body) });
         out.innerHTML = '<span class="status warn">' + escapeHTML((res.request && res.request.status) || 'created') + '</span> <span class="muted" style="font-size:11px">요청이 생성되었습니다.</span>';
+        showToast('ok', 'Config 변경 요청 생성됨', '요청 상태: ' + ((res.request && res.request.status) || 'created'));
+        uxInvalidateActionQueue();
         await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
-      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+        showToast('error', 'Config 변경 요청 실패', e.message);
+      }
     };
     window.k8sConfigChangeAction = async (id, action) => {
       let body = '{}';
+      const label = { approve: '승인', reject: '반려', apply: '적용 기록', verify: '검증' }[action] || action;
       if (action === 'reject') body = JSON.stringify({ note: prompt('반려 사유를 입력하세요(선택):') || '' });
       if (action === 'apply' && !confirm('이 변경이 외부/GitOps 경로로 적용되었음을 기록할까요?')) return;
-      try { await api('/admin/k8s/config-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body }); }
-      catch (e) { alert(e.message); }
+      try {
+        await api('/admin/k8s/config-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
+        showToast('ok', 'Config 변경 ' + label + ' 완료', id);
+        uxInvalidateActionQueue();
+      }
+      catch (e) { showToast('error', 'Config 변경 ' + label + ' 실패', e.message); }
       await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
@@ -9751,6 +10784,7 @@ const adminHTML = `<!doctype html>
       const note = prompt('승인 메모(선택):', '') || '';
       try { await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/approve', { method: 'POST', body: JSON.stringify({ note }) }); }
       catch (e) { alert(e.message); return; }
+      uxInvalidateActionQueue();
       await renderK8sExecInbox(false);
     };
     window.k8sExecReject = async (id) => {
@@ -9758,6 +10792,7 @@ const adminHTML = `<!doctype html>
       if (note === null) return;
       try { await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/reject', { method: 'POST', body: JSON.stringify({ note }) }); }
       catch (e) { alert(e.message); return; }
+      uxInvalidateActionQueue();
       await renderK8sExecInbox(false);
     };
     window.k8sExecRun = async (id) => {
@@ -9769,6 +10804,7 @@ const adminHTML = `<!doctype html>
         const r = d.result || {};
         if (out) out.innerHTML = '<div class="status ' + (d.executed ? '' : 'error') + '" style="font-size:11px">' + escapeHTML((d.session || {}).status || '-') + ' · exit ' + fmt(r.exit_code || 0) + ' · masked</div>' +
           '<pre style="white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:4px;font-size:11px">' + escapeHTML((r.stdout || '') + (r.stderr ? '\n[stderr]\n' + r.stderr : '') + (d.error ? '\n[error]\n' + d.error : '')) + '</pre>';
+        uxInvalidateActionQueue();
       } catch (e) { if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sExecShow = async (id) => {
@@ -10074,11 +11110,16 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('FinOps', '<div class="empty">불러오는 중...</div>');
-      let clusters, data;
+      let clusters, data, idle, gpu, unit, chargeback, savings;
       try {
-        [clusters, data] = await Promise.all([
+        [clusters, data, idle, gpu, unit, chargeback, savings] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/finops/overview' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/finops/idle-resources' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { resources: [] } })),
+          api('/admin/finops/gpu-costs' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { workloads: [] } })),
+          api('/admin/finops/unit-economics').catch(() => ({ data: { unit_economics: {} } })),
+          api('/admin/finops/chargeback' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { lines: [] } })),
+          api('/admin/finops/savings-workflows').catch(() => ({ data: { workflows: [] } })),
         ]);
       } catch (e) {
         view.innerHTML = section('FinOps', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -10118,6 +11159,18 @@ const adminHTML = `<!doctype html>
       const costRows = (cost.by_team || []).length ? (cost.by_team || []).slice(0, 20).map(l =>
         '<tr><td>' + escapeHTML(l.key || '-') + '</td><td data-num="' + (l.pods || 0) + '">' + fmt(l.pods || 0) + '</td><td>' + fmt(l.cpu_cores || 0) + '</td><td>' + fmt(l.mem_gb || 0) + '</td><td data-num="' + (l.monthly_krw || 0) + '">' + won(l.monthly_krw) + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">팀 비용 배분 데이터 없음</td></tr>';
+      const idleRows = (((idle && idle.data && idle.data.resources) || idle.resources || [])).slice(0, 25).map(x =>
+        '<tr><td><span class="status ' + (x.risk === 'medium' || x.risk === 'high' ? 'warn' : '') + '">' + escapeHTML(x.risk || '-') + '</span></td><td>' + escapeHTML((x.namespace || '-') + '/' + (x.kind || '-') + '/' + (x.name || '-')) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(x.reason || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">Idle 후보 없음</td></tr>';
+      const gpuData = (gpu && gpu.data) || gpu || {};
+      const gpuRows = (gpuData.workloads || []).slice(0, 20).map(x =>
+        '<tr><td>' + escapeHTML((x.namespace || '-') + '/' + (x.kind || '-') + '/' + (x.name || '-')) + '</td><td data-num="' + (x.gpu_request || 0) + '">' + fmt(x.gpu_request || 0) + '</td><td data-num="' + (x.estimated_monthly_krw || 0) + '">' + won(x.estimated_monthly_krw) + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">GPU workload 없음</td></tr>';
+      const unitData = (unit && unit.data && unit.data.unit_economics) || unit.unit_economics || {};
+      const chargeRows = (((chargeback && chargeback.data && chargeback.data.lines) || chargeback.lines || [])).slice(0, 20).map(l =>
+        '<tr><td>' + escapeHTML((l.scope || '-') + ':' + (l.scope_value || '-')) + '</td><td>' + escapeHTML(l.source || '-') + '</td><td data-num="' + (l.monthly_krw || 0) + '">' + won(l.monthly_krw) + '</td></tr>'
+      ).join('') || '<tr><td colspan="3" class="muted">chargeback 데이터 없음</td></tr>';
+      const savingRows = (((savings && savings.data && savings.data.workflows) || savings.workflows || [])).slice(0, 10).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">절감 승인 워크플로우 없음</td></tr>';
       view.innerHTML =
         section('FinOps', '<div class="card-body">' +
           '<div class="kpis">' +
@@ -10125,6 +11178,8 @@ const adminHTML = `<!doctype html>
             kpi('예산 주의', fmt(summary.budget_violations || 0)) +
             kpi('비용 이상', fmt(summary.anomalies || 0)) +
             kpi('절감 후보', won(rightsizing.total_monthly_savings_krw || 0) + ' KRW') +
+            kpi('Idle 후보', fmt(((idle && idle.data && idle.data.resources) || idle.resources || []).length)) +
+            kpi('GPU 월 추정', won(gpuData.estimated_monthly_krw || 0) + ' KRW') +
           '</div>' +
           '<div class="inline-form" style="grid-template-columns:minmax(180px,1fr) 90px auto auto;margin-top:12px">' +
             '<select id="finops-cluster">' + clusterOpts + '</select>' +
@@ -10137,7 +11192,13 @@ const adminHTML = `<!doctype html>
           card('비용 이상', '<div class="card-body"><table><thead><tr><th>심각도</th><th>대상</th><th>전일</th><th>현재</th><th>증가</th><th>증가율</th><th>사유</th></tr></thead><tbody>' + anomalyRows + '</tbody></table></div>') +
         '</div>' +
         card('Rightsizing 권장', '<div class="card-body"><table><thead><tr><th>방향</th><th>Pod</th><th>CPU usage/request/권장</th><th>Mem usage/request/권장</th><th>월 절감</th></tr></thead><tbody>' + recRows + '</tbody></table></div>') +
-        card('팀별 비용 배분', '<div class="card-body"><table><thead><tr><th>팀</th><th>Pod</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' + costRows + '</tbody></table></div>');
+        card('팀별 비용 배분', '<div class="card-body"><table><thead><tr><th>팀</th><th>Pod</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' + costRows + '</tbody></table></div>') +
+        '<div class="grid2">' +
+          card('Idle Resource', '<div class="card-body"><table><thead><tr><th>위험</th><th>리소스</th><th>사유</th></tr></thead><tbody>' + idleRows + '</tbody></table></div>') +
+          card('GPU Cost', '<div class="card-body"><table><thead><tr><th>워크로드</th><th>GPU</th><th>월 추정</th></tr></thead><tbody>' + gpuRows + '</tbody></table><div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(gpuData.pricing_note || '') + '</div></div>') +
+          card('Unit Economics', '<div class="card-body"><table><tbody><tr><th>월 비용</th><td>' + won(unitData.monthly_krw || 0) + ' KRW</td></tr><tr><th>요청당</th><td>' + won(unitData.cost_per_request_krw || 0) + ' KRW</td></tr><tr><th>사용자당</th><td>' + won(unitData.cost_per_user_krw || 0) + ' KRW</td></tr><tr><th>테넌트당</th><td>' + won(unitData.cost_per_tenant_krw || 0) + ' KRW</td></tr></tbody></table></div>') +
+          card('Chargeback / Savings Workflow', '<div class="card-body"><table><thead><tr><th>범위</th><th>Source</th><th>월 KRW</th></tr></thead><tbody>' + chargeRows + '</tbody></table><div style="margin-top:12px"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + savingRows + '</tbody></table></div></div>') +
+        '</div>';
       makeSortable('#view', 'finops');
     }
     window.finOpsGo = () => {
@@ -10232,11 +11293,18 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('GitOps Change Manager', '<div class="empty">불러오는 중...</div>');
-      let clusters, data;
+      let clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts;
       try {
-        [clusters, data] = await Promise.all([
+        [clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/gitops/overview' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/gitops/drift' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { drift: [] } })),
+          api('/admin/gitops/sources' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { sources: [], stack_sources: [] } })),
+          api('/admin/gitops/rollback-plans').catch(() => ({ data: { stack_candidates: [], plans: [] } })),
+          api('/admin/gitops/change-calendar').catch(() => ({ data: { windows: [] } })),
+          api('/admin/gitops/deployment-evidence').catch(() => ({ data: { evidence: [] } })),
+          api('/admin/gitops/pr-drafts').catch(() => ({ data: { drafts: [] } })),
+          api('/admin/gitops/progressive-rollouts').catch(() => ({ data: { rollouts: [] } })),
         ]);
       } catch (e) {
         view.innerHTML = section('GitOps Change Manager', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -10260,6 +11328,25 @@ const adminHTML = `<!doctype html>
           '<td class="muted" style="font-size:11px">' + escapeHTML((x.reasons || []).join(', ')) + '</td>' +
           '<td><a href="#/k8s-stacks' + (st.cluster_id ? '?cluster_id=' + encodeURIComponent(st.cluster_id) : '') + '">Stack</a></td></tr>';
       }).join('') : '<tr><td colspan="9" class="muted">Stack 없음. 앱 배포에서 Git metadata를 가진 Stack을 저장하면 표시됩니다.</td></tr>';
+      const driftRows = (((drift && drift.data && drift.data.drift) || drift.drift || [])).slice(0, 25).map(d =>
+        '<tr><td><span class="status ' + riskClass(d.risk_level) + '">' + escapeHTML(d.risk_level || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(d.stack || d.stack_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((d.cluster_id || '-') + ' · ' + (d.namespace || '-')) + '</div></td>' +
+        '<td>' + escapeHTML(d.classification || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML((d.reasons || []).join(', ') || '-') + '</td><td>' + escapeHTML(d.recommended_action || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="5" class="muted">drift 없음</td></tr>';
+      const srcData = (sources && sources.data) || sources || {};
+      const sourceRows = ((srcData.stack_sources || []).concat(srcData.sources || [])).slice(0, 20).map(s =>
+        '<tr><td><strong>' + escapeHTML(s.name || s.id || s.stack_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || s.scope_id || '') + '</div></td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(s.repo || (s.payload && s.payload.repo) || s.source_ref || '-') + '</td>' +
+        '<td>' + escapeHTML(s.branch || (s.payload && s.payload.branch) || '-') + '</td><td>' + escapeHTML(s.path || (s.payload && s.payload.path) || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">Git source 없음</td></tr>';
+      const rollbackData = (rollbacks && rollbacks.data) || rollbacks || {};
+      const rollbackRows = ((rollbackData.stack_candidates || []).concat(rollbackData.plans || [])).slice(0, 20).map(r =>
+        '<tr><td>' + escapeHTML(r.source || r.kind || 'plan') + '</td><td>' + escapeHTML(r.stack_id || r.scope_id || '-') + '</td><td>' + escapeHTML(r.revision_no || (r.payload && r.payload.revision_no) || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.manifest_hash || r.evidence_id || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="4" class="muted">rollback 후보 없음</td></tr>';
+      const calendarRows = (((calendar && calendar.data && calendar.data.windows) || calendar.windows || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">change window 없음</td></tr>';
+      const evidenceRows = (((evidence && evidence.data && evidence.data.evidence) || evidence.evidence || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">deployment evidence 없음</td></tr>';
+      const prRows = (((prDrafts && prDrafts.data && prDrafts.data.drafts) || prDrafts.drafts || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">PR draft 없음</td></tr>';
+      const rolloutRows = (((rollouts && rollouts.data && rollouts.data.rollouts) || rollouts.rollouts || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">progressive rollout 없음</td></tr>';
       view.innerHTML =
         section('GitOps Change Manager', '<div class="card-body">' +
           '<div class="kpis">' +
@@ -10267,6 +11354,7 @@ const adminHTML = `<!doctype html>
             kpi('Git Connected', fmt(sum.git_connected || 0)) +
             kpi('Drifted', fmt(sum.drifted || 0)) +
             kpi('Rollback Ready', fmt(sum.rollback_ready || 0)) +
+            kpi('Freeze Active', ((calendar && calendar.data && calendar.data.active_freeze) ? 'YES' : 'NO')) +
           '</div>' +
           '<div class="inline-form" style="grid-template-columns:minmax(180px,1fr) 90px auto auto;margin-top:12px">' +
             '<select id="gitops-cluster">' + clusterOpts + '</select>' +
@@ -10274,7 +11362,14 @@ const adminHTML = `<!doctype html>
             '<a class="button secondary" href="#/k8s-stacks' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">Application Stack</a>' +
             '<a class="button secondary" href="#/k8s-manifest-changes' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 변경</a>' +
           '</div><div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div></div>') +
-        card('Drift and Change Readiness', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>Git Source</th><th>Sync</th><th>Drift</th><th>Last Op</th><th>Rollback</th><th>사유</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        card('Drift and Change Readiness', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>Git Source</th><th>Sync</th><th>Drift</th><th>Last Op</th><th>Rollback</th><th>사유</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        '<div class="grid2">' +
+          card('Drift Diff', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>분류</th><th>사유</th><th>권장</th></tr></thead><tbody>' + driftRows + '</tbody></table></div>') +
+          card('Git Source Registry', '<div class="card-body"><table><thead><tr><th>대상</th><th>Repo</th><th>Branch</th><th>Path</th></tr></thead><tbody>' + sourceRows + '</tbody></table></div>') +
+          card('Rollback Plans', '<div class="card-body"><table><thead><tr><th>Source</th><th>Stack</th><th>Revision</th><th>Hash/Evidence</th></tr></thead><tbody>' + rollbackRows + '</tbody></table></div>') +
+          card('Change Calendar / Evidence', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + calendarRows + '</tbody></table><div style="margin-top:12px"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + evidenceRows + '</tbody></table></div></div>') +
+          card('PR Drafts / Progressive Rollouts', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + prRows + '</tbody></table><div style="margin-top:12px"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + rolloutRows + '</tbody></table></div></div>') +
+        '</div>';
       makeSortable('#view', 'gitops');
     }
     window.gitOpsGo = () => {
@@ -10287,15 +11382,16 @@ const adminHTML = `<!doctype html>
     async function renderGovernanceHub(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('Governance Hub', '<div class="empty">불러오는 중...</div>');
-      let report, evidence, tickets, risks, audits, cmdb;
+      let report, evidence, tickets, risks, audits, cmdb, gapExceptions;
       try {
-        [report, evidence, tickets, risks, audits, cmdb] = await Promise.all([
+        [report, evidence, tickets, risks, audits, cmdb, gapExceptions] = await Promise.all([
           api('/admin/governance/executive-report'),
           api('/admin/governance/evidence'),
           api('/admin/governance/tickets'),
           api('/admin/governance/risk-register'),
           api('/admin/governance/audit-search?limit=80'),
           api('/admin/governance/cmdb-links'),
+          api('/admin/catalog/gap-exceptions?limit=100').catch(() => ({ exceptions: [] })),
         ]);
       } catch (e) {
         view.innerHTML = section('Governance Hub', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -10306,6 +11402,7 @@ const adminHTML = `<!doctype html>
       const ticketRows = ((tickets.data && tickets.data.tickets) || tickets.tickets || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">티켓 없음.</td></tr>';
       const riskRows = ((risks.data && risks.data.risks) || risks.risks || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">등록된 위험 없음.</td></tr>';
       const cmdbRows = ((cmdb.data && cmdb.data.links) || cmdb.links || []).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">CMDB 링크 없음.</td></tr>';
+      const gapExceptionRows = (((gapExceptions.data && gapExceptions.data.exceptions) || gapExceptions.exceptions || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">Catalog gap 예외 없음.</td></tr>';
       const auditRows = ((audits.data && audits.data.events) || audits.events || []).slice(0, 30).map(ev =>
         '<tr><td>' + escapeHTML(ev.source || '-') + '</td><td>' + escapeHTML(ev.actor || '-') + '</td><td>' + escapeHTML(ev.action || '-') + '</td><td>' + escapeHTML(ev.target || '-') + '</td><td>' + escapeHTML(ev.result || ev.detail || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(ev.created_at || '-') + '</td></tr>'
       ).join('') || '<tr><td colspan="6" class="muted">감사 이벤트 없음.</td></tr>';
@@ -10318,9 +11415,13 @@ const adminHTML = `<!doctype html>
             kpi('Monthly Cost', fmt(Math.round(sum.monthly_k8s_cost_krw || 0)) + ' KRW') +
             kpi('Tickets', fmt(sum.open_tickets || 0)) +
             kpi('Accepted Risks', fmt(sum.accepted_risks || 0)) +
+            kpi('Catalog Exceptions', fmt(sum.catalog_gap_exceptions || 0)) +
+            kpi('Expiring', fmt(sum.expiring_catalog_gap_exceptions || 0)) +
+            kpi('Governance Debt', fmt(sum.governance_debt || 0)) +
           '</div>' +
           '<div class="toolbar" style="margin-top:12px">' +
             '<a class="button secondary" href="#/enterprise">조직·권한</a>' +
+            '<a class="button secondary" href="#/service-catalog">서비스 카탈로그</a>' +
             '<a class="button secondary" href="#/k8s-actions">액션 승인함</a>' +
             '<a class="button secondary" href="#/problems">Problem Inbox</a>' +
             '<a class="button secondary" href="#/finops">FinOps</a>' +
@@ -10330,6 +11431,7 @@ const adminHTML = `<!doctype html>
           card('Evidence Chain', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + evidenceRows + '</tbody></table></div>') +
           card('ITSM Tickets', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + ticketRows + '</tbody></table></div>') +
           card('Risk Register', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + riskRows + '</tbody></table></div>') +
+          card('Catalog Gap Exceptions', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + gapExceptionRows + '</tbody></table></div>') +
           card('CMDB Links', '<div class="card-body"><table><thead><tr><th>상태</th><th>이름</th><th>범위</th><th>Evidence</th><th>갱신</th></tr></thead><tbody>' + cmdbRows + '</tbody></table></div>') +
         '</div>' +
         card('Audit Search', '<div class="card-body"><table><thead><tr><th>Source</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Time</th></tr></thead><tbody>' + auditRows + '</tbody></table></div>');
@@ -11000,22 +12102,35 @@ const adminHTML = `<!doctype html>
       const body = k8sManifestFormTarget();
       body.after_yaml = (document.getElementById('mchg-yaml').value || '').trim();
       body.reason = (document.getElementById('mchg-reason').value || '').trim();
-      if (!body.cluster_id || !body.kind || !body.name || !body.after_yaml) { out.innerHTML = '<span class="status warn">대상과 YAML이 필요합니다</span>'; return; }
+      if (!body.cluster_id || !body.kind || !body.name || !body.after_yaml) {
+        out.innerHTML = '<span class="status warn">대상과 YAML이 필요합니다</span>';
+        showToast('warn', 'YAML 변경 요청 불가', '클러스터, Kind, 이름, YAML 본문을 입력하세요.');
+        return;
+      }
       out.innerHTML = '<span class="muted">변경 요청 생성 중...</span>';
       try {
         const d = await api('/admin/k8s/manifest-changes', { method: 'POST', body: JSON.stringify(body) });
         out.innerHTML = '<span class="status">요청 생성됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((d.request || {}).id || '') + ' · 검증을 실행하세요.</span>';
+        showToast('ok', 'YAML 변경 요청 생성', ((d.request || {}).id || '') + ' · ' + body.kind + '/' + body.name);
+        uxInvalidateActionQueue();
         await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
-      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+        showToast('error', 'YAML 변경 요청 실패', e.message);
+      }
     };
     window.k8sManifestChangeAction = async (id, action) => {
       let body = '{}';
+      const label = ({ validate: '검증', approve: '승인', reject: '반려', apply: '적용', verify: '검증확인', rollback: '롤백요청' })[action] || action;
       if (action === 'reject') body = JSON.stringify({ note: prompt('반려 사유를 입력하세요(선택):') || '' });
       if (action === 'approve') body = JSON.stringify({ note: prompt('승인 의견을 입력하세요(선택):') || 'approved' });
       if (action === 'apply' && !confirm('이 YAML 변경을 실제 클러스터에 Server-Side Apply로 적용할까요?')) return;
       if (action === 'rollback' && !confirm('이 변경의 이전 YAML로 롤백 요청을 생성할까요?')) return;
       try {
-        await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
+        const resp = await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
+        const nextID = ((resp || {}).request || {}).id || id;
+        showToast('ok', 'YAML 변경 ' + label + ' 완료', nextID);
+        uxInvalidateActionQueue();
       } catch (e) {
         if (action === 'apply') {
           try {
@@ -11026,13 +12141,15 @@ const adminHTML = `<!doctype html>
               if (ok) {
                 const note = prompt('force 적용 사유를 입력하세요:') || 'force drift override';
                 await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id) + '/apply', { method: 'POST', body: JSON.stringify({ force_drift: true, note }) });
+                showToast('ok', 'YAML 변경 강제 적용 완료', id);
+                uxInvalidateActionQueue();
                 await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
                 return;
               }
             }
           } catch (_) {}
         }
-        alert(e.message);
+        showToast('error', 'YAML 변경 ' + label + ' 실패', e.message);
       }
       await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
