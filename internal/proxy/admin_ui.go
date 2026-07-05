@@ -1159,11 +1159,11 @@ const adminHTML = `<!doctype html>
     }
     function uxFlowMoveLabel(label) {
       const v = String(label || '').trim();
-      if (!v) return '처리 화면으로 이동';
-      if (v === '완료') return '완료 내역 열기';
-      if (v === '확인' || v === '검증확인') return '확인 화면으로 이동';
-      if (v === '열기') return '처리 화면으로 이동';
-      return v + ' 화면으로 이동';
+      if (!v) return '처리';
+      if (v === '완료') return '완료';
+      if (v === '확인' || v === '검증확인') return '확인';
+      if (v === '열기') return '처리';
+      return v;
     }
     function uxFlowItemHref(it) {
       const kind = String((it && it.kind) || '');
@@ -10199,7 +10199,7 @@ const adminHTML = `<!doctype html>
             '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
             '<div class="action-flow-foot">' +
             '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
-            '<span style="display:flex;align-items:center;gap:6px"><button type="button" class="action-flow-copy" onclick="' + escapeAttr(copyOnclick) + '">대상 복사</button>' +
+            '<span style="display:flex;align-items:center;gap:6px"><button type="button" class="action-flow-copy" onclick="' + escapeAttr(copyOnclick) + '" title="대상 복사" style="display:inline-flex;align-items:center;justify-content:center;padding:4px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>' +
             '<a class="action-flow-cta" href="' + escapeAttr(uxFlowItemHref(it)) + '" title="이 링크는 승인/실행을 완료하지 않고 해당 처리 화면의 대상 요청으로만 이동합니다. 이동 후 실제 승인·실행 버튼을 확인하세요.">' + escapeHTML(moveLabel) + ' →</a></span>' +
             '</div></div>';
         }).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
