@@ -195,7 +195,18 @@ const adminHTML = `<!doctype html>
     .action-flow-meta, .action-flow-detail { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .action-flow-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 8px; }
     .action-flow-cta { text-decoration: none; font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+    .action-flow-copy {
+      border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 6px;
+      background: var(--panel); color: var(--muted); font-size: 10px; cursor: pointer;
+    }
+    .action-flow-copy:hover { border-color: var(--accent); color: var(--accent); }
     .action-flow-empty { color: var(--muted); font-size: 11px; padding: 10px; }
+    .route-focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      background: rgba(110,168,254,0.12) !important;
+      box-shadow: 0 0 0 4px rgba(110,168,254,0.12);
+    }
     .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
     .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
     .inline-form { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
@@ -430,6 +441,10 @@ const adminHTML = `<!doctype html>
     .quick-access-work-meta {
       margin-top: 4px; color: var(--muted); font-size: 11px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .quick-access-work-next {
+      margin-top: 6px; display: inline-flex; align-items: center; gap: 4px;
+      color: var(--accent); font-size: 11px; font-weight: 800;
     }
     .quick-access-side { display: flex; flex-direction: column; gap: 10px; }
     .quick-access-side h4 { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
@@ -1142,6 +1157,75 @@ const adminHTML = `<!doctype html>
         '<span><strong>' + escapeHTML(item.label || item.href) + '</strong><br><small>' + escapeHTML(item.group || '') + '</small></span>' +
         '<small>' + escapeHTML(item.href || '') + '</small></a>';
     }
+    function uxFlowMoveLabel(label) {
+      const v = String(label || '').trim();
+      if (!v) return '처리 화면으로 이동';
+      if (v === '완료') return '완료 내역 열기';
+      if (v === '확인' || v === '검증확인') return '확인 화면으로 이동';
+      if (v === '열기') return '처리 화면으로 이동';
+      return v + ' 화면으로 이동';
+    }
+    function uxFlowItemHref(it) {
+      const kind = String((it && it.kind) || '');
+      const clusterId = String((it && it.cluster_id) || '');
+      const focusId = String((it && it.id) || '');
+      return uxFlowFocusHref(kind, focusId, clusterId);
+    }
+    function uxFlowFocusHref(kind, focusId, clusterId) {
+      kind = String(kind || '');
+      focusId = String(focusId || '');
+      clusterId = String(clusterId || '');
+      const tabByKind = {
+        action: 'k8s-actions',
+        config_change: 'k8s-security',
+        manifest_change: 'k8s-manifest-changes',
+        exec_session: 'k8s-settings',
+        debug_session: 'k8s-settings'
+      };
+      const tab = tabByKind[kind] || 'k8s-actions';
+      const q = new URLSearchParams();
+      if (clusterId) q.set('cluster_id', clusterId);
+      if (focusId) q.set('focus_id', focusId);
+      if (kind) q.set('focus_kind', kind);
+      return '#/' + tab + (q.toString() ? '?' + q.toString() : '');
+    }
+    function uxFocusElement(domId, label) {
+      const el = document.getElementById(domId);
+      if (!el) return false;
+      el.classList.add('route-focus');
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (label) showToast('ok', '요청 위치로 이동', label, 3000);
+      window.setTimeout(() => el.classList.remove('route-focus'), 7000);
+      return true;
+    }
+    function uxCopyText(text, title) {
+      const value = String(text || '');
+      if (!value) {
+        showToast('warn', title || '복사할 값 없음', '');
+        return;
+      }
+      const done = () => showToast('ok', title || '복사됨', value);
+      const fail = (e) => showToast('error', (title || '복사') + ' 실패', e.message || String(e));
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(value).then(done).catch(fail);
+          return;
+        }
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (e) {
+        fail(e);
+      }
+    }
+    window.uxCopyText = uxCopyText;
     function uxActionQueueHTML(flow) {
       const lanes = ((flow && flow.lanes) || []).filter(l => ['attention', 'approval', 'ready', 'verify'].includes(l.id));
       const items = [];
@@ -1151,7 +1235,8 @@ const adminHTML = `<!doctype html>
           title: it.title || it.kind || '작업',
           target: it.target || '-',
           status: it.status || '-',
-          href: it.href || '#/k8s-actions'
+          primary_label: it.primary_label || '',
+          href: uxFlowItemHref(it)
         }));
       });
       if (!items.length) return '<div class="empty" style="padding:10px">처리 대기 없음</div>';
@@ -1160,6 +1245,7 @@ const adminHTML = `<!doctype html>
           '<strong>' + escapeHTML(it.title) + '</strong>' +
           '<div class="quick-access-work-meta">' + escapeHTML(it.lane + ' · ' + it.status) + '</div>' +
           '<div class="quick-access-work-meta">' + escapeHTML(it.target) + '</div>' +
+          '<div class="quick-access-work-next">' + escapeHTML(uxFlowMoveLabel(it.primary_label || '열기')) + '</div>' +
         '</a>'
       ).join('');
     }
@@ -8706,9 +8792,9 @@ const adminHTML = `<!doctype html>
         if (d.execution && d.execution.status) lines.push('실행 결과: ' + d.execution.status + (d.execution.error ? ' · ' + d.execution.error : (d.execution.result ? ' · ' + d.execution.result : '')));
         if (d.submit_to) lines.push('제출 대상: ' + d.submit_to);
         if (d.logs_endpoint) lines.push('로그: ' + d.logs_endpoint);
-        const actionUI = d.action_ui || d.approval_ui;
+        const actionUI = d.action_id ? uxFlowFocusHref('action', d.action_id, cid) : (d.action_ui || d.approval_ui);
         if (out) out.innerHTML = '<div style="white-space:pre-wrap">' + lines.map(escapeHTML).join('\n') + '</div>' +
-          (actionUI ? '<button type="button" class="secondary" style="margin-top:6px" onclick="location.hash=\'' + escapeAttr(actionUI) + '\'">액션 승인함 열기</button>' : '');
+          (actionUI ? '<button type="button" class="secondary" style="margin-top:6px" onclick="location.hash=\'' + escapeAttr(actionUI) + '\'">대상 요청 열기</button>' : '');
         uxInvalidateActionQueue();
       } catch (e) { if (out) out.textContent = '실패: ' + e.message; }
     };
@@ -9106,7 +9192,7 @@ const adminHTML = `<!doctype html>
         const id = (d.action || {}).id || '';
         showToast('ok', '액션 승인함 등록', (id ? 'Action ID: ' + id + ' · ' : '') + action + ' 요청');
         uxInvalidateActionQueue();
-        location.hash = '#/k8s-actions?cluster_id=' + encodeURIComponent(clusterId);
+        location.hash = id ? uxFlowFocusHref('action', id, clusterId) : '#/k8s-actions?cluster_id=' + encodeURIComponent(clusterId);
       } catch (e) {
         showToast('error', '노드 액션 요청 실패', e.message);
         if (btn) { btn.disabled = false; btn.textContent = action === 'cordon' ? 'Cordon 요청' : 'Uncordon 요청'; }
@@ -9388,7 +9474,9 @@ const adminHTML = `<!doctype html>
       try {
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/debug/sessions?cluster_id=' + encodeURIComponent(clusterId || ''), { method: 'POST', body: JSON.stringify(payload) });
         const s = d.session || {}; const cls = s.status === 'blocked' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
-        out.innerHTML = '<span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · image ' + escapeHTML(s.debug_image || '-') + ' · risk ' + escapeHTML(s.risk_level || '-');
+        const focusHref = s.id ? uxFlowFocusHref('debug_session', s.id, clusterId || '') : '';
+        out.innerHTML = '<span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · image ' + escapeHTML(s.debug_image || '-') + ' · risk ' + escapeHTML(s.risk_level || '-') +
+          (focusHref ? '<div style="margin-top:6px"><a class="secondary" href="' + escapeAttr(focusHref) + '">Debug 승인함에서 열기</a></div>' : '');
         uxInvalidateActionQueue();
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
@@ -9518,9 +9606,11 @@ const adminHTML = `<!doctype html>
         const s = d.session || {}; const r = d.policy_result || {};
         const cls = s.status === 'denied' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
         const amBadge = r.access_mode ? ' · <span class="status ' + (r.access_mode === 'full_tty' ? 'error' : (r.access_mode === 'guided' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(r.access_mode) + '</span>' : '';
+        const focusHref = s.id ? uxFlowFocusHref('exec_session', s.id, clusterId || '') : '';
         out.innerHTML = '<div><span class="status ' + cls + '">' + escapeHTML(s.status || '-') + '</span> <strong>' + escapeHTML(s.id || '-') + '</strong> · risk ' + escapeHTML(s.risk_level || '-') + amBadge + ' · next ' + escapeHTML(d.next_action || '-') + '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(r.reason || s.reason || '') + '</div>' +
-          '<div class="muted" style="font-size:11px;margin-top:4px">matched policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + '</div>';
+          '<div class="muted" style="font-size:11px;margin-top:4px">matched policies: ' + escapeHTML((r.matched_policies || []).join(', ') || '-') + '</div>' +
+          (focusHref ? '<div style="margin-top:6px"><a class="secondary" href="' + escapeAttr(focusHref) + '">Exec 승인함에서 열기</a></div>' : '');
         uxInvalidateActionQueue();
       } catch (e) {
         out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
@@ -10026,6 +10116,7 @@ const adminHTML = `<!doctype html>
     async function renderK8sActions(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
+      const focusId = (params && params.get('focus_id')) || '';
       view.innerHTML = section('K8s 액션 승인함', '<div class="empty">불러오는 중...</div>');
       let clusters, data, flow;
       try {
@@ -10054,7 +10145,7 @@ const adminHTML = `<!doctype html>
           : (a.status === 'approved'
             ? '<button type="button" onclick="k8sActExecute(\'' + escapeAttr(a.id) + '\',this)">실행</button>'
             : '<span class="muted" style="font-size:11px">' + escapeHTML(a.approved_by || a.executed_by || '-') + '</span>');
-        return '<tr><td>' + escapeHTML(a.action) + '</td>' +
+        return '<tr id="' + escapeAttr('k8s-action-row-' + a.id) + '"><td>' + escapeHTML(a.action) + '</td>' +
           '<td>' + escapeHTML((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.resource_kind, a.namespace, a.resource_name, 'YAML') + '</div></td>' +
           '<td><span class="status ' + riskClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td>' +
           '<td><span class="status ' + (a.status === 'approved' ? '' : (a.status === 'rejected' ? 'error' : 'warn')) + '" style="font-size:10px">' + escapeHTML(a.status) + '</span></td>' +
@@ -10077,6 +10168,13 @@ const adminHTML = `<!doctype html>
           '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
       uxActionQueueCache = { ts: Date.now(), html: uxActionQueueHTML(flow) };
       updateK8sActionNavBadge();
+      if (focusId) {
+        window.setTimeout(() => {
+          if (!uxFocusElement('k8s-action-row-' + focusId, 'Action ID: ' + focusId)) {
+            showToast('warn', '대상 액션을 찾지 못함', focusId);
+          }
+        }, 80);
+      }
     }
     function renderK8sActionFlow(flow) {
       const lanes = (flow && flow.lanes) || [];
@@ -10089,18 +10187,22 @@ const adminHTML = `<!doctype html>
       }
       const html = lanes.map(lane => {
         const items = (lane.items || []).slice(0, 5);
-        const rows = items.map(it =>
-          '<div class="action-flow-item">' +
-          '<div class="action-flow-item-title">' +
-          '<strong>' + escapeHTML(it.title || it.kind || '') + '</strong>' +
-          '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
-          '<div class="action-flow-meta">' + escapeHTML(it.target || '-') + (k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') ? ' · ' + k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') : '') + '</div>' +
-          '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
-          '<div class="action-flow-foot">' +
-          '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
-          '<a class="action-flow-cta" href="' + escapeAttr(it.href || '#/k8s-actions') + '" title="이 링크는 승인 실행이 아니라 처리 화면으로 이동합니다.">' + escapeHTML(it.primary_label ? '처리 화면' : '열기') + ' →</a>' +
-          '</div></div>'
-        ).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
+        const rows = items.map(it => {
+          const moveLabel = uxFlowMoveLabel(it.primary_label || '');
+          const copyValue = [it.id || '', it.target || ''].filter(Boolean).join(' · ');
+          const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('작업 대상 복사됨') + ');return false';
+          return '<div class="action-flow-item">' +
+            '<div class="action-flow-item-title">' +
+            '<strong>' + escapeHTML(it.title || it.kind || '') + '</strong>' +
+            '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
+            '<div class="action-flow-meta">' + escapeHTML(it.target || '-') + (k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') ? ' · ' + k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') : '') + '</div>' +
+            '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
+            '<div class="action-flow-foot">' +
+            '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
+            '<span style="display:flex;align-items:center;gap:6px"><button type="button" class="action-flow-copy" onclick="' + escapeAttr(copyOnclick) + '">대상 복사</button>' +
+            '<a class="action-flow-cta" href="' + escapeAttr(uxFlowItemHref(it)) + '" title="이 링크는 승인/실행을 완료하지 않고 해당 처리 화면의 대상 요청으로만 이동합니다. 이동 후 실제 승인·실행 버튼을 확인하세요.">' + escapeHTML(moveLabel) + ' →</a></span>' +
+            '</div></div>';
+        }).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
         const more = (lane.count || 0) > items.length ? '<div class="muted" style="font-size:10px;margin-top:6px">외 ' + fmt((lane.count || 0) - items.length) + '건</div>' : '';
         return '<div class="action-flow-lane ' + escapeAttr(lane.id || '') + '">' +
           '<div class="action-flow-lane-head"><div class="action-flow-lane-title"><span>' + escapeHTML(lane.label || lane.id) + '</span><span class="status ' + laneTone(lane.id) + '" style="font-size:10px">' + fmt(lane.count || 0) + '</span></div>' +
@@ -10163,6 +10265,7 @@ const adminHTML = `<!doctype html>
     async function renderK8sSecurity(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
+      const focusId = (params && params.get('focus_id')) || '';
       view.innerHTML = section('K8s 보안', '<div class="empty">불러오는 중...</div>');
       let clusters, data, rbacDiff, imgs, cfgChanges, posture, secImages, cves, signing, runtimeThreats, compliance, netGraph, secExceptions;
       try {
@@ -10171,7 +10274,7 @@ const adminHTML = `<!doctype html>
           api('/admin/k8s/security' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/rbac-diff' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ entries: [] })),
           api('/admin/k8s/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ images: [] })),
-          api('/admin/k8s/config-changes?limit=20' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ requests: [] })),
+          api('/admin/k8s/config-changes?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ requests: [] })),
           api('/admin/security/posture').catch(() => ({ clusters: [] })),
           api('/admin/security/images' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { ledger: { entries: [] } } })),
           api('/admin/security/cves').catch(() => ({ data: { cves: [] } })),
@@ -10210,7 +10313,7 @@ const adminHTML = `<!doctype html>
           : (approved
             ? '<button type="button" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'apply\')">적용 기록</button>'
             : (applied ? '<button type="button" class="secondary" onclick="k8sConfigChangeAction(\'' + escapeAttr(cr.id) + '\',\'verify\')">검증</button>' : '<span class="muted" style="font-size:11px">' + escapeHTML(cr.verified_by || cr.applied_by || cr.approved_by || '-') + '</span>'));
-        return '<tr><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
+        return '<tr id="' + escapeAttr('cfgchg-row-' + cr.id) + '"><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
           '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.source_kind + '/' + cr.source_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(cr.cluster_id, cr.source_kind, cr.namespace, cr.source_name, 'YAML') + '</div><div class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.proposed_summary || '') + '</div></td>' +
           '<td>' + fmt(cr.impact_count || 0) + '</td><td>' + fmt(cr.restart_needed || 0) + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(cr.requested_by || '-') + '</td><td>' + btns + '</td></tr>';
@@ -10319,6 +10422,13 @@ const adminHTML = `<!doctype html>
             '<td>' + fmt(c.days_left) + '일</td></tr>').join('');
           return card('TLS 인증서 만료 (SEC-07)', '<div class="card-body"><table><thead><tr><th>심각도</th><th>Secret</th><th>CN</th><th>SAN</th><th>남은 일수</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })();
+      if (focusId) {
+        setTimeout(() => {
+          if (!uxFocusElement('cfgchg-row-' + focusId, 'Config Change ID: ' + focusId)) {
+            showToast('warn', '대상 Config 변경 요청을 찾지 못함', focusId);
+          }
+        }, 80);
+      }
     }
     window.k8sSecGo = () => {
       const cl = document.getElementById('k8ssec-cluster').value;
@@ -10384,7 +10494,9 @@ const adminHTML = `<!doctype html>
         out.innerHTML = '<span class="status warn">' + escapeHTML((res.request && res.request.status) || 'created') + '</span> <span class="muted" style="font-size:11px">요청이 생성되었습니다.</span>';
         showToast('ok', 'Config 변경 요청 생성됨', '요청 상태: ' + ((res.request && res.request.status) || 'created'));
         uxInvalidateActionQueue();
-        await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
+        const id = (res.request && res.request.id) || '';
+        if (id) location.hash = uxFlowFocusHref('config_change', id, body.cluster_id);
+        else await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) {
         out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
         showToast('error', 'Config 변경 요청 실패', e.message);
@@ -10405,18 +10517,22 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
-    async function renderK8sSettings() {
+    async function renderK8sSettings(params) {
       const view = document.getElementById('view');
+      const clusterId = (params && params.get && params.get('cluster_id')) || '';
+      const focusId = (params && params.get && params.get('focus_id')) || '';
+      const focusKind = (params && params.get && params.get('focus_kind')) || '';
       view.innerHTML = section('K8s 운영 설정', '<div class="empty">불러오는 중...</div>');
-      let cost, noti, lat, mm, term, execs, roles;
+      let cost, noti, lat, mm, term, execs, debugSessions, roles;
       try {
-        [cost, noti, lat, mm, term, execs, roles] = await Promise.all([
+        [cost, noti, lat, mm, term, execs, debugSessions, roles] = await Promise.all([
           api('/admin/k8s/cost/config'),
           api('/admin/k8s/notify/config'),
           api('/admin/k8s/latency/config').catch(() => ({})),
           api('/admin/notifications/mattermost').catch(() => ({})),
           api('/admin/k8s/terminal-policies').catch(() => ({ policies: [], command_presets: {}, default_denylist: [] })),
-          api('/admin/k8s/exec/sessions?limit=50').catch(() => ({ sessions: [] })),
+          api('/admin/k8s/exec/sessions?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ sessions: [] })),
+          api('/admin/k8s/debug/sessions?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ sessions: [] })),
           api('/admin/roles').catch(() => ({ roles: [] })),
         ]);
       } catch (e) { view.innerHTML = section('K8s 운영 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
@@ -10425,6 +10541,7 @@ const adminHTML = `<!doctype html>
       mm = mm || {};
       term = term || { policies: [], command_presets: {}, default_denylist: [] };
       execs = execs || { sessions: [] };
+      debugSessions = debugSessions || { sessions: [] };
       const roleOpts = '<option value="*">전체 역할</option>' + (roles.roles || []).map(r => '<option value="' + escapeAttr(r.role || '') + '">' + escapeHTML(r.role || '') + '</option>').join('');
       const presetReadOnly = (((term.command_presets || {}).read_only || []).join('\n') || 'ls\npwd\ncat\nhead\ntail\ngrep\nenv\nps\ndf\ndate\nid\nwhoami');
       const defaultDeny = ((term.default_denylist || []).join('\n') || 'rm -rf\nmkfs\ndd if=\nshutdown\nreboot\nkubectl delete\ncurl * | sh');
@@ -10443,11 +10560,22 @@ const adminHTML = `<!doctype html>
           : (s.status === 'ready'
             ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionExport(\'' + escapeAttr(s.id || '') + '\')">리포트</button> <button type="button" style="font-size:11px" onclick="k8sExecSessionExecute(\'' + escapeAttr(s.id || '') + '\')">실행</button>'
             : '<button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sExecSessionExport(\'' + escapeAttr(s.id || '') + '\')">리포트</button> <span class="muted" style="font-size:11px">' + escapeHTML(s.executed_by || s.decided_by || s.requested_by || '-') + '</span>');
-        return '<tr><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span><div class="muted" style="font-size:10px">' + escapeHTML(s.risk_level || '-') + '</div></td>' +
+        return '<tr id="' + escapeAttr('exec-session-row-' + (s.id || '')) + '"><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span><div class="muted" style="font-size:10px">' + escapeHTML(s.risk_level || '-') + '</div></td>' +
           '<td><strong>' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || '') + '</div></td>' +
           '<td>' + escapeHTML(s.container || '-') + '</td><td>' + escapeHTML(s.role || '-') + '</td><td style="word-break:break-all">' + escapeHTML(s.command || '-') + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(s.requested_by || '-') + '<div>' + ago(s.created_at) + '</div></td><td>' + actions + '</td></tr>';
       }).join('') : '<tr><td colspan="7" class="muted">최근 exec 세션 요청이 없습니다.</td></tr>';
+      const debugRows = (debugSessions.sessions || []).length ? (debugSessions.sessions || []).map(s => {
+        const cls = s.status === 'blocked' || s.status === 'rejected' || s.status === 'failed' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '');
+        const pending = s.status === 'pending_approval';
+        const actions = pending
+          ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sDebugSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sDebugSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'approve\')">승인</button> <button type="button" class="danger" style="font-size:11px" onclick="k8sDebugSessionDecide(\'' + escapeAttr(s.id || '') + '\',\'reject\')">반려</button>'
+          : '<button type="button" class="secondary" style="font-size:11px" onclick="k8sDebugSessionDetail(\'' + escapeAttr(s.id || '') + '\')">상세</button> <span class="muted" style="font-size:11px">' + escapeHTML(s.approved_by || s.requested_by || '-') + '</span>';
+        return '<tr id="' + escapeAttr('debug-session-row-' + (s.id || '')) + '"><td><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span><div class="muted" style="font-size:10px">' + escapeHTML(s.risk_level || '-') + '</div></td>' +
+          '<td><strong>' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || '') + '</div></td>' +
+          '<td>' + escapeHTML(s.target_container || '-') + '</td><td>' + escapeHTML(s.debug_image || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(s.template || s.reason || '-') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(s.requested_by || '-') + '<div>' + ago(s.created_at) + '</div></td><td>' + actions + '</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">최근 debug 세션 요청이 없습니다.</td></tr>';
       view.innerHTML =
         section('K8s 운영 설정', '<div class="muted" style="font-size:12px;padding:0 4px">비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.</div>') +
         card('비용 단가',
@@ -10485,6 +10613,9 @@ const adminHTML = `<!doctype html>
         card('Exec 세션 승인함',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 상세의 터미널 요청은 여기서 승인 또는 반려합니다. 승인된 세션은 <code>ready</code> 상태가 되며, 단일 제한 명령 실행 후 <code>completed</code> 또는 <code>failed</code>로 닫힙니다.</div>' +
           '<table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Role</th><th>Command</th><th>요청자</th><th></th></tr></thead><tbody>' + execRows + '</tbody></table><div id="exec-session-detail" style="margin-top:10px"></div></div>') +
+        card('Debug Container 승인함',
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Ephemeral debug container 요청은 여기서 승인 또는 반려합니다. 승인 후에는 <code>ready</code> 상태가 되며, 실제 주입은 허용 이미지·manifest preview를 확인한 뒤 별도 운영 절차로 진행합니다.</div>' +
+          '<table><thead><tr><th>상태</th><th>Pod</th><th>Target</th><th>Debug Image</th><th>사유/템플릿</th><th>요청자</th><th></th></tr></thead><tbody>' + debugRows + '</tbody></table><div id="debug-session-detail" style="margin-top:10px"></div></div>') +
         card('터미널 정책 추가',
           '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
           '<input id="tp-name" placeholder="정책 이름" value="운영 읽기 전용">' +
@@ -10504,6 +10635,15 @@ const adminHTML = `<!doctype html>
           '<input id="tpe-labels" placeholder=\'labels JSON 예: {"app":"api"}\' style="grid-column:span 2" value=\'{"app":"api"}\'><input id="tpe-command" placeholder="명령" value="ls /app" style="grid-column:span 2"></div>' +
           '<button type="button" onclick="k8sTerminalPolicyEvaluate()">평가</button><div id="tp-eval-out" style="margin-top:8px"></div></div>') +
         '<div id="set-msg" class="muted" style="font-size:12px;padding:4px"></div>';
+      if (focusId) {
+        setTimeout(() => {
+          const domId = focusKind === 'debug_session' ? 'debug-session-row-' + focusId : 'exec-session-row-' + focusId;
+          const label = (focusKind === 'debug_session' ? 'Debug Session ID: ' : 'Exec Session ID: ') + focusId;
+          if (!uxFocusElement(domId, label)) {
+            showToast('warn', '대상 세션을 찾지 못함', focusId);
+          }
+        }, 80);
+      }
     }
     function terminalPolicyLines(id) {
       return (document.getElementById(id).value || '').split(/\n|,/).map(s => s.trim()).filter(Boolean);
@@ -10537,12 +10677,15 @@ const adminHTML = `<!doctype html>
       const label = action === 'approve' ? '승인' : '반려';
       const note = prompt('exec 세션 ' + label + ' 메모(선택):', '') || '';
       await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({ note }) });
-      await renderK8sSettings();
+      showToast('ok', 'Exec 세션 ' + label + ' 완료', id);
+      uxInvalidateActionQueue();
+      await renderK8sSettings(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
     window.k8sExecSessionExecute = async (id) => {
       if (!confirm('이 ready exec 세션의 단일 명령을 실행할까요?')) return;
       const d = await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' });
-      await renderK8sSettings();
+      uxInvalidateActionQueue();
+      await renderK8sSettings(new URLSearchParams(location.hash.split('?')[1] || ''));
       const msg = document.getElementById('set-msg');
       const r = d.result || {};
       const cls = d.executed ? 'status' : 'status error';
@@ -10574,6 +10717,32 @@ const adminHTML = `<!doctype html>
       } catch (e) {
         const out = document.getElementById('exec-session-detail') || document.getElementById('set-msg');
         if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sDebugSessionDecide = async (id, action) => {
+      const label = action === 'approve' ? '승인' : '반려';
+      const note = prompt('debug 세션 ' + label + ' 메모(선택):', '') || '';
+      try {
+        await api('/admin/k8s/debug/sessions/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({ note }) });
+        showToast('ok', 'Debug 세션 ' + label + ' 완료', id);
+        uxInvalidateActionQueue();
+      } catch (e) {
+        showToast('error', 'Debug 세션 ' + label + ' 실패', e.message);
+      }
+      await renderK8sSettings(new URLSearchParams(location.hash.split('?')[1] || ''));
+    };
+    window.k8sDebugSessionDetail = async (id) => {
+      const out = document.getElementById('debug-session-detail') || document.getElementById('set-msg');
+      out.innerHTML = '<span class="muted">Debug 세션 상세 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/debug/sessions/' + encodeURIComponent(id));
+        const s = d.session || {};
+        out.innerHTML = '<div class="banner"><strong>' + escapeHTML(s.id || '-') + '</strong> · ' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + ' · ' + escapeHTML(s.debug_image || '-') + '</div>' +
+          '<div class="kpis" style="margin:8px 0">' + kpi('Status', escapeHTML(s.status || '-')) + kpi('Risk', escapeHTML(s.risk_level || '-')) + kpi('Approval', s.require_approval ? '필요' : '불필요') + kpi('Target', escapeHTML(s.target_container || '-')) + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:6px">요청자 ' + escapeHTML(s.requested_by || '-') + ' · 승인자 ' + escapeHTML(s.approved_by || '-') + ' · ' + ago(s.updated_at || s.created_at) + '</div>' +
+          '<pre style="white-space:pre-wrap;max-height:360px;overflow:auto;margin-top:8px">' + escapeHTML(s.manifest_preview || s.reason || 'manifest preview 없음') + '</pre>';
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
       }
     };
     window.k8sTerminalPolicyEvaluate = async () => {
@@ -11889,6 +12058,7 @@ const adminHTML = `<!doctype html>
       const targetKind = (params && params.get('kind')) || '';
       const targetNs = (params && params.get('namespace')) || '';
       const targetName = (params && params.get('name')) || '';
+      const focusId = (params && params.get('focus_id')) || '';
       const shouldAutoload = !!(params && (params.get('autoload') === '1' || params.get('live') === '1'));
       view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="empty">불러오는 중...</div>');
       let editor, changes;
@@ -11924,7 +12094,7 @@ const adminHTML = `<!doctype html>
           (canVerify ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'verify\')">검증확인</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeAction(\'' + escapeAttr(cr.id) + '\',\'rollback\')">롤백요청</button> ' : '') +
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeEvidence(\'' + escapeAttr(cr.id) + '\')">증적</button> ' +
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangePatch(\'' + escapeAttr(cr.id) + '\')">Patch</button>';
-        return '<tr><td><span class="status ' + statusClass(cr.status) + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
+        return '<tr id="' + escapeAttr('mchg-row-' + cr.id) + '"><td><span class="status ' + statusClass(cr.status) + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
           '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.kind + '/' + cr.name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.cluster_id || '') + '</div></td>' +
           '<td><span class="status ' + riskClass(cr.risk_level) + '" style="font-size:10px">' + escapeHTML(cr.risk_level || '') + '</span></td>' +
           '<td>' + fmt((cr.diffs || []).length) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.result || '') + '</td>' +
@@ -11966,6 +12136,13 @@ const adminHTML = `<!doctype html>
         if (shouldAutoload && targetKind && targetName) {
           setTimeout(() => window.k8sManifestLoadLive && window.k8sManifestLoadLive(), 0);
         }
+      }
+      if (focusId) {
+        setTimeout(() => {
+          if (!uxFocusElement('mchg-row-' + focusId, 'YAML Change ID: ' + focusId)) {
+            showToast('warn', '대상 YAML 변경 요청을 찾지 못함', focusId);
+          }
+        }, 80);
       }
       setTimeout(() => window.resizeK8sManifestYaml && window.resizeK8sManifestYaml(), 0);
     }
@@ -12113,7 +12290,9 @@ const adminHTML = `<!doctype html>
         out.innerHTML = '<span class="status">요청 생성됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((d.request || {}).id || '') + ' · 검증을 실행하세요.</span>';
         showToast('ok', 'YAML 변경 요청 생성', ((d.request || {}).id || '') + ' · ' + body.kind + '/' + body.name);
         uxInvalidateActionQueue();
-        await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
+        const id = (d.request || {}).id || '';
+        if (id) location.hash = uxFlowFocusHref('manifest_change', id, body.cluster_id);
+        else await renderK8sManifestChanges(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) {
         out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
         showToast('error', 'YAML 변경 요청 실패', e.message);

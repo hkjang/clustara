@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.49** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.50** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.49)
+## 기능 상태 (v0.9.50)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -92,6 +92,7 @@
 | Enterprise Enforcement Plus — Access Binding 전역 enforcement middleware, tenant/scope envelope, enterprise evidence ledger, Governance Hub, FleetOps/SecOps/AIOps/FinOps/GitOps 상세 API 확장. AI Gateway 신규 확장은 제외하고 기존 overview만 유지 | ✅ (v0.9.47) |
 | Enterprise Operations UI Plus — Enterprise enforcement/ownership coverage, 서비스 카탈로그 운영 진입점·runtime 상세·runtime 후보 등록·coverage·gap queue·gap exception·scorecard·셀프서비스 액션 초안, Governance Hub gap exception debt/audit/report, FleetOps global search catalog enrichment/cluster compare/blast radius/action dry-run/progressive action, 액션 승인함 nav 배지, 빠른 이동 고정/최근/자주 사용/처리 대기 큐(Action/Config/YAML 상태 변경과 Dev/Node/Exec/Debug 요청 생성 시 즉시 캐시 무효화)/고정 리소스/최근 리소스 UX와 Fleet 리소스 미리보기·직접 진입 자동 기록·리소스 작업 카드·상단 현재 리소스 고정/해제(Pod 상세·카탈로그·YAML·타임라인·그래프, Gateway 단축 진입 제외), Action Center·YAML 변경·Config 변경·Catalog·Node 조치 toast 피드백, SecOps admission simulator/exception, AIOps problem detail/runbook/postmortem, FinOps/GitOps 상세 ledger를 화면에 연결. AI Gateway 신규 확장은 제외 | ✅ (v0.9.48) |
 | Operator Path UX Refinement — 모든 화면 상단 빠른 작업에 현재 링크 복사, 헤더 링크 복사 버튼, 빠른 이동 처리 대기 큐 수동 새로고침을 추가해 승인·YAML·Pod·노드 화면을 공유하고 대기 상태를 즉시 재조회할 수 있게 개선 | ✅ (v0.9.49) |
+| Action Flow CTA Clarity — 액션 승인함과 빠른 이동 처리 대기 큐의 CTA를 `승인 화면으로 이동`, `실행 화면으로 이동`, `검증 화면으로 이동`처럼 실제 작업과 화면 이동을 구분해 표시하고, Action/Config/YAML/Exec/Debug 요청으로 이동 시 `focus_id`로 대상 행 자동 스크롤·하이라이트, 새 요청 생성 직후 대상 요청 바로가기, 작업 ID·대상 복사 버튼을 제공 | ✅ (v0.9.50) |
 | Ops Status v2 — `/admin/ops/status`에 DB, async logger, ClickHouse, K8s collector, Mattermost, retention, alert worker component 상태와 overall(degraded/failed) 제공 | ✅ (v0.9.47) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
