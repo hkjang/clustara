@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"clustara/internal/store"
 )
@@ -28,10 +30,11 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 	defer proxy.Close()
 
 	ctx := context.Background()
+	oldApproval := time.Now().UTC().Add(-3 * time.Hour).Format(time.RFC3339Nano)
 	if err := db.InsertK8sActionRequest(ctx, store.K8sActionRequest{
 		ID: "act_approval", ClusterID: "c1", Namespace: "default", ResourceKind: "Deployment", ResourceName: "api",
 		Action: "rollout_restart", RiskLevel: "high", Status: "approval_required", RequestedBy: "dev",
-		DryRunDiff: "restart api", IdempotencyKey: "idem-flow-approval", CommandHash: "hash-flow-approval",
+		DryRunDiff: "restart api", IdempotencyKey: "idem-flow-approval", CommandHash: "hash-flow-approval", CreatedAt: oldApproval,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,13 +87,18 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 		t.Fatalf("action flow status=%d body=%s", resp.StatusCode, body)
 	}
 	var out struct {
-		Summary map[string]int `json:"summary"`
-		Items   []struct {
+		Summary        map[string]int `json:"summary"`
+		HandoffSummary string         `json:"handoff_summary"`
+		Items          []struct {
 			ID         string `json:"id"`
 			Kind       string `json:"kind"`
 			Lane       string `json:"lane"`
 			NextAction string `json:"next_action"`
 			Href       string `json:"href"`
+			SLAStatus  string `json:"sla_status"`
+			AgeSeconds int64  `json:"age_seconds"`
+			ActorHint  string `json:"actor_hint"`
+			Handoff    string `json:"handoff_text"`
 		} `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -98,6 +106,15 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 	}
 	if out.Summary["total"] != 7 || out.Summary["approval"] != 3 || out.Summary["ready"] != 2 || out.Summary["verify"] != 1 || out.Summary["prepare"] != 1 {
 		t.Fatalf("unexpected summary: %+v", out.Summary)
+	}
+	if out.Summary["sla_breached"] < 1 {
+		t.Fatalf("expected at least one breached SLA item, summary=%+v", out.Summary)
+	}
+	if !strings.Contains(out.HandoffSummary, "[Clustara 운영 작업 요약]") ||
+		!strings.Contains(out.HandoffSummary, "act_approval") ||
+		!strings.Contains(out.HandoffSummary, "SLA 초과") ||
+		!strings.Contains(out.HandoffSummary, "security/admin") {
+		t.Fatalf("handoff summary should include priority queue context, summary=%q", out.HandoffSummary)
 	}
 	want := map[string]struct {
 		lane string
@@ -122,6 +139,18 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 		}{it.Lane, it.NextAction}
 		if it.Href == "" {
 			t.Fatalf("item %s should include a destination href", it.ID)
+		}
+		if it.ID == "act_approval" && (it.SLAStatus != "breached" || it.AgeSeconds < int64((2*time.Hour).Seconds())) {
+			t.Fatalf("old approval should be SLA breached, item=%+v", it)
+		}
+		if it.ID == "act_approval" && it.ActorHint != "security/admin" {
+			t.Fatalf("high-risk approval should point to security/admin, item=%+v", it)
+		}
+		if it.ID == "act_ready" && it.ActorHint != "operator/admin" {
+			t.Fatalf("ready action should point to operator/admin, item=%+v", it)
+		}
+		if it.ID == "act_approval" && (!strings.Contains(it.Handoff, "다음 담당: security/admin") || !strings.Contains(it.Handoff, "#/k8s-actions")) {
+			t.Fatalf("handoff text should include actor and destination, item=%+v", it)
 		}
 	}
 	for id, w := range want {

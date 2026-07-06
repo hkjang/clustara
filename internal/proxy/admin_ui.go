@@ -76,6 +76,7 @@ const adminHTML = `<!doctype html>
       font-size: 10px; font-weight: 900; line-height: 1;
     }
     .nav-badge.warn { background: var(--warn); color: #111827; }
+    .nav-badge.mine { background: var(--accent); color: #fff; }
     /* "대시보드" grouped dropdown in the top nav */
     .nav-group { position: relative; }
     .nav-group > .nav-group-toggle {
@@ -174,6 +175,36 @@ const adminHTML = `<!doctype html>
     .kpi { background: var(--panel); padding: 14px; min-height: 80px; }
     .kpi .label { color: var(--muted); font-size: 12px; font-weight: 700; }
     .kpi .value { margin-top: 8px; font-size: 22px; font-weight: 800; overflow-wrap: anywhere; }
+    .action-flow-summary {
+      display: flex; justify-content: space-between; gap: 12px; align-items: center;
+      margin: 0 0 10px; padding: 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--panel-alt);
+    }
+    .action-flow-summary strong { font-size: 12px; }
+    .action-flow-summary .muted { font-size: 11px; margin-top: 2px; }
+    .action-flow-filterbar {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      margin: 0 0 10px;
+    }
+    .action-flow-filterbar a {
+      border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px;
+      background: var(--panel); color: var(--ink); text-decoration: none;
+      font-size: 11px; font-weight: 750;
+    }
+    .action-flow-filterbar a.active { border-color: var(--accent); color: var(--accent); background: rgba(110,168,254,0.12); }
+    .action-flow-filterbar a .muted { margin-left: 4px; font-size: 10px; color: inherit; opacity: 0.78; }
+    .action-flow-filterbar > .muted { margin-left: auto; font-size: 11px; }
+    .action-flow-empty-state {
+      display: flex; justify-content: space-between; gap: 10px; align-items: center;
+      margin: 0 0 10px; padding: 10px; border: 1px dashed var(--line-strong);
+      border-radius: 8px; background: var(--panel-alt); color: var(--muted);
+    }
+    .action-flow-empty-state a {
+      display: inline-flex; align-items: center; border: 1px solid var(--line);
+      border-radius: 999px; padding: 5px 9px; text-decoration: none; color: var(--ink);
+      background: var(--panel); font-size: 11px; font-weight: 750;
+    }
+    .action-flow-empty-state a:hover { border-color: var(--accent); color: var(--accent); }
     .action-flow-board { display: grid; grid-template-columns: repeat(6, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
     .action-flow-lane {
       border: 1px solid var(--line); border-top: 4px solid var(--line);
@@ -195,6 +226,13 @@ const adminHTML = `<!doctype html>
     .action-flow-meta, .action-flow-detail { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .action-flow-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 8px; }
     .action-flow-cta { text-decoration: none; font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+    .action-flow-sla { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 10px; color: var(--muted); }
+    .action-flow-sla .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--good); display: inline-block; }
+    .action-flow-sla.warning .dot { background: var(--warn); }
+    .action-flow-sla.breached .dot { background: var(--bad); }
+    .action-flow-actor { margin-top: 5px; font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-flow-item.sla-warning { box-shadow: inset 3px 0 0 var(--warn); }
+    .action-flow-item.sla-breached { box-shadow: inset 3px 0 0 var(--bad); }
     .action-flow-copy {
       border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 6px;
       background: var(--panel); color: var(--muted); font-size: 10px; cursor: pointer;
@@ -429,11 +467,12 @@ const adminHTML = `<!doctype html>
     }
     .quick-access-resource-actions a:hover { border-color: var(--accent); }
     .quick-access-work-item {
-      display: block; padding: 8px 10px; border: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line);
       border-radius: 6px; background: var(--panel-alt); color: var(--ink);
-      text-decoration: none;
     }
+    .quick-access-work-item.mine { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
     .quick-access-work-item:hover { border-color: var(--accent); }
+    .quick-access-work-main { color: var(--ink); text-decoration: none; }
     .quick-access-work-item strong {
       display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-size: 12px;
@@ -442,10 +481,34 @@ const adminHTML = `<!doctype html>
       margin-top: 4px; color: var(--muted); font-size: 11px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .quick-access-work-sla { font-size: 10px; margin-top: 4px; color: var(--muted); }
+    .quick-access-work-sla.warning { color: var(--warn); }
+    .quick-access-work-sla.breached { color: var(--bad); font-weight: 800; }
+    .quick-access-work-actor { margin-top: 3px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-access-work-summary {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--panel); font-size: 11px; color: var(--muted);
+    }
+    .quick-access-work-summary a,
+    .quick-access-work-summary button {
+      border: 1px solid var(--line-strong); border-radius: 5px; padding: 4px 7px;
+      background: var(--panel-alt); color: var(--ink); font-size: 11px; cursor: pointer;
+      white-space: nowrap;
+      text-decoration: none;
+    }
+    .quick-access-work-summary a:hover,
+    .quick-access-work-summary button:hover { border-color: var(--accent); color: var(--accent); }
     .quick-access-work-next {
       margin-top: 6px; display: inline-flex; align-items: center; gap: 4px;
       color: var(--accent); font-size: 11px; font-weight: 800;
     }
+    .quick-access-work-actions { display: flex; justify-content: flex-end; gap: 6px; }
+    .quick-access-work-actions button {
+      border: 1px solid var(--line-strong); border-radius: 5px; padding: 4px 7px;
+      background: var(--panel); color: var(--ink); font-size: 11px; cursor: pointer;
+    }
+    .quick-access-work-actions button:hover { border-color: var(--accent); color: var(--accent); }
     .quick-access-side { display: flex; flex-direction: column; gap: 10px; }
     .quick-access-side h4 { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
     .quick-access-section-head {
@@ -1128,6 +1191,7 @@ const adminHTML = `<!doctype html>
     const UX_PIN_KEY = 'clustara.ux.pinned';
     const UX_RECENT_RESOURCE_KEY = 'clustara.ux.recent.resources';
     const UX_PINNED_RESOURCE_KEY = 'clustara.ux.pinned.resources';
+    const UX_ACTION_FLOW_FILTER_KEY = 'clustara.ux.action.flow.filter';
     let uxResourceSearchTimer = null;
     let uxResourceSearchSeq = 0;
     let uxActionQueueSeq = 0;
@@ -1164,6 +1228,86 @@ const adminHTML = `<!doctype html>
       if (v === '확인' || v === '검증확인') return '확인';
       if (v === '열기') return '처리';
       return v;
+    }
+    function uxFlowSlaClass(status) {
+      const s = String(status || '').toLowerCase();
+      return s === 'breached' ? 'breached' : (s === 'warning' ? 'warning' : 'ok');
+    }
+    function uxFlowSlaLabel(item) {
+      const s = uxFlowSlaClass(item && item.sla_status);
+      const age = (item && item.age_label) || '';
+      if (s === 'breached') return 'SLA 초과' + (age && age !== '-' ? ' · ' + age : '');
+      if (s === 'warning') return 'SLA 임박' + (age && age !== '-' ? ' · ' + age : '');
+      return age && age !== '-' ? '대기 ' + age : 'SLA 정상';
+    }
+    function uxActionFlowValidFilter(filter) {
+      const v = String(filter || 'all');
+      return ['all', 'mine', 'sla', 'attention', 'approval', 'ready', 'verify', 'prepare', 'done'].includes(v) ? v : 'all';
+    }
+    function uxActionFlowPreferredFilter() {
+      try { return uxActionFlowValidFilter(localStorage.getItem(UX_ACTION_FLOW_FILTER_KEY) || 'all'); }
+      catch { return 'all'; }
+    }
+    function uxRememberActionFlowFilter(filter) {
+      try { localStorage.setItem(UX_ACTION_FLOW_FILTER_KEY, uxActionFlowValidFilter(filter)); } catch {}
+    }
+    window.uxRememberActionFlowFilter = uxRememberActionFlowFilter;
+    function uxActionFlowCurrentRole() {
+      return String((authState.nav && authState.nav.role) || (authState.user && authState.user.role) || 'admin').toLowerCase();
+    }
+    function uxActionFlowRoleMatches(item, role) {
+      role = String(role || uxActionFlowCurrentRole()).toLowerCase();
+      const hint = String((item && item.actor_hint) || '').toLowerCase();
+      if (!hint) return false;
+      if (role === 'super_admin' || role === 'admin') return hint.includes('admin') || hint.includes('operator') || hint.includes('approver') || hint.includes('security');
+      if (role === 'ops_admin' || role === 'operator') return hint.includes('operator') || hint.includes('admin');
+      if (role === 'approver') return hint.includes('approver') || hint.includes('security') || hint.includes('admin');
+      if (role.indexOf('security') >= 0) return hint.includes('security') || hint.includes('admin');
+      if (role === 'developer' || role === 'viewer') return hint.includes('requester');
+      return hint.includes(role);
+    }
+    function uxActionFlowFilterMatches(item, laneId, flowFilter, role) {
+      flowFilter = String(flowFilter || 'all');
+      if (flowFilter === 'mine') return uxActionFlowRoleMatches(item, role);
+      if (flowFilter === 'sla') return item && (item.sla_status === 'breached' || item.sla_status === 'warning');
+      if (['attention', 'approval', 'ready', 'verify', 'prepare', 'done'].includes(flowFilter)) return laneId === flowFilter;
+      return true;
+    }
+    function uxActionFlowFilteredIds(flow, flowFilter, kind) {
+      const ids = new Set();
+      const role = uxActionFlowCurrentRole();
+      ((flow && flow.lanes) || []).forEach(lane => {
+        ((lane.items || [])).forEach(it => {
+          if (kind && it.kind !== kind) return;
+          if (uxActionFlowFilterMatches(it, lane.id, flowFilter, role)) ids.add(it.id);
+        });
+      });
+      return ids;
+    }
+    function uxActionFlowFilteredSummary(items, filterLabel, role) {
+      const list = Array.isArray(items) ? items : [];
+      const title = '[Clustara 운영 작업 요약 - ' + (filterLabel || '현재 필터') + ']';
+      if (!list.length) return title + '\n현재 필터 조건에 해당하는 처리 대기 작업이 없습니다.';
+      const counts = { attention: 0, approval: 0, ready: 0, verify: 0, sla: 0 };
+      list.forEach(it => {
+        if (counts[it.lane] !== undefined) counts[it.lane]++;
+        if (it.sla_status === 'breached' || it.sla_status === 'warning') counts.sla++;
+      });
+      const lines = [
+        title,
+        '역할: ' + (role || '-') + ' · 총 ' + list.length + '건 · 확인 ' + counts.attention + ' · 승인 ' + counts.approval + ' · 실행 ' + counts.ready + ' · 검증 ' + counts.verify + ' · SLA ' + counts.sla
+      ];
+      list.slice(0, 8).forEach(it => {
+        lines.push('- [' + [it.lane || '-', it.status || '-', it.risk_level || '-'].join('/') + '] ' +
+          (it.title || it.kind || '-') + ' (' + (it.id || '-') + ')' +
+          ' | ' + (it.target || '-') +
+          ' | 다음: ' + (it.primary_label || it.next_action || '-') +
+          ' | 담당: ' + (it.actor_hint || '-') +
+          ' | ' + uxFlowSlaLabel(it) +
+          ' | ' + uxFlowItemHref(it));
+      });
+      if (list.length > 8) lines.push('외 ' + (list.length - 8) + '건은 액션 승인함에서 확인');
+      return lines.join('\n');
     }
     function uxFlowItemHref(it) {
       const kind = String((it && it.kind) || '');
@@ -1229,25 +1373,62 @@ const adminHTML = `<!doctype html>
     function uxActionQueueHTML(flow) {
       const lanes = ((flow && flow.lanes) || []).filter(l => ['attention', 'approval', 'ready', 'verify'].includes(l.id));
       const items = [];
+      const role = uxActionFlowCurrentRole();
+      const laneRank = { attention: 0, approval: 1, ready: 2, verify: 3 };
+      const slaRank = (status) => status === 'breached' ? 0 : (status === 'warning' ? 1 : 2);
       lanes.forEach(lane => {
-        ((lane.items || []).slice(0, 2)).forEach(it => items.push({
+        ((lane.items || [])).forEach(it => items.push({
+          id: it.id || '',
+          kind: it.kind || '',
+          lane_id: lane.id,
           lane: lane.label || lane.id,
           title: it.title || it.kind || '작업',
           target: it.target || '-',
           status: it.status || '-',
           primary_label: it.primary_label || '',
+          sla_status: it.sla_status || '',
+          age_label: it.age_label || '',
+          sla_reason: it.sla_reason || '',
+          actor_hint: it.actor_hint || '',
+          actor_reason: it.actor_reason || '',
+          handoff_text: it.handoff_text || '',
+          role_match: uxActionFlowRoleMatches(it, role),
           href: uxFlowItemHref(it)
         }));
       });
       if (!items.length) return '<div class="empty" style="padding:10px">처리 대기 없음</div>';
-      return items.slice(0, 6).map(it =>
-        '<a class="quick-access-work-item" href="' + escapeAttr(it.href) + '" onclick="uxCloseQuickAccess()">' +
-          '<strong>' + escapeHTML(it.title) + '</strong>' +
-          '<div class="quick-access-work-meta">' + escapeHTML(it.lane + ' · ' + it.status) + '</div>' +
-          '<div class="quick-access-work-meta">' + escapeHTML(it.target) + '</div>' +
-          '<div class="quick-access-work-next">' + escapeHTML(uxFlowMoveLabel(it.primary_label || '열기')) + '</div>' +
-        '</a>'
-      ).join('');
+      items.sort((a, b) => {
+        if (a.role_match !== b.role_match) return a.role_match ? -1 : 1;
+        const sa = slaRank(a.sla_status), sb = slaRank(b.sla_status);
+        if (sa !== sb) return sa - sb;
+        const la = laneRank[a.lane_id], lb = laneRank[b.lane_id];
+        return (la === undefined ? 9 : la) - (lb === undefined ? 9 : lb);
+      });
+      const myCount = items.filter(it => it.role_match).length;
+      const slaCount = items.filter(it => it.sla_status === 'breached' || it.sla_status === 'warning').length;
+      const actionLinks = '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">' +
+        '<a href="#/k8s-actions?flow=mine" onclick="uxRememberActionFlowFilter(\'mine\');uxCloseQuickAccess()">내 역할 ' + fmt(myCount) + '</a>' +
+        '<a href="#/k8s-actions?flow=sla" onclick="uxRememberActionFlowFilter(\'sla\');uxCloseQuickAccess()">SLA ' + fmt(slaCount) + '</a>' +
+        '<a href="#/k8s-actions" onclick="uxRememberActionFlowFilter(\'all\');uxCloseQuickAccess()">전체</a></div>';
+      const handoffSummary = (flow && flow.handoff_summary) || '';
+      const summaryCopy = handoffSummary
+        ? '<div class="quick-access-work-summary"><span>내 역할 우선 · ' + escapeHTML(role) + '</span>' + actionLinks + '</div><div class="quick-access-work-summary"><span>처리 대기 큐 전체 인계</span><button type="button" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('인계 요약 복사됨') + ');return false') + '">요약 복사</button></div>'
+        : '';
+      return summaryCopy + items.slice(0, 6).map(it => {
+        const copyValue = it.handoff_text || [it.title || '', it.target || '', it.actor_hint ? '담당 ' + it.actor_hint : ''].filter(Boolean).join(' · ');
+        const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('인계 문구 복사됨') + ');return false';
+        return '<div class="quick-access-work-item ' + (it.role_match ? 'mine' : '') + '">' +
+          '<a class="quick-access-work-main" href="' + escapeAttr(it.href) + '" onclick="uxCloseQuickAccess()">' +
+            '<strong>' + escapeHTML(it.title) + '</strong>' +
+            '<div class="quick-access-work-meta">' + escapeHTML(it.lane + ' · ' + it.status) + '</div>' +
+            '<div class="quick-access-work-meta">' + escapeHTML(it.target) + '</div>' +
+            '<div class="quick-access-work-sla ' + escapeAttr(uxFlowSlaClass(it.sla_status)) + '">' + escapeHTML(uxFlowSlaLabel(it)) + '</div>' +
+            '<div class="quick-access-work-actor" title="' + escapeAttr(it.actor_reason || '') + '">담당 ' + escapeHTML(it.actor_hint || '-') + '</div>' +
+            '<div class="quick-access-work-next">' + escapeHTML(uxFlowMoveLabel(it.primary_label || '열기')) + '</div>' +
+          '</a>' +
+          '<div class="quick-access-work-actions"><button type="button" onclick="' + escapeAttr(copyOnclick) + '" title="화면 이동 없이 인계 문구 복사">인계 복사</button></div>' +
+        '</div>';
+      }).join('');
     }
     function uxResourceKey(item) {
       return [item.cluster_id || '', item.namespace || '', item.kind || '', item.name || '', item.catalog_id || ''].join('|');
@@ -1899,25 +2080,54 @@ const adminHTML = `<!doctype html>
     async function updateK8sActionNavBadge() {
       const badge = document.getElementById('k8s-action-nav-badge');
       if (!badge) return;
+      const link = badge.closest('a');
       if (!uxAllowed('k8s-actions')) {
         badge.style.display = 'none';
+        if (link) {
+          link.setAttribute('href', '#/k8s-actions');
+          link.onclick = null;
+          link.title = '액션 승인함';
+        }
         return;
       }
       try {
-        const flow = await api('/admin/k8s/action-flow?limit=1');
+        const flow = await api('/admin/k8s/action-flow?limit=50');
         const s = (flow && flow.summary) || {};
         const attention = Number(s.attention || 0);
         const approval = Number(s.approval || 0);
         const ready = Number(s.ready || 0);
         const verify = Number(s.verify || 0);
+        const sla = Number(s.sla_breached || 0) + Number(s.sla_warning || 0);
         const count = attention + approval + ready + verify;
+        let myCount = 0;
+        ((flow && flow.lanes) || []).forEach(lane => {
+          if (!['attention', 'approval', 'ready', 'verify'].includes(lane.id)) return;
+          ((lane.items || [])).forEach(it => {
+            if (uxActionFlowRoleMatches(it)) myCount++;
+          });
+        });
         if (!count) {
           badge.style.display = 'none';
+          if (link) {
+            link.setAttribute('href', '#/k8s-actions');
+            link.onclick = null;
+            link.title = '액션 승인함';
+          }
           return;
         }
-        badge.textContent = String(count > 99 ? '99+' : count);
-        badge.classList.toggle('warn', attention === 0);
-        badge.title = '확인 필요 ' + attention + ' · 승인 대기 ' + approval + ' · 실행 가능 ' + ready + ' · 검증 필요 ' + verify;
+        const shown = myCount || count;
+        let targetFilter = uxActionFlowPreferredFilter();
+        if (myCount > 0) targetFilter = 'mine';
+        else if (targetFilter === 'all' && sla > 0) targetFilter = 'sla';
+        if (link) {
+          link.setAttribute('href', '#/k8s-actions' + (targetFilter && targetFilter !== 'all' ? '?flow=' + encodeURIComponent(targetFilter) : ''));
+          link.onclick = () => { uxRememberActionFlowFilter(targetFilter || 'all'); };
+          link.title = myCount > 0 ? '내 역할 작업으로 이동' : (targetFilter === 'sla' ? 'SLA 지연 작업으로 이동' : '액션 승인함으로 이동');
+        }
+        badge.textContent = (myCount ? '내' : '') + String(shown > 99 ? '99+' : shown);
+        badge.classList.toggle('mine', myCount > 0);
+        badge.classList.toggle('warn', myCount === 0 && attention === 0);
+        badge.title = '내 역할 ' + myCount + ' · 전체 ' + count + ' · 확인 필요 ' + attention + ' · 승인 대기 ' + approval + ' · 실행 가능 ' + ready + ' · 검증 필요 ' + verify;
         badge.style.display = 'inline-flex';
       } catch (_) {
         badge.style.display = 'none';
@@ -10118,6 +10328,8 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       const focusId = (params && params.get('focus_id')) || '';
+      const flowFilter = uxActionFlowValidFilter((params && params.get('flow')) || uxActionFlowPreferredFilter());
+      uxRememberActionFlowFilter(flowFilter);
       view.innerHTML = section('K8s 액션 승인함', '<div class="empty">불러오는 중...</div>');
       let clusters, data, flow;
       try {
@@ -10135,9 +10347,11 @@ const adminHTML = `<!doctype html>
       const filterBar = '<div class="card-body"><select id="k8sact-cluster" onchange="k8sActGo()">' + clusterOpts + '</select></div>';
 
       const acts = data.actions || [];
+      const actionFlowIds = uxActionFlowFilteredIds(flow, flowFilter, 'action');
+      const tableActs = flowFilter === 'all' ? acts : acts.filter(a => actionFlowIds.has(a.id));
       const riskClass = (r) => r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
       const pending = acts.filter(a => a.status === 'pending' || a.status === 'approval_required' || a.status === 'pending_approval');
-      const rows = acts.length ? acts.map(a => {
+      const rows = tableActs.length ? tableActs.map(a => {
         const canDecide = a.status === 'pending' || a.status === 'approval_required' || a.status === 'pending_approval';
         const btns = canDecide
           ? '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'approve\',this)">승인</button> ' +
@@ -10153,7 +10367,7 @@ const adminHTML = `<!doctype html>
           '<td class="muted" style="font-size:11px;white-space:pre-wrap;max-width:340px">' + escapeHTML(a.dry_run_diff || a.result || '') + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(a.requested_by || '-') + '</td>' +
           '<td>' + btns + '</td></tr>';
-      }).join('') : '<tr><td colspan="7" class="muted">액션 요청이 없습니다.</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">' + (acts.length ? '현재 필터에 해당하는 액션 요청이 없습니다.' : '액션 요청이 없습니다.') + '</td></tr>';
 
       view.innerHTML =
         section('K8s 액션 승인함', k8sActionNoticeHTML() + '<div class="kpis">' +
@@ -10161,11 +10375,12 @@ const adminHTML = `<!doctype html>
           kpi('승인 대기', fmt(((flow.summary || {}).approval) || pending.length)) +
           kpi('실행 가능', fmt(((flow.summary || {}).ready) || 0)) +
           kpi('검증 필요', fmt(((flow.summary || {}).verify) || 0)) +
+          kpi('SLA 지연', fmt(((flow.summary || {}).sla_breached) || 0) + ' / 임박 ' + fmt(((flow.summary || {}).sla_warning) || 0)) +
           kpi('전체', fmt(((flow.summary || {}).total) || acts.length)) + '</div>') +
         card('필터', filterBar) +
-        renderK8sActionFlow(flow) +
+        renderK8sActionFlow(flow, flowFilter, clusterId) +
         card('액션 요청',
-          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">상단 바로가기 또는 장애 및 대응 &gt; 액션 승인함에서 요청을 승인·반려·실행합니다. super_admin/admin은 개발자 뷰에서 실행 가능한 요청을 즉시 실행할 수도 있습니다.</div>' +
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">상단 바로가기 또는 장애 및 대응 &gt; 액션 승인함에서 요청을 승인·반려·실행합니다. super_admin/admin은 개발자 뷰에서 실행 가능한 요청을 즉시 실행할 수도 있습니다. 현재 표는 흐름판 필터 기준의 Action 요청 ' + fmt(tableActs.length) + '건을 표시합니다.</div>' +
           '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
       uxActionQueueCache = { ts: Date.now(), html: uxActionQueueHTML(flow) };
       updateK8sActionNavBadge();
@@ -10177,30 +10392,79 @@ const adminHTML = `<!doctype html>
         }, 80);
       }
     }
-    function renderK8sActionFlow(flow) {
+    function renderK8sActionFlow(flow, flowFilter, clusterId) {
       const lanes = (flow && flow.lanes) || [];
       const total = ((flow && flow.summary) || {}).total || 0;
       const riskClass = (r) => r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
       const laneTone = (lane) => lane === 'attention' ? 'error' : (lane === 'approval' || lane === 'ready' || lane === 'verify' ? 'warn' : '');
       const kindLabel = { action: '액션', config_change: 'Config', manifest_change: 'YAML', exec_session: 'Exec', debug_session: 'Debug' };
+      flowFilter = String(flowFilter || 'all');
+      const currentRole = uxActionFlowCurrentRole();
+      const filteredLanes = lanes.map(lane => {
+        const filtered = (lane.items || []).filter(it => uxActionFlowFilterMatches(it, lane.id, flowFilter, currentRole));
+        return Object.assign({}, lane, { items: filtered, count: filtered.length });
+      });
+      const filteredTotal = filteredLanes.reduce((sum, lane) => sum + ((lane.items || []).length), 0);
+      const filterHref = (id) => {
+        const q = new URLSearchParams();
+        if (clusterId) q.set('cluster_id', clusterId);
+        if (id && id !== 'all') q.set('flow', id);
+        return '#/k8s-actions' + (q.toString() ? '?' + q.toString() : '');
+      };
+      const allItems = [];
+      const laneCounts = {};
+      lanes.forEach(lane => {
+        laneCounts[lane.id] = (lane.items || []).length;
+        (lane.items || []).forEach(it => allItems.push({ item: it, lane: lane.id }));
+      });
+      const filterCounts = {
+        all: allItems.length,
+        mine: allItems.filter(x => uxActionFlowFilterMatches(x.item, x.lane, 'mine', currentRole)).length,
+        sla: allItems.filter(x => uxActionFlowFilterMatches(x.item, x.lane, 'sla', currentRole)).length,
+        attention: laneCounts.attention || 0,
+        approval: laneCounts.approval || 0,
+        ready: laneCounts.ready || 0,
+        verify: laneCounts.verify || 0,
+      };
+      const filters = [
+        ['all', '전체'],
+        ['mine', '내 역할'],
+        ['sla', 'SLA'],
+        ['approval', '승인'],
+        ['ready', '실행'],
+        ['verify', '검증'],
+        ['attention', '확인 필요']
+      ];
+      const filterBar = '<div class="action-flow-filterbar">' +
+        filters.map(f => '<a href="' + escapeAttr(filterHref(f[0])) + '" onclick="' + escapeAttr('uxRememberActionFlowFilter(' + JSON.stringify(f[0]) + ')') + '" class="' + (flowFilter === f[0] ? 'active' : '') + '">' + escapeHTML(f[1]) + ' <span class="muted">' + fmt(filterCounts[f[0]] || 0) + '</span></a>').join('') +
+        '<span class="muted">현재 관점 ' + escapeHTML(flowFilter === 'mine' ? ('내 역할 · ' + currentRole) : flowFilter) + ' · ' + fmt(filteredTotal) + '건</span></div>';
+      const emptyRecovery = filteredTotal ? '' :
+        '<div class="action-flow-empty-state"><div><strong style="color:var(--ink)">현재 필터 결과 0건</strong><div style="font-size:11px;margin-top:3px">다른 큐에 처리 대기 작업이 있는지 바로 전환해서 확인하세요.</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
+        '<a href="' + escapeAttr(filterHref('all')) + '" onclick="uxRememberActionFlowFilter(\'all\')">전체 ' + fmt(filterCounts.all || 0) + '</a>' +
+        '<a href="' + escapeAttr(filterHref('mine')) + '" onclick="uxRememberActionFlowFilter(\'mine\')">내 역할 ' + fmt(filterCounts.mine || 0) + '</a>' +
+        '<a href="' + escapeAttr(filterHref('sla')) + '" onclick="uxRememberActionFlowFilter(\'sla\')">SLA ' + fmt(filterCounts.sla || 0) + '</a></div></div>';
       if (!total) {
         return card('다음 행동 흐름', '<div class="card-body"><div class="empty">진행 중인 운영 작업이 없습니다.</div></div>');
       }
-      const html = lanes.map(lane => {
+      const html = filteredLanes.map(lane => {
         const items = (lane.items || []).slice(0, 5);
         const rows = items.map(it => {
           const moveLabel = uxFlowMoveLabel(it.primary_label || '');
-          const copyValue = [it.id || '', it.target || ''].filter(Boolean).join(' · ');
-          const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('작업 대상 복사됨') + ');return false';
-          return '<div class="action-flow-item">' +
+          const copyValue = it.handoff_text || [it.id || '', it.target || '', it.actor_hint ? '담당 ' + it.actor_hint : ''].filter(Boolean).join(' · ');
+          const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('인계 문구 복사됨') + ');return false';
+          const slaClass = uxFlowSlaClass(it.sla_status);
+          const slaTitle = it.sla_reason || uxFlowSlaLabel(it);
+          return '<div class="action-flow-item sla-' + escapeAttr(slaClass) + '">' +
             '<div class="action-flow-item-title">' +
             '<strong>' + escapeHTML(it.title || it.kind || '') + '</strong>' +
             '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
             '<div class="action-flow-meta">' + escapeHTML(it.target || '-') + (k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') ? ' · ' + k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') : '') + '</div>' +
             '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
+            '<div class="action-flow-sla ' + escapeAttr(slaClass) + '" title="' + escapeAttr(slaTitle) + '"><span class="dot"></span><span>' + escapeHTML(uxFlowSlaLabel(it)) + '</span></div>' +
+            '<div class="action-flow-actor" title="' + escapeAttr(it.actor_reason || '') + '">다음 담당: ' + escapeHTML(it.actor_hint || '-') + '</div>' +
             '<div class="action-flow-foot">' +
             '<span><span class="status ' + laneTone(it.lane) + '" style="font-size:9px">' + escapeHTML(it.status || '-') + '</span> <span class="muted" style="font-size:10px">' + escapeHTML(kindLabel[it.kind] || it.kind || '') + '</span></span>' +
-            '<span style="display:flex;align-items:center;gap:6px"><button type="button" class="action-flow-copy" onclick="' + escapeAttr(copyOnclick) + '" title="대상 복사" style="display:inline-flex;align-items:center;justify-content:center;padding:4px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>' +
+            '<span style="display:flex;align-items:center;gap:6px"><button type="button" class="action-flow-copy" onclick="' + escapeAttr(copyOnclick) + '" title="인계 문구 복사" style="display:inline-flex;align-items:center;justify-content:center;padding:4px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>' +
             '<a class="action-flow-cta" href="' + escapeAttr(uxFlowItemHref(it)) + '" title="이 링크는 승인/실행을 완료하지 않고 해당 처리 화면의 대상 요청으로만 이동합니다. 이동 후 실제 승인·실행 버튼을 확인하세요.">' + escapeHTML(moveLabel) + ' →</a></span>' +
             '</div></div>';
         }).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
@@ -10210,14 +10474,30 @@ const adminHTML = `<!doctype html>
           '<div class="action-flow-lane-desc">' + escapeHTML(lane.description || '') + '</div></div>' +
           rows + (more ? '<div style="padding:0 10px 10px">' + more + '</div>' : '') + '</div>';
       }).join('');
+      const handoffSummary = (flow && flow.handoff_summary) || '';
+      const filteredItems = [];
+      filteredLanes.forEach(lane => (lane.items || []).forEach(it => filteredItems.push(Object.assign({}, it, { lane: lane.id }))));
+      const filterLabel = flowFilter === 'mine' ? '내 역할 ' + currentRole : flowFilter;
+      const filteredSummary = uxActionFlowFilteredSummary(filteredItems, filterLabel, currentRole);
+      const summaryCopy = handoffSummary
+        ? '<div class="action-flow-summary"><div><strong>운영 인계 요약</strong><div class="muted">SLA 초과·승인·실행·검증 대기 작업을 우선순위대로 묶어 복사합니다.</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(filteredSummary) + ',' + JSON.stringify('현재 필터 요약 복사됨') + ');return false') + '">현재 필터 복사</button><button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('전체 인계 요약 복사됨') + ');return false') + '">전체 요약 복사</button></div></div>'
+        : '';
       return card('다음 행동 흐름',
         '<div class="card-body">' +
         '<div class="muted" style="font-size:11px;margin-bottom:8px">Action, Config 변경, YAML 변경, Exec, Debug 요청을 메뉴가 아니라 사용자의 다음 행동 기준으로 묶었습니다. 버튼을 누르면 원래 처리 화면으로 이동합니다.</div>' +
+        summaryCopy +
+        filterBar +
+        emptyRecovery +
         '<div class="action-flow-board">' + html + '</div></div>');
     }
     window.k8sActGo = () => {
       const cl = document.getElementById('k8sact-cluster').value;
-      location.hash = '#/k8s-actions' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+      const current = new URLSearchParams(location.hash.split('?')[1] || '');
+      const q = new URLSearchParams();
+      if (cl) q.set('cluster_id', cl);
+      const flow = uxActionFlowValidFilter(current.get('flow') || uxActionFlowPreferredFilter());
+      if (flow !== 'all') q.set('flow', flow);
+      location.hash = '#/k8s-actions' + (q.toString() ? '?' + q.toString() : '');
     };
     window.k8sActDecide = async (id, command, btn) => {
       let body = '{}';

@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"clustara/internal/store"
 )
@@ -26,6 +29,13 @@ type k8sActionFlowItem struct {
 	Href         string `json:"href"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+	AgeSeconds   int64  `json:"age_seconds"`
+	AgeLabel     string `json:"age_label"`
+	SLAStatus    string `json:"sla_status"`
+	SLAReason    string `json:"sla_reason"`
+	ActorHint    string `json:"actor_hint"`
+	ActorReason  string `json:"actor_reason"`
+	HandoffText  string `json:"handoff_text"`
 }
 
 type k8sActionFlowLane struct {
@@ -94,24 +104,43 @@ func (s *Server) handleK8sActionFlow(w http.ResponseWriter, r *http.Request) {
 	for _, d := range debugSessions {
 		items = append(items, flowItemFromDebugSession(d))
 	}
+	now := time.Now().UTC()
+	for i := range items {
+		items[i] = annotateActionFlowSLA(items[i], now)
+		items[i] = annotateActionFlowActor(items[i])
+		items[i].HandoffText = actionFlowHandoffText(items[i])
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		li, lj := lanePriority(items[i].Lane), lanePriority(items[j].Lane)
 		if li != lj {
 			return li < lj
 		}
+		si, sj := flowSLAPriority(items[i].SLAStatus), flowSLAPriority(items[j].SLAStatus)
+		if si != sj {
+			return si < sj
+		}
 		return flowItemTime(items[i]) > flowItemTime(items[j])
 	})
 
 	lanes := buildActionFlowLanes(items)
-	summary := map[string]int{"total": len(items)}
+	summary := map[string]int{"total": len(items), "sla_warning": 0, "sla_breached": 0}
 	for _, lane := range lanes {
 		summary[lane.ID] = lane.Count
 	}
+	for _, it := range items {
+		switch it.SLAStatus {
+		case "warning":
+			summary["sla_warning"]++
+		case "breached":
+			summary["sla_breached"]++
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":   items,
-		"lanes":   lanes,
-		"summary": summary,
-		"note":    "요청 종류가 아니라 사용자의 다음 행동 기준으로 운영 작업을 묶은 흐름판입니다.",
+		"items":           items,
+		"lanes":           lanes,
+		"summary":         summary,
+		"handoff_summary": actionFlowHandoffSummary(items, summary, 8),
+		"note":            "요청 종류가 아니라 사용자의 다음 행동 기준으로 운영 작업을 묶은 흐름판입니다.",
 	})
 }
 
@@ -307,6 +336,232 @@ func buildActionFlowLanes(items []k8sActionFlowItem) []k8sActionFlowLane {
 	return lanes
 }
 
+func annotateActionFlowSLA(it k8sActionFlowItem, now time.Time) k8sActionFlowItem {
+	ageBase := actionFlowAgeBase(it)
+	if ts, ok := parseActionFlowTime(ageBase); ok {
+		age := now.Sub(ts)
+		if age < 0 {
+			age = 0
+		}
+		it.AgeSeconds = int64(age.Seconds())
+		it.AgeLabel = actionFlowAgeLabel(age)
+	} else {
+		it.AgeLabel = "-"
+	}
+	warn, breach := actionFlowSLAThresholds(it.Lane)
+	switch {
+	case breach > 0 && time.Duration(it.AgeSeconds)*time.Second >= breach:
+		it.SLAStatus = "breached"
+	case warn > 0 && time.Duration(it.AgeSeconds)*time.Second >= warn:
+		it.SLAStatus = "warning"
+	default:
+		it.SLAStatus = "ok"
+	}
+	it.SLAReason = actionFlowSLAReason(it.Lane, it.SLAStatus, it.AgeLabel)
+	return it
+}
+
+func actionFlowAgeBase(it k8sActionFlowItem) string {
+	switch it.Lane {
+	case "approval", "prepare":
+		return firstNonEmpty(it.CreatedAt, it.UpdatedAt)
+	case "ready", "verify", "attention", "done":
+		return firstNonEmpty(it.UpdatedAt, it.CreatedAt)
+	default:
+		return firstNonEmpty(it.UpdatedAt, it.CreatedAt)
+	}
+}
+
+func annotateActionFlowActor(it k8sActionFlowItem) k8sActionFlowItem {
+	risk := strings.ToLower(strings.TrimSpace(it.RiskLevel))
+	switch it.Lane {
+	case "approval":
+		if risk == "critical" || risk == "high" || it.Kind == "debug_session" {
+			it.ActorHint = "security/admin"
+			it.ActorReason = "고위험·보안성 요청은 보안 담당자 또는 관리자가 승인해야 합니다."
+		} else {
+			it.ActorHint = "approver/operator"
+			it.ActorReason = "승인 권한이 있는 운영자 또는 승인자가 결정해야 합니다."
+		}
+	case "ready":
+		switch it.Kind {
+		case "exec_session":
+			it.ActorHint = "requester/operator"
+			it.ActorReason = "승인된 단일 명령 세션은 요청자 또는 운영자가 실행합니다."
+		case "debug_session":
+			it.ActorHint = "operator"
+			it.ActorReason = "Debug Container 주입은 운영 절차에 따라 운영자가 진행합니다."
+		default:
+			it.ActorHint = "operator/admin"
+			it.ActorReason = "승인된 변경은 운영자 또는 관리자가 실행합니다."
+		}
+	case "verify":
+		it.ActorHint = "requester/operator"
+		it.ActorReason = "적용 이후 상태는 요청자와 운영자가 함께 검증합니다."
+	case "prepare":
+		it.ActorHint = "requester"
+		it.ActorReason = "초안·검증 전 요청은 요청자가 보완해야 합니다."
+	case "attention":
+		it.ActorHint = "operator"
+		it.ActorReason = "실패·반려·차단 상태는 운영자가 원인을 확인해야 합니다."
+	case "done":
+		it.ActorHint = "closed"
+		it.ActorReason = "닫힌 작업입니다."
+	default:
+		it.ActorHint = "operator"
+		it.ActorReason = "운영자 확인이 필요합니다."
+	}
+	if it.SLAStatus == "breached" && it.Lane != "done" {
+		it.ActorReason += " SLA가 초과되어 우선 처리 대상입니다."
+	}
+	return it
+}
+
+func actionFlowHandoffText(it k8sActionFlowItem) string {
+	parts := []string{
+		"[Clustara 운영 작업 인계]",
+		"작업: " + firstNonEmpty(it.Title, it.Kind, "-"),
+		"ID: " + firstNonEmpty(it.ID, "-"),
+		"대상: " + firstNonEmpty(it.Target, "-"),
+		"상태: " + firstNonEmpty(it.Status, "-") + " / 위험도: " + firstNonEmpty(it.RiskLevel, "-"),
+		"다음 단계: " + firstNonEmpty(it.PrimaryLabel, it.NextAction, "-"),
+		"다음 담당: " + firstNonEmpty(it.ActorHint, "-"),
+		"SLA: " + firstNonEmpty(it.SLAStatus, "-") + " (" + firstNonEmpty(it.AgeLabel, "-") + ")",
+	}
+	if it.RequestedBy != "" {
+		parts = append(parts, "요청자: "+it.RequestedBy)
+	}
+	if it.ActorReason != "" {
+		parts = append(parts, "담당 사유: "+it.ActorReason)
+	}
+	if it.Href != "" {
+		parts = append(parts, "처리 화면: "+it.Href)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func actionFlowHandoffSummary(items []k8sActionFlowItem, summary map[string]int, limit int) string {
+	if limit <= 0 {
+		limit = 8
+	}
+	active := make([]k8sActionFlowItem, 0, limit)
+	activeTotal := 0
+	for _, it := range items {
+		if it.Lane == "done" {
+			continue
+		}
+		if it.Lane == "prepare" && it.SLAStatus == "ok" {
+			continue
+		}
+		activeTotal++
+		if len(active) < limit {
+			active = append(active, it)
+		}
+	}
+	if len(active) == 0 {
+		return "[Clustara 운영 작업 요약]\n처리 대기 작업이 없습니다."
+	}
+	lines := []string{
+		"[Clustara 운영 작업 요약]",
+		fmt.Sprintf(
+			"총 %d건 · 확인 %d · 승인 %d · 실행 %d · 검증 %d · SLA 초과 %d · 임박 %d",
+			summary["total"],
+			summary["attention"],
+			summary["approval"],
+			summary["ready"],
+			summary["verify"],
+			summary["sla_breached"],
+			summary["sla_warning"],
+		),
+	}
+	for _, it := range active {
+		sla := firstNonEmpty(it.SLAStatus, "-")
+		if it.AgeLabel != "" && it.AgeLabel != "-" {
+			sla += " " + it.AgeLabel
+		}
+		lines = append(lines, "- ["+
+			firstNonEmpty(it.Lane, "-")+"/"+firstNonEmpty(it.Status, "-")+"/"+firstNonEmpty(it.RiskLevel, "-")+"] "+
+			firstNonEmpty(it.Title, it.Kind, "-")+
+			" ("+firstNonEmpty(it.ID, "-")+")"+
+			" | "+firstNonEmpty(it.Target, "-")+
+			" | 다음: "+firstNonEmpty(it.PrimaryLabel, it.NextAction, "-")+
+			" | 담당: "+firstNonEmpty(it.ActorHint, "-")+
+			" | SLA: "+sla+
+			" | "+firstNonEmpty(it.Href, "-"))
+	}
+	if activeTotal > len(active) {
+		lines = append(lines, fmt.Sprintf("외 %d건은 액션 승인함에서 확인", activeTotal-len(active)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func actionFlowSLAThresholds(lane string) (warn, breach time.Duration) {
+	switch lane {
+	case "attention":
+		return 0, 0
+	case "approval":
+		return 30 * time.Minute, 2 * time.Hour
+	case "ready":
+		return 15 * time.Minute, time.Hour
+	case "verify":
+		return 30 * time.Minute, 4 * time.Hour
+	case "prepare":
+		return 4 * time.Hour, 24 * time.Hour
+	default:
+		return 0, 0
+	}
+}
+
+func actionFlowSLAReason(lane, status, age string) string {
+	if status == "ok" {
+		if lane == "done" {
+			return "닫힌 작업"
+		}
+		return "SLA 정상"
+	}
+	switch lane {
+	case "approval":
+		return "승인 대기 " + age
+	case "ready":
+		return "실행 대기 " + age
+	case "verify":
+		return "사후 검증 대기 " + age
+	case "prepare":
+		return "검증 전 초안 " + age
+	case "attention":
+		return "확인 필요 " + age
+	default:
+		return "대기 " + age
+	}
+}
+
+func actionFlowAgeLabel(age time.Duration) string {
+	if age < time.Minute {
+		return "방금"
+	}
+	if age < time.Hour {
+		return strconv.Itoa(int(age/time.Minute)) + "분"
+	}
+	if age < 48*time.Hour {
+		return strconv.Itoa(int(age/time.Hour)) + "시간"
+	}
+	return strconv.Itoa(int(age/(24*time.Hour))) + "일"
+}
+
+func parseActionFlowTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 func lanePriority(lane string) int {
 	switch lane {
 	case "attention":
@@ -323,6 +578,19 @@ func lanePriority(lane string) int {
 		return 5
 	default:
 		return 9
+	}
+}
+
+func flowSLAPriority(status string) int {
+	switch status {
+	case "breached":
+		return 0
+	case "warning":
+		return 1
+	case "ok":
+		return 2
+	default:
+		return 3
 	}
 }
 
