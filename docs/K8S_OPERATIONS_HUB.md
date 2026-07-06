@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.65** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.93** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.65)
+## 기능 상태 (v0.9.93)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -108,6 +108,34 @@
 | Action Badge Deep Link — 상단 액션 승인함 배지 클릭 시 내 역할 또는 SLA 지연 큐로 바로 진입 | ✅ (v0.9.63) |
 | Action Flow Filter Counts — 액션 승인함 필터 버튼에 전체·내 역할·SLA·승인·실행·검증·확인 필요 건수를 직접 표시 | ✅ (v0.9.64) |
 | Action Flow Empty Recovery — 현재 필터 결과가 0건일 때 전체·내 역할·SLA 큐로 즉시 전환하는 복구 링크 제공 | ✅ (v0.9.65) |
+| Action Flow Shareable Filter — 저장된 선호 필터가 복원될 때 URL에도 `flow=`를 반영해 현재 링크 공유 시 같은 관점 유지 | ✅ (v0.9.66) |
+| Action Flow First Item CTA — 현재 필터의 첫 처리 대상 화면으로 바로 이동하는 `첫 작업 열기` 제공 | ✅ (v0.9.67) |
+| Quick Access First Work CTA — 빠른 이동 처리 대기 큐에서 내 역할·SLA 우선순위 첫 작업으로 즉시 이동 | ✅ (v0.9.68) |
+| Action Flow Priority Brief — 액션 승인함과 빠른 이동 큐에 우선 처리 대상의 제목·대상·담당·SLA 요약 표시 | ✅ (v0.9.69) |
+| Action Flow Priority Reason — 우선 처리 브리프에 내 역할 대상·SLA 초과/임박·확인/승인/실행/검증 필요 근거 표시 | ✅ (v0.9.70) |
+| Action Flow Handoff Priority Reason — 개별/전체/필터 인계 문구에 우선 사유를 포함해 공유 시 처리 우선순위 근거 전달 | ✅ (v0.9.71) |
+| Action Flow Role Match Explain — 액션 승인함과 빠른 이동 큐에 현재 역할과 `내 역할` 매칭 기준 설명을 표시해 승인/실행 담당 판단 혼동 완화 | ✅ (v0.9.72) |
+| Action Flow My Work Badge — 액션 흐름판 카드에 `내 역할` 배지와 배경 강조를 추가해 전체/SLA 관점에서도 자기 담당 작업 즉시 식별 | ✅ (v0.9.73) |
+| Action Flow Priority Ordering — 빠른 이동 큐와 액션 승인함 카드·첫 작업·필터 인계 요약을 동일한 `내 역할 → SLA → 레인` 기준으로 정렬 | ✅ (v0.9.74) |
+| Action Flow Lane Quick Entry — 각 레인 헤더에서 해당 레인의 첫 처리 대상 화면으로 바로 이동하는 `첫 작업` CTA 제공 | ✅ (v0.9.75) |
+| Action Flow Lane Handoff Copy — 각 레인 헤더에서 해당 단계 작업만 묶은 인계 요약을 즉시 복사 | ✅ (v0.9.76) |
+| Action Flow Lane Filter Entry — 각 레인 헤더에서 해당 단계만 보는 `레인 보기` 필터 전환 제공 | ✅ (v0.9.77) |
+| Action Flow Filter Label Clarity — 현재 관점 표시와 필터 인계 요약 제목을 내부 값 대신 한국어 단계명으로 통일 | ✅ (v0.9.78) |
+| Action Flow Refresh Context — Action Flow API `generated_at`과 액션 승인함 `마지막 갱신`·`새로고침` 제공 | ✅ (v0.9.79) |
+| Action Flow Refresh Feedback — 액션 승인함 새로고침 버튼에 busy 상태와 성공/실패 toast notice 제공 | ✅ (v0.9.80) |
+| Action Flow Inline Refresh Notice — 액션 승인함 새로고침/승인/실행 결과 notice를 toast와 본문 슬롯에 즉시 표시 | ✅ (v0.9.81) |
+| Action Flow Post-Action Next Step — 승인/반려/실행/승인+실행 완료 notice에 다음 확인 단계 안내 포함 | ✅ (v0.9.82) |
+| Action Flow Notice Queue Links — 액션 결과 notice에 실행 큐·검증 큐·전체 보기 후속 이동 버튼 제공 | ✅ (v0.9.83) |
+| Action Flow Dismissible Notice — 액션 승인함 본문 notice에 `닫기` 버튼을 추가해 처리 후 화면 정리 가능 | ✅ (v0.9.84) |
+| Action Flow Notice Target Focus — 액션 결과 notice의 후속 큐 링크에 `focus_id`를 포함해 방금 처리한 요청 행 자동 강조 | ✅ (v0.9.85) |
+| Action Flow Done Queue Entry — 실행 완료 Action의 후속 링크를 `완료 보기`로 보정하고 흐름판 필터에 `완료` 관점 추가 | ✅ (v0.9.86) |
+| Action Flow Done Count Visibility — 액션 승인함 KPI와 인계 요약에 `완료` 건수 표시 | ✅ (v0.9.87) |
+| Action Flow Focused Lane Board — 승인/실행/검증/완료 등 레인 필터 선택 시 해당 레인만 표시해 빈 레인 노이즈 제거 | ✅ (v0.9.88) |
+| Action Flow Table Priority Sync — 액션 요청 표 정렬을 흐름판 우선순위와 동기화해 카드와 표의 첫 처리 대상 일치 | ✅ (v0.9.89) |
+| Action Flow Table Context Column — 액션 요청 표에 흐름 레인·SLA·다음 담당·우선 사유 컬럼 추가 | ✅ (v0.9.90) |
+| Action Flow Table Handoff Copy — 액션 요청 표의 흐름 컬럼에서 표준 인계 문구 즉시 복사 | ✅ (v0.9.91) |
+| Action Flow Table Target Link — 액션 요청 표의 흐름 컬럼에서 대상 처리 화면으로 즉시 이동 | ✅ (v0.9.92) |
+| Action Flow Table Batch Tools — 액션 요청 표 상단에서 첫 행 처리와 현재 표 인계 요약 복사 제공 | ✅ (v0.9.93) |
 | Ops Status v2 — `/admin/ops/status`에 DB, async logger, ClickHouse, K8s collector, Mattermost, retention, alert worker component 상태와 overall(degraded/failed) 제공 | ✅ (v0.9.47) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.

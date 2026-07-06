@@ -89,6 +89,7 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 	var out struct {
 		Summary        map[string]int `json:"summary"`
 		HandoffSummary string         `json:"handoff_summary"`
+		GeneratedAt    string         `json:"generated_at"`
 		Items          []struct {
 			ID         string `json:"id"`
 			Kind       string `json:"kind"`
@@ -107,13 +108,20 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 	if out.Summary["total"] != 7 || out.Summary["approval"] != 3 || out.Summary["ready"] != 2 || out.Summary["verify"] != 1 || out.Summary["prepare"] != 1 {
 		t.Fatalf("unexpected summary: %+v", out.Summary)
 	}
+	if out.GeneratedAt == "" {
+		t.Fatal("action flow response should include generated_at for UI refresh context")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, out.GeneratedAt); err != nil {
+		t.Fatalf("generated_at should be RFC3339Nano, got %q: %v", out.GeneratedAt, err)
+	}
 	if out.Summary["sla_breached"] < 1 {
 		t.Fatalf("expected at least one breached SLA item, summary=%+v", out.Summary)
 	}
 	if !strings.Contains(out.HandoffSummary, "[Clustara 운영 작업 요약]") ||
 		!strings.Contains(out.HandoffSummary, "act_approval") ||
 		!strings.Contains(out.HandoffSummary, "SLA 초과") ||
-		!strings.Contains(out.HandoffSummary, "security/admin") {
+		!strings.Contains(out.HandoffSummary, "security/admin") ||
+		!strings.Contains(out.HandoffSummary, "사유: SLA 초과") {
 		t.Fatalf("handoff summary should include priority queue context, summary=%q", out.HandoffSummary)
 	}
 	want := map[string]struct {
@@ -151,6 +159,9 @@ func TestK8sActionFlowAggregatesUserNextSteps(t *testing.T) {
 		}
 		if it.ID == "act_approval" && (!strings.Contains(it.Handoff, "다음 담당: security/admin") || !strings.Contains(it.Handoff, "#/k8s-actions")) {
 			t.Fatalf("handoff text should include actor and destination, item=%+v", it)
+		}
+		if it.ID == "act_approval" && !strings.Contains(it.Handoff, "우선 사유: SLA 초과") {
+			t.Fatalf("handoff text should include priority reason, item=%+v", it)
 		}
 	}
 	for id, w := range want {

@@ -140,6 +140,7 @@ func (s *Server) handleK8sActionFlow(w http.ResponseWriter, r *http.Request) {
 		"lanes":           lanes,
 		"summary":         summary,
 		"handoff_summary": actionFlowHandoffSummary(items, summary, 8),
+		"generated_at":    now.Format(time.RFC3339Nano),
 		"note":            "요청 종류가 아니라 사용자의 다음 행동 기준으로 운영 작업을 묶은 흐름판입니다.",
 	})
 }
@@ -427,6 +428,7 @@ func actionFlowHandoffText(it k8sActionFlowItem) string {
 		"다음 단계: " + firstNonEmpty(it.PrimaryLabel, it.NextAction, "-"),
 		"다음 담당: " + firstNonEmpty(it.ActorHint, "-"),
 		"SLA: " + firstNonEmpty(it.SLAStatus, "-") + " (" + firstNonEmpty(it.AgeLabel, "-") + ")",
+		"우선 사유: " + actionFlowPriorityReason(it),
 	}
 	if it.RequestedBy != "" {
 		parts = append(parts, "요청자: "+it.RequestedBy)
@@ -487,12 +489,47 @@ func actionFlowHandoffSummary(items []k8sActionFlowItem, summary map[string]int,
 			" | 다음: "+firstNonEmpty(it.PrimaryLabel, it.NextAction, "-")+
 			" | 담당: "+firstNonEmpty(it.ActorHint, "-")+
 			" | SLA: "+sla+
+			" | 사유: "+actionFlowPriorityReason(it)+
 			" | "+firstNonEmpty(it.Href, "-"))
 	}
 	if activeTotal > len(active) {
 		lines = append(lines, fmt.Sprintf("외 %d건은 액션 승인함에서 확인", activeTotal-len(active)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func actionFlowPriorityReason(it k8sActionFlowItem) string {
+	reasons := make([]string, 0, 3)
+	switch it.SLAStatus {
+	case "breached":
+		reasons = append(reasons, "SLA 초과")
+	case "warning":
+		reasons = append(reasons, "SLA 임박")
+	}
+	switch it.Lane {
+	case "attention":
+		reasons = append(reasons, "확인 필요")
+	case "approval":
+		if len(reasons) == 0 {
+			reasons = append(reasons, "승인 대기")
+		}
+	case "ready":
+		if len(reasons) == 0 {
+			reasons = append(reasons, "실행 가능")
+		}
+	case "verify":
+		if len(reasons) == 0 {
+			reasons = append(reasons, "검증 필요")
+		}
+	case "prepare":
+		if len(reasons) == 0 {
+			reasons = append(reasons, "준비/검증")
+		}
+	}
+	if len(reasons) == 0 {
+		return "처리 대기"
+	}
+	return strings.Join(reasons, " · ")
 }
 
 func actionFlowSLAThresholds(lane string) (warn, breach time.Duration) {

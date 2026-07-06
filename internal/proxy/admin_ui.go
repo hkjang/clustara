@@ -194,6 +194,11 @@ const adminHTML = `<!doctype html>
     .action-flow-filterbar a.active { border-color: var(--accent); color: var(--accent); background: rgba(110,168,254,0.12); }
     .action-flow-filterbar a .muted { margin-left: 4px; font-size: 10px; color: inherit; opacity: 0.78; }
     .action-flow-filterbar > .muted { margin-left: auto; font-size: 11px; }
+    .action-flow-role-note {
+      margin: -4px 0 10px; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--panel-alt); color: var(--muted); font-size: 11px;
+    }
+    .action-flow-role-note strong { color: var(--ink); }
     .action-flow-empty-state {
       display: flex; justify-content: space-between; gap: 10px; align-items: center;
       margin: 0 0 10px; padding: 10px; border: 1px dashed var(--line-strong);
@@ -219,10 +224,24 @@ const adminHTML = `<!doctype html>
     .action-flow-lane-head { padding: 10px 10px 8px; background: var(--panel-alt); border-bottom: 1px solid var(--line); }
     .action-flow-lane-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-weight: 800; }
     .action-flow-lane-desc { color: var(--muted); font-size: 11px; line-height: 1.35; margin-top: 5px; min-height: 30px; }
+    .action-flow-lane-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+    .action-flow-lane-actions a, .action-flow-lane-actions button {
+      border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; text-decoration: none;
+      color: var(--accent); background: var(--panel); font-size: 10px; font-weight: 800;
+      cursor: pointer;
+    }
+    .action-flow-lane-actions a:hover, .action-flow-lane-actions button:hover { border-color: var(--accent); }
     .action-flow-item { margin: 0; padding: 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
     .action-flow-item:last-child { border-bottom: none; }
+    .action-flow-item.mine { background: linear-gradient(90deg, rgba(110,168,254,0.12), transparent 44px), var(--panel); }
     .action-flow-item-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
     .action-flow-item-title strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-flow-title-badges { display: inline-flex; gap: 5px; align-items: center; flex-shrink: 0; }
+    .action-flow-my-badge {
+      border: 1px solid rgba(110,168,254,0.45); border-radius: 999px; padding: 2px 6px;
+      background: rgba(110,168,254,0.12); color: var(--accent); font-size: 9px; font-weight: 800;
+      white-space: nowrap;
+    }
     .action-flow-meta, .action-flow-detail { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .action-flow-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 8px; }
     .action-flow-cta { text-decoration: none; font-size: 11px; font-weight: 800; color: var(--accent); white-space: nowrap; }
@@ -1244,6 +1263,21 @@ const adminHTML = `<!doctype html>
       const v = String(filter || 'all');
       return ['all', 'mine', 'sla', 'attention', 'approval', 'ready', 'verify', 'prepare', 'done'].includes(v) ? v : 'all';
     }
+    function uxActionFlowFilterLabel(filter, role) {
+      const v = uxActionFlowValidFilter(filter);
+      const labels = {
+        all: '전체',
+        mine: '내 역할' + (role ? ' · ' + role : ''),
+        sla: 'SLA',
+        attention: '확인 필요',
+        approval: '승인',
+        ready: '실행',
+        verify: '검증',
+        prepare: '준비',
+        done: '완료'
+      };
+      return labels[v] || v;
+    }
     function uxActionFlowPreferredFilter() {
       try { return uxActionFlowValidFilter(localStorage.getItem(UX_ACTION_FLOW_FILTER_KEY) || 'all'); }
       catch { return 'all'; }
@@ -1266,6 +1300,36 @@ const adminHTML = `<!doctype html>
       if (role === 'developer' || role === 'viewer') return hint.includes('requester');
       return hint.includes(role);
     }
+    function uxActionFlowRoleMatchExplain(role) {
+      role = String(role || uxActionFlowCurrentRole()).toLowerCase();
+      if (role === 'super_admin' || role === 'admin') return 'admin/super_admin은 admin, operator, approver, security 담당 작업을 내 역할로 봅니다.';
+      if (role === 'ops_admin' || role === 'operator') return 'operator/ops_admin은 operator, admin 담당 작업을 내 역할로 봅니다.';
+      if (role === 'approver') return 'approver는 approver, security, admin 승인 작업을 내 역할로 봅니다.';
+      if (role.indexOf('security') >= 0) return 'security 역할은 security, admin 담당 작업을 내 역할로 봅니다.';
+      if (role === 'developer' || role === 'viewer') return 'developer/viewer는 requester 담당 작업을 내 역할로 봅니다.';
+      return role + ' 역할은 actor_hint에 같은 역할명이 포함된 작업을 내 역할로 봅니다.';
+    }
+    function uxActionFlowSlaRank(status) {
+      return status === 'breached' ? 0 : (status === 'warning' ? 1 : 2);
+    }
+    function uxActionFlowLaneRank(laneId) {
+      const rank = { attention: 0, approval: 1, ready: 2, verify: 3, prepare: 4, done: 5 };
+      return rank[laneId] === undefined ? 9 : rank[laneId];
+    }
+    function uxActionFlowSortItems(items, role) {
+      const list = Array.isArray(items) ? items.slice() : [];
+      return list.sort((a, b) => {
+        const am = a && a.role_match !== undefined ? !!a.role_match : uxActionFlowRoleMatches(a, role);
+        const bm = b && b.role_match !== undefined ? !!b.role_match : uxActionFlowRoleMatches(b, role);
+        if (am !== bm) return am ? -1 : 1;
+        const sa = uxActionFlowSlaRank(a && a.sla_status), sb = uxActionFlowSlaRank(b && b.sla_status);
+        if (sa !== sb) return sa - sb;
+        const la = uxActionFlowLaneRank((a && (a.lane_id || a.lane)) || '');
+        const lb = uxActionFlowLaneRank((b && (b.lane_id || b.lane)) || '');
+        if (la !== lb) return la - lb;
+        return String((a && (a.title || a.id)) || '').localeCompare(String((b && (b.title || b.id)) || ''));
+      });
+    }
     function uxActionFlowFilterMatches(item, laneId, flowFilter, role) {
       flowFilter = String(flowFilter || 'all');
       if (flowFilter === 'mine') return uxActionFlowRoleMatches(item, role);
@@ -1284,18 +1348,50 @@ const adminHTML = `<!doctype html>
       });
       return ids;
     }
+    function uxActionFlowItemOrder(flow, kind) {
+      const order = new Map();
+      const role = uxActionFlowCurrentRole();
+      let idx = 0;
+      ((flow && flow.lanes) || []).forEach(lane => {
+        const items = uxActionFlowSortItems(((lane.items || [])).map(it =>
+          Object.assign({}, it, { lane_id: lane.id, lane: lane.id, role_match: uxActionFlowRoleMatches(it, role) })
+        ), role);
+        items.forEach(it => {
+          if (kind && it.kind !== kind) return;
+          if (it.id && !order.has(it.id)) order.set(it.id, idx++);
+        });
+      });
+      return order;
+    }
+    function uxActionFlowItemMap(flow, kind) {
+      const out = new Map();
+      const role = uxActionFlowCurrentRole();
+      ((flow && flow.lanes) || []).forEach(lane => {
+        ((lane.items || [])).forEach(it => {
+          if (kind && it.kind !== kind) return;
+          if (!it.id || out.has(it.id)) return;
+          out.set(it.id, Object.assign({}, it, {
+            lane_id: lane.id,
+            lane: lane.id,
+            lane_label: lane.label || uxActionFlowFilterLabel(lane.id, role),
+            role_match: uxActionFlowRoleMatches(it, role)
+          }));
+        });
+      });
+      return out;
+    }
     function uxActionFlowFilteredSummary(items, filterLabel, role) {
       const list = Array.isArray(items) ? items : [];
       const title = '[Clustara 운영 작업 요약 - ' + (filterLabel || '현재 필터') + ']';
       if (!list.length) return title + '\n현재 필터 조건에 해당하는 처리 대기 작업이 없습니다.';
-      const counts = { attention: 0, approval: 0, ready: 0, verify: 0, sla: 0 };
+      const counts = { attention: 0, approval: 0, ready: 0, verify: 0, done: 0, sla: 0 };
       list.forEach(it => {
         if (counts[it.lane] !== undefined) counts[it.lane]++;
         if (it.sla_status === 'breached' || it.sla_status === 'warning') counts.sla++;
       });
       const lines = [
         title,
-        '역할: ' + (role || '-') + ' · 총 ' + list.length + '건 · 확인 ' + counts.attention + ' · 승인 ' + counts.approval + ' · 실행 ' + counts.ready + ' · 검증 ' + counts.verify + ' · SLA ' + counts.sla
+        '역할: ' + (role || '-') + ' · 총 ' + list.length + '건 · 확인 ' + counts.attention + ' · 승인 ' + counts.approval + ' · 실행 ' + counts.ready + ' · 검증 ' + counts.verify + ' · 완료 ' + counts.done + ' · SLA ' + counts.sla
       ];
       list.slice(0, 8).forEach(it => {
         lines.push('- [' + [it.lane || '-', it.status || '-', it.risk_level || '-'].join('/') + '] ' +
@@ -1304,10 +1400,23 @@ const adminHTML = `<!doctype html>
           ' | 다음: ' + (it.primary_label || it.next_action || '-') +
           ' | 담당: ' + (it.actor_hint || '-') +
           ' | ' + uxFlowSlaLabel(it) +
+          ' | 사유: ' + uxActionFlowPriorityReason(it) +
           ' | ' + uxFlowItemHref(it));
       });
       if (list.length > 8) lines.push('외 ' + (list.length - 8) + '건은 액션 승인함에서 확인');
       return lines.join('\n');
+    }
+    function uxActionFlowPriorityReason(item) {
+      if (!item) return '';
+      const reasons = [];
+      if (item.role_match || uxActionFlowRoleMatches(item)) reasons.push('내 역할 대상');
+      if (item.sla_status === 'breached') reasons.push('SLA 초과');
+      else if (item.sla_status === 'warning') reasons.push('SLA 임박');
+      if (item.lane === 'attention' || item.lane_id === 'attention') reasons.push('확인 필요');
+      if (!reasons.length && (item.lane === 'approval' || item.lane_id === 'approval')) reasons.push('승인 대기');
+      if (!reasons.length && (item.lane === 'ready' || item.lane_id === 'ready')) reasons.push('실행 가능');
+      if (!reasons.length && (item.lane === 'verify' || item.lane_id === 'verify')) reasons.push('검증 필요');
+      return reasons.join(' · ') || '처리 대기';
     }
     function uxFlowItemHref(it) {
       const kind = String((it && it.kind) || '');
@@ -1374,8 +1483,6 @@ const adminHTML = `<!doctype html>
       const lanes = ((flow && flow.lanes) || []).filter(l => ['attention', 'approval', 'ready', 'verify'].includes(l.id));
       const items = [];
       const role = uxActionFlowCurrentRole();
-      const laneRank = { attention: 0, approval: 1, ready: 2, verify: 3 };
-      const slaRank = (status) => status === 'breached' ? 0 : (status === 'warning' ? 1 : 2);
       lanes.forEach(lane => {
         ((lane.items || [])).forEach(it => items.push({
           id: it.id || '',
@@ -1397,24 +1504,22 @@ const adminHTML = `<!doctype html>
         }));
       });
       if (!items.length) return '<div class="empty" style="padding:10px">처리 대기 없음</div>';
-      items.sort((a, b) => {
-        if (a.role_match !== b.role_match) return a.role_match ? -1 : 1;
-        const sa = slaRank(a.sla_status), sb = slaRank(b.sla_status);
-        if (sa !== sb) return sa - sb;
-        const la = laneRank[a.lane_id], lb = laneRank[b.lane_id];
-        return (la === undefined ? 9 : la) - (lb === undefined ? 9 : lb);
-      });
+      const sortedItems = uxActionFlowSortItems(items, role);
       const myCount = items.filter(it => it.role_match).length;
       const slaCount = items.filter(it => it.sla_status === 'breached' || it.sla_status === 'warning').length;
+      const firstItem = sortedItems[0] || null;
+      const firstBrief = firstItem ? '<div class="quick-access-work-summary"><span><strong style="color:var(--ink)">우선 처리</strong> · ' + escapeHTML(firstItem.title || '-') + '<br><small>' + escapeHTML((firstItem.target || '-') + ' · 담당 ' + (firstItem.actor_hint || '-') + ' · ' + uxFlowSlaLabel(firstItem) + ' · ' + uxActionFlowPriorityReason(firstItem)) + '</small></span></div>' : '';
+      const roleExplain = uxActionFlowRoleMatchExplain(role);
       const actionLinks = '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">' +
+        (firstItem ? '<a href="' + escapeAttr(firstItem.href) + '" onclick="uxCloseQuickAccess()" title="내 역할·SLA·레인 우선순위 기준 첫 작업 화면으로 이동합니다.">첫 작업</a>' : '') +
         '<a href="#/k8s-actions?flow=mine" onclick="uxRememberActionFlowFilter(\'mine\');uxCloseQuickAccess()">내 역할 ' + fmt(myCount) + '</a>' +
         '<a href="#/k8s-actions?flow=sla" onclick="uxRememberActionFlowFilter(\'sla\');uxCloseQuickAccess()">SLA ' + fmt(slaCount) + '</a>' +
         '<a href="#/k8s-actions" onclick="uxRememberActionFlowFilter(\'all\');uxCloseQuickAccess()">전체</a></div>';
       const handoffSummary = (flow && flow.handoff_summary) || '';
       const summaryCopy = handoffSummary
-        ? '<div class="quick-access-work-summary"><span>내 역할 우선 · ' + escapeHTML(role) + '</span>' + actionLinks + '</div><div class="quick-access-work-summary"><span>처리 대기 큐 전체 인계</span><button type="button" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('인계 요약 복사됨') + ');return false') + '">요약 복사</button></div>'
+        ? '<div class="quick-access-work-summary" title="' + escapeAttr(roleExplain) + '"><span>내 역할 우선 · ' + escapeHTML(role) + '</span>' + actionLinks + '</div>' + firstBrief + '<div class="quick-access-work-summary"><span>처리 대기 큐 전체 인계</span><button type="button" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('인계 요약 복사됨') + ');return false') + '">요약 복사</button></div>'
         : '';
-      return summaryCopy + items.slice(0, 6).map(it => {
+      return summaryCopy + sortedItems.slice(0, 6).map(it => {
         const copyValue = it.handoff_text || [it.title || '', it.target || '', it.actor_hint ? '담당 ' + it.actor_hint : ''].filter(Boolean).join(' · ');
         const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('인계 문구 복사됨') + ');return false';
         return '<div class="quick-access-work-item ' + (it.role_match ? 'mine' : '') + '">' +
@@ -10307,16 +10412,30 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 액션 승인함 (ACT-01~10 안전장치) ----------
-    function k8sActionSetNotice(type, text) {
-      window._k8sActionNotice = { type, text };
+    function k8sActionNoticeMarkup(n) {
+      if (!n || !n.text) return '';
+      const cls = n.type === 'error' ? 'error' : (n.type === 'warn' ? 'warn' : '');
+      const links = Array.isArray(n.links) ? n.links : [];
+      const actions = links.length
+        ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">' + links.map(l => '<a class="secondary" href="' + escapeAttr(l.href || '#/k8s-actions') + '" title="' + escapeAttr(l.title || '') + '">' + escapeHTML(l.label || '열기') + '</a>').join('') + '</div>'
+        : '';
+      return '<div class="card-body" style="padding:0 4px 10px"><div style="border:1px solid var(--line);border-left:4px solid ' + (cls === 'error' ? 'var(--bad)' : (cls === 'warn' ? 'var(--warn)' : 'var(--good)')) + ';border-radius:8px;padding:10px;background:var(--panel)"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(n.type || 'ok') + '</span> <strong style="font-size:12px">' + escapeHTML(n.text) + '</strong></div><button type="button" class="secondary" onclick="k8sActionDismissNotice()" title="이 알림만 화면에서 닫습니다." style="font-size:10px;padding:3px 7px">닫기</button></div>' + actions + '</div></div>';
+    }
+    function k8sActionSetNotice(type, text, links) {
+      window._k8sActionNotice = { type, text, links: Array.isArray(links) ? links : [] };
+      const slot = document.getElementById('k8s-action-notice-slot');
+      if (slot) slot.innerHTML = k8sActionNoticeMarkup(window._k8sActionNotice);
       showToast(type === 'error' ? 'error' : (type === 'warn' ? 'warn' : 'ok'), type === 'error' ? '액션 처리 실패' : '액션 처리 완료', text);
     }
+    window.k8sActionDismissNotice = () => {
+      window._k8sActionNotice = null;
+      const slot = document.getElementById('k8s-action-notice-slot');
+      if (slot) slot.innerHTML = '';
+    };
     function k8sActionNoticeHTML() {
       const n = window._k8sActionNotice;
       window._k8sActionNotice = null;
-      if (!n || !n.text) return '';
-      const cls = n.type === 'error' ? 'error' : (n.type === 'warn' ? 'warn' : '');
-      return '<div class="card-body" style="padding:0 4px 10px"><div style="border:1px solid var(--line);border-left:4px solid ' + (cls === 'error' ? 'var(--bad)' : (cls === 'warn' ? 'var(--warn)' : 'var(--good)')) + ';border-radius:8px;padding:10px;background:var(--panel)"><span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(n.type || 'ok') + '</span> <strong style="font-size:12px">' + escapeHTML(n.text) + '</strong></div></div>';
+      return '<div id="k8s-action-notice-slot">' + k8sActionNoticeMarkup(n) + '</div>';
     }
     function k8sActionButtonBusy(btn, label) {
       if (!btn) return;
@@ -10324,12 +10443,50 @@ const adminHTML = `<!doctype html>
       btn.dataset.originalText = btn.textContent || '';
       btn.textContent = label;
     }
+    function k8sActionSuccessMessage(id, command, label) {
+      if (command === 'approve') return '액션 ' + id + ' 승인 완료 · 실행 가능 큐에서 실제 실행을 진행하세요.';
+      if (command === 'reject') return '액션 ' + id + ' 반려 완료 · 요청자에게 사유를 공유하세요.';
+      if (command === 'execute') return '액션 ' + id + ' 실행 완료 · 완료 큐와 결과/이벤트를 확인하세요.';
+      if (command === 'approve_execute') return '액션 ' + id + ' 승인+실행 완료 · 완료 큐와 결과/이벤트를 확인하세요.';
+      return '액션 ' + id + ' ' + (label || command || '처리') + ' 완료';
+    }
+    function k8sActionFlowQueueHref(flow, focusId) {
+      const q = new URLSearchParams(location.hash.split('?')[1] || '');
+      q.delete('focus_id');
+      const v = uxActionFlowValidFilter(flow || 'all');
+      if (v === 'all') q.delete('flow'); else q.set('flow', v);
+      if (focusId) q.set('focus_id', focusId);
+      return '#/k8s-actions' + (q.toString() ? '?' + q.toString() : '');
+    }
+    function k8sActionPostActionLinks(command, id) {
+      if (command === 'approve') {
+        return [{ label: '실행 큐 보기', href: k8sActionFlowQueueHref('ready', id), title: '승인된 액션 중 실제 실행 가능한 작업만 보고 방금 승인한 요청을 강조합니다.' }];
+      }
+      if (command === 'reject') {
+        return [
+          { label: '승인 큐 보기', href: k8sActionFlowQueueHref('approval'), title: '남아 있는 승인 대기 작업을 봅니다.' },
+          { label: '반려 항목 보기', href: k8sActionFlowQueueHref('all', id), title: '전체 목록에서 방금 반려한 요청을 강조합니다.' }
+        ];
+      }
+      if (command === 'execute' || command === 'approve_execute') {
+        return [
+          { label: '완료 보기', href: k8sActionFlowQueueHref('done', id), title: '실행이 완료된 작업을 보고 방금 실행한 요청을 강조합니다.' },
+          { label: '전체 보기', href: k8sActionFlowQueueHref('all', id), title: '전체 액션 흐름판으로 돌아가 방금 처리한 요청을 강조합니다.' }
+        ];
+      }
+      return [];
+    }
     async function renderK8sActions(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       const focusId = (params && params.get('focus_id')) || '';
       const flowFilter = uxActionFlowValidFilter((params && params.get('flow')) || uxActionFlowPreferredFilter());
       uxRememberActionFlowFilter(flowFilter);
+      if (params && !params.get('flow') && flowFilter !== 'all') {
+        const normalizedParams = new URLSearchParams(params.toString());
+        normalizedParams.set('flow', flowFilter);
+        updateHashParams(normalizedParams);
+      }
       view.innerHTML = section('K8s 액션 승인함', '<div class="empty">불러오는 중...</div>');
       let clusters, data, flow;
       try {
@@ -10348,10 +10505,57 @@ const adminHTML = `<!doctype html>
 
       const acts = data.actions || [];
       const actionFlowIds = uxActionFlowFilteredIds(flow, flowFilter, 'action');
-      const tableActs = flowFilter === 'all' ? acts : acts.filter(a => actionFlowIds.has(a.id));
+      const actionFlowOrder = uxActionFlowItemOrder(flow, 'action');
+      const actionFlowItems = uxActionFlowItemMap(flow, 'action');
+      const tableActs = (flowFilter === 'all' ? acts : acts.filter(a => actionFlowIds.has(a.id))).slice().sort((a, b) => {
+        const ai = actionFlowOrder.has(a.id) ? actionFlowOrder.get(a.id) : 999999;
+        const bi = actionFlowOrder.has(b.id) ? actionFlowOrder.get(b.id) : 999999;
+        if (ai !== bi) return ai - bi;
+        return String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''));
+      });
+      const actionRole = uxActionFlowCurrentRole();
+      const tableFlowItems = tableActs.map(a => {
+        const f = actionFlowItems.get(a.id);
+        if (f && f.id) return Object.assign({}, f, { lane: f.lane || f.lane_id || '-' });
+        return {
+          id: a.id || '',
+          kind: 'action',
+          lane: '-',
+          status: a.status || '-',
+          risk_level: a.risk_level || '-',
+          title: 'K8s 액션 · ' + (a.action || '-'),
+          target: (a.namespace || '-') + '/' + (a.resource_kind || '-') + '/' + (a.resource_name || '-'),
+          primary_label: a.status === 'approved' ? '실행' : '열기',
+          actor_hint: a.requested_by || '-',
+          href: uxFlowFocusHref('action', a.id || '', a.cluster_id || '')
+        };
+      });
+      const tableSummary = uxActionFlowFilteredSummary(tableFlowItems, '표 ' + uxActionFlowFilterLabel(flowFilter, actionRole), actionRole);
+      const firstTableItem = tableFlowItems[0] || null;
+      const tableTools = tableActs.length
+        ? '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:8px">' +
+          (firstTableItem ? '<a class="secondary" href="' + escapeAttr(uxFlowItemHref(firstTableItem)) + '" title="현재 표의 첫 번째 처리 대상 화면으로 이동합니다.">첫 행 처리</a>' : '') +
+          '<button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(tableSummary) + ',' + JSON.stringify('표 인계 요약 복사됨') + ');return false') + '" title="현재 표에 표시된 Action 요청만 인계 요약으로 복사합니다.">표 인계 요약 복사</button></div>'
+        : '';
       const riskClass = (r) => r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
       const pending = acts.filter(a => a.status === 'pending' || a.status === 'approval_required' || a.status === 'pending_approval');
       const rows = tableActs.length ? tableActs.map(a => {
+        const f = actionFlowItems.get(a.id) || {};
+        const flowCopyText = f.handoff_text || [f.title || a.action || '', f.target || ((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name), f.actor_hint ? '담당 ' + f.actor_hint : ''].filter(Boolean).join(' · ');
+        const flowOpen = f.id
+          ? '<a class="secondary" style="font-size:10px;padding:3px 6px;text-decoration:none" href="' + escapeAttr(uxFlowItemHref(f)) + '" title="이 액션의 흐름판 대상 처리 화면으로 이동합니다.">처리 화면</a>'
+          : '';
+        const flowCopy = f.id
+          ? '<button type="button" class="secondary" style="font-size:10px;padding:3px 6px" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(flowCopyText) + ',' + JSON.stringify('인계 문구 복사됨') + ');return false') + '" title="이 액션의 표준 인계 문구를 복사합니다.">인계 복사</button>'
+          : '';
+        const flowCell = f.id
+          ? '<span class="status ' + (f.sla_status === 'breached' ? 'error' : (f.sla_status === 'warning' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(f.lane_label || uxActionFlowFilterLabel(f.lane || 'all')) + '</span>' +
+            (f.role_match ? ' <span class="action-flow-my-badge" title="' + escapeAttr(uxActionFlowRoleMatchExplain(uxActionFlowCurrentRole())) + '">내 역할</span>' : '') +
+            '<div class="muted" style="font-size:10px;margin-top:3px">' + escapeHTML(uxFlowSlaLabel(f)) + '</div>' +
+            '<div class="muted" style="font-size:10px;margin-top:2px">담당 ' + escapeHTML(f.actor_hint || '-') + '</div>' +
+            '<div class="muted" style="font-size:10px;margin-top:2px">사유 ' + escapeHTML(uxActionFlowPriorityReason(f)) + '</div>' +
+            '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">' + flowOpen + flowCopy + '</div>'
+          : '<span class="muted" style="font-size:11px">-</span>';
         const canDecide = a.status === 'pending' || a.status === 'approval_required' || a.status === 'pending_approval';
         const btns = canDecide
           ? '<button type="button" class="secondary" onclick="k8sActDecide(\'' + escapeAttr(a.id) + '\',\'approve\',this)">승인</button> ' +
@@ -10364,10 +10568,11 @@ const adminHTML = `<!doctype html>
           '<td>' + escapeHTML((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.resource_kind, a.namespace, a.resource_name, 'YAML') + '</div></td>' +
           '<td><span class="status ' + riskClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td>' +
           '<td><span class="status ' + (a.status === 'approved' ? '' : (a.status === 'rejected' ? 'error' : 'warn')) + '" style="font-size:10px">' + escapeHTML(a.status) + '</span></td>' +
+          '<td>' + flowCell + '</td>' +
           '<td class="muted" style="font-size:11px;white-space:pre-wrap;max-width:340px">' + escapeHTML(a.dry_run_diff || a.result || '') + '</td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(a.requested_by || '-') + '</td>' +
           '<td>' + btns + '</td></tr>';
-      }).join('') : '<tr><td colspan="7" class="muted">' + (acts.length ? '현재 필터에 해당하는 액션 요청이 없습니다.' : '액션 요청이 없습니다.') + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">' + (acts.length ? '현재 필터에 해당하는 액션 요청이 없습니다.' : '액션 요청이 없습니다.') + '</td></tr>';
 
       view.innerHTML =
         section('K8s 액션 승인함', k8sActionNoticeHTML() + '<div class="kpis">' +
@@ -10375,13 +10580,15 @@ const adminHTML = `<!doctype html>
           kpi('승인 대기', fmt(((flow.summary || {}).approval) || pending.length)) +
           kpi('실행 가능', fmt(((flow.summary || {}).ready) || 0)) +
           kpi('검증 필요', fmt(((flow.summary || {}).verify) || 0)) +
+          kpi('완료', fmt(((flow.summary || {}).done) || 0)) +
           kpi('SLA 지연', fmt(((flow.summary || {}).sla_breached) || 0) + ' / 임박 ' + fmt(((flow.summary || {}).sla_warning) || 0)) +
           kpi('전체', fmt(((flow.summary || {}).total) || acts.length)) + '</div>') +
         card('필터', filterBar) +
         renderK8sActionFlow(flow, flowFilter, clusterId) +
         card('액션 요청',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">상단 바로가기 또는 장애 및 대응 &gt; 액션 승인함에서 요청을 승인·반려·실행합니다. super_admin/admin은 개발자 뷰에서 실행 가능한 요청을 즉시 실행할 수도 있습니다. 현재 표는 흐름판 필터 기준의 Action 요청 ' + fmt(tableActs.length) + '건을 표시합니다.</div>' +
-          '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+          tableTools +
+          '<table><thead><tr><th>Action</th><th>대상</th><th>위험도</th><th>상태</th><th>흐름</th><th>영향도 / dry-run</th><th>요청자</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
       uxActionQueueCache = { ts: Date.now(), html: uxActionQueueHTML(flow) };
       updateK8sActionNavBadge();
       if (focusId) {
@@ -10401,8 +10608,11 @@ const adminHTML = `<!doctype html>
       flowFilter = String(flowFilter || 'all');
       const currentRole = uxActionFlowCurrentRole();
       const filteredLanes = lanes.map(lane => {
-        const filtered = (lane.items || []).filter(it => uxActionFlowFilterMatches(it, lane.id, flowFilter, currentRole));
-        return Object.assign({}, lane, { items: filtered, count: filtered.length });
+        const filtered = (lane.items || [])
+          .filter(it => uxActionFlowFilterMatches(it, lane.id, flowFilter, currentRole))
+          .map(it => Object.assign({}, it, { lane_id: lane.id, lane: lane.id, role_match: uxActionFlowRoleMatches(it, currentRole) }));
+        const sorted = uxActionFlowSortItems(filtered, currentRole);
+        return Object.assign({}, lane, { items: sorted, count: sorted.length });
       });
       const filteredTotal = filteredLanes.reduce((sum, lane) => sum + ((lane.items || []).length), 0);
       const filterHref = (id) => {
@@ -10425,6 +10635,7 @@ const adminHTML = `<!doctype html>
         approval: laneCounts.approval || 0,
         ready: laneCounts.ready || 0,
         verify: laneCounts.verify || 0,
+        done: laneCounts.done || 0,
       };
       const filters = [
         ['all', '전체'],
@@ -10433,11 +10644,14 @@ const adminHTML = `<!doctype html>
         ['approval', '승인'],
         ['ready', '실행'],
         ['verify', '검증'],
-        ['attention', '확인 필요']
+        ['attention', '확인 필요'],
+        ['done', '완료']
       ];
+      const currentFilterLabel = uxActionFlowFilterLabel(flowFilter, currentRole);
       const filterBar = '<div class="action-flow-filterbar">' +
         filters.map(f => '<a href="' + escapeAttr(filterHref(f[0])) + '" onclick="' + escapeAttr('uxRememberActionFlowFilter(' + JSON.stringify(f[0]) + ')') + '" class="' + (flowFilter === f[0] ? 'active' : '') + '">' + escapeHTML(f[1]) + ' <span class="muted">' + fmt(filterCounts[f[0]] || 0) + '</span></a>').join('') +
-        '<span class="muted">현재 관점 ' + escapeHTML(flowFilter === 'mine' ? ('내 역할 · ' + currentRole) : flowFilter) + ' · ' + fmt(filteredTotal) + '건</span></div>';
+        '<span class="muted">현재 관점 ' + escapeHTML(currentFilterLabel) + ' · ' + fmt(filteredTotal) + '건</span></div>';
+      const roleNote = '<div class="action-flow-role-note">내 역할 기준: <strong>' + escapeHTML(currentRole) + '</strong> · ' + escapeHTML(uxActionFlowRoleMatchExplain(currentRole)) + '</div>';
       const emptyRecovery = filteredTotal ? '' :
         '<div class="action-flow-empty-state"><div><strong style="color:var(--ink)">현재 필터 결과 0건</strong><div style="font-size:11px;margin-top:3px">다른 큐에 처리 대기 작업이 있는지 바로 전환해서 확인하세요.</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
         '<a href="' + escapeAttr(filterHref('all')) + '" onclick="uxRememberActionFlowFilter(\'all\')">전체 ' + fmt(filterCounts.all || 0) + '</a>' +
@@ -10446,7 +10660,9 @@ const adminHTML = `<!doctype html>
       if (!total) {
         return card('다음 행동 흐름', '<div class="card-body"><div class="empty">진행 중인 운영 작업이 없습니다.</div></div>');
       }
-      const html = filteredLanes.map(lane => {
+      const laneOnlyFilters = ['attention', 'approval', 'ready', 'verify', 'prepare', 'done'];
+      const boardLanes = laneOnlyFilters.includes(flowFilter) ? filteredLanes.filter(lane => lane.id === flowFilter) : filteredLanes;
+      const html = boardLanes.map(lane => {
         const items = (lane.items || []).slice(0, 5);
         const rows = items.map(it => {
           const moveLabel = uxFlowMoveLabel(it.primary_label || '');
@@ -10454,10 +10670,12 @@ const adminHTML = `<!doctype html>
           const copyOnclick = 'uxCopyText(' + JSON.stringify(copyValue) + ',' + JSON.stringify('인계 문구 복사됨') + ');return false';
           const slaClass = uxFlowSlaClass(it.sla_status);
           const slaTitle = it.sla_reason || uxFlowSlaLabel(it);
-          return '<div class="action-flow-item sla-' + escapeAttr(slaClass) + '">' +
+          const roleMatch = uxActionFlowRoleMatches(it, currentRole);
+          const roleBadge = roleMatch ? '<span class="action-flow-my-badge" title="' + escapeAttr(uxActionFlowRoleMatchExplain(currentRole)) + '">내 역할</span>' : '';
+          return '<div class="action-flow-item sla-' + escapeAttr(slaClass) + (roleMatch ? ' mine' : '') + '">' +
             '<div class="action-flow-item-title">' +
             '<strong>' + escapeHTML(it.title || it.kind || '') + '</strong>' +
-            '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></div>' +
+            '<span class="action-flow-title-badges">' + roleBadge + '<span class="status ' + riskClass(it.risk_level) + '" style="font-size:9px">' + escapeHTML(it.risk_level || '-') + '</span></span></div>' +
             '<div class="action-flow-meta">' + escapeHTML(it.target || '-') + (k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') ? ' · ' + k8sYamlChangeLinkFromTarget(it.cluster_id, it.target, 'YAML') : '') + '</div>' +
             '<div class="action-flow-detail">' + escapeHTML(it.detail || '') + '</div>' +
             '<div class="action-flow-sla ' + escapeAttr(slaClass) + '" title="' + escapeAttr(slaTitle) + '"><span class="dot"></span><span>' + escapeHTML(uxFlowSlaLabel(it)) + '</span></div>' +
@@ -10469,24 +10687,46 @@ const adminHTML = `<!doctype html>
             '</div></div>';
         }).join('') || '<div class="action-flow-empty">해당 단계 작업 없음</div>';
         const more = (lane.count || 0) > items.length ? '<div class="muted" style="font-size:10px;margin-top:6px">외 ' + fmt((lane.count || 0) - items.length) + '건</div>' : '';
+        const laneFirst = items[0] || null;
+        const laneSummary = uxActionFlowFilteredSummary(lane.items || [], lane.label || lane.id || '레인', currentRole);
+        const laneCopy = (lane.items || []).length
+          ? '<button type="button" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(laneSummary) + ',' + JSON.stringify('레인 인계 요약 복사됨') + ');return false') + '" title="이 레인에 표시된 처리 대상만 인계 요약으로 복사합니다.">요약 복사</button>'
+          : '';
+        const laneView = (lane.items || []).length && lane.id
+          ? '<a href="' + escapeAttr(filterHref(lane.id)) + '" onclick="' + escapeAttr('uxRememberActionFlowFilter(' + JSON.stringify(lane.id) + ')') + '" title="이 레인 작업만 보도록 액션 흐름판 필터를 전환합니다.">레인 보기 ' + fmt(lane.count || 0) + '</a>'
+          : '';
+        const laneAction = laneFirst || laneCopy || laneView
+          ? '<div class="action-flow-lane-actions">' + (laneFirst ? '<a href="' + escapeAttr(uxFlowItemHref(laneFirst)) + '" title="이 레인의 첫 처리 대상 화면으로 이동합니다. 승인이나 실행을 완료하지는 않습니다.">첫 작업 · ' + escapeHTML(uxFlowMoveLabel(laneFirst.primary_label || '열기')) + '</a>' : '') + laneView + laneCopy + '</div>'
+          : '';
         return '<div class="action-flow-lane ' + escapeAttr(lane.id || '') + '">' +
           '<div class="action-flow-lane-head"><div class="action-flow-lane-title"><span>' + escapeHTML(lane.label || lane.id) + '</span><span class="status ' + laneTone(lane.id) + '" style="font-size:10px">' + fmt(lane.count || 0) + '</span></div>' +
-          '<div class="action-flow-lane-desc">' + escapeHTML(lane.description || '') + '</div></div>' +
+          '<div class="action-flow-lane-desc">' + escapeHTML(lane.description || '') + '</div>' + laneAction + '</div>' +
           rows + (more ? '<div style="padding:0 10px 10px">' + more + '</div>' : '') + '</div>';
       }).join('');
       const handoffSummary = (flow && flow.handoff_summary) || '';
       const filteredItems = [];
       filteredLanes.forEach(lane => (lane.items || []).forEach(it => filteredItems.push(Object.assign({}, it, { lane: lane.id }))));
-      const filterLabel = flowFilter === 'mine' ? '내 역할 ' + currentRole : flowFilter;
-      const filteredSummary = uxActionFlowFilteredSummary(filteredItems, filterLabel, currentRole);
+      const sortedFilteredItems = uxActionFlowSortItems(filteredItems, currentRole);
+      const filteredSummary = uxActionFlowFilteredSummary(sortedFilteredItems, currentFilterLabel, currentRole);
+      const firstFiltered = sortedFilteredItems[0] || null;
+      const firstActionLink = firstFiltered
+        ? '<a class="secondary" href="' + escapeAttr(uxFlowItemHref(firstFiltered)) + '" title="현재 필터의 첫 작업 화면으로 이동합니다. 승인이나 실행을 완료하지는 않습니다.">첫 작업 열기</a>'
+        : '';
+      const firstFilteredBrief = firstFiltered
+        ? '<div class="muted">우선 처리: <strong style="color:var(--ink)">' + escapeHTML(firstFiltered.title || '-') + '</strong> · ' + escapeHTML(firstFiltered.target || '-') + ' · 담당 ' + escapeHTML(firstFiltered.actor_hint || '-') + ' · ' + escapeHTML(uxFlowSlaLabel(firstFiltered)) + ' · ' + escapeHTML(uxActionFlowPriorityReason(firstFiltered)) + '</div>'
+        : '<div class="muted">현재 필터 기준 우선 처리 대상이 없습니다.</div>';
+      const refreshOnclick = 'k8sActionRefreshFlow(this);return false';
+      const refreshButton = '<button type="button" class="secondary" onclick="' + escapeAttr(refreshOnclick) + '" title="Action Flow API를 다시 조회해 최신 승인/실행 상태를 반영합니다.">새로고침</button>';
+      const refreshMeta = '<div class="muted">마지막 갱신: ' + (flow && flow.generated_at ? ago(flow.generated_at) : '방금') + '</div>';
       const summaryCopy = handoffSummary
-        ? '<div class="action-flow-summary"><div><strong>운영 인계 요약</strong><div class="muted">SLA 초과·승인·실행·검증 대기 작업을 우선순위대로 묶어 복사합니다.</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(filteredSummary) + ',' + JSON.stringify('현재 필터 요약 복사됨') + ');return false') + '">현재 필터 복사</button><button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('전체 인계 요약 복사됨') + ');return false') + '">전체 요약 복사</button></div></div>'
+        ? '<div class="action-flow-summary"><div><strong>운영 인계 요약</strong><div class="muted">SLA 초과·승인·실행·검증 대기 작업을 우선순위대로 묶어 복사합니다.</div>' + firstFilteredBrief + refreshMeta + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' + firstActionLink + refreshButton + '<button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(filteredSummary) + ',' + JSON.stringify('현재 필터 요약 복사됨') + ');return false') + '">현재 필터 복사</button><button type="button" class="secondary" onclick="' + escapeAttr('uxCopyText(' + JSON.stringify(handoffSummary) + ',' + JSON.stringify('전체 인계 요약 복사됨') + ');return false') + '">전체 요약 복사</button></div></div>'
         : '';
       return card('다음 행동 흐름',
         '<div class="card-body">' +
         '<div class="muted" style="font-size:11px;margin-bottom:8px">Action, Config 변경, YAML 변경, Exec, Debug 요청을 메뉴가 아니라 사용자의 다음 행동 기준으로 묶었습니다. 버튼을 누르면 원래 처리 화면으로 이동합니다.</div>' +
         summaryCopy +
         filterBar +
+        roleNote +
         emptyRecovery +
         '<div class="action-flow-board">' + html + '</div></div>');
     }
@@ -10499,6 +10739,20 @@ const adminHTML = `<!doctype html>
       if (flow !== 'all') q.set('flow', flow);
       location.hash = '#/k8s-actions' + (q.toString() ? '?' + q.toString() : '');
     };
+    window.k8sActionRefreshFlow = async (btn) => {
+      k8sActionButtonBusy(btn, '새로고침 중...');
+      try {
+        uxInvalidateActionQueue();
+        await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
+        k8sActionSetNotice('ok', '액션 승인함 새로고침 완료');
+      } catch (e) {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = btn.dataset.originalText || '새로고침';
+        }
+        k8sActionSetNotice('error', '액션 승인함 새로고침 실패: ' + e.message);
+      }
+    };
     window.k8sActDecide = async (id, command, btn) => {
       let body = '{}';
       const label = command === 'approve' ? '승인' : (command === 'reject' ? '반려' : command);
@@ -10509,7 +10763,7 @@ const adminHTML = `<!doctype html>
       k8sActionButtonBusy(btn, label + ' 중...');
       try {
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/' + command, { method: 'POST', body });
-        k8sActionSetNotice('ok', '액션 ' + id + ' ' + label + ' 완료');
+        k8sActionSetNotice('ok', k8sActionSuccessMessage(id, command, label), k8sActionPostActionLinks(command, id));
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' ' + label + ' 실패: ' + e.message);
       }
@@ -10521,7 +10775,7 @@ const adminHTML = `<!doctype html>
       k8sActionButtonBusy(btn, '실행 중...');
       try {
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' });
-        k8sActionSetNotice('ok', '액션 ' + id + ' 실행 완료');
+        k8sActionSetNotice('ok', k8sActionSuccessMessage(id, 'execute', '실행'), k8sActionPostActionLinks('execute', id));
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' 실행 실패: ' + e.message);
       }
@@ -10534,7 +10788,7 @@ const adminHTML = `<!doctype html>
       try {
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/approve', { method: 'POST', body: JSON.stringify({ result: 'approved for immediate execution' }) });
         await api('/admin/k8s/actions/' + encodeURIComponent(id) + '/execute', { method: 'POST', body: '{}' });
-        k8sActionSetNotice('ok', '액션 ' + id + ' 승인+실행 완료');
+        k8sActionSetNotice('ok', k8sActionSuccessMessage(id, 'approve_execute', '승인+실행'), k8sActionPostActionLinks('approve_execute', id));
       } catch (e) {
         k8sActionSetNotice('error', '액션 ' + id + ' 승인+실행 실패: ' + e.message);
       }
