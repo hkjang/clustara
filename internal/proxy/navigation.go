@@ -36,7 +36,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.service_catalog", Label: "서비스 카탈로그", Path: "#/service-catalog", Tab: "service-catalog", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_stacks", Label: "앱 배포", Path: "#/k8s-stacks", Tab: "k8s-stacks", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
-	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경/생성", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.gitops", Label: "GitOps", Path: "#/gitops", Tab: "gitops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_timeline", Label: "변경 타임라인", Path: "#/k8s-timeline", Tab: "k8s-timeline", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.problems", Label: "Problem Inbox", Path: "#/problems", Tab: "problems", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},

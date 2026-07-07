@@ -6,13 +6,13 @@
 # prompt changes can't merge if they regress known-good behaviour.
 #
 # Usage:
-#   GATEWAY_URL=http://localhost:8080 ADMIN_TOKEN=... \
+#   GATEWAY_URL=http://localhost:9090 ADMIN_TOKEN=... \
 #   scripts/golden-regression.sh "gpt-4.1-mini,gpt-4.1" [min_pass_rate] [tag]
 #
 # Defaults: models from $GOLDEN_MODELS, min_pass_rate=1.0, no tag filter.
 set -euo pipefail
 
-GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:9090}"
 MODELS="${1:-${GOLDEN_MODELS:-}}"
 MIN_PASS_RATE="${2:-1.0}"
 TAG="${3:-}"

@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestPathCovered(t *testing.T) {
 	routes := []string{"/v1/models", "/v1/apps/", "/mcp/gateway", "/me/connection-doctor", "/v1/"}
@@ -68,5 +73,58 @@ func TestBuildReportContractIntact(t *testing.T) {
 	rep2 := buildReport([]string{`mux.HandleFunc("/v1/models", h)`}, "", "", "req(\"POST\", \"/v1/ghost\")")
 	if len(rep2.SDKOnly) != 1 || rep2.SDKOnly[0] != "/v1/ghost" {
 		t.Fatalf("expected /v1/ghost flagged as sdk_only, got %v", rep2.SDKOnly)
+	}
+	if surfaceFailureCount(rep2) != 2 {
+		t.Fatalf("surfaceFailureCount = %d, want 2", surfaceFailureCount(rep2))
+	}
+}
+
+func TestSurfaceFailureCountIncludesDocumentationGaps(t *testing.T) {
+	rep := auditReport{
+		OpenAPIMissing: []string{"/admin/new-route"},
+		StaleDocs:      []string{"/admin/removed-route"},
+	}
+	if surfaceFailureCount(rep) != 2 {
+		t.Fatalf("documentation gaps must fail API surface audit: %+v", rep)
+	}
+}
+
+func TestRepositoryAPISurfaceAuditIsZeroGap(t *testing.T) {
+	root := filepath.Join("..", "..")
+	serverFiles, err := filepath.Glob(filepath.Join(root, "internal", "proxy", "*.go"))
+	if err != nil {
+		t.Fatalf("glob server sources: %v", err)
+	}
+	serverSrcs := []string{}
+	for _, f := range serverFiles {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read server source %s: %v", f, err)
+		}
+		serverSrcs = append(serverSrcs, string(b))
+	}
+	if len(serverSrcs) == 0 {
+		t.Fatal("no server route sources found")
+	}
+	read := func(rel string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("read required API surface source %s: %v", rel, err)
+		}
+		return string(b)
+	}
+	rep := buildReport(
+		serverSrcs,
+		read(filepath.Join("internal", "proxy", "admin_openapi.go")),
+		read(filepath.Join("cmd", "clustara-cli", "main.go")),
+		read(filepath.Join("sdk", "typescript", "clustara.ts")),
+	)
+	if gaps := surfaceFailureCount(rep); gaps != 0 {
+		t.Fatalf("repository API surface drift: gaps=%d cli_only=%v sdk_only=%v openapi_missing=%v undocumented=%v",
+			gaps, rep.CLIOnly, rep.SDKOnly, rep.OpenAPIMissing, rep.StaleDocs)
 	}
 }

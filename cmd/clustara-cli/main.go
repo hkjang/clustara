@@ -1,7 +1,8 @@
-// Command clustara-cli is a small CLI for the clustara Clustara. It talks to the gateway over HTTP:
+// Command clustara-cli is a small CLI for Clustara. It talks to the gateway over HTTP:
 // chat/app runs via the OpenAI-compatible /v1 API, and read-only lookups (models, quota, route
 // preview, usage) via the Clustara MCP server at /mcp/gateway. Config comes from flags or env
-// (CLUSTARA_BASE_URL/VIBE_BASE_URL, CLUSTARA_API_KEY/VIBE_API_KEY). Output is JSON by default; --table renders a human view.
+// (CLUSTARA_BASE_URL/CLUSTARA_API_KEY; legacy VIBE_* aliases are still accepted). Output is JSON
+// by default; --table renders a human view.
 package main
 
 import (
@@ -33,7 +34,7 @@ func resolveConfig(args []string, env func(string) string) (cliConfig, []string)
 		cfg.APIKey = env("VIBE_API_KEY")
 	}
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "http://localhost:8080"
+		cfg.BaseURL = "http://localhost:9090"
 	}
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
@@ -88,7 +89,7 @@ Commands:
   models                  list available models
   chat -m MODEL PROMPT    run a chat completion
   quota                   show your quota status
-  route MODEL PROMPT      preview vibe/auto routing
+  route MODEL PROMPT      preview model routing
   usage [WINDOW]          show your usage summary (e.g. 30d)
   app run APP_ID          run an AI work app
   doctor [--client C]     diagnose your client connection setup
@@ -106,7 +107,7 @@ func run(cfg cliConfig, args []string) error {
 			fmt.Println(mcpConfigJSON(cfg.BaseURL))
 			return nil
 		}
-		return fmt.Errorf("usage: vibe mcp config")
+		return fmt.Errorf("usage: clustara-cli mcp config")
 	case "models":
 		return cmdModels(cfg)
 	case "quota":
@@ -119,7 +120,7 @@ func run(cfg cliConfig, args []string) error {
 		return cmdMCPTool(cfg, "gateway_get_usage_summary", map[string]any{"window": win})
 	case "route":
 		if len(rest) < 2 {
-			return fmt.Errorf("usage: vibe route MODEL PROMPT")
+			return fmt.Errorf("usage: clustara-cli route MODEL PROMPT")
 		}
 		return cmdMCPTool(cfg, "gateway_route_preview", map[string]any{"model": rest[0], "prompt": strings.Join(rest[1:], " ")})
 	case "chat":
@@ -128,7 +129,7 @@ func run(cfg cliConfig, args []string) error {
 		if len(rest) >= 2 && rest[0] == "run" {
 			return cmdAppRun(cfg, rest[1])
 		}
-		return fmt.Errorf("usage: vibe app run APP_ID")
+		return fmt.Errorf("usage: clustara-cli app run APP_ID")
 	case "doctor":
 		client := "openai-sdk"
 		for i := 0; i < len(rest); i++ {
@@ -204,7 +205,7 @@ func cmdChat(cfg cliConfig, rest []string) error {
 		prompt = append(prompt, rest[i])
 	}
 	if len(prompt) == 0 {
-		return fmt.Errorf("usage: vibe chat -m MODEL PROMPT")
+		return fmt.Errorf("usage: clustara-cli chat -m MODEL PROMPT")
 	}
 	body := map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": strings.Join(prompt, " ")}}}
 	raw, status, err := cfg.do(http.MethodPost, "/v1/chat/completions", body)

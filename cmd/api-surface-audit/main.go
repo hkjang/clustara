@@ -141,6 +141,10 @@ func buildReport(serverSrcs []string, openapiSrc, cliSrc, sdkSrc string) auditRe
 	return rep
 }
 
+func surfaceFailureCount(rep auditReport) int {
+	return len(rep.CLIOnly) + len(rep.SDKOnly) + len(rep.OpenAPIMissing) + len(rep.StaleDocs)
+}
+
 func main() {
 	root := "."
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
@@ -153,28 +157,39 @@ func main() {
 		}
 	}
 
-	read := func(p string) string {
+	readRequired := func(p string) string {
 		b, err := os.ReadFile(filepath.Join(root, p))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: cannot read %s: %v\n", p, err)
-			return ""
+			fmt.Fprintf(os.Stderr, "FAIL: cannot read required API surface source %s: %v\n", p, err)
+			os.Exit(1)
 		}
 		return string(b)
 	}
-	serverFiles, _ := filepath.Glob(filepath.Join(root, "internal", "proxy", "*.go"))
+	serverFiles, err := filepath.Glob(filepath.Join(root, "internal", "proxy", "*.go"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: cannot enumerate server route sources: %v\n", err)
+		os.Exit(1)
+	}
 	serverSrcs := []string{}
 	for _, f := range serverFiles {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		if b, err := os.ReadFile(f); err == nil {
-			serverSrcs = append(serverSrcs, string(b))
+		b, err := os.ReadFile(f)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL: cannot read server route source %s: %v\n", f, err)
+			os.Exit(1)
 		}
+		serverSrcs = append(serverSrcs, string(b))
+	}
+	if len(serverSrcs) == 0 {
+		fmt.Fprintln(os.Stderr, "FAIL: no server route sources found under internal/proxy")
+		os.Exit(1)
 	}
 	rep := buildReport(serverSrcs,
-		read(filepath.Join("internal", "proxy", "admin_openapi.go")),
-		read(filepath.Join("cmd", "vibe", "main.go")),
-		read(filepath.Join("sdk", "typescript", "vibe.ts")))
+		readRequired(filepath.Join("internal", "proxy", "admin_openapi.go")),
+		readRequired(filepath.Join("cmd", "clustara-cli", "main.go")),
+		readRequired(filepath.Join("sdk", "typescript", "clustara.ts")))
 
 	if jsonOut {
 		b, _ := json.MarshalIndent(rep, "", "  ")
@@ -192,9 +207,9 @@ func main() {
 	}
 
 	// Fail on any contract gap: a client (CLI/SDK) path the server doesn't serve, a server route
-	// absent from the OpenAPI catalog, or a documented route that no longer exists. The repo is at
-	// zero gaps, so this keeps the README/CLI/SDK/OpenAPI/server surfaces in lockstep.
-	gaps := len(rep.CLIOnly) + len(rep.SDKOnly) + len(rep.OpenAPIMissing) + len(rep.StaleDocs)
+	// absent from the OpenAPI catalog, or a documented route that no longer exists. Missing source
+	// files and unreadable route sources already fail before this point.
+	gaps := surfaceFailureCount(rep)
 	if gaps > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: %d API surface gap(s) — cli_only=%v sdk_only=%v openapi_missing=%v undocumented=%v\n",
 			gaps, rep.CLIOnly, rep.SDKOnly, rep.OpenAPIMissing, rep.StaleDocs)

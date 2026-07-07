@@ -358,7 +358,7 @@ func terminalCommandTemplates() []map[string]any {
 		{"name": "디스크 사용량", "command": "df -h", "risk": "low"},
 		{"name": "메모리 확인", "command": "free -m", "risk": "low"},
 		{"name": "DNS 확인", "command": "nslookup kubernetes.default", "risk": "medium"},
-		{"name": "HTTP 확인", "command": "curl -I http://localhost:8080/health", "risk": "medium"},
+		{"name": "HTTP 확인", "command": "curl -I http://localhost:9090/health", "risk": "medium"},
 	}
 }
 

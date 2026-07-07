@@ -21,7 +21,7 @@
 | **운영 홈** | 클러스터 위험 TOP5, 장애 후보 TOP10, 최근 변경 TOP10, 비용 TOP10 |
 | **Pod 관리** | Pod 목록·상세, 위험 Pod 자동 북마크, 최근 접근 이력, 컨테이너 상태, 이벤트, 현재/previous 로그, 로그 분석·프리셋·마스킹 리포트·스냅샷·동일 workload 병합, 증적 번들, Golden Pod Diff, Health Replay, 조치 안전성·플레이북 |
 | **터미널·디버그 정책** | Pod exec/web terminal 사전 정책: role·namespace·label·명령 allow/deny·승인·세션 시간·감사 평가, Risk Briefing, 명령 템플릿, 세션 요청 이력·승인함·상세 리플레이·감사 리포트, Debug Container 요청·승인 이력 |
-| **변경 추적** | 리소스 spec 리비전(append-only), Resource Diff, 변경 타임라인, Manifest Viewer(민감값 마스킹) |
+| **변경 추적** | 리소스 spec 리비전(append-only), Resource Diff, 변경 타임라인, Manifest Viewer(민감값 마스킹), YAML 변경/생성 요청 원장 |
 | **장애 분석(RCA)** | CrashLoop·OOM·ImagePull·Pending·Unavailable + Readiness/Liveness probe·DNS·NodePressure(노드 condition) + 직전 Config 변경·배포 후 오류 연계, 근거 기반 장애 분석 센터 |
 | **연결성 점검** | Service selector↔Endpoint, Ingress backend/host/TLS, PVC, Rollout, Job/CronJob |
 | **액션 센터** | 영향도 분석·승인·감사 공통화 + 실클러스터 executor(scale / rollout restart / cordon / uncordon / delete pod) — Action/Config/YAML/Exec/Debug 요청을 다음 행동 흐름으로 묶는 승인 게이트 |
@@ -45,7 +45,7 @@ $env:ADMIN_TOKEN    = "dev-admin"
 go run ./cmd/clustara
 ```
 
-기동 로그에 `Clustara listening addr=:8080 database=sqlite` 가 보이면 정상입니다. 어드민 UI: `http://localhost:8080/admin` (상단 "관리자 토큰"에 `ADMIN_TOKEN` 입력).
+기동 로그에 `Clustara listening addr=:9090 database=sqlite` 가 보이면 정상입니다. 어드민 UI: `http://localhost:9090/admin` (상단 "관리자 토큰"에 `ADMIN_TOKEN` 입력).
 
 자세한 기동/종료/백업은 [운영 가이드](docs/OPERATIONS.md) 참고.
 
@@ -59,7 +59,7 @@ go run ./cmd/clustara
 
 | 변수 | 설명 |
 | --- | --- |
-| `LISTEN_ADDR` | 리슨 주소 (기본 `:8080`) |
+| `LISTEN_ADDR` | 리슨 주소 (기본 `:9090`) |
 | `GATEWAY_SECRET` | kubeconfig/token·provider key 암호화 키 — **운영 필수, 변경 시 기존 암호값 복호화 불가** |
 | `ADMIN_TOKEN` | 어드민 API/UI 접근 토큰 |
 | `DB_DRIVER` / `DB_DSN` | 저장소 (기본 sqlite `data/gateway.db`, PostgreSQL DSN 지원) |
@@ -81,7 +81,7 @@ POST /admin/k8s/dw/sink        # 현재 fact 적재 (cron으로 주기 호출)
 
 ```bash
 docker build -t clustara:dev .
-docker run -d --name clustara --restart=always -p 8080:8080 -v $PWD/data:/data \
+docker run -d --name clustara --restart=always -p 9090:9090 -v $PWD/data:/data \
   -e GATEWAY_SECRET=$(openssl rand -hex 32) -e ADMIN_TOKEN=$(openssl rand -hex 32) clustara:dev
 ```
 

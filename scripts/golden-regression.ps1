@@ -6,7 +6,7 @@
   and exits non-zero when the pass rate drops below the threshold, so model or
   prompt changes that regress known-good behaviour fail the build.
 .EXAMPLE
-  $env:GATEWAY_URL="http://localhost:8080"; $env:ADMIN_TOKEN="..."
+  $env:GATEWAY_URL="http://localhost:9090"; $env:ADMIN_TOKEN="..."
   ./scripts/golden-regression.ps1 -Models "gpt-4.1-mini,gpt-4.1" -MinPassRate 1.0
 #>
 param(
@@ -16,7 +16,7 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-$gateway = if ($env:GATEWAY_URL) { $env:GATEWAY_URL } else { "http://localhost:8080" }
+$gateway = if ($env:GATEWAY_URL) { $env:GATEWAY_URL } else { "http://localhost:9090" }
 if ([string]::IsNullOrWhiteSpace($Models)) {
   Write-Error "no models given (-Models or `$env:GOLDEN_MODELS)"; exit 2
 }

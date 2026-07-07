@@ -346,6 +346,9 @@ func TestOperationalHealthReadyMetricsAndFavicon(t *testing.T) {
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), want) {
 			t.Fatalf("%s returned status=%d body=%s", path, resp.StatusCode, body)
 		}
+		if path == "/ready" && (!strings.Contains(string(body), `"ops_status":"/admin/ops/status"`) || !strings.Contains(string(body), `"name":"database"`)) {
+			t.Fatalf("/ready missing readiness v2 fields: %s", body)
+		}
 	}
 	metrics, err := http.Get(proxy.URL + "/metrics")
 	if err != nil {

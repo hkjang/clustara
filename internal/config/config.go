@@ -13,29 +13,42 @@ import (
 )
 
 type Config struct {
-	ListenAddr  string
-	Upstream    UpstreamConfig
-	Database    DatabaseConfig
-	Logging     LoggingConfig
-	Retention   RetentionConfig
-	Cache       CacheConfig
-	Auth        AuthConfig
-	Secret      SecretConfig
-	Session     SessionConfig
-	VCS         VCSConfig
-	Text2SQL    Text2SQLConfig
-	ClickHouse  ClickHouseConfig
-	Carbon      CarbonConfig
-	Insurance   InsuranceConfig
-	Pricing     map[string]ModelPrice
-	PricingConf PricingConfig
-	Skills      SkillsConfig
-	Limits      LimitsConfig
-	MCP         MCPConfig
-	Keycloak    KeycloakConfig
+	ListenAddr   string
+	Environment  string
+	StrictConfig bool
+	HTTP         HTTPConfig
+	Upstream     UpstreamConfig
+	Database     DatabaseConfig
+	Logging      LoggingConfig
+	Retention    RetentionConfig
+	Cache        CacheConfig
+	Auth         AuthConfig
+	Secret       SecretConfig
+	Session      SessionConfig
+	VCS          VCSConfig
+	Text2SQL     Text2SQLConfig
+	ClickHouse   ClickHouseConfig
+	Carbon       CarbonConfig
+	Insurance    InsuranceConfig
+	Pricing      map[string]ModelPrice
+	PricingConf  PricingConfig
+	Skills       SkillsConfig
+	Limits       LimitsConfig
+	MCP          MCPConfig
+	Keycloak     KeycloakConfig
 	// RuntimeReloadInterval is how often each pod polls the DB for admin-settings changes made on
 	// other pods (multi-replica convergence). 0 disables polling (single-pod / local dev).
 	RuntimeReloadInterval time.Duration
+}
+
+// HTTPConfig holds the public HTTP server guardrails. WriteTimeout is intentionally long by
+// default because chat and log streaming responses can be long-lived.
+type HTTPConfig struct {
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	MaxHeaderBytes    int
 }
 
 // KeycloakConfig configures OIDC SSO via Keycloak (Authorization Code + PKCE). When
@@ -326,10 +339,21 @@ func Load() (Config, error) {
 	if _, err := strconv.Atoi(addr); err == nil {
 		addr = ":" + addr
 	}
+	envName := strings.ToLower(strings.TrimSpace(getEnv("CLUSTARA_ENV", getEnv("APP_ENV", "development"))))
+	strictConfig := boolEnv("STRICT_CONFIG", false) || boolEnv("CLUSTARA_STRICT_CONFIG", false)
 
 	cfg := Config{
 		ListenAddr:            addr,
+		Environment:           envName,
+		StrictConfig:          strictConfig,
 		RuntimeReloadInterval: durationEnv("SETTINGS_RELOAD_INTERVAL", 10*time.Second),
+		HTTP: HTTPConfig{
+			ReadHeaderTimeout: durationEnv("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),
+			ReadTimeout:       durationEnv("HTTP_READ_TIMEOUT", 60*time.Second),
+			WriteTimeout:      durationEnv("HTTP_WRITE_TIMEOUT", 10*time.Minute),
+			IdleTimeout:       durationEnv("HTTP_IDLE_TIMEOUT", 120*time.Second),
+			MaxHeaderBytes:    intEnv("HTTP_MAX_HEADER_BYTES", 1<<20),
+		},
 		Upstream: UpstreamConfig{
 			Provider:     getEnv("UPSTREAM_PROVIDER", "openai"),
 			BaseURL:      strings.TrimRight(getEnv("UPSTREAM_BASE_URL", "https://api.openai.com"), "/"),
@@ -499,6 +523,26 @@ func Load() (Config, error) {
 	if cfg.Logging.QueueSize <= 0 {
 		return Config{}, fmt.Errorf("LOG_QUEUE_SIZE must be positive")
 	}
+	if cfg.HTTP.MaxHeaderBytes < 0 {
+		return Config{}, fmt.Errorf("HTTP_MAX_HEADER_BYTES must be non-negative")
+	}
+	if cfg.Environment == "production" || cfg.StrictConfig {
+		if weakOperationalSecret(cfg.Secret.GatewaySecret) {
+			return Config{}, fmt.Errorf("strong GATEWAY_SECRET is required in production or strict config mode")
+		}
+		if !cfg.Auth.Enabled && cfg.Auth.AdminToken == "" && cfg.Auth.AdminReadonlyToken == "" {
+			return Config{}, fmt.Errorf("ADMIN_TOKEN, ADMIN_READONLY_TOKEN, or AUTH_ENABLED=true is required in production or strict config mode")
+		}
+		if cfg.Auth.AdminToken != "" && weakOperationalSecret(cfg.Auth.AdminToken) {
+			return Config{}, fmt.Errorf("strong ADMIN_TOKEN is required in production or strict config mode")
+		}
+		if cfg.Auth.AdminReadonlyToken != "" && weakOperationalSecret(cfg.Auth.AdminReadonlyToken) {
+			return Config{}, fmt.Errorf("strong ADMIN_READONLY_TOKEN is required in production or strict config mode")
+		}
+		if cfg.Auth.Enabled && weakOperationalSecret(cfg.Auth.JWTSecret) {
+			return Config{}, fmt.Errorf("strong AUTH_JWT_SECRET is required when AUTH_ENABLED=true in production or strict config mode")
+		}
+	}
 	if err := json.Unmarshal([]byte(getEnv("MODEL_PRICING_KRW_PER_1M", "{}")), &cfg.Pricing); err != nil {
 		return Config{}, fmt.Errorf("parse MODEL_PRICING_KRW_PER_1M: %w", err)
 	}
@@ -507,6 +551,27 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func weakOperationalSecret(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 16 {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	weakMarkers := []string{
+		"change-me", "changeme", "dev-only", "dev-local", "dev-admin",
+		"default", "insecure", "password", "secret", "token",
+	}
+	if trimmed == DefaultGatewaySecret {
+		return true
+	}
+	for _, marker := range weakMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func databaseConfig() DatabaseConfig {

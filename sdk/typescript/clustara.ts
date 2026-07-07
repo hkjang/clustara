@@ -4,11 +4,11 @@
 //
 // Usage:
 //   import { ClustaraClient } from "./clustara";
-//   const vibe = new ClustaraClient({ baseURL: "https://gw.example.com", apiKey: process.env.CLUSTARA_API_KEY! });
-//   const out = await vibe.chat("코드 리뷰 해줘", { model: "vibe/auto" });
+//   const clustara = new ClustaraClient({ baseURL: "https://gw.example.com", apiKey: process.env.CLUSTARA_API_KEY! });
+//   const out = await clustara.chat("코드 리뷰 해줘", { model: "vibe/auto" });
 
 export interface ClustaraOptions {
-  baseURL?: string; // default http://localhost:8080
+  baseURL?: string; // default http://localhost:9090
   apiKey: string;
 }
 
@@ -32,7 +32,7 @@ export class ClustaraClient {
   private apiKey: string;
 
   constructor(opts: ClustaraOptions) {
-    this.baseURL = (opts.baseURL ?? "http://localhost:8080").replace(/\/+$/, "");
+    this.baseURL = (opts.baseURL ?? "http://localhost:9090").replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
   }
 

@@ -154,6 +154,7 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 		Kind           string `json:"kind"`
 		APIVersion     string `json:"api_version"`
 		Name           string `json:"name"`
+		Operation      string `json:"operation"`
 		AfterYAML      string `json:"after_yaml"`
 		Reason         string `json:"reason"`
 		IdempotencyKey string `json:"idempotency_key"`
@@ -163,11 +164,44 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	clusterID := strings.TrimSpace(in.ClusterID)
-	kind := strings.TrimSpace(in.Kind)
+	operation, err := normalizeManifestChangeOperation(in.Operation)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_manifest_operation")
+		return
+	}
+	kind := canonicalManifestKind(strings.TrimSpace(in.Kind))
 	namespace := strings.TrimSpace(in.Namespace)
 	name := strings.TrimSpace(in.Name)
-	if clusterID == "" || kind == "" || name == "" || strings.TrimSpace(in.AfterYAML) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "cluster_id, kind, name and after_yaml are required", "invalid_request_error", "missing_fields")
+	afterRaw := strings.TrimSpace(in.AfterYAML)
+	if clusterID == "" || afterRaw == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id and after_yaml are required", "invalid_request_error", "missing_fields")
+		return
+	}
+	afterDoc, err := parseSingleManifestDoc(afterRaw)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "after_yaml parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	docAPIVersion, docKind, docNamespace, docName := manifestDocIdentity(afterDoc)
+	if kind == "" {
+		kind = docKind
+	}
+	if name == "" {
+		name = docName
+	}
+	if namespace == "" {
+		namespace = docNamespace
+	}
+	if namespace == "" && !manifestKindClusterScoped(kind) {
+		namespace = "default"
+	}
+	if err := ensureManifestDocTarget(afterDoc, kind, namespace, name); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "manifest_target_mismatch")
+		return
+	}
+	apiVersion := firstNonEmpty(strings.TrimSpace(in.APIVersion), docAPIVersion)
+	if clusterID == "" || kind == "" || name == "" || apiVersion == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id, apiVersion, kind, name and after_yaml are required", "invalid_request_error", "missing_fields")
 		return
 	}
 	idempotencyKey := strings.TrimSpace(firstNonEmpty(in.IdempotencyKey, r.Header.Get("Idempotency-Key")))
@@ -182,18 +216,17 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	if operation == "create" {
+		s.createK8sManifestCreateRequest(w, r, clusterID, namespace, kind, apiVersion, name, afterDoc, strings.TrimSpace(in.Reason), idempotencyKey)
+		return
+	}
 	item, err := s.db.GetK8sInventoryItem(r.Context(), clusterID, kind, namespace, name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeOpenAIError(w, http.StatusNotFound, "live resource not found", "invalid_request_error", "resource_not_found")
+		writeOpenAIError(w, http.StatusNotFound, "live resource not found; 신규 리소스 생성은 operation=create로 요청하세요", "invalid_request_error", "resource_not_found")
 		return
 	}
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
-		return
-	}
-	afterDoc, err := parseSingleManifestDoc(in.AfterYAML)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "after_yaml parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
 		return
 	}
 	if err := validateManifestTarget(afterDoc, item); err != nil {
@@ -214,7 +247,7 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 		impact["secret_payload_guard"] = "Secret data/stringData 원문은 Manifest Change Studio에 저장하거나 적용하지 않습니다. Secret 값 변경은 Config Change Control 또는 외부 Secret 관리 체계를 사용하세요."
 	}
 	req := store.K8sManifestChangeRequest{
-		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: item.Kind, APIVersion: firstNonEmpty(in.APIVersion, item.APIVersion),
+		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: item.Kind, APIVersion: firstNonEmpty(apiVersion, item.APIVersion),
 		Name: item.Name, Status: "draft", RiskLevel: risk, RequiresApproval: requiresApproval, Reason: strings.TrimSpace(in.Reason),
 		BeforeYAML: beforeYAML, AfterYAML: afterYAML, BeforeHash: manifestHash(beforeYAML), AfterHash: manifestHash(afterYAML),
 		Diffs: diffs, Impact: impact, CreatedBy: adminID(r), IdempotencyKey: idempotencyKey,
@@ -231,6 +264,53 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"request": req, "impact": impact, "diffs": diffs,
 		"note": "요청이 draft로 저장되었습니다. validate 후 위험도에 따라 승인 또는 바로 적용할 수 있습니다.",
+	})
+}
+
+func (s *Server) createK8sManifestCreateRequest(w http.ResponseWriter, r *http.Request, clusterID, namespace, kind, apiVersion, name string, afterDoc map[string]any, reason, idempotencyKey string) {
+	if _, err := s.db.GetK8sCluster(r.Context(), clusterID); errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "cluster not found: "+clusterID, "invalid_request_error", "k8s_cluster_not_found")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed")
+		return
+	}
+	if existing, err := s.db.GetK8sInventoryItem(r.Context(), clusterID, kind, namespace, name); err == nil {
+		writeOpenAIError(w, http.StatusConflict, fmt.Sprintf("resource already exists: %s/%s/%s (uid=%s)", kind, namespace, name, existing.UID), "invalid_request_error", "manifest_create_target_exists")
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
+		return
+	}
+	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
+	afterYAML := mustManifestYAML(storeAfterDoc)
+	diffs := diffManifestDocs(map[string]any{}, storeAfterDoc)
+	policies, _ := s.db.ListK8sPolicies(r.Context())
+	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
+	item := store.K8sInventoryItem{ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion, Name: name}
+	impact, risk, requiresApproval := manifestCreateImpact(item, afterDoc, diffs, plan)
+	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
+		requiresApproval = true
+		risk = "critical"
+		impact["secret_payload_guard"] = "Secret data/stringData 원문은 Manifest Change Studio에 저장하거나 적용하지 않습니다. Secret 값 생성은 외부 Secret 관리 체계를 사용하세요."
+	}
+	req := store.K8sManifestChangeRequest{
+		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion,
+		Name: name, Status: "draft", RiskLevel: risk, RequiresApproval: requiresApproval, Reason: reason,
+		BeforeYAML: "", AfterYAML: afterYAML, BeforeHash: manifestHash(""), AfterHash: manifestHash(afterYAML),
+		Diffs: diffs, Impact: impact, CreatedBy: adminID(r), IdempotencyKey: idempotencyKey,
+		Result: "생성 요청 생성됨. validate를 실행해 schema/policy/server dry-run을 확인하세요.",
+	}
+	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), req); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_create_save_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change.create_request", "", auditJSON(map[string]any{
+		"id": req.ID, "cluster_id": clusterID, "kind": kind, "namespace": namespace, "name": name, "risk": risk,
+	}))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"request": req, "impact": impact, "diffs": diffs,
+		"note": "신규 리소스 생성 요청이 draft로 저장되었습니다. validate 후 승인/적용하세요.",
 	})
 }
 
@@ -462,12 +542,18 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 	driftGuard := s.manifestChangeDriftGuard(r.Context(), req)
 	forceDrift := in.ForceDrift || in.Force
 	if manifestChangeDriftBlocks(driftGuard, forceDrift) {
+		errMsg := "live manifest changed after this request was created"
+		nextActions := []string{"새 live YAML을 다시 불러와 변경 요청을 재생성하세요.", "의도한 덮어쓰기라면 force_drift=true로 재시도할 수 있습니다. UID 변경이나 삭제는 force로도 차단됩니다."}
+		if manifestChangeOperation(req) == "create" {
+			errMsg = "create target already exists"
+			nextActions = []string{"이미 생성된 리소스를 확인하세요.", "기존 리소스를 수정하려면 변경 모드에서 live YAML을 불러와 새 요청을 만드세요."}
+		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"request_id":   id,
 			"status":       "blocked",
-			"error":        "live manifest changed after this request was created",
+			"error":        errMsg,
 			"drift_guard":  driftGuard,
-			"next_actions": []string{"새 live YAML을 다시 불러와 변경 요청을 재생성하세요.", "의도한 덮어쓰기라면 force_drift=true로 재시도할 수 있습니다. UID 변경이나 삭제는 force로도 차단됩니다."},
+			"next_actions": nextActions,
 		})
 		return
 	}
@@ -676,8 +762,110 @@ func parseSingleManifestDoc(raw string) (map[string]any, error) {
 	return docs[0], nil
 }
 
+func normalizeManifestChangeOperation(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "update", "edit", "change", "patch":
+		return "update", nil
+	case "create", "new":
+		return "create", nil
+	default:
+		return "", fmt.Errorf("operation must be update or create")
+	}
+}
+
+func manifestDocIdentity(doc map[string]any) (apiVersion, kind, namespace, name string) {
+	apiVersion = strings.TrimSpace(asStr(doc["apiVersion"]))
+	kind = canonicalManifestKind(strings.TrimSpace(asStr(doc["kind"])))
+	meta, _ := doc["metadata"].(map[string]any)
+	namespace = strings.TrimSpace(asStr(meta["namespace"]))
+	name = strings.TrimSpace(asStr(meta["name"]))
+	return apiVersion, kind, namespace, name
+}
+
+func ensureManifestDocTarget(doc map[string]any, kind, namespace, name string) error {
+	apiVersion, docKind, docNamespace, docName := manifestDocIdentity(doc)
+	if apiVersion == "" || docKind == "" || docName == "" {
+		return fmt.Errorf("apiVersion, kind and metadata.name are required")
+	}
+	if namespace == "" && !manifestKindClusterScoped(kind) {
+		namespace = "default"
+	}
+	if docNamespace == "" && !manifestKindClusterScoped(kind) {
+		meta, _ := doc["metadata"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+			doc["metadata"] = meta
+		}
+		meta["namespace"] = namespace
+		docNamespace = namespace
+	}
+	if !strings.EqualFold(docKind, kind) || docName != name || docNamespace != namespace {
+		return fmt.Errorf("manifest target mismatch: expected %s/%s/%s, got %s/%s/%s", kind, namespace, name, docKind, docNamespace, docName)
+	}
+	return nil
+}
+
+func canonicalManifestKind(kind string) string {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, ".", "")
+	switch normalized {
+	case "cm", "configmap", "configmaps":
+		return "ConfigMap"
+	case "secret", "secrets":
+		return "Secret"
+	case "sa", "serviceaccount", "serviceaccounts":
+		return "ServiceAccount"
+	case "svc", "service", "services":
+		return "Service"
+	case "pvc", "pvcs", "persistentvolumeclaim", "persistentvolumeclaims", "persistancevolumeclaim", "persistancevolumeclaims":
+		return "PersistentVolumeClaim"
+	case "ing", "ingress", "ingresses":
+		return "Ingress"
+	case "netpol", "networkpolicy", "networkpolicies":
+		return "NetworkPolicy"
+	case "hpa", "horizontalpodautoscaler", "horizontalpodautoscalers":
+		return "HorizontalPodAutoscaler"
+	case "deploy", "deployment", "deployments":
+		return "Deployment"
+	case "sts", "statefulset", "statefulsets":
+		return "StatefulSet"
+	case "ds", "daemonset", "daemonsets":
+		return "DaemonSet"
+	case "job", "jobs":
+		return "Job"
+	case "cronjob", "cronjobs":
+		return "CronJob"
+	case "role", "roles":
+		return "Role"
+	case "rb", "rolebinding", "rolebindings":
+		return "RoleBinding"
+	case "cr", "clusterrole", "clusterroles":
+		return "ClusterRole"
+	case "crb", "clusterrolebinding", "clusterrolebindings":
+		return "ClusterRoleBinding"
+	case "ns", "namespace", "namespaces":
+		return "Namespace"
+	case "pod", "pods":
+		return "Pod"
+	default:
+		return strings.TrimSpace(kind)
+	}
+}
+
+func manifestKindClusterScoped(kind string) bool {
+	switch canonicalManifestKind(kind) {
+	case "Namespace", "Node", "PersistentVolume", "ClusterRole", "ClusterRoleBinding", "StorageClass", "CustomResourceDefinition", "PriorityClass", "ClusterIssuer":
+		return true
+	default:
+		return false
+	}
+}
+
 func validateManifestTarget(doc map[string]any, item store.K8sInventoryItem) error {
-	kind := strings.TrimSpace(asStr(doc["kind"]))
+	kind := canonicalManifestKind(strings.TrimSpace(asStr(doc["kind"])))
 	meta, _ := doc["metadata"].(map[string]any)
 	name := strings.TrimSpace(asStr(meta["name"]))
 	ns := strings.TrimSpace(asStr(meta["namespace"]))
@@ -726,6 +914,7 @@ func manifestHash(raw string) string {
 func (s *Server) manifestChangeDriftGuard(ctx context.Context, req store.K8sManifestChangeRequest) map[string]any {
 	guard := map[string]any{
 		"status":                  "passed",
+		"operation":               manifestChangeOperation(req),
 		"expected_before_hash":    req.BeforeHash,
 		"target_uid":              req.TargetUID,
 		"target_resource_version": req.TargetResourceVersion,
@@ -733,6 +922,28 @@ func (s *Server) manifestChangeDriftGuard(ctx context.Context, req store.K8sMani
 		"hash_source":             "normalized_manifest",
 	}
 	current, err := s.db.GetK8sInventoryItem(ctx, req.ClusterID, req.Kind, req.Namespace, req.Name)
+	if manifestChangeOperation(req) == "create" {
+		if errors.Is(err, store.ErrNotFound) {
+			guard["reason"] = "create_target_absent"
+			guard["create_target_absent"] = true
+			return guard
+		}
+		if err != nil {
+			guard["status"] = "unknown"
+			guard["reason"] = err.Error()
+			return guard
+		}
+		currentYAML := mustManifestYAML(sanitizeManifestDocForLedger(assembleManifest(current)))
+		guard["status"] = "blocked"
+		guard["hard_block"] = true
+		guard["reason"] = "create_target_already_exists"
+		guard["current_uid"] = current.UID
+		guard["current_resource_version"] = k8sActionTargetResourceVersion(current)
+		guard["current_hash"] = manifestHash(currentYAML)
+		guard["current_observed_at"] = current.ObservedAt
+		guard["current_updated_at"] = current.UpdatedAt
+		return guard
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		guard["status"] = "blocked"
 		guard["hard_block"] = true
@@ -829,6 +1040,7 @@ func manifestChangeBrief(req store.K8sManifestChangeRequest, driftGuard map[stri
 	}
 	return map[string]any{
 		"summary": map[string]any{
+			"operation":         manifestChangeOperation(req),
 			"target":            req.Namespace + "/" + req.Kind + "/" + req.Name,
 			"status":            req.Status,
 			"risk_level":        req.RiskLevel,
@@ -910,6 +1122,16 @@ func manifestApprovalReasons(impact map[string]any) []string {
 		}
 	}
 	return out
+}
+
+func manifestChangeOperation(req store.K8sManifestChangeRequest) string {
+	op := strings.ToLower(strings.TrimSpace(asStr(req.Impact["operation"])))
+	switch op {
+	case "create":
+		return "create"
+	default:
+		return "update"
+	}
 }
 
 func diffManifestDocs(before, after map[string]any) []store.K8sManifestFieldDiff {
@@ -1048,10 +1270,33 @@ func manifestChangeImpact(item store.K8sInventoryItem, after map[string]any, dif
 	}
 	targets := resolveStackTargets([]map[string]any{after}, item.Namespace)
 	return map[string]any{
+		"operation":      "update",
 		"target":         map[string]any{"cluster_id": item.ClusterID, "kind": item.Kind, "namespace": item.Namespace, "name": item.Name, "uid": item.UID},
 		"changed_fields": len(diffs), "approval_reasons": reasons, "stack_resources": targets,
 		"policy_denied": plan.Denied, "policy_violations": plan.PolicyViolations,
 	}, risk, requiresApproval
+}
+
+func manifestCreateImpact(item store.K8sInventoryItem, after map[string]any, diffs []store.K8sManifestFieldDiff, plan analyzer.StackPlan) (map[string]any, string, bool) {
+	impact, risk, requiresApproval := manifestChangeImpact(item, after, diffs, plan)
+	impact["operation"] = "create"
+	impact["create_target"] = map[string]any{"cluster_id": item.ClusterID, "kind": item.Kind, "namespace": item.Namespace, "name": item.Name}
+	reasons := manifestApprovalReasons(impact)
+	filtered := make([]string, 0, len(reasons)+1)
+	filtered = append(filtered, "create_resource")
+	for _, r := range reasons {
+		if r != "" && r != "low-risk metadata/spec change" && r != "create_resource" {
+			filtered = append(filtered, r)
+		}
+	}
+	impact["approval_reasons"] = filtered
+	if riskRank(risk) < riskRank("medium") {
+		risk = "medium"
+	}
+	// New Kubernetes objects are mutating changes even when the manifest itself is low-risk.
+	// Keep them in the approval lane so ownership, namespace, and rollback intent are reviewed.
+	requiresApproval = true
+	return impact, risk, requiresApproval
 }
 
 func manifestRiskMax(a, b string) string {
@@ -1081,8 +1326,8 @@ func riskRank(r string) int {
 func manifestChangeEvidenceMarkdown(req store.K8sManifestChangeRequest) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Manifest Change Evidence\n\n")
-	fmt.Fprintf(&b, "- Request: `%s`\n- Target: `%s/%s/%s`\n- Status: `%s`\n- Risk: `%s`\n- Created by: `%s`\n- Reason: %s\n\n",
-		req.ID, req.Namespace, req.Kind, req.Name, req.Status, req.RiskLevel, req.CreatedBy, req.Reason)
+	fmt.Fprintf(&b, "- Request: `%s`\n- Operation: `%s`\n- Target: `%s/%s/%s`\n- Status: `%s`\n- Risk: `%s`\n- Created by: `%s`\n- Reason: %s\n\n",
+		req.ID, manifestChangeOperation(req), req.Namespace, req.Kind, req.Name, req.Status, req.RiskLevel, req.CreatedBy, req.Reason)
 	fmt.Fprintf(&b, "## Hashes\n\n- Before: `%s`\n- After: `%s`\n\n", req.BeforeHash, req.AfterHash)
 	fmt.Fprintf(&b, "## Field Diff\n\n")
 	if len(req.Diffs) == 0 {
@@ -1101,6 +1346,7 @@ func manifestChangeEvidenceMarkdown(req store.K8sManifestChangeRequest) string {
 
 func manifestChangePseudoPatch(req store.K8sManifestChangeRequest) string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "# operation: %s\n", manifestChangeOperation(req))
 	fmt.Fprintf(&b, "--- before/%s-%s-%s.yaml\n+++ after/%s-%s-%s.yaml\n", req.Namespace, req.Kind, req.Name, req.Namespace, req.Kind, req.Name)
 	beforeLines := strings.Split(req.BeforeYAML, "\n")
 	afterLines := strings.Split(req.AfterYAML, "\n")

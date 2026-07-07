@@ -12595,7 +12595,9 @@ const adminHTML = `<!doctype html>
       const targetName = (params && params.get('name')) || '';
       const focusId = (params && params.get('focus_id')) || '';
       const shouldAutoload = !!(params && (params.get('autoload') === '1' || params.get('live') === '1'));
-      view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="empty">불러오는 중...</div>');
+      const initialMode = String((params && params.get('mode')) || 'update').toLowerCase() === 'create' ? 'create' : 'update';
+      window.k8sManifestMode = initialMode;
+      view.innerHTML = section('YAML 변경/생성 (Manifest Change Studio)', '<div class="empty">불러오는 중...</div>');
       let editor, changes;
       try {
         [editor, changes] = await Promise.all([
@@ -12603,7 +12605,7 @@ const adminHTML = `<!doctype html>
           api('/admin/k8s/manifest-changes?limit=100' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
         ]);
       } catch (e) {
-        view.innerHTML = section('YAML 변경 (Manifest Change Studio)', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        view.innerHTML = section('YAML 변경/생성 (Manifest Change Studio)', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
         return;
       }
       const clusters = editor.clusters || [];
@@ -12613,9 +12615,12 @@ const adminHTML = `<!doctype html>
         '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name || cl.id) + '</option>').join('');
       const resourceOpts = '<option value="">리소스 선택</option>' + resources.slice(0, 1000).map((r, i) =>
         '<option value="' + i + '">' + escapeHTML((r.namespace || '-') + '/' + r.kind + '/' + r.name + ' · ' + (r.api_version || '')) + '</option>').join('');
+      const templateKinds = ['Deployment', 'Service', 'ConfigMap', 'Secret', 'ServiceAccount', 'Role', 'RoleBinding', 'PersistentVolumeClaim', 'Ingress', 'NetworkPolicy', 'HorizontalPodAutoscaler', 'Namespace', 'Job', 'CronJob'];
+      const templateOpts = templateKinds.map(k => '<option value="' + escapeAttr(k) + '">' + escapeHTML(k) + '</option>').join('');
       const riskClass = (r) => r === 'blocked' || r === 'critical' || r === 'high' ? 'error' : (r === 'medium' ? 'warn' : '');
       const statusClass = (st) => ['failed', 'rejected', 'verify_failed'].includes(st) ? 'error' : (['draft', 'approval_required', 'approved', 'running'].includes(st) ? 'warn' : '');
       const rows = (changes.requests || []).length ? (changes.requests || []).map(cr => {
+        const op = k8sManifestChangeOperation(cr);
         const canValidate = cr.status === 'draft' || cr.status === 'validated' || cr.status === 'approval_required';
         const canApprove = cr.status === 'validated' || cr.status === 'approval_required';
         const canApply = cr.status === 'approved' || (!cr.requires_approval && cr.status === 'validated');
@@ -12630,27 +12635,41 @@ const adminHTML = `<!doctype html>
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangeEvidence(\'' + escapeAttr(cr.id) + '\')">증적</button> ' +
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangePatch(\'' + escapeAttr(cr.id) + '\')">Patch</button>';
         return '<tr id="' + escapeAttr('mchg-row-' + cr.id) + '"><td><span class="status ' + statusClass(cr.status) + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
-          '<td>' + escapeHTML((cr.namespace || '-') + '/' + cr.kind + '/' + cr.name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.cluster_id || '') + '</div></td>' +
+          '<td><span class="status ' + (op === 'create' ? 'warn' : '') + '" style="font-size:9px">' + escapeHTML(op === 'create' ? '생성' : '변경') + '</span> ' + escapeHTML((cr.namespace || '-') + '/' + cr.kind + '/' + cr.name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.cluster_id || '') + '</div></td>' +
           '<td><span class="status ' + riskClass(cr.risk_level) + '" style="font-size:10px">' + escapeHTML(cr.risk_level || '') + '</span></td>' +
           '<td>' + fmt((cr.diffs || []).length) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.result || '') + '</td>' +
           '<td class="muted" style="font-size:11px">' + ago(cr.updated_at || cr.created_at) + '</td><td>' + btns + '</td></tr>';
       }).join('') : '<tr><td colspan="7" class="muted">YAML 변경 요청이 없습니다.</td></tr>';
       view.innerHTML =
-        section('YAML 변경 (Manifest Change Studio)',
-          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, CRD 등 단일 리소스 YAML을 요청→검증→승인→Server-Side Apply→사후 검증 흐름으로 변경합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
-        card('리소스 선택과 변경 요청',
-          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
+        section('YAML 변경/생성 (Manifest Change Studio)',
+          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, Namespace 등 단일 리소스 YAML을 생성 또는 변경 요청으로 저장하고 검증→승인→Server-Side Apply→사후 검증 흐름으로 처리합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
+        card('리소스 선택과 요청 생성',
+          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">' +
+          '<button type="button" id="mchg-mode-update" class="secondary" onclick="k8sManifestSetMode(\'update\')">기존 리소스 변경</button>' +
+          '<button type="button" id="mchg-mode-create" class="secondary" onclick="k8sManifestSetMode(\'create\')">신규 리소스 생성</button>' +
+          '<span id="mchg-mode-note" class="muted" style="font-size:11px"></span></div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
           '<select id="mchg-cluster" onchange="k8sManifestChangeGo()">' + clusterOpts + '</select>' +
           '<select id="mchg-resource" onchange="k8sManifestPickResource()">' + resourceOpts + '</select>' +
           '<input id="mchg-resource-search" placeholder="namespace / kind / name 검색 (cm, sa, pvc, netpol 가능)" style="min-width:320px;flex:1" oninput="k8sManifestSearchResources()" onfocus="k8sManifestSearchResources()">' +
-          '<input id="mchg-kind" placeholder="Kind" style="min-width:120px"><input id="mchg-ns" placeholder="namespace" style="min-width:120px"><input id="mchg-name" placeholder="name" style="min-width:160px">' +
+          '<input id="mchg-kind" placeholder="Kind" style="min-width:120px" oninput="k8sManifestCreateTargetChanged()"><input id="mchg-ns" placeholder="namespace" style="min-width:120px" oninput="k8sManifestCreateTargetChanged()"><input id="mchg-name" placeholder="name" style="min-width:160px" oninput="k8sManifestCreateTargetChanged()">' +
           '<button type="button" class="secondary" onclick="k8sManifestLoadLive()">Live YAML</button></div>' +
+          '<div id="mchg-create-tools" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">' +
+          '<select id="mchg-template-kind" onchange="k8sManifestTemplateKindChanged()">' + templateOpts + '</select>' +
+          '<input id="mchg-template-apiver" placeholder="apiVersion" style="min-width:170px">' +
+          '<button type="button" class="secondary" onclick="k8sManifestGenerateCreateTemplate()">생성 YAML 템플릿</button>' +
+          '<button type="button" class="secondary" onclick="k8sManifestReadTargetFromYaml()">YAML에서 대상 읽기</button>' +
+          '<span class="muted" style="font-size:11px">이름과 namespace를 입력한 뒤 필요한 spec만 수정하세요.</span></div>' +
+          '<div id="mchg-template-presets" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px"></div>' +
+          '<div id="mchg-create-hint" class="muted" style="font-size:12px;margin-bottom:6px"></div>' +
           '<div id="mchg-resource-preview" class="resource-preview"></div>' +
-          '<textarea id="mchg-yaml" class="yaml-editor-textarea" rows="13" placeholder="Live YAML을 불러온 뒤 수정하세요" style="width:100%" oninput="resizeK8sManifestYaml()"></textarea>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="mchg-reason" placeholder="변경 사유 / 장애번호 / 변경번호" style="min-width:280px"><button type="button" onclick="k8sManifestCreateChange()">변경 요청 생성</button></div>' +
+          '<textarea id="mchg-yaml" class="yaml-editor-textarea" rows="13" placeholder="변경 모드에서는 Live YAML을 불러오고, 생성 모드에서는 템플릿을 만든 뒤 수정하세요" style="width:100%" oninput="k8sManifestYamlInputChanged()"></textarea>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="mchg-reason" placeholder="생성/변경 사유 / 장애번호 / 변경번호" style="min-width:280px"><button type="button" id="mchg-submit" onclick="k8sManifestCreateChange()">요청 생성</button></div>' +
           '<div id="mchg-out" style="margin-top:8px"></div></div>') +
         card('변경 요청 원장',
           '<div class="card-body"><table><thead><tr><th>상태</th><th>대상</th><th>위험도</th><th>Diff</th><th>사유/결과</th><th>수정</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="mchg-detail" style="margin-top:10px"></div></div>');
+      k8sManifestTemplateKindChanged();
+      k8sManifestSyncModeUI();
       if (targetKind || targetName || targetNs) {
         const matchIdx = resources.findIndex(r =>
           (!targetKind || String(r.kind || '').toLowerCase() === targetKind.toLowerCase()) &&
@@ -12679,12 +12698,203 @@ const adminHTML = `<!doctype html>
           }
         }, 80);
       }
-      setTimeout(() => window.resizeK8sManifestYaml && window.resizeK8sManifestYaml(), 0);
+      setTimeout(() => {
+        window.resizeK8sManifestYaml && window.resizeK8sManifestYaml();
+        window.k8sManifestCreateTargetChanged && window.k8sManifestCreateTargetChanged();
+      }, 0);
     }
     window.k8sManifestChangeGo = () => {
       const cl = document.getElementById('mchg-cluster').value;
-      location.hash = '#/k8s-manifest-changes' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
+      const mode = window.k8sManifestMode === 'create' ? 'create' : '';
+      const qs = new URLSearchParams();
+      if (cl) qs.set('cluster_id', cl);
+      if (mode) qs.set('mode', mode);
+      location.hash = '#/k8s-manifest-changes' + (qs.toString() ? '?' + qs.toString() : '');
     };
+    window.k8sManifestSetMode = (mode) => {
+      window.k8sManifestMode = mode === 'create' ? 'create' : 'update';
+      k8sManifestSyncModeUI();
+    };
+    function k8sManifestSyncModeUI() {
+      const mode = window.k8sManifestMode === 'create' ? 'create' : 'update';
+      const updateBtn = document.getElementById('mchg-mode-update');
+      const createBtn = document.getElementById('mchg-mode-create');
+      const createTools = document.getElementById('mchg-create-tools');
+      const resourceSelect = document.getElementById('mchg-resource');
+      const resourceSearch = document.getElementById('mchg-resource-search');
+      const submit = document.getElementById('mchg-submit');
+      const note = document.getElementById('mchg-mode-note');
+      if (updateBtn) updateBtn.className = mode === 'update' ? '' : 'secondary';
+      if (createBtn) createBtn.className = mode === 'create' ? '' : 'secondary';
+      if (createTools) createTools.style.display = mode === 'create' ? 'flex' : 'none';
+      if (resourceSelect) resourceSelect.disabled = mode === 'create';
+      if (resourceSearch) resourceSearch.placeholder = mode === 'create' ? '생성할 리소스 템플릿은 아래 Kind에서 선택하세요' : 'namespace / kind / name 검색 (cm, sa, pvc, netpol 가능)';
+      if (submit) submit.textContent = mode === 'create' ? '생성 요청 저장' : '변경 요청 생성';
+      if (note) note.textContent = mode === 'create' ? '새 리소스가 이미 있으면 적용 직전에 차단됩니다.' : '기존 리소스의 live YAML을 기준으로 변경합니다.';
+      if (mode === 'create') {
+        const preview = document.getElementById('mchg-resource-preview');
+        if (preview) preview.innerHTML = '';
+      }
+      k8sManifestRenderTemplatePresets();
+      k8sManifestRenderCreateHint();
+    }
+    function k8sManifestChangeOperation(cr) {
+      const impact = cr && cr.impact ? cr.impact : {};
+      return String(impact.operation || '').toLowerCase() === 'create' ? 'create' : 'update';
+    }
+    window.k8sManifestTemplateKindChanged = () => {
+      const kindSel = document.getElementById('mchg-template-kind');
+      const api = document.getElementById('mchg-template-apiver');
+      if (!kindSel || !api) return;
+      const kind = k8sManifestCanonicalKind(kindSel.value || 'Deployment');
+      api.value = k8sManifestDefaultAPIVersion(kind);
+      const kindInput = document.getElementById('mchg-kind');
+      if (kindInput && window.k8sManifestMode === 'create') kindInput.value = kind;
+      k8sManifestRenderTemplatePresets();
+      k8sManifestRenderCreateHint();
+    };
+    window.k8sManifestGenerateCreateTemplate = () => {
+      window.k8sManifestMode = 'create';
+      k8sManifestSyncModeUI();
+      const kind = k8sManifestCanonicalKind((document.getElementById('mchg-template-kind').value || document.getElementById('mchg-kind').value || 'Deployment'));
+      const apiVersion = (document.getElementById('mchg-template-apiver').value || k8sManifestDefaultAPIVersion(kind)).trim();
+      const nameInput = document.getElementById('mchg-name');
+      const nsInput = document.getElementById('mchg-ns');
+      const kindInput = document.getElementById('mchg-kind');
+      const name = (nameInput.value || k8sManifestDefaultName(kind)).trim();
+      const namespace = k8sManifestIsClusterScoped(kind) ? '' : ((nsInput.value || 'default').trim());
+      kindInput.value = kind;
+      nameInput.value = name;
+      nsInput.value = namespace;
+      document.getElementById('mchg-yaml').value = k8sManifestTemplate(kind, apiVersion, namespace, name);
+      resizeK8sManifestYaml();
+      k8sManifestRenderCreateHint();
+      const out = document.getElementById('mchg-out');
+      if (out) out.innerHTML = '<span class="status">생성 템플릿 준비됨</span> <span class="muted" style="font-size:11px">필요한 spec을 조정한 뒤 생성 요청을 저장하세요.</span>';
+    };
+    window.k8sManifestCreatePreset = (kind) => {
+      window.k8sManifestMode = 'create';
+      const sel = document.getElementById('mchg-template-kind');
+      if (sel) sel.value = k8sManifestCanonicalKind(kind);
+      k8sManifestTemplateKindChanged();
+      k8sManifestGenerateCreateTemplate();
+    };
+    function k8sManifestRenderTemplatePresets() {
+      const el = document.getElementById('mchg-template-presets');
+      if (!el) return;
+      if (window.k8sManifestMode !== 'create') { el.innerHTML = ''; return; }
+      const presets = [
+        ['Deployment', '워크로드'],
+        ['Service', '서비스'],
+        ['ConfigMap', '설정'],
+        ['Secret', '시크릿'],
+        ['Ingress', 'Ingress'],
+        ['NetworkPolicy', 'NetPolicy'],
+        ['HorizontalPodAutoscaler', 'HPA'],
+        ['Role', 'Role'],
+        ['RoleBinding', 'Binding'],
+        ['PersistentVolumeClaim', 'PVC'],
+        ['Namespace', 'Namespace']
+      ];
+      el.innerHTML = presets.map(p => '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestCreatePreset(\'' + escapeAttr(p[0]) + '\')">' + escapeHTML(p[1]) + '</button>').join('');
+    }
+    window.k8sManifestYamlInputChanged = () => {
+      resizeK8sManifestYaml();
+      if (window.k8sManifestMode === 'create') k8sManifestRenderCreateHint();
+    };
+    window.k8sManifestCreateTargetChanged = () => {
+      if (window.k8sManifestMode === 'create') {
+        const kind = k8sManifestCanonicalKind((document.getElementById('mchg-kind') || {}).value || '');
+        const sel = document.getElementById('mchg-template-kind');
+        const api = document.getElementById('mchg-template-apiver');
+        if (sel && kind) sel.value = kind;
+        if (api && kind && !api.value) api.value = k8sManifestDefaultAPIVersion(kind);
+      }
+      k8sManifestRenderCreateHint();
+    };
+    window.k8sManifestReadTargetFromYaml = () => {
+      const yaml = (document.getElementById('mchg-yaml').value || '');
+      const target = k8sManifestExtractTargetFromYaml(yaml);
+      const out = document.getElementById('mchg-out');
+      if (!target.kind || !target.name) {
+        if (out) out.innerHTML = '<span class="status warn">YAML에서 kind/name을 찾지 못했습니다</span>';
+        showToast('warn', 'YAML 대상 추출 실패', 'apiVersion, kind, metadata.name을 확인하세요.');
+        return;
+      }
+      window.k8sManifestMode = 'create';
+      k8sManifestSyncModeUI();
+      document.getElementById('mchg-kind').value = target.kind;
+      document.getElementById('mchg-name').value = target.name;
+      document.getElementById('mchg-ns').value = k8sManifestIsClusterScoped(target.kind) ? '' : (target.namespace || 'default');
+      const sel = document.getElementById('mchg-template-kind');
+      const api = document.getElementById('mchg-template-apiver');
+      if (sel) sel.value = target.kind;
+      if (api) api.value = target.apiVersion || k8sManifestDefaultAPIVersion(target.kind);
+      k8sManifestRenderCreateHint();
+      if (out) out.innerHTML = '<span class="status">YAML 대상 반영됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((target.namespace || '-') + '/' + target.kind + '/' + target.name) + '</span>';
+    };
+    function k8sManifestExtractTargetFromYaml(yaml) {
+      const lines = String(yaml || '').split(/\r?\n/);
+      const target = { apiVersion: '', kind: '', namespace: '', name: '' };
+      let inMeta = false;
+      let metaIndent = -1;
+      for (const line of lines) {
+        if (/^\s*---\s*$/.test(line) && (target.kind || target.name)) break;
+        const indent = (line.match(/^\s*/) || [''])[0].length;
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        let m = trimmed.match(/^apiVersion:\s*["']?([^"']+)["']?\s*$/);
+        if (m && !target.apiVersion) target.apiVersion = m[1].trim();
+        m = trimmed.match(/^kind:\s*["']?([^"']+)["']?\s*$/);
+        if (m && !target.kind) target.kind = k8sManifestCanonicalKind(m[1]);
+        if (/^metadata:\s*$/.test(trimmed)) { inMeta = true; metaIndent = indent; continue; }
+        if (inMeta && indent <= metaIndent && !/^metadata:\s*$/.test(trimmed)) inMeta = false;
+        if (inMeta) {
+          m = trimmed.match(/^name:\s*["']?([^"']+)["']?\s*$/);
+          if (m && !target.name) target.name = m[1].trim();
+          m = trimmed.match(/^namespace:\s*["']?([^"']+)["']?\s*$/);
+          if (m && !target.namespace) target.namespace = m[1].trim();
+        }
+      }
+      return target;
+    }
+    function k8sManifestRenderCreateHint() {
+      const el = document.getElementById('mchg-create-hint');
+      if (!el) return;
+      if (window.k8sManifestMode !== 'create') { el.innerHTML = ''; return; }
+      const target = k8sManifestFormTarget();
+      const api = (document.getElementById('mchg-template-apiver') || {}).value || k8sManifestDefaultAPIVersion(target.kind);
+      const exists = k8sManifestFindExistingTarget(target);
+      const yamlTarget = k8sManifestExtractTargetFromYaml((document.getElementById('mchg-yaml') || {}).value || '');
+      const mismatches = [];
+      if (yamlTarget.kind && target.kind && yamlTarget.kind !== target.kind) mismatches.push('Kind');
+      if (yamlTarget.name && target.name && yamlTarget.name !== target.name) mismatches.push('name');
+      const expectedNs = k8sManifestIsClusterScoped(target.kind) ? '' : (target.namespace || 'default');
+      if (yamlTarget.namespace && expectedNs && yamlTarget.namespace !== expectedNs) mismatches.push('namespace');
+      const targetText = (expectedNs || '-') + '/' + (target.kind || '-') + '/' + (target.name || '-');
+      const badges = [];
+      badges.push('<span class="status" style="font-size:10px">create</span>');
+      badges.push('<span class="status" style="font-size:10px">' + escapeHTML(api || '-') + '</span>');
+      if (exists) badges.push('<span class="status error" style="font-size:10px">이미 존재</span>');
+      else if (target.cluster_id && target.kind && target.name) badges.push('<span class="status" style="font-size:10px">생성 가능 후보</span>');
+      if (mismatches.length) badges.push('<span class="status warn" style="font-size:10px">YAML/입력 불일치</span>');
+      const details = [];
+      details.push('대상: <strong>' + escapeHTML(targetText) + '</strong>');
+      if (exists) details.push('같은 대상이 inventory에 있습니다. 생성 요청은 서버에서도 차단됩니다.');
+      if (mismatches.length) details.push('YAML 본문과 입력 필드가 다릅니다: ' + escapeHTML(mismatches.join(', ')) + ' · YAML에서 대상 읽기 버튼으로 맞출 수 있습니다.');
+      if (target.kind === 'Secret') details.push('Secret data/stringData 원문은 저장·적용하지 않습니다.');
+      el.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' + badges.join(' ') + '<span>' + details.join(' · ') + '</span></div>';
+    }
+    function k8sManifestFindExistingTarget(target) {
+      if (!target || !target.cluster_id || !target.kind || !target.name) return null;
+      const ns = k8sManifestIsClusterScoped(target.kind) ? '' : (target.namespace || 'default');
+      return (window.k8sManifestResources || []).find(r =>
+        String(r.cluster_id || '') === target.cluster_id &&
+        k8sManifestCanonicalKind(r.kind || '') === target.kind &&
+        String(r.name || '') === target.name &&
+        String(r.namespace || '') === ns
+      ) || null;
+    }
     window.k8sManifestPickResource = () => {
       const idx = document.getElementById('mchg-resource').value;
       const r = (window.k8sManifestResources || [])[Number(idx)];
@@ -12775,12 +12985,99 @@ const adminHTML = `<!doctype html>
         deployment: 'Deployment', deployments: 'Deployment',
         statefulset: 'StatefulSet', statefulsets: 'StatefulSet',
         daemonset: 'DaemonSet', daemonsets: 'DaemonSet',
+        job: 'Job', jobs: 'Job',
+        cronjob: 'CronJob', cronjobs: 'CronJob',
+        ns: 'Namespace', namespace: 'Namespace', namespaces: 'Namespace',
         pod: 'Pod', pods: 'Pod'
       };
       return map[normalized] || String(kind || '').trim();
     }
+    function k8sManifestIsClusterScoped(kind) {
+      return ['Namespace', 'Node', 'PersistentVolume', 'ClusterRole', 'ClusterRoleBinding', 'StorageClass', 'CustomResourceDefinition', 'PriorityClass'].includes(k8sManifestCanonicalKind(kind));
+    }
+    function k8sManifestDefaultAPIVersion(kind) {
+      switch (k8sManifestCanonicalKind(kind)) {
+        case 'Deployment':
+        case 'StatefulSet':
+        case 'DaemonSet': return 'apps/v1';
+        case 'Job':
+        case 'CronJob': return 'batch/v1';
+        case 'Ingress':
+        case 'NetworkPolicy': return 'networking.k8s.io/v1';
+        case 'HorizontalPodAutoscaler': return 'autoscaling/v2';
+        case 'Role':
+        case 'RoleBinding':
+        case 'ClusterRole':
+        case 'ClusterRoleBinding': return 'rbac.authorization.k8s.io/v1';
+        default: return 'v1';
+      }
+    }
+    function k8sManifestDefaultName(kind) {
+      switch (k8sManifestCanonicalKind(kind)) {
+        case 'Deployment': return 'sample-app';
+        case 'Service': return 'sample-app';
+        case 'ConfigMap': return 'sample-config';
+        case 'Secret': return 'sample-secret';
+        case 'ServiceAccount': return 'sample-sa';
+        case 'Role': return 'sample-reader';
+        case 'RoleBinding': return 'sample-reader-binding';
+        case 'PersistentVolumeClaim': return 'sample-data';
+        case 'Ingress': return 'sample-ingress';
+        case 'NetworkPolicy': return 'default-deny';
+        case 'HorizontalPodAutoscaler': return 'sample-app';
+        case 'Namespace': return 'sample-namespace';
+        case 'Job': return 'sample-job';
+        case 'CronJob': return 'sample-cron';
+        default: return 'sample-resource';
+      }
+    }
+    function k8sManifestMetadataYaml(kind, namespace, name) {
+      const lines = ['metadata:', '  name: ' + name];
+      if (!k8sManifestIsClusterScoped(kind) && namespace) lines.push('  namespace: ' + namespace);
+      lines.push('  labels:', '    app.kubernetes.io/managed-by: clustara');
+      return lines.join('\n');
+    }
+    function k8sManifestTemplate(kind, apiVersion, namespace, name) {
+      kind = k8sManifestCanonicalKind(kind);
+      apiVersion = apiVersion || k8sManifestDefaultAPIVersion(kind);
+      const meta = k8sManifestMetadataYaml(kind, namespace, name);
+      switch (kind) {
+        case 'Deployment':
+          return ['apiVersion: ' + apiVersion, 'kind: Deployment', meta, 'spec:', '  replicas: 1', '  selector:', '    matchLabels:', '      app: ' + name, '  template:', '    metadata:', '      labels:', '        app: ' + name, '    spec:', '      containers:', '      - name: app', '        image: nginx:stable', '        ports:', '        - containerPort: 80', '        resources:', '          requests:', '            cpu: 100m', '            memory: 128Mi', '          limits:', '            memory: 256Mi'].join('\n') + '\n';
+        case 'Service':
+          return ['apiVersion: ' + apiVersion, 'kind: Service', meta, 'spec:', '  type: ClusterIP', '  selector:', '    app: ' + name, '  ports:', '  - name: http', '    port: 80', '    targetPort: 80'].join('\n') + '\n';
+        case 'ConfigMap':
+          return ['apiVersion: ' + apiVersion, 'kind: ConfigMap', meta, 'data:', '  APP_MODE: production'].join('\n') + '\n';
+        case 'Secret':
+          return ['apiVersion: ' + apiVersion, 'kind: Secret', meta, 'type: Opaque'].join('\n') + '\n';
+        case 'ServiceAccount':
+          return ['apiVersion: ' + apiVersion, 'kind: ServiceAccount', meta, 'automountServiceAccountToken: false'].join('\n') + '\n';
+        case 'Role':
+          return ['apiVersion: ' + apiVersion, 'kind: Role', meta, 'rules:', '- apiGroups: [""]', '  resources: ["pods", "pods/log"]', '  verbs: ["get", "list", "watch"]'].join('\n') + '\n';
+        case 'RoleBinding':
+          return ['apiVersion: ' + apiVersion, 'kind: RoleBinding', meta, 'subjects:', '- kind: ServiceAccount', '  name: sample-sa', '  namespace: ' + (namespace || 'default'), 'roleRef:', '  apiGroup: rbac.authorization.k8s.io', '  kind: Role', '  name: sample-reader'].join('\n') + '\n';
+        case 'PersistentVolumeClaim':
+          return ['apiVersion: ' + apiVersion, 'kind: PersistentVolumeClaim', meta, 'spec:', '  accessModes:', '  - ReadWriteOnce', '  resources:', '    requests:', '      storage: 1Gi'].join('\n') + '\n';
+        case 'Ingress':
+          return ['apiVersion: ' + apiVersion, 'kind: Ingress', meta, 'spec:', '  ingressClassName: nginx', '  rules:', '  - host: example.local', '    http:', '      paths:', '      - path: /', '        pathType: Prefix', '        backend:', '          service:', '            name: ' + name, '            port:', '              number: 80'].join('\n') + '\n';
+        case 'NetworkPolicy':
+          return ['apiVersion: ' + apiVersion, 'kind: NetworkPolicy', meta, 'spec:', '  podSelector: {}', '  policyTypes:', '  - Ingress', '  - Egress'].join('\n') + '\n';
+        case 'HorizontalPodAutoscaler':
+          return ['apiVersion: ' + apiVersion, 'kind: HorizontalPodAutoscaler', meta, 'spec:', '  scaleTargetRef:', '    apiVersion: apps/v1', '    kind: Deployment', '    name: ' + name, '  minReplicas: 1', '  maxReplicas: 3', '  metrics:', '  - type: Resource', '    resource:', '      name: cpu', '      target:', '        type: Utilization', '        averageUtilization: 70'].join('\n') + '\n';
+        case 'Namespace':
+          return ['apiVersion: ' + apiVersion, 'kind: Namespace', meta].join('\n') + '\n';
+        case 'Job':
+          return ['apiVersion: ' + apiVersion, 'kind: Job', meta, 'spec:', '  template:', '    spec:', '      restartPolicy: Never', '      containers:', '      - name: job', '        image: busybox:1.36', '        command: ["sh", "-c", "echo hello from clustara"]', '  backoffLimit: 1'].join('\n') + '\n';
+        case 'CronJob':
+          return ['apiVersion: ' + apiVersion, 'kind: CronJob', meta, 'spec:', '  schedule: "*/15 * * * *"', '  jobTemplate:', '    spec:', '      template:', '        spec:', '          restartPolicy: OnFailure', '          containers:', '          - name: job', '            image: busybox:1.36', '            command: ["sh", "-c", "date"]'].join('\n') + '\n';
+        default:
+          return ['apiVersion: ' + apiVersion, 'kind: ' + kind, meta, 'spec: {}'].join('\n') + '\n';
+      }
+    }
     window.k8sManifestLoadLive = async () => {
       const out = document.getElementById('mchg-out');
+      window.k8sManifestMode = 'update';
+      k8sManifestSyncModeUI();
       const body = k8sManifestFormTarget();
       if (!body.cluster_id || !body.kind || !body.name) { out.innerHTML = '<span class="status warn">클러스터, Kind, 이름을 선택하세요</span>'; return; }
       out.innerHTML = '<span class="muted">Live manifest 로딩 중...</span>';
@@ -12802,28 +13099,58 @@ const adminHTML = `<!doctype html>
       el.style.overflowY = 'hidden';
     };
     function k8sManifestFormTarget() {
+      const kind = k8sManifestCanonicalKind((document.getElementById('mchg-kind').value || '').trim());
+      let namespace = (document.getElementById('mchg-ns').value || '').trim();
+      if (window.k8sManifestMode === 'create' && !namespace && !k8sManifestIsClusterScoped(kind)) namespace = 'default';
       return {
         cluster_id: (document.getElementById('mchg-cluster').value || '').trim(),
-        kind: k8sManifestCanonicalKind((document.getElementById('mchg-kind').value || '').trim()),
-        namespace: (document.getElementById('mchg-ns').value || '').trim(),
+        kind: kind,
+        namespace: namespace,
         name: (document.getElementById('mchg-name').value || '').trim()
       };
     }
     window.k8sManifestCreateChange = async () => {
       const out = document.getElementById('mchg-out');
       const body = k8sManifestFormTarget();
+      body.operation = window.k8sManifestMode === 'create' ? 'create' : 'update';
       body.after_yaml = (document.getElementById('mchg-yaml').value || '').trim();
       body.reason = (document.getElementById('mchg-reason').value || '').trim();
+      if (body.operation === 'create') {
+        const extracted = k8sManifestExtractTargetFromYaml(body.after_yaml);
+        if ((!body.kind || !body.name) && extracted.kind && extracted.name) {
+          body.kind = extracted.kind;
+          body.name = extracted.name;
+          body.namespace = k8sManifestIsClusterScoped(extracted.kind) ? '' : (extracted.namespace || body.namespace || 'default');
+          document.getElementById('mchg-kind').value = body.kind;
+          document.getElementById('mchg-name').value = body.name;
+          document.getElementById('mchg-ns').value = body.namespace;
+        }
+        const expectedNs = k8sManifestIsClusterScoped(body.kind) ? '' : (body.namespace || 'default');
+        const mismatch = [];
+        if (extracted.kind && body.kind && extracted.kind !== body.kind) mismatch.push('Kind');
+        if (extracted.name && body.name && extracted.name !== body.name) mismatch.push('name');
+        if (extracted.namespace && expectedNs && extracted.namespace !== expectedNs) mismatch.push('namespace');
+        if (mismatch.length) {
+          out.innerHTML = '<span class="status warn">YAML 본문과 입력 필드가 다릅니다</span> <span class="muted" style="font-size:11px">' + escapeHTML(mismatch.join(', ')) + '</span>';
+          showToast('warn', 'YAML 생성 요청 확인 필요', 'YAML에서 대상 읽기 버튼으로 필드를 맞춘 뒤 다시 저장하세요.');
+          return;
+        }
+        if (k8sManifestFindExistingTarget(body)) {
+          out.innerHTML = '<span class="status error">이미 존재하는 생성 대상입니다</span> <span class="muted" style="font-size:11px">기존 리소스 변경 모드에서 Live YAML을 불러오세요.</span>';
+          showToast('error', 'YAML 생성 요청 차단', body.kind + '/' + body.name + ' 대상이 이미 inventory에 있습니다.');
+          return;
+        }
+      }
       if (!body.cluster_id || !body.kind || !body.name || !body.after_yaml) {
         out.innerHTML = '<span class="status warn">대상과 YAML이 필요합니다</span>';
-        showToast('warn', 'YAML 변경 요청 불가', '클러스터, Kind, 이름, YAML 본문을 입력하세요.');
+        showToast('warn', 'YAML 요청 불가', '클러스터, Kind, 이름, YAML 본문을 입력하세요.');
         return;
       }
-      out.innerHTML = '<span class="muted">변경 요청 생성 중...</span>';
+      out.innerHTML = '<span class="muted">' + (body.operation === 'create' ? '생성' : '변경') + ' 요청 저장 중...</span>';
       try {
         const d = await api('/admin/k8s/manifest-changes', { method: 'POST', body: JSON.stringify(body) });
         out.innerHTML = '<span class="status">요청 생성됨</span> <span class="muted" style="font-size:11px">' + escapeHTML((d.request || {}).id || '') + ' · 검증을 실행하세요.</span>';
-        showToast('ok', 'YAML 변경 요청 생성', ((d.request || {}).id || '') + ' · ' + body.kind + '/' + body.name);
+        showToast('ok', body.operation === 'create' ? 'YAML 생성 요청 저장' : 'YAML 변경 요청 생성', ((d.request || {}).id || '') + ' · ' + body.kind + '/' + body.name);
         uxInvalidateActionQueue();
         const id = (d.request || {}).id || '';
         if (id) location.hash = uxFlowFocusHref('manifest_change', id, body.cluster_id);

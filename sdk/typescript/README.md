@@ -35,10 +35,10 @@ console.log(await clustara.routePreview("vibe/auto", "긴 문서 요약"));
 
 // Work apps / workflows
 console.log(await clustara.runApp("app_123"));
-console.log(await vibe.runWorkflow("wf_123", "분기 매출 분석"));
+console.log(await clustara.runWorkflow("wf_123", "분기 매출 분석"));
 
 // MCP client config for Claude / Cursor / Roo Code / Cline
-console.log(JSON.stringify(vibe.mcpConfig(), null, 2));
+console.log(JSON.stringify(clustara.mcpConfig(), null, 2));
 ```
 
 ## Methods

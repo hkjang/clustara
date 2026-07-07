@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.93** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.96** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.93)
+## 기능 상태 (v0.9.96)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -136,6 +136,9 @@
 | Action Flow Table Handoff Copy — 액션 요청 표의 흐름 컬럼에서 표준 인계 문구 즉시 복사 | ✅ (v0.9.91) |
 | Action Flow Table Target Link — 액션 요청 표의 흐름 컬럼에서 대상 처리 화면으로 즉시 이동 | ✅ (v0.9.92) |
 | Action Flow Table Batch Tools — 액션 요청 표 상단에서 첫 행 처리와 현재 표 인계 요약 복사 제공 | ✅ (v0.9.93) |
+| Contract Audit & Runtime Hardening — API surface audit가 `cmd/clustara-cli/main.go`와 `sdk/typescript/clustara.ts` 실제 경로를 필수로 읽고 누락 시 실패하며, CLI/SDK 경로 불일치와 OpenAPI 누락·낡은 문서 경로를 모두 hard fail로 검증, 누락됐던 K8s/Agent/MCP Tool Scope/Mattermost 라우트를 OpenAPI 카탈로그에 보강하고 `go test`에서 repository zero-gap을 강제, README/Docker/CLI/SDK 기본 포트를 `:9090`으로 정렬하고 release test로 포트 정합성을 강제, production/strict 모드 기본 `GATEWAY_SECRET`·약한 admin token·열린 admin API 기동을 차단, HTTP read/write/idle/header timeout 기본값을 적용, `/ready`에 database component와 `/admin/ops/status` 참조를 포함 | ✅ (v0.9.94) |
+| Manifest Create Studio — YAML 변경 화면에 신규 리소스 생성 모드와 Deployment/Service/ConfigMap/Secret/ServiceAccount/RBAC/PVC/Ingress/NetworkPolicy/HPA/Namespace/Job/CronJob 템플릿을 추가하고, `operation=create` 요청을 같은 원장·검증·승인·SSA 적용 흐름으로 처리하며 이미 존재하는 대상은 요청/적용 단계에서 차단 | ✅ (v0.9.95) |
+| Manifest Create Convenience — 생성 모드에서 프리셋 버튼, YAML 본문 대상 자동 추출, 입력/YAML 불일치 감지, inventory 기반 중복 대상 미리보기와 제출 전 차단, Secret payload 경고를 제공해 YAML 생성 요청의 실수를 줄임 | ✅ (v0.9.96) |
 | Ops Status v2 — `/admin/ops/status`에 DB, async logger, ClickHouse, K8s collector, Mattermost, retention, alert worker component 상태와 overall(degraded/failed) 제공 | ✅ (v0.9.47) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -215,12 +218,12 @@
 | GET | `/admin/k8s/manifest` | 현재 리소스 manifest YAML 조회 (Secret/token/env 민감값 자동 마스킹) |
 | GET | `/admin/k8s/manifests/editor` | Manifest Change Studio 리소스 picker metadata: 클러스터, 인벤토리 리소스, kind 목록 |
 | GET | `/admin/k8s/manifests/live` | YAML 변경용 live manifest 조회 alias. Secret/token/env 민감값 자동 마스킹 |
-| GET/POST | `/admin/k8s/manifest-changes` | 단일 리소스 YAML 변경 요청 목록/생성. before/after YAML, field diff, impact, 위험도, target UID/resourceVersion을 원장에 저장 |
-| GET | `/admin/k8s/manifest-changes/{id}` | YAML 변경 요청 상세: diff, impact, validation, apply, verify 결과 |
+| GET/POST | `/admin/k8s/manifest-changes` | 단일 리소스 YAML 변경/생성 요청 목록/생성. 신규 리소스는 body에 `operation=create`를 지정하며 before YAML은 비워두고 after YAML 전체를 생성 후보로 저장. before/after YAML, field diff, impact, 위험도, target UID/resourceVersion을 원장에 저장 |
+| GET | `/admin/k8s/manifest-changes/{id}` | YAML 변경/생성 요청 상세: operation, diff, impact, validation, apply, verify 결과 |
 | GET | `/admin/k8s/manifest-changes/{id}/brief` | 승인자 브리핑: 위험도 분포, 상위 diff, approval reasons, dry-run/policy/drift 상태, 다음 액션, 운영자 체크리스트 |
 | POST | `/admin/k8s/manifest-changes/{id}/validate` | schema basic check, 정책 검사, server dry-run(`dryRun=All`) 검증. Secret payload 원문 변경은 blocked 처리 |
-| POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, 적용 직전 drift guard 통과 후 Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성. 의도한 덮어쓰기는 `apply` body에 `force_drift=true`와 `note`를 남김 |
-| GET | `/admin/k8s/manifest-changes/{id}/evidence`, `/git-patch` | 변경 증적 Markdown bundle과 Git PR용 pseudo patch export |
+| POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, 적용 직전 drift guard 통과 후 Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성. 생성 요청은 대상이 이미 존재하면 적용을 차단하고, 의도한 덮어쓰기는 기존 변경 요청으로 재생성해야 함. 변경 요청의 의도한 덮어쓰기는 `apply` body에 `force_drift=true`와 `note`를 남김 |
+| GET | `/admin/k8s/manifest-changes/{id}/evidence`, `/git-patch` | 변경/생성 증적 Markdown bundle과 Git PR용 pseudo patch export |
 | GET | `/admin/k8s/resource-graph` | 인벤토리 selector/backend/volume/node/HPA 관계 기반 리소스 그래프·blast radius (`cluster_id`,`kind`,`namespace`,`name`,`radius`) |
 | GET | `/admin/k8s/security` | Pod Security 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백 포스처 |
 | GET | `/admin/k8s/capacity` | HPA 현황·확장한계, 과소/과다 할당, 노드 bin-packing, GPU, 노드 용량 예측(SCALE-05) |

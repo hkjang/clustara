@@ -35,7 +35,7 @@ func TestResolveConfig(t *testing.T) {
 
 	// Default when no env/flag.
 	cfg3, _ := resolveConfig([]string{"quota"}, func(string) string { return "" })
-	if cfg3.BaseURL != "http://localhost:8080" {
+	if cfg3.BaseURL != "http://localhost:9090" {
 		t.Fatalf("default base = %q", cfg3.BaseURL)
 	}
 }

@@ -26,12 +26,12 @@ USER nonroot:nonroot
 COPY --from=build /out/clustara /app/clustara
 COPY --from=build /out/clustara-agent /app/clustara-agent
 
-ENV LISTEN_ADDR=:8080 \
+ENV LISTEN_ADDR=:9090 \
     DB_DRIVER=sqlite \
     DB_DSN=/data/gateway.db \
     LOG_FALLBACK_PATH=/data/fallback.ndjson
 
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 9090
 
 ENTRYPOINT ["/app/clustara"]

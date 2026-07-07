@@ -2261,6 +2261,150 @@ status:
 	}
 }
 
+func TestK8sManifestCreateRequestUsesSSAAndBlocksExistingTarget(t *testing.T) {
+	var dryRuns int
+	var applies int
+	kubeAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/namespaces/default/services/new-api":
+			if r.Method != http.MethodPatch {
+				t.Errorf("manifest create should use PATCH, got %s", r.Method)
+			}
+			if got := r.Header.Get("Content-Type"); !strings.Contains(got, "application/apply-patch+yaml") {
+				t.Errorf("manifest create should use SSA content type, got %q", got)
+			}
+			body, _ := io.ReadAll(r.Body)
+			bodyText := string(body)
+			if !strings.Contains(bodyText, "kind: Service") || !strings.Contains(bodyText, "name: new-api") {
+				t.Errorf("SSA create manifest body should contain target service, body=%s", bodyText)
+			}
+			if r.URL.Query().Get("dryRun") == "All" {
+				dryRuns++
+			} else {
+				applies++
+			}
+			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"namespace":"default","name":"new-api"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		}
+	}))
+	defer kubeAPI.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "manifest-create.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name":       "manifest-create-cluster",
+		"server_url": kubeAPI.URL,
+		"auth_mode":  "token",
+		"token":      "test-token",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("register cluster status=%d body=%s", resp.StatusCode, body)
+	}
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	createYAML := `apiVersion: v1
+kind: Service
+metadata:
+  name: new-api
+  namespace: default
+spec:
+  selector:
+    app: new-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+`
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes", "", map[string]any{
+		"cluster_id":      created.Cluster.ID,
+		"operation":       "create",
+		"after_yaml":      createYAML,
+		"reason":          "create service through Studio",
+		"idempotency_key": "manifest-create-test-1",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create manifest create request status=%d body=%s", resp.StatusCode, body)
+	}
+	var createOut struct {
+		Request store.K8sManifestChangeRequest `json:"request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&createOut); err != nil {
+		t.Fatal(err)
+	}
+	if createOut.Request.ID == "" || createOut.Request.Status != "draft" || createOut.Request.Kind != "Service" || createOut.Request.Name != "new-api" {
+		t.Fatalf("unexpected manifest create request: %+v", createOut.Request)
+	}
+	if createOut.Request.Impact["operation"] != "create" || !createOut.Request.RequiresApproval || createOut.Request.BeforeYAML != "" {
+		t.Fatalf("create request should be marked as operation=create with empty baseline: %+v", createOut.Request)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/validate", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("validate manifest create status=%d body=%s", resp.StatusCode, body)
+	}
+	if dryRuns != 1 || applies != 0 {
+		t.Fatalf("validate should dry-run create exactly once, dryRuns=%d applies=%d", dryRuns, applies)
+	}
+
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/approve", "", map[string]any{"note": "approved"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("approve manifest create status=%d body=%s", resp.StatusCode, body)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes/"+createOut.Request.ID+"/apply", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("apply manifest create status=%d body=%s", resp.StatusCode, body)
+	}
+	if dryRuns != 1 || applies != 1 {
+		t.Fatalf("apply should execute one real SSA create, dryRuns=%d applies=%d", dryRuns, applies)
+	}
+
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{
+		ID: "svc_new_api", ClusterID: created.Cluster.ID, Kind: "Service", APIVersion: "v1",
+		Namespace: "default", Name: "new-api", UID: "svc1", Status: "Observed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/manifest-changes", "", map[string]any{
+		"cluster_id": created.Cluster.ID,
+		"operation":  "create",
+		"after_yaml": createYAML,
+		"reason":     "duplicate create should be blocked",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("duplicate manifest create should be blocked, status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
 func TestK8sManifestEditorKeepsEditableKindsBeyondPodHeavyPage(t *testing.T) {
 	ctx := context.Background()
 	db := openTestStore(t)

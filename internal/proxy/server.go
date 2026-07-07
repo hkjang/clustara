@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.93"
+const AppVersion = "v0.9.96"
 
 type Server struct {
 	cfg            config.Config
@@ -726,11 +726,33 @@ func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC().Format(time.RFC3339)
 	if err := s.db.Ping(r.Context()); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "error": err.Error()})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":     "not_ready",
+			"overall":    "failed",
+			"error":      err.Error(),
+			"ops_status": "/admin/ops/status",
+			"components": []OpsComponentStatus{{
+				Name:      "database",
+				Status:    "failed",
+				Detail:    "primary store unreachable",
+				UpdatedAt: now,
+			}},
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "ready",
+		"overall":    "ok",
+		"ops_status": "/admin/ops/status",
+		"components": []OpsComponentStatus{{
+			Name:      "database",
+			Status:    "ok",
+			Detail:    "primary store reachable",
+			UpdatedAt: now,
+		}},
+	})
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {

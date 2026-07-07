@@ -77,3 +77,62 @@ func TestAppVersionMatchesChangelog(t *testing.T) {
 		t.Errorf("FAIL: version mismatch! server.go AppVersion is %q but changelog.txt latest version is %q", appVersion, changelogVersion)
 	}
 }
+
+func TestDefaultPortConsistency(t *testing.T) {
+	files := map[string]struct {
+		mustContain    []string
+		mustNotContain []string
+	}{
+		filepath.Join("..", "..", "internal", "config", "config.go"): {
+			mustContain: []string{`getEnv("LISTEN_ADDR", ":9090")`},
+		},
+		filepath.Join("..", "..", "README.md"): {
+			mustContain:    []string{"localhost:9090/admin", "기본 `:9090`", "-p 9090:9090"},
+			mustNotContain: []string{"localhost:8080", "-p 8080:8080", "기본 `:8080`"},
+		},
+		filepath.Join("..", "..", "Dockerfile"): {
+			mustContain:    []string{"LISTEN_ADDR=:9090", "EXPOSE 9090"},
+			mustNotContain: []string{"LISTEN_ADDR=:8080", "EXPOSE 8080"},
+		},
+		filepath.Join("..", "..", "docker-compose.yml"): {
+			mustContain:    []string{`"9090:9090"`, `LISTEN_ADDR: ":9090"`},
+			mustNotContain: []string{`"8080:8080"`, `LISTEN_ADDR: ":8080"`},
+		},
+		filepath.Join("..", "clustara-cli", "main.go"): {
+			mustContain:    []string{`http://localhost:9090`},
+			mustNotContain: []string{`http://localhost:8080`},
+		},
+		filepath.Join("..", "..", "sdk", "typescript", "clustara.ts"): {
+			mustContain:    []string{`http://localhost:9090`},
+			mustNotContain: []string{`http://localhost:8080`},
+		},
+		filepath.Join("..", "..", "scripts", "golden-regression.sh"): {
+			mustContain:    []string{`http://localhost:9090`},
+			mustNotContain: []string{`http://localhost:8080`},
+		},
+		filepath.Join("..", "..", "scripts", "golden-regression.ps1"): {
+			mustContain:    []string{`http://localhost:9090`},
+			mustNotContain: []string{`http://localhost:8080`},
+		},
+	}
+
+	for path, rules := range files {
+		t.Run(path, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", path, err)
+			}
+			text := string(data)
+			for _, want := range rules.mustContain {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s must contain %q", path, want)
+				}
+			}
+			for _, forbidden := range rules.mustNotContain {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("%s must not contain stale default port marker %q", path, forbidden)
+				}
+			}
+		})
+	}
+}
