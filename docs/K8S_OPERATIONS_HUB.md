@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.98** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.102** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.98)
+## 기능 상태 (v0.9.102)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -21,6 +21,10 @@
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
 | 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.98) |
+| Security Manifest & SBOM Ops — multi-document YAML Admission 이미지 추출, 원본 CycloneDX/SPDX SBOM 직접 업로드, query metadata 보정 | ✅ (v0.9.102) |
+| Security Admission & Benchmark Ops — AdmissionReview 응답 audit/warning 보강, 만료 예외 자동 표기, kube-bench Job manifest 생성 API/UI | ✅ (v0.9.101) |
+| Security Operator Correlation Plus — 원본 scanner JSON 직접 업로드, Trivy Operator VulnerabilityReport import 맥락 보정, 스캔 신선도/stale 요약, 런타임 이벤트↔취약 이미지 digest 상관분석, Admission decision 우선순위 보강 | ✅ (v0.9.100) |
+| Security Vulnerability Foundation — Trivy/Grype import, digest 기준 CVE 원장, SBOM 업로드, Admission 이미지 정책 평가, Falco 런타임 이벤트, kube-bench CIS 결과, 만료형 예외 승인과 보안 하위 메뉴 7종 | ✅ (v0.9.99) |
 | Pod 관리 센터 — 목록·상세·위험 Pod 자동 북마크·최근 접근·현재/previous 로그·로그 프리셋·마스킹 리포트·스냅샷·동일 workload 병합·증적 번들·Golden Pod Diff·Health Replay·조치 안전성·플레이북 | ✅ |
 | Pod Health Score(0~100) + 문제 유형 자동 태깅(CrashLoop/OOM/ImagePull/Pending/ProbeFailing/RecentRestart 등) · Health 낮은 순 정렬 | ✅ |
 | Restart Storm 탐지 — 같은 workload 다수 Pod의 **최근** 재시작/비정상 신호를 서비스 단위 장애로 묶어 경고(POD-RULE-06) · critical storm은 워크로드 incident 자동 생성 | ✅ |
@@ -239,6 +243,21 @@
 | GET/POST | `/admin/k8s/policies` | 정책 팩 목록/생성 (SEC-10), `DELETE /policies/{id}` |
 | POST | `/admin/k8s/policies/simulate` | manifest 적용 전 정책 위반 검증 (SEC-05 Admission 시뮬레이터) |
 | GET | `/admin/k8s/policies/compliance` | 현재 인벤토리의 정책 위반 목록 |
+| GET | `/admin/k8s/security/vuln/summary` | 이미지 취약점, 예외, 런타임 이벤트, CIS 결과 요약 |
+| GET | `/admin/k8s/security/vuln/images` | digest·namespace·severity·fixable 기준 이미지 취약점 목록 |
+| GET | `/admin/k8s/security/vuln/workloads` | 실행 워크로드 기준 취약 이미지 영향도 집계 |
+| GET/POST | `/admin/k8s/security/scans` | 외부 scanner/agent runner가 처리할 스캔 작업 등록 및 이력 조회 |
+| POST | `/admin/k8s/security/scans/import` | 래퍼 JSON 또는 원본 Trivy/Grype/Trivy Operator JSON 결과를 표준 취약점 원장으로 import |
+| GET/POST | `/admin/k8s/security/sboms` | 래퍼 JSON 또는 원본 CycloneDX/SPDX SBOM 업로드 및 digest별 SBOM 조회 |
+| GET/POST | `/admin/k8s/security/exceptions` | 취약점·이미지·워크로드 예외 요청 생성 및 조회(만료일 필수) |
+| POST | `/admin/k8s/security/exceptions/{id}/approve|revoke` | 보안 예외 승인 또는 폐기 |
+| POST | `/admin/k8s/security/admission/evaluate` | YAML/image list에 대해 latest·digest·SBOM·Critical/High CVE 정책 평가 |
+| POST | `/admin/k8s/security/admission/review` | AdmissionReview 호환 응답 생성(현재 admin/service token 보호 필요) |
+| GET | `/admin/k8s/security/admission/decisions` | Admission 허용·경고·차단 결정 이력 |
+| GET/POST | `/admin/k8s/security/runtime/events` | Falco/Falcosidekick 런타임 이벤트 수집 및 조회 |
+| GET/POST | `/admin/k8s/security/benchmarks/job-manifest` | kube-bench 실행용 Kubernetes Job YAML 생성(서버는 직접 실행하지 않음) |
+| GET/POST | `/admin/k8s/security/benchmarks/runs` | kube-bench JSON 결과 import 및 실행 이력 조회 |
+| GET | `/admin/k8s/security/benchmarks/results` | kube-bench control별 상세 결과 조회 |
 | GET | `/admin/k8s/cost` | request×단가 월 비용 추정 (namespace/team/group/cost-center), `cost/config`로 단가 조정 |
 | POST | `/admin/k8s/cost/snapshot` | 일별 비용 스냅샷 기록 (비용 증가율 추세용, 로컬 누적) |
 | GET | `/admin/k8s/cost/trend` | namespace별 전일 대비 비용 증가/감소 |

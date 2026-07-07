@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.98"
+const AppVersion = "v0.9.102"
 
 type Server struct {
 	cfg            config.Config
@@ -329,6 +329,22 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/resource-graph", s.handleK8sResourceGraph)
 	mux.HandleFunc("/admin/k8s/remediation/advice", s.handleK8sRemediation)
 	mux.HandleFunc("/admin/k8s/connectivity", s.handleK8sConnectivity)
+	mux.HandleFunc("/admin/k8s/security/vuln/summary", s.handleK8sSecurityVulnSummary)
+	mux.HandleFunc("/admin/k8s/security/vuln/images", s.handleK8sSecurityVulnImages)
+	mux.HandleFunc("/admin/k8s/security/vuln/workloads", s.handleK8sSecurityVulnWorkloads)
+	mux.HandleFunc("/admin/k8s/security/scans/import", s.handleK8sSecurityScansImport)
+	mux.HandleFunc("/admin/k8s/security/scans/", s.handleK8sSecurityScanByID)
+	mux.HandleFunc("/admin/k8s/security/scans", s.handleK8sSecurityScans)
+	mux.HandleFunc("/admin/k8s/security/sboms", s.handleK8sSecuritySBOMs)
+	mux.HandleFunc("/admin/k8s/security/exceptions/", s.handleK8sSecurityVulnExceptionByID)
+	mux.HandleFunc("/admin/k8s/security/exceptions", s.handleK8sSecurityVulnExceptions)
+	mux.HandleFunc("/admin/k8s/security/admission/evaluate", s.handleK8sSecurityAdmissionEvaluate)
+	mux.HandleFunc("/admin/k8s/security/admission/review", s.handleK8sSecurityAdmissionReview)
+	mux.HandleFunc("/admin/k8s/security/admission/decisions", s.handleK8sSecurityAdmissionDecisions)
+	mux.HandleFunc("/admin/k8s/security/runtime/events", s.handleK8sSecurityRuntimeEvents)
+	mux.HandleFunc("/admin/k8s/security/benchmarks/job-manifest", s.handleK8sSecurityBenchmarkJobManifest)
+	mux.HandleFunc("/admin/k8s/security/benchmarks/runs", s.handleK8sSecurityBenchmarkRuns)
+	mux.HandleFunc("/admin/k8s/security/benchmarks/results", s.handleK8sSecurityBenchmarkResults)
 	mux.HandleFunc("/admin/k8s/security", s.handleK8sSecurity)
 	mux.HandleFunc("/admin/k8s/capacity", s.handleK8sCapacity)
 	mux.HandleFunc("/admin/k8s/capacity/simulate", s.handleK8sScaleSimulate)

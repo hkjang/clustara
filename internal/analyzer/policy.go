@@ -31,6 +31,9 @@ var PolicyRuleTypes = []string{
 	"disallow_privileged", "disallow_host_network", "disallow_host_path",
 	"disallow_latest_tag", "require_resource_limits", "require_run_as_non_root",
 	"disallow_wildcard_rbac",
+	"disallow_unsigned_image", "require_image_digest", "require_sbom",
+	"require_vuln_scan_attestation", "deny_critical_vulnerability", "warn_high_vulnerability",
+	"deny_unfixed_exception_expired", "deny_privileged_runtime", "enforce_pss_restricted",
 }
 
 // EvaluatePolicies checks a resource (by kind + raw spec, e.g. from a manifest) against the
@@ -53,6 +56,7 @@ func podSpecFromKindSpec(kind string, spec map[string]any) map[string]any {
 }
 
 func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, string) {
+	annotations := policyAnnotations(kind, spec)
 	containers := func() []any {
 		if ps == nil {
 			return nil
@@ -82,6 +86,51 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, strin
 				return true, "mutable 태그: " + img
 			}
 		}
+	case "require_image_digest":
+		for _, img := range ExtractImages(ps) {
+			if !strings.Contains(img, "@sha256:") {
+				return true, "digest 미고정 이미지: " + img
+			}
+		}
+	case "disallow_unsigned_image":
+		if annotations["cosign.sigstore.dev/signature"] == "" && annotations["clustara.io/image-signature"] == "" {
+			return true, "이미지 서명 attestation 없음"
+		}
+	case "require_sbom":
+		if annotations["clustara.io/sbom-ref"] == "" && annotations["clustara.io/sbom-digest"] == "" {
+			return true, "SBOM 연결 정보 없음"
+		}
+	case "require_vuln_scan_attestation":
+		if annotations["clustara.io/vuln-scan-id"] == "" && annotations["clustara.io/vuln-scan-attestation"] == "" {
+			return true, "취약점 스캔 attestation 없음"
+		}
+	case "deny_critical_vulnerability":
+		if n := strings.TrimSpace(annotations["clustara.io/critical-vulnerabilities"]); n != "" && n != "0" {
+			return true, "Critical 취약점 attestation: " + n
+		}
+	case "warn_high_vulnerability":
+		if n := strings.TrimSpace(annotations["clustara.io/high-vulnerabilities"]); n != "" && n != "0" {
+			return true, "High 취약점 attestation: " + n
+		}
+	case "deny_unfixed_exception_expired":
+		if strings.EqualFold(annotations["clustara.io/exception-expired"], "true") {
+			return true, "만료된 보안 예외"
+		}
+	case "deny_privileged_runtime", "enforce_pss_restricted":
+		if asBool(ps["hostNetwork"]) || asBool(ps["hostPID"]) || asBool(ps["hostIPC"]) {
+			return true, "host namespace 사용"
+		}
+		for _, raw := range asAnySlice(ps["volumes"]) {
+			if _, ok := asAnyMap(raw)["hostPath"]; ok {
+				return true, "hostPath volume 사용"
+			}
+		}
+		for _, raw := range containers() {
+			sc := asAnyMap(asAnyMap(raw)["securityContext"])
+			if asBool(sc["privileged"]) || asBool(sc["allowPrivilegeEscalation"]) {
+				return true, str(asAnyMap(raw)["name"]) + ": privileged/privesc"
+			}
+		}
 	case "require_resource_limits":
 		for _, raw := range containers() {
 			lim := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["limits"])
@@ -107,6 +156,24 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, strin
 		}
 	}
 	return false, ""
+}
+
+func policyAnnotations(kind string, spec map[string]any) map[string]string {
+	out := map[string]string{}
+	add := func(raw any) {
+		for k, v := range asAnyMap(raw) {
+			if s := strings.TrimSpace(str(v)); s != "" {
+				out[k] = s
+			}
+		}
+	}
+	add(asAnyMap(asAnyMap(spec["metadata"])["annotations"]))
+	tmpl := asAnyMap(spec["template"])
+	add(asAnyMap(asAnyMap(tmpl["metadata"])["annotations"]))
+	if strings.EqualFold(kind, "Pod") {
+		add(asAnyMap(spec["annotations"]))
+	}
+	return out
 }
 
 func hasWildcard(v any) bool {

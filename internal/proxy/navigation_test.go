@@ -64,7 +64,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// admin: every K8s area incl. security + nested settings children.
 	adminTabs := tabSet(roleScopes["admin"], features)
-	for _, want := range []string{"k8s-home", "fleet", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "enterprise", "settings"} {
+	for _, want := range []string{"k8s-home", "fleet", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "enterprise", "settings"} {
 		if !adminTabs[want] {
 			t.Errorf("admin should see %q", want)
 		}
@@ -111,7 +111,7 @@ func TestMeNavigationLegacyModeReturnsFullMenu(t *testing.T) {
 	for _, tb := range nav.AllowedTabs {
 		tabs[tb] = true
 	}
-	for _, want := range []string{"k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-nodes", "service-catalog", "k8s-security", "runtimesettings"} {
+	for _, want := range []string{"k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-nodes", "service-catalog", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "runtimesettings"} {
 		if !tabs[want] {
 			t.Errorf("legacy allowed_tabs missing %q", want)
 		}
@@ -205,6 +205,9 @@ func TestRoleHomeOverrides(t *testing.T) {
 	// security_admin sees the security tab; billing_admin (no security:read) does not.
 	if !tabSet(roleScopes["security_admin"], features)["k8s-security"] {
 		t.Error("security_admin should see k8s-security")
+	}
+	if !tabSet(roleScopes["security_admin"], features)["k8s-security-vulnerabilities"] {
+		t.Error("security_admin should see vulnerability security center")
 	}
 	if tabSet(roleScopes["billing_admin"], features)["k8s-security"] {
 		t.Error("billing_admin should not see k8s-security")

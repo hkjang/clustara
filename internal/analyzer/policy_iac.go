@@ -67,6 +67,60 @@ var policyRuleCatalog = map[string]PolicyRuleMeta{
 		regoBody:        "  some r\n  input.rules[r].verbs[_] == \"*\"\n  msg := \"wildcard verb in RBAC rule\"",
 		keywords:        []string{"wildcard", "rbac wildcard", "disallow-wildcard"},
 	},
+	"require_image_digest": {
+		RuleType: "require_image_digest", Title: "이미지 digest 고정 필수",
+		kyvernoValidate: "      message: \"이미지는 tag가 아니라 digest(@sha256)로 고정해야 합니다\"\n      deny:\n        conditions:\n          any:\n          - key: \"{{ images.containers.*.referenceWithTag || '' }}\"\n            operator: NotEquals\n            value: \"\"",
+		regoBody:        "  some c\n  not contains(input.spec.containers[c].image, \"@sha256:\")\n  msg := sprintf(\"container %v image is not digest pinned\", [input.spec.containers[c].name])",
+		keywords:        []string{"require-image-digest", "digest pinned", "@sha256", "image digest"},
+	},
+	"disallow_unsigned_image": {
+		RuleType: "disallow_unsigned_image", Title: "서명 없는 이미지 금지",
+		kyvernoValidate: "      message: \"서명 attestation 없는 이미지는 금지됩니다\"\n      deny:\n        conditions:\n          any:\n          - key: \"{{ request.object.metadata.annotations.\\\"clustara.io/image-signature\\\" || '' }}\"\n            operator: Equals\n            value: \"\"",
+		regoBody:        "  not input.metadata.annotations[\"clustara.io/image-signature\"]\n  msg := \"missing image signature attestation\"",
+		keywords:        []string{"cosign", "sigstore", "image-signature", "unsigned image"},
+	},
+	"require_sbom": {
+		RuleType: "require_sbom", Title: "SBOM 필수",
+		kyvernoValidate: "      message: \"이미지 SBOM 참조가 필요합니다\"\n      pattern:\n        metadata:\n          annotations:\n            clustara.io/sbom-ref: \"?*\"",
+		regoBody:        "  not input.metadata.annotations[\"clustara.io/sbom-ref\"]\n  msg := \"missing SBOM reference\"",
+		keywords:        []string{"sbom", "cyclonedx", "spdx", "require-sbom"},
+	},
+	"require_vuln_scan_attestation": {
+		RuleType: "require_vuln_scan_attestation", Title: "취약점 스캔 attestation 필수",
+		kyvernoValidate: "      message: \"취약점 스캔 attestation이 필요합니다\"\n      pattern:\n        metadata:\n          annotations:\n            clustara.io/vuln-scan-id: \"?*\"",
+		regoBody:        "  not input.metadata.annotations[\"clustara.io/vuln-scan-id\"]\n  msg := \"missing vulnerability scan attestation\"",
+		keywords:        []string{"vuln-scan", "vulnerability scan", "attestation"},
+	},
+	"deny_critical_vulnerability": {
+		RuleType: "deny_critical_vulnerability", Title: "Critical CVE 이미지 차단",
+		kyvernoValidate: "      message: \"예외 없는 Critical 취약 이미지 배포는 차단됩니다\"\n      deny:\n        conditions:\n          any:\n          - key: \"{{ request.object.metadata.annotations.\\\"clustara.io/critical-vulnerabilities\\\" || '0' }}\"\n            operator: NotEquals\n            value: \"0\"",
+		regoBody:        "  input.metadata.annotations[\"clustara.io/critical-vulnerabilities\"] != \"0\"\n  msg := \"critical vulnerabilities found\"",
+		keywords:        []string{"critical vulnerability", "critical cve", "deny-critical"},
+	},
+	"warn_high_vulnerability": {
+		RuleType: "warn_high_vulnerability", Title: "High CVE 승인 필요",
+		kyvernoValidate: "      message: \"High 취약점 이미지는 승인 또는 SLA 관리가 필요합니다\"\n      deny:\n        conditions:\n          any:\n          - key: \"{{ request.object.metadata.annotations.\\\"clustara.io/high-vulnerabilities\\\" || '0' }}\"\n            operator: NotEquals\n            value: \"0\"",
+		regoBody:        "  input.metadata.annotations[\"clustara.io/high-vulnerabilities\"] != \"0\"\n  msg := \"high vulnerabilities require approval\"",
+		keywords:        []string{"high vulnerability", "high cve", "warn-high"},
+	},
+	"deny_unfixed_exception_expired": {
+		RuleType: "deny_unfixed_exception_expired", Title: "만료 예외 차단",
+		kyvernoValidate: "      message: \"만료된 취약점 예외는 사용할 수 없습니다\"\n      deny:\n        conditions:\n          any:\n          - key: \"{{ request.object.metadata.annotations.\\\"clustara.io/exception-expired\\\" || 'false' }}\"\n            operator: Equals\n            value: \"true\"",
+		regoBody:        "  input.metadata.annotations[\"clustara.io/exception-expired\"] == \"true\"\n  msg := \"security exception has expired\"",
+		keywords:        []string{"exception expired", "expired exception", "deny-unfixed-exception"},
+	},
+	"deny_privileged_runtime": {
+		RuleType: "deny_privileged_runtime", Title: "런타임 권한 위험 차단",
+		kyvernoValidate: "      message: \"privileged, hostPath, host namespace 사용은 금지됩니다\"\n      pattern:\n        spec:\n          =(hostNetwork): \"false\"\n          =(hostPID): \"false\"\n          =(volumes):\n          - X(hostPath): \"null\"\n          containers:\n          - =(securityContext):\n              =(privileged): \"false\"",
+		regoBody:        "  input.spec.hostNetwork == true\n  msg := \"privileged runtime setting is not allowed\"",
+		keywords:        []string{"privileged runtime", "hostnamespace", "deny-privileged-runtime"},
+	},
+	"enforce_pss_restricted": {
+		RuleType: "enforce_pss_restricted", Title: "Pod Security Restricted 강제",
+		kyvernoValidate: "      message: \"Restricted Pod Security 기준을 만족해야 합니다\"\n      pattern:\n        spec:\n          =(hostNetwork): \"false\"\n          =(hostPID): \"false\"\n          =(hostIPC): \"false\"\n          =(volumes):\n          - X(hostPath): \"null\"",
+		regoBody:        "  input.spec.hostPID == true\n  msg := \"PSS restricted violation\"",
+		keywords:        []string{"pod security restricted", "pss restricted", "enforce-pss"},
+	},
 }
 
 const policyAnnotationKey = "clustara.io/rule-type"

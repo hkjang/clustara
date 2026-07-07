@@ -638,6 +638,13 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-cost" data-tab="k8s-cost">비용</a>
           <a href="#/ai-governance" data-tab="ai-governance">AI Governance</a>
           <a href="#/k8s-security" data-tab="k8s-security">보안</a>
+          <a href="#/k8s-security-vulnerabilities" data-tab="k8s-security-vulnerabilities">이미지 취약점</a>
+          <a href="#/k8s-security-sbom" data-tab="k8s-security-sbom">SBOM 분석</a>
+          <a href="#/k8s-security-cluster-scan" data-tab="k8s-security-cluster-scan">클러스터 지속 스캔</a>
+          <a href="#/k8s-security-admission" data-tab="k8s-security-admission">배포 차단 정책</a>
+          <a href="#/k8s-security-runtime" data-tab="k8s-security-runtime">런타임 탐지</a>
+          <a href="#/k8s-security-benchmark" data-tab="k8s-security-benchmark">CIS Benchmark</a>
+          <a href="#/k8s-security-exceptions" data-tab="k8s-security-exceptions">예외 승인</a>
           <a href="#/k8s-policy" data-tab="k8s-policy">정책 센터</a>
         </div>
       </div>
@@ -1213,6 +1220,13 @@ const adminHTML = `<!doctype html>
       { tab: 'finops', href: '#/finops', label: 'FinOps', group: '비용', tags: 'cost budget rightsizing anomaly' },
       { tab: 'k8s-cost', href: '#/k8s-cost', label: 'K8s 비용 상세', group: '비용', tags: 'cost price namespace team' },
       { tab: 'k8s-security', href: '#/k8s-security', label: '보안', group: '보안', tags: 'security posture image rbac tls policy' },
+      { tab: 'k8s-security-vulnerabilities', href: '#/k8s-security-vulnerabilities', label: '이미지 취약점', group: '보안', tags: 'trivy grype cve vulnerability image digest fixable' },
+      { tab: 'k8s-security-sbom', href: '#/k8s-security-sbom', label: 'SBOM 분석', group: '보안', tags: 'sbom cyclonedx spdx package license' },
+      { tab: 'k8s-security-cluster-scan', href: '#/k8s-security-cluster-scan', label: '클러스터 지속 스캔', group: '보안', tags: 'trivy operator vulnerabilityreport stale scan' },
+      { tab: 'k8s-security-admission', href: '#/k8s-security-admission', label: '배포 차단 정책', group: '보안', tags: 'admission deny digest latest critical cve' },
+      { tab: 'k8s-security-runtime', href: '#/k8s-security-runtime', label: '런타임 탐지', group: '보안', tags: 'falco runtime shell privilege node pod' },
+      { tab: 'k8s-security-benchmark', href: '#/k8s-security-benchmark', label: 'CIS Benchmark', group: '보안', tags: 'kube-bench cis benchmark remediation' },
+      { tab: 'k8s-security-exceptions', href: '#/k8s-security-exceptions', label: '보안 예외 승인', group: '보안', tags: 'exception approval cve expires ticket' },
       { tab: 'k8s-policy', href: '#/k8s-policy', label: '정책 센터', group: '보안', tags: 'policy pack exception simulation' },
       { tab: 'enterprise', href: '#/enterprise', label: '엔터프라이즈', group: '설정', tags: 'org workspace project catalog access binding' },
       { tab: 'governance', href: '#/governance', label: 'Governance Hub', group: '설정', tags: 'audit evidence ticket cmdb risk executive report' },
@@ -2438,6 +2452,13 @@ const adminHTML = `<!doctype html>
           case 'k8s-manifest-changes': await renderK8sManifestChanges(params); break;
           case 'gitops': await renderGitOps(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
+          case 'k8s-security-vulnerabilities': await renderK8sSecurityVulnerabilities(params); break;
+          case 'k8s-security-sbom': await renderK8sSecuritySBOM(params); break;
+          case 'k8s-security-cluster-scan': await renderK8sSecurityClusterScan(params); break;
+          case 'k8s-security-admission': await renderK8sSecurityAdmission(params); break;
+          case 'k8s-security-runtime': await renderK8sSecurityRuntime(params); break;
+          case 'k8s-security-benchmark': await renderK8sSecurityBenchmark(params); break;
+          case 'k8s-security-exceptions': await renderK8sSecurityExceptions(params); break;
           case 'k8s-policy': await renderK8sPolicy(params); break;
           case 'k8s-settings': await renderK8sSettings(params); break;
           case 'enterprise': await renderEnterpriseFoundation(params); break;
@@ -11191,7 +11212,257 @@ const adminHTML = `<!doctype html>
       await renderK8sActions(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
 
-    // ---------- K8s 보안 대시보드 (SEC-01~06) ----------
+    // ---------- K8s 보안 대시보드 (SEC-01~06 + vulnerability/SBOM/runtime/CIS) ----------
+    function k8sSecurityVal(id) {
+      const el = document.getElementById(id);
+      return el ? (el.value || '').trim() : '';
+    }
+    function k8sSecurityClusterQuery(clusterId) {
+      return clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+    }
+    function k8sSecurityHref(tab, clusterId) {
+      return '#/' + tab + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '');
+    }
+    function k8sSecuritySubnav(clusterId) {
+      const tabs = [
+        ['k8s-security', '대시보드'],
+        ['k8s-security-vulnerabilities', '이미지 취약점'],
+        ['k8s-security-sbom', 'SBOM'],
+        ['k8s-security-cluster-scan', '지속 스캔'],
+        ['k8s-security-admission', '배포 차단'],
+        ['k8s-security-runtime', '런타임'],
+        ['k8s-security-benchmark', 'CIS'],
+        ['k8s-security-exceptions', '예외 승인'],
+        ['k8s-policy', '정책 센터']
+      ];
+      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px">' + tabs.map(t =>
+        '<a class="button secondary" style="font-size:12px;text-decoration:none" href="' + escapeAttr(k8sSecurityHref(t[0], clusterId)) + '">' + escapeHTML(t[1]) + '</a>'
+      ).join('') + '</div>';
+    }
+    function k8sSecurityClusterSelect(clusters, clusterId, id, tab) {
+      const opts = '<option value="">전체 클러스터</option>' + ((clusters && clusters.clusters) || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name || cl.id) + '</option>').join('');
+      return '<select id="' + escapeAttr(id) + '" onchange="k8sSecurityGo(\'' + escapeAttr(tab) + '\',\'' + escapeAttr(id) + '\')">' + opts + '</select>';
+    }
+    function securitySeverityClass(sev) {
+      const s = String(sev || '').toLowerCase();
+      return s === 'critical' || s === 'high' ? 'error' : (s === 'medium' || s === 'warn' ? 'warn' : '');
+    }
+    function securityDecisionClass(decision) {
+      const d = String(decision || '').toLowerCase();
+      return d === 'deny' || d === 'blocked' || d === 'failed' || d === 'revoked' || d === 'expired' ? 'error' : (d === 'warn' || d === 'approval_required' || d === 'pending' ? 'warn' : '');
+    }
+    function securitySummaryKpis(summary) {
+      const s = summary || {};
+      return '<div class="kpis">' +
+        kpi('Critical CVE', fmt(s.Critical || s.critical || 0)) +
+        kpi('High CVE', fmt(s.High || s.high || 0)) +
+        kpi('Fixable', fmt(s.fixable || 0)) +
+        kpi('예외', fmt(s.exceptions || 0)) +
+        kpi('Runtime', fmt(s.runtime_events || 0)) +
+        kpi('CIS Fail', fmt(s.benchmark_fail || 0)) +
+      '</div>';
+    }
+    function securityScanRows(scans) {
+      const rows = (scans || []).map(s =>
+        '<tr><td><span class="status ' + securityDecisionClass(s.status) + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(s.scanner || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.source || '-') + ' · ' + escapeHTML(s.scanner_version || '-') + '</div></td>' +
+        '<td style="word-break:break-all">' + escapeHTML(s.target_ref || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(s.image_digest || '-') + '</div></td>' +
+        '<td class="muted" style="font-size:11px">' + ago(s.finished_at || s.created_at) + '</td>' +
+        '<td><a href="#/k8s-security-vulnerabilities?image_digest=' + encodeURIComponent(s.image_digest || '') + '">상세</a></td></tr>').join('');
+      return rows || '<tr><td colspan="5" class="muted">스캔 실행 이력이 없습니다.</td></tr>';
+    }
+    function securityVulnRows(vulns) {
+      const rows = (vulns || []).map(v =>
+        '<tr><td><span class="status ' + securitySeverityClass(v.severity) + '" style="font-size:10px">' + escapeHTML(v.severity || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(v.cve_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(v.package_name || '-') + ' ' + escapeHTML(v.installed_version || '') + '</div></td>' +
+        '<td>' + escapeHTML(v.fixed_version || '-') + '</td>' +
+        '<td style="word-break:break-all">' + escapeHTML(v.image || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(v.image_digest || '-') + '</div></td>' +
+        '<td>' + escapeHTML((v.namespace || '-') + '/' + (v.workload_kind || '-') + '/' + (v.workload_name || '-')) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(v.last_seen_at) + '</td></tr>').join('');
+      return rows || '<tr><td colspan="6" class="muted">취약점 finding이 없습니다.</td></tr>';
+    }
+    function securityWorkloadRows(workloads) {
+      const rows = (workloads || []).map(w =>
+        '<tr><td>' + escapeHTML((w.namespace || '-') + '/' + (w.workload_kind || '-') + '/' + (w.workload_name || '-')) + '</td>' +
+        '<td style="word-break:break-all">' + escapeHTML(w.image_digest || w.image || '-') + '</td>' +
+        '<td data-num="' + (w.critical || 0) + '">' + (w.critical ? '<span class="status error">' + fmt(w.critical) + '</span>' : '0') + '</td>' +
+        '<td data-num="' + (w.high || 0) + '">' + (w.high ? '<span class="status error">' + fmt(w.high) + '</span>' : '0') + '</td>' +
+        '<td data-num="' + (w.fixable || 0) + '">' + fmt(w.fixable || 0) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML((w.cves || []).join(', ') || '-') + '</td></tr>').join('');
+      return rows || '<tr><td colspan="6" class="muted">실행 워크로드 매핑이 없습니다.</td></tr>';
+    }
+    window.k8sSecurityGo = (tab, selectId) => {
+      const clusterId = k8sSecurityVal(selectId);
+      location.hash = k8sSecurityHref(tab || 'k8s-security', clusterId);
+    };
+    window.k8sSecurityImportScan = async () => {
+      const out = document.getElementById('sec-vuln-import-out');
+      try {
+        const raw = JSON.parse(k8sSecurityVal('sec-vuln-raw') || '{}');
+        const body = {
+          cluster_id: k8sSecurityVal('sec-vuln-cluster'),
+          namespace: k8sSecurityVal('sec-vuln-ns'),
+          workload_kind: k8sSecurityVal('sec-vuln-wkind'),
+          workload_name: k8sSecurityVal('sec-vuln-wname'),
+          container_name: k8sSecurityVal('sec-vuln-container'),
+          image: k8sSecurityVal('sec-vuln-image'),
+          image_digest: k8sSecurityVal('sec-vuln-digest'),
+          scanner: k8sSecurityVal('sec-vuln-scanner') || 'trivy',
+          scanner_version: k8sSecurityVal('sec-vuln-scanner-version'),
+          source: 'ci-import',
+          raw_json: raw
+        };
+        const res = await api('/admin/k8s/security/scans/import', { method: 'POST', body: JSON.stringify(body) });
+        if (out) out.innerHTML = '<span class="status">imported ' + fmt(res.imported || 0) + '</span>';
+        showToast('ok', '취약점 스캔 import 완료', 'finding ' + fmt(res.imported || 0) + '건');
+        await renderK8sSecurityVulnerabilities(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityUploadSBOM = async () => {
+      const out = document.getElementById('sec-sbom-out');
+      try {
+        const raw = JSON.parse(k8sSecurityVal('sec-sbom-raw') || '{}');
+        const res = await api('/admin/k8s/security/sboms', { method: 'POST', body: JSON.stringify({
+          image: k8sSecurityVal('sec-sbom-image'),
+          image_digest: k8sSecurityVal('sec-sbom-digest'),
+          generator: k8sSecurityVal('sec-sbom-generator'),
+          sbom: raw
+        }) });
+        if (out) out.innerHTML = '<span class="status">SBOM 저장됨 · packages ' + fmt((res.sbom || {}).package_count || 0) + '</span>';
+        showToast('ok', 'SBOM 저장 완료', (res.sbom || {}).id || '');
+        await renderK8sSecuritySBOM(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityCreateScan = async () => {
+      const out = document.getElementById('sec-scan-out');
+      try {
+        const res = await api('/admin/k8s/security/scans', { method: 'POST', body: JSON.stringify({
+          cluster_id: k8sSecurityVal('sec-scan-cluster'),
+          image: k8sSecurityVal('sec-scan-image'),
+          image_digest: k8sSecurityVal('sec-scan-digest'),
+          scanner: k8sSecurityVal('sec-scan-scanner') || 'trivy',
+          severity_policy: k8sSecurityVal('sec-scan-policy') || 'HIGH,CRITICAL'
+        }) });
+        if (out) out.innerHTML = '<span class="status warn">queued</span> <span class="muted">' + escapeHTML((res.scan || {}).id || '') + '</span>';
+        showToast('ok', '스캔 작업 등록', (res.scan || {}).id || '');
+        await renderK8sSecurityClusterScan(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityEvaluateAdmission = async () => {
+      const out = document.getElementById('sec-adm-out');
+      try {
+        const images = k8sSecurityVal('sec-adm-images').split(/\n|,/).map(x => x.trim()).filter(Boolean);
+        const res = await api('/admin/k8s/security/admission/evaluate', { method: 'POST', body: JSON.stringify({
+          cluster_id: k8sSecurityVal('sec-adm-cluster'),
+          namespace: k8sSecurityVal('sec-adm-ns'),
+          operation: k8sSecurityVal('sec-adm-op') || 'CREATE',
+          manifest: k8sSecurityVal('sec-adm-yaml2'),
+          images
+        }) });
+        const rows = (res.results || []).map(r => '<tr><td><span class="status ' + securityDecisionClass(r.decision) + '">' + escapeHTML(r.decision || '-') + '</span></td><td>' + escapeHTML(r.rule || '-') + '</td><td style="word-break:break-all">' + escapeHTML(r.image || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.reason || r.cve || '-') + '</td></tr>').join('');
+        if (out) out.innerHTML = '<div class="banner"><strong>' + escapeHTML(res.decision || '-') + '</strong> · ' + escapeHTML(res.reason || '') + '</div><table><thead><tr><th>결정</th><th>Rule</th><th>Image</th><th>근거</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        showToast(res.decision === 'deny' ? 'warn' : 'ok', 'Admission 평가 완료', res.decision || '');
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityPostRuntime = async () => {
+      const out = document.getElementById('sec-runtime-out');
+      try {
+        const raw = JSON.parse(k8sSecurityVal('sec-runtime-raw') || '{}');
+        if (k8sSecurityVal('sec-runtime-cluster')) raw.cluster_id = k8sSecurityVal('sec-runtime-cluster');
+        const res = await api('/admin/k8s/security/runtime/events', { method: 'POST', body: JSON.stringify(raw) });
+        if (out) out.innerHTML = '<span class="status">runtime event 저장됨</span> <span class="muted">' + escapeHTML((res.event || {}).id || '') + '</span>';
+        showToast('ok', 'Falco 이벤트 저장', (res.event || {}).rule || '');
+        await renderK8sSecurityRuntime(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityImportBenchmark = async () => {
+      const out = document.getElementById('sec-bench-out');
+      try {
+        const raw = JSON.parse(k8sSecurityVal('sec-bench-raw') || '{}');
+        const res = await api('/admin/k8s/security/benchmarks/runs', { method: 'POST', body: JSON.stringify({
+          cluster_id: k8sSecurityVal('sec-bench-cluster'),
+          benchmark_version: k8sSecurityVal('sec-bench-version'),
+          raw_json: raw
+        }) });
+        if (out) out.innerHTML = '<span class="status">benchmark 저장됨</span> fail ' + fmt((res.run || {}).fail_count || 0);
+        showToast('ok', 'kube-bench 결과 저장', (res.run || {}).id || '');
+        await renderK8sSecurityBenchmark(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityGenerateBenchmarkJob = async () => {
+      const out = document.getElementById('sec-bench-job-out');
+      const target = document.getElementById('sec-bench-job-yaml');
+      try {
+        const res = await api('/admin/k8s/security/benchmarks/job-manifest', { method: 'POST', body: JSON.stringify({
+          namespace: k8sSecurityVal('sec-bench-job-ns') || 'kube-system',
+          job_name: k8sSecurityVal('sec-bench-job-name') || 'clustara-kube-bench',
+          service_account: k8sSecurityVal('sec-bench-job-sa') || 'clustara-kube-bench',
+          image: k8sSecurityVal('sec-bench-job-image') || 'docker.io/aquasec/kube-bench:v0.8.0'
+        }) });
+        if (target) target.value = res.manifest || '';
+        if (out) out.innerHTML = '<span class="status">manifest 생성됨</span><div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(((res.warnings || [])[0]) || '') + '</div>';
+        showToast('ok', 'kube-bench Job manifest 생성', '적용은 별도 승인된 runner에서 수행하세요.');
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityLoadBenchmarkResults = async (runId) => {
+      const out = document.getElementById('sec-bench-results');
+      if (!out) return;
+      out.innerHTML = '<span class="muted">결과 불러오는 중...</span>';
+      try {
+        const res = await api('/admin/k8s/security/benchmarks/results?run_id=' + encodeURIComponent(runId));
+        const rows = (res.results || []).map(r => '<tr><td><span class="status ' + (r.state === 'FAIL' ? 'error' : (r.state === 'WARN' ? 'warn' : '')) + '">' + escapeHTML(r.state || '-') + '</span></td><td>' + escapeHTML(r.control_id || '-') + '</td><td>' + escapeHTML(r.text || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.remediation || '-') + '</td></tr>').join('');
+        out.innerHTML = '<table><thead><tr><th>상태</th><th>Control</th><th>항목</th><th>조치</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="muted">결과 없음</td></tr>') + '</tbody></table>';
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityCreateException = async () => {
+      const out = document.getElementById('sec-ex-out');
+      try {
+        const res = await api('/admin/k8s/security/exceptions', { method: 'POST', body: JSON.stringify({
+          cluster_id: k8sSecurityVal('sec-ex-cluster'),
+          namespace: k8sSecurityVal('sec-ex-ns'),
+          workload: k8sSecurityVal('sec-ex-workload'),
+          scope_type: k8sSecurityVal('sec-ex-scope-type') || 'image_digest',
+          scope_value: k8sSecurityVal('sec-ex-scope-value'),
+          cve_id: k8sSecurityVal('sec-ex-cve'),
+          severity: k8sSecurityVal('sec-ex-sev'),
+          reason: k8sSecurityVal('sec-ex-reason'),
+          ticket_url: k8sSecurityVal('sec-ex-ticket'),
+          expires_at: k8sSecurityVal('sec-ex-exp')
+        }) });
+        if (out) out.innerHTML = '<span class="status warn">예외 요청 생성됨</span> <span class="muted">' + escapeHTML((res.exception || {}).id || '') + '</span>';
+        showToast('ok', '보안 예외 요청 생성', (res.exception || {}).id || '');
+        await renderK8sSecurityExceptions(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sSecurityExceptionAction = async (id, action) => {
+      try {
+        const res = await api('/admin/k8s/security/exceptions/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: '{}' });
+        showToast('ok', '예외 ' + action + ' 완료', (res && res.id) || id);
+        await renderK8sSecurityExceptions(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        showToast('error', '예외 처리 실패', e.message);
+      }
+    };
+
     async function renderK8sSecurity(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -11286,7 +11557,7 @@ const adminHTML = `<!doctype html>
       };
 
       view.innerHTML =
-        section('K8s 보안', '<div class="kpis">' +
+        section('K8s 보안', k8sSecuritySubnav(clusterId) + '<div class="kpis">' +
           kpi('보안 점수', fmt(sum.score || 0)) +
           kpi('Privileged', fmt(sum.privileged || 0)) +
           kpi('Baseline', fmt(sum.baseline || 0)) +
@@ -11371,12 +11642,12 @@ const adminHTML = `<!doctype html>
       if (!out) return;
       if (!manifest) { out.innerHTML = '<span class="status warn">YAML을 입력하세요</span>'; return; }
       try {
-        const res = await api('/admin/security/admission/simulate', { method: 'POST', body: JSON.stringify({ cluster_id: cluster, manifest, mode: 'dry-run' }) });
+        const res = await api('/admin/k8s/security/admission/evaluate', { method: 'POST', body: JSON.stringify({ cluster_id: cluster, manifest, operation: 'DRY_RUN' }) });
         const d = (res && res.data) || res || {};
         out.innerHTML = '<span class="status ' + (d.decision === 'deny' ? 'error' : (d.decision === 'audit' ? 'warn' : '')) + '">' + escapeHTML(d.decision || '-') + '</span>' +
           ' <span class="muted">evidence ' + escapeHTML(d.evidence_ref || '-') + '</span>' +
-          '<div class="muted" style="font-size:11px;margin-top:4px">blockers: ' + escapeHTML((d.blockers || []).join(', ') || '-') + '</div>' +
-          '<div class="muted" style="font-size:11px">warnings: ' + escapeHTML((d.warnings || []).join(', ') || '-') + '</div>';
+          '<div class="muted" style="font-size:11px;margin-top:4px">reason: ' + escapeHTML(d.reason || '-') + '</div>' +
+          '<div class="muted" style="font-size:11px">rules: ' + escapeHTML(((d.results || []).map(x => x.rule + ':' + x.decision)).join(', ') || '-') + '</div>';
       } catch (e) {
         out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
       }
@@ -11445,6 +11716,241 @@ const adminHTML = `<!doctype html>
       catch (e) { showToast('error', 'Config 변경 ' + label + ' 실패', e.message); }
       await renderK8sSecurity(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
+
+    async function renderK8sSecurityVulnerabilities(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const digest = (params && params.get('image_digest')) || '';
+      const severity = (params && params.get('severity')) || '';
+      view.innerHTML = section('이미지 취약점', '<div class="empty">불러오는 중...</div>');
+      let clusters, summary, images, workloads, scans;
+      try {
+        const q = new URLSearchParams();
+        if (clusterId) q.set('cluster_id', clusterId);
+        if (digest) q.set('image_digest', digest);
+        if (severity) q.set('severity', severity);
+        [clusters, summary, images, workloads, scans] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/vuln/summary' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ summary: {} })),
+          api('/admin/k8s/security/vuln/images?' + q.toString()).catch(() => ({ vulnerabilities: [], summary: {} })),
+          api('/admin/k8s/security/vuln/workloads' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ workloads: [] })),
+          api('/admin/k8s/security/scans' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ scans: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('이미지 취약점', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const sample = '{"ArtifactName":"registry.example.com/app:1.0.0","Metadata":{"RepoDigests":["registry.example.com/app@sha256:demo"]},"Results":[{"Target":"alpine","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-0001","PkgName":"openssl","InstalledVersion":"1.0","FixedVersion":"1.1","Severity":"CRITICAL"}]}]}';
+      view.innerHTML =
+        section('이미지 취약점', k8sSecuritySubnav(clusterId) + securitySummaryKpis(summary.summary || images.summary || {}) +
+          '<div class="card-body" style="padding:0 4px 8px"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          k8sSecurityClusterSelect(clusters, clusterId, 'sec-vuln-filter-cluster', 'k8s-security-vulnerabilities') +
+          '<input id="sec-vuln-filter-digest" value="' + escapeAttr(digest) + '" placeholder="image digest" style="min-width:240px">' +
+          '<select id="sec-vuln-filter-sev"><option value="">전체 severity</option>' + ['Critical','High','Medium','Low','Unknown'].map(s => '<option value="' + s + '"' + (s === severity ? ' selected' : '') + '>' + s + '</option>').join('') + '</select>' +
+          '<button type="button" class="secondary" onclick="location.hash=\'#/k8s-security-vulnerabilities?cluster_id=\'+encodeURIComponent(k8sSecurityVal(\'sec-vuln-filter-cluster\'))+\'&image_digest=\'+encodeURIComponent(k8sSecurityVal(\'sec-vuln-filter-digest\'))+\'&severity=\'+encodeURIComponent(k8sSecurityVal(\'sec-vuln-filter-sev\'))">필터</button></div></div>') +
+        card('취약점 목록', '<div class="card-body"><table><thead><tr><th>Severity</th><th>CVE/Package</th><th>Fixed</th><th>Image</th><th>Workload</th><th>Seen</th></tr></thead><tbody>' + securityVulnRows(images.vulnerabilities || []) + '</tbody></table></div>') +
+        card('실행 워크로드 영향도', '<div class="card-body"><table><thead><tr><th>Workload</th><th>Digest</th><th>Critical</th><th>High</th><th>Fixable</th><th>CVE</th></tr></thead><tbody>' + securityWorkloadRows(workloads.workloads || []) + '</tbody></table></div>') +
+        '<div class="grid2">' +
+          card('Trivy / Grype JSON Import', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+            '<input id="sec-vuln-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
+            '<select id="sec-vuln-scanner"><option value="trivy">trivy</option><option value="grype">grype</option></select>' +
+            '<input id="sec-vuln-scanner-version" placeholder="scanner version">' +
+            '<input id="sec-vuln-image" placeholder="image" value="registry.example.com/app:1.0.0">' +
+            '<input id="sec-vuln-digest" placeholder="sha256:..." value="' + escapeAttr(digest) + '">' +
+            '<input id="sec-vuln-ns" placeholder="namespace">' +
+            '<input id="sec-vuln-wkind" placeholder="workload kind" value="Deployment">' +
+            '<input id="sec-vuln-wname" placeholder="workload name">' +
+            '<input id="sec-vuln-container" placeholder="container"></div>' +
+            '<textarea id="sec-vuln-raw" rows="11" style="width:100%;font-family:ui-monospace,Consolas,monospace">' + escapeHTML(sample) + '</textarea>' +
+            '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityImportScan()">Import</button> <span id="sec-vuln-import-out" class="muted" style="font-size:12px"></span></div></div>') +
+          card('최근 Scan Runs', '<div class="card-body"><table><thead><tr><th>상태</th><th>Scanner</th><th>Target</th><th>완료</th><th></th></tr></thead><tbody>' + securityScanRows(scans.scans || []) + '</tbody></table></div>') +
+        '</div>';
+    }
+
+    async function renderK8sSecuritySBOM(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const digest = (params && params.get('image_digest')) || '';
+      view.innerHTML = section('SBOM 분석', '<div class="empty">불러오는 중...</div>');
+      let sboms;
+      try {
+        sboms = await api('/admin/k8s/security/sboms?limit=200' + (digest ? '&image_digest=' + encodeURIComponent(digest) : '')).catch(() => ({ sboms: [] }));
+      } catch (e) {
+        view.innerHTML = section('SBOM 분석', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const sample = '{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"tools":{"components":[{"name":"syft","version":"1.0"}]}},"components":[{"type":"library","name":"openssl","version":"1.0","purl":"pkg:apk/alpine/openssl@1.0"}]}';
+      const rows = (sboms.sboms || []).map(s =>
+        '<tr><td><strong>' + escapeHTML(s.format || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.generator || '-') + '</div></td>' +
+        '<td style="word-break:break-all">' + escapeHTML(s.image || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(s.image_digest || '-') + '</div></td>' +
+        '<td data-num="' + (s.package_count || 0) + '">' + fmt(s.package_count || 0) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(s.generated_at || s.created_at) + '</td>' +
+        '<td style="word-break:break-all" class="muted">' + escapeHTML(s.file_hash || '-') + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">SBOM이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('SBOM 분석', k8sSecuritySubnav(clusterId) + '<div class="kpis">' + kpi('SBOM', fmt((sboms.sboms || []).length)) + kpi('Digest 필터', digest ? '적용' : '전체') + '</div>') +
+        card('SBOM 목록', '<div class="card-body"><table><thead><tr><th>Format</th><th>Image</th><th>Packages</th><th>생성</th><th>Hash</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        card('CycloneDX / SPDX 업로드', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          '<input id="sec-sbom-image" placeholder="image" value="registry.example.com/app:1.0.0">' +
+          '<input id="sec-sbom-digest" placeholder="sha256:..." value="' + escapeAttr(digest) + '">' +
+          '<input id="sec-sbom-generator" placeholder="generator" value="syft"></div>' +
+          '<textarea id="sec-sbom-raw" rows="12" style="width:100%;font-family:ui-monospace,Consolas,monospace">' + escapeHTML(sample) + '</textarea>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityUploadSBOM()">SBOM 저장</button> <span id="sec-sbom-out" class="muted" style="font-size:12px"></span></div></div>');
+    }
+
+    async function renderK8sSecurityClusterScan(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('클러스터 지속 스캔', '<div class="empty">불러오는 중...</div>');
+      let clusters, summary, scans;
+      try {
+        [clusters, summary, scans] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/vuln/summary' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ summary: {} })),
+          api('/admin/k8s/security/scans' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ scans: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('클러스터 지속 스캔', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      view.innerHTML =
+        section('클러스터 지속 스캔', k8sSecuritySubnav(clusterId) + securitySummaryKpis(summary.summary || {}) +
+          '<div class="kpis">' + kpi('Scan Runs', fmt((scans.freshness || {}).total || (scans.scans || []).length)) + kpi('Stale 24h', fmt((scans.freshness || {}).stale_24h || 0)) + kpi('Queued', fmt((scans.freshness || {}).queued || 0)) + kpi('Failed', fmt((scans.freshness || {}).failed || 0)) + '</div>' +
+          '<div class="card-body" style="padding:0 4px 8px">' + k8sSecurityClusterSelect(clusters, clusterId, 'sec-scan-filter-cluster', 'k8s-security-cluster-scan') + '</div>') +
+        card('수동 스캔 작업 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Clustara 메인 프로세스가 scanner shell을 직접 실행하지 않습니다. 여기서는 CI/agent runner가 처리할 queued 작업을 만들고, 완료 결과는 import API로 들어옵니다.</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px">' +
+          '<input id="sec-scan-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
+          '<input id="sec-scan-image" placeholder="image">' +
+          '<input id="sec-scan-digest" placeholder="sha256:...">' +
+          '<select id="sec-scan-scanner"><option value="trivy">trivy</option><option value="grype">grype</option></select>' +
+          '<input id="sec-scan-policy" value="HIGH,CRITICAL" placeholder="severity policy"></div>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityCreateScan()">스캔 요청 생성</button> <span id="sec-scan-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Scan Runs / Trivy Operator 수집 상태', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Trivy Operator VulnerabilityReport는 import API에서 source=trivy-operator 형태로 같은 scan run 원장에 적재합니다. 24시간 이상 갱신되지 않은 report는 stale로 운영하세요.</div>' +
+          '<table><thead><tr><th>상태</th><th>Scanner</th><th>Target</th><th>완료</th><th></th></tr></thead><tbody>' + securityScanRows(scans.scans || []) + '</tbody></table></div>');
+    }
+
+    async function renderK8sSecurityAdmission(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('배포 차단 정책', '<div class="empty">불러오는 중...</div>');
+      let clusters, decisions;
+      try {
+        [clusters, decisions] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/admission/decisions' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ decisions: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('배포 차단 정책', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const rows = (decisions.decisions || []).map(d =>
+        '<tr><td><span class="status ' + securityDecisionClass(d.decision) + '" style="font-size:10px">' + escapeHTML(d.decision || '-') + '</span></td>' +
+        '<td>' + escapeHTML((d.namespace || '-') + '/' + (d.kind || '-') + '/' + (d.name || '-')) + '</td>' +
+        '<td>' + escapeHTML(d.operation || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(d.reason || '-') + '</td><td class="muted" style="font-size:11px">' + ago(d.created_at) + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">Admission 결정 이력이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('배포 차단 정책', k8sSecuritySubnav(clusterId) + '<div class="card-body" style="padding:0 4px 8px">' + k8sSecurityClusterSelect(clusters, clusterId, 'sec-adm-filter-cluster', 'k8s-security-admission') + '</div>') +
+        card('이미지 정책 평가', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          '<input id="sec-adm-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
+          '<input id="sec-adm-ns" placeholder="namespace" value="default">' +
+          '<select id="sec-adm-op"><option>CREATE</option><option>UPDATE</option></select>' +
+          '<input id="sec-adm-images" placeholder="image@sha256:... 또는 여러 줄"></div>' +
+          '<textarea id="sec-adm-yaml2" rows="11" placeholder="Kubernetes YAML 또는 image 목록을 입력하세요" style="width:100%;font-family:ui-monospace,Consolas,monospace"></textarea>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityEvaluateAdmission()">평가</button></div><div id="sec-adm-out" style="margin-top:8px"></div></div>') +
+        card('최근 Admission 결정', '<div class="card-body"><table><thead><tr><th>Decision</th><th>Resource</th><th>Operation</th><th>Reason</th><th>Time</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+
+    async function renderK8sSecurityRuntime(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('런타임 탐지', '<div class="empty">불러오는 중...</div>');
+      let clusters, events;
+      try {
+        [clusters, events] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/runtime/events' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ events: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('런타임 탐지', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const rows = (events.events || []).map(ev =>
+        '<tr><td><span class="status ' + securityDecisionClass(ev.priority) + '" style="font-size:10px">' + escapeHTML(ev.priority || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(ev.rule || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(ev.output || '-') + '</div></td>' +
+        '<td>' + escapeHTML((ev.namespace || '-') + '/' + (ev.pod || '-')) + '<div class="muted" style="font-size:11px">' + escapeHTML(ev.container || '-') + '</div><div class="muted" style="font-size:10px">CVE C/H ' + fmt(((ev.vulnerability_summary || {}).Critical) || 0) + '/' + fmt(((ev.vulnerability_summary || {}).High) || 0) + '</div></td>' +
+        '<td>' + escapeHTML(ev.node || '-') + '</td><td class="muted" style="font-size:11px">' + ago(ev.event_time || ev.created_at) + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">런타임 이벤트가 없습니다.</td></tr>';
+      const sample = '{"rule":"Terminal shell in container","priority":"High","output":"shell spawned in container","k8s":{"ns.name":"prod","pod.name":"api-1","container.name":"app","node.name":"node-1"},"image":"registry.example.com/app@sha256:demo"}';
+      view.innerHTML =
+        section('런타임 탐지', k8sSecuritySubnav(clusterId) + '<div class="kpis">' + kpi('Events', fmt((events.events || []).length)) + kpi('취약 이미지 이벤트', fmt((events.correlation || {}).events_with_vulns || 0)) + kpi('연결 Critical', fmt((events.correlation || {}).critical || 0)) + kpi('연결 High', fmt((events.correlation || {}).high || 0)) + '</div><div class="card-body" style="padding:0 4px 8px">' + k8sSecurityClusterSelect(clusters, clusterId, 'sec-runtime-filter-cluster', 'k8s-security-runtime') + '</div>') +
+        card('Falco / Falcosidekick 이벤트 수집', '<div class="card-body"><input id="sec-runtime-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id" style="margin-bottom:6px"><textarea id="sec-runtime-raw" rows="9" style="width:100%;font-family:ui-monospace,Consolas,monospace">' + escapeHTML(sample) + '</textarea><div style="margin-top:6px"><button type="button" onclick="k8sSecurityPostRuntime()">이벤트 저장</button> <span id="sec-runtime-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('런타임 이벤트', '<div class="card-body"><table><thead><tr><th>Priority</th><th>Rule</th><th>Pod</th><th>Node</th><th>Time</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+
+    async function renderK8sSecurityBenchmark(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('CIS Benchmark', '<div class="empty">불러오는 중...</div>');
+      let clusters, runs;
+      try {
+        [clusters, runs] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/benchmarks/runs' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ runs: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('CIS Benchmark', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const rows = (runs.runs || []).map(r =>
+        '<tr><td><span class="status ' + (r.fail_count ? 'error' : (r.warn_count ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(r.status || '-') + '</span></td>' +
+        '<td><strong>' + escapeHTML(r.tool || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.benchmark_version || '-') + '</div></td>' +
+        '<td data-num="' + (r.pass_count || 0) + '">' + fmt(r.pass_count || 0) + '</td><td data-num="' + (r.fail_count || 0) + '">' + (r.fail_count ? '<span class="status error">' + fmt(r.fail_count) + '</span>' : '0') + '</td><td data-num="' + (r.warn_count || 0) + '">' + (r.warn_count ? '<span class="status warn">' + fmt(r.warn_count) + '</span>' : '0') + '</td>' +
+        '<td class="muted" style="font-size:11px">' + ago(r.finished_at || r.created_at) + '</td><td><button type="button" class="secondary" onclick="k8sSecurityLoadBenchmarkResults(\'' + escapeAttr(r.id || '') + '\')">상세</button></td></tr>').join('') || '<tr><td colspan="7" class="muted">benchmark 실행 이력이 없습니다.</td></tr>';
+      const sample = '{"Controls":[{"id":"1","text":"Control Plane","tests":[{"test_number":"1.1.1","test_desc":"Ensure API server is configured securely","status":"FAIL","remediation":"Update kube-apiserver flags","scored":true},{"test_number":"1.1.2","test_desc":"Ensure audit log is enabled","status":"PASS","scored":true}]}]}';
+      view.innerHTML =
+        section('CIS Benchmark', k8sSecuritySubnav(clusterId) + '<div class="card-body" style="padding:0 4px 8px">' + k8sSecurityClusterSelect(clusters, clusterId, 'sec-bench-filter-cluster', 'k8s-security-benchmark') + '</div>') +
+        card('kube-bench Job Manifest', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Clustara는 kube-bench를 직접 실행하지 않고, 승인된 runner나 운영자가 적용할 수 있는 Job YAML만 생성합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px"><input id="sec-bench-job-ns" placeholder="namespace" value="kube-system"><input id="sec-bench-job-name" placeholder="job name" value="clustara-kube-bench"><input id="sec-bench-job-sa" placeholder="service account" value="clustara-kube-bench"><input id="sec-bench-job-image" placeholder="image" value="docker.io/aquasec/kube-bench:v0.8.0"></div><button type="button" class="secondary" onclick="k8sSecurityGenerateBenchmarkJob()">Job YAML 생성</button> <span id="sec-bench-job-out" class="muted" style="font-size:12px"></span><textarea id="sec-bench-job-yaml" rows="12" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>') +
+        card('kube-bench 결과 Import', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px"><input id="sec-bench-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id"><input id="sec-bench-version" placeholder="benchmark version" value="CIS Kubernetes"></div><textarea id="sec-bench-raw" rows="10" style="width:100%;font-family:ui-monospace,Consolas,monospace">' + escapeHTML(sample) + '</textarea><div style="margin-top:6px"><button type="button" onclick="k8sSecurityImportBenchmark()">결과 저장</button> <span id="sec-bench-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Benchmark Runs', '<div class="card-body"><table><thead><tr><th>상태</th><th>Tool</th><th>Pass</th><th>Fail</th><th>Warn</th><th>Time</th><th></th></tr></thead><tbody>' + rows + '</tbody></table><div id="sec-bench-results" style="margin-top:10px"></div></div>');
+    }
+
+    async function renderK8sSecurityExceptions(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('보안 예외 승인', '<div class="empty">불러오는 중...</div>');
+      let clusters, exceptions;
+      try {
+        [clusters, exceptions] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/security/exceptions' + k8sSecurityClusterQuery(clusterId)).catch(() => ({ exceptions: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('보안 예외 승인', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const rows = (exceptions.exceptions || []).map(e => {
+        const est = e.effective_status || e.status || '';
+        return '<tr><td><span class="status ' + securityDecisionClass(est) + '" style="font-size:10px">' + escapeHTML(est || '-') + '</span>' + (e.expires_soon ? ' <span class="status warn" style="font-size:9px">만료 임박</span>' : '') + '</td>' +
+        '<td>' + escapeHTML(e.scope_type || '-') + '<div class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(e.scope_value || '-') + '</div></td>' +
+        '<td><strong>' + escapeHTML(e.cve_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(e.severity || '-') + '</div></td>' +
+        '<td>' + escapeHTML((e.namespace || '-') + '/' + (e.workload || '-')) + '</td>' +
+        '<td class="muted" style="font-size:11px">' + escapeHTML(e.reason || '-') + '<div>' + escapeHTML(e.ticket_url || '') + '</div></td>' +
+        '<td>' + escapeHTML(e.expires_at || '-') + '<div class="muted" style="font-size:11px">' + (Number.isFinite(Number(e.days_remaining)) ? fmt(e.days_remaining) + '일 남음' : '') + '</div></td>' +
+        '<td>' + (est === 'pending' ? '<button type="button" class="secondary" onclick="k8sSecurityExceptionAction(\'' + escapeAttr(e.id || '') + '\',\'approve\')">승인</button> <button type="button" class="danger" onclick="k8sSecurityExceptionAction(\'' + escapeAttr(e.id || '') + '\',\'revoke\')">폐기</button>' : '<button type="button" class="secondary" onclick="k8sSecurityExceptionAction(\'' + escapeAttr(e.id || '') + '\',\'revoke\')">폐기</button>') + '</td></tr>';
+      }).join('') || '<tr><td colspan="7" class="muted">보안 예외가 없습니다.</td></tr>';
+      view.innerHTML =
+        section('보안 예외 승인', k8sSecuritySubnav(clusterId) + '<div class="card-body" style="padding:0 4px 8px">' + k8sSecurityClusterSelect(clusters, clusterId, 'sec-ex-filter-cluster', 'k8s-security-exceptions') + '</div>') +
+        card('예외 요청 생성', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          '<input id="sec-ex-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
+          '<input id="sec-ex-ns" placeholder="namespace">' +
+          '<input id="sec-ex-workload" placeholder="workload">' +
+          '<select id="sec-ex-scope-type"><option value="image_digest">image_digest</option><option value="cve">cve</option><option value="workload">workload</option><option value="package">package</option></select>' +
+          '<input id="sec-ex-scope-value" placeholder="scope value / sha256:...">' +
+          '<input id="sec-ex-cve" placeholder="CVE ID">' +
+          '<select id="sec-ex-sev"><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>' +
+          '<input id="sec-ex-exp" placeholder="expires_at RFC3339 예: 2026-08-01T00:00:00Z">' +
+          '<input id="sec-ex-ticket" placeholder="ticket URL" style="grid-column:span 2">' +
+          '<input id="sec-ex-reason" placeholder="사유(필수)" style="grid-column:span 2"></div>' +
+          '<button type="button" onclick="k8sSecurityCreateException()">예외 요청 생성</button> <span id="sec-ex-out" class="muted" style="font-size:12px"></span></div>') +
+        card('예외 목록', '<div class="card-body"><table><thead><tr><th>상태</th><th>Scope</th><th>CVE</th><th>대상</th><th>사유</th><th>만료</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
     async function renderK8sSettings(params) {

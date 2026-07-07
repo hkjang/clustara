@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 34
+const menuVersion = 35
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -64,6 +64,13 @@ var menuRegistry = []menuItem{
 	{ID: "ai.gateway_governance", Label: "AI Governance", Path: "#/ai-governance", Tab: "ai-governance", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
 	// 보안 영역.
 	{ID: "sec.k8s_security", Label: "보안", Path: "#/k8s-security", Tab: "k8s-security", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_vulnerabilities", Label: "이미지 취약점", Path: "#/k8s-security-vulnerabilities", Tab: "k8s-security-vulnerabilities", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_sbom", Label: "SBOM 분석", Path: "#/k8s-security-sbom", Tab: "k8s-security-sbom", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_cluster_scan", Label: "클러스터 지속 스캔", Path: "#/k8s-security-cluster-scan", Tab: "k8s-security-cluster-scan", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_admission", Label: "배포 차단 정책", Path: "#/k8s-security-admission", Tab: "k8s-security-admission", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_runtime", Label: "런타임 탐지", Path: "#/k8s-security-runtime", Tab: "k8s-security-runtime", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_benchmark", Label: "CIS Benchmark", Path: "#/k8s-security-benchmark", Tab: "k8s-security-benchmark", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_exceptions", Label: "예외 승인", Path: "#/k8s-security-exceptions", Tab: "k8s-security-exceptions", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_policy", Label: "정책 센터", Path: "#/k8s-policy", Tab: "k8s-policy", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	// 설정 영역.
 	{ID: "set.enterprise", Label: "엔터프라이즈", Path: "#/enterprise", Tab: "enterprise", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},

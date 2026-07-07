@@ -71,6 +71,25 @@ var capabilityRegistry = []Capability{
 		Tables:      []string{"policy_decisions", "secret_events", "approvals", "anomaly_events"},
 	},
 	{
+		Key: "k8s_security_vulnerability", Name: "K8s 취약점·SBOM·런타임 보안", Group: "security",
+		Description: "Trivy/Grype 스캔 결과 import, 이미지 digest 기준 CVE 원장, SBOM 분석, Admission 이미지 정책 평가, Falco 런타임 이벤트, kube-bench CIS 결과와 만료형 예외 승인.",
+		APIs: []string{
+			"GET /admin/k8s/security/vuln/summary", "GET /admin/k8s/security/vuln/images", "GET /admin/k8s/security/vuln/workloads",
+			"GET/POST /admin/k8s/security/scans", "POST /admin/k8s/security/scans/import", "GET/POST /admin/k8s/security/sboms",
+			"GET/POST /admin/k8s/security/exceptions", "POST /admin/k8s/security/admission/evaluate", "POST /admin/k8s/security/admission/review",
+			"GET/POST /admin/k8s/security/runtime/events", "GET/POST /admin/k8s/security/benchmarks/job-manifest", "GET/POST /admin/k8s/security/benchmarks/runs",
+		},
+		UITabs: []string{
+			"k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan",
+			"k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "k8s-policy",
+		},
+		Scopes: []string{"security:read", "security:scan", "security:policy", "security:exception", "security:runtime"},
+		Tables: []string{
+			"k8s_security_scan_runs", "k8s_image_vulnerabilities", "k8s_sboms", "k8s_sbom_packages",
+			"k8s_security_exceptions", "k8s_admission_decisions", "k8s_runtime_events", "k8s_benchmark_runs", "k8s_benchmark_results",
+		},
+	},
+	{
 		Key: "skill_studio", Name: "Skill Studio", Group: "assets",
 		Description: "Skill 등록·정책 enforce·보안 스캔·승격 게이트(모델 적합성 포함)·후보 추천.",
 		APIs:        []string{"GET/POST /admin/skills", "POST /admin/skills/promote", "GET /admin/skill-studio/readiness", "GET/POST /admin/skills/fitness"},
