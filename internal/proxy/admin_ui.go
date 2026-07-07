@@ -592,6 +592,13 @@ const adminHTML = `<!doctype html>
         <button class="nav-group-toggle" type="button">리소스 관리</button>
         <div class="nav-group-menu">
           <a href="#/k8s" data-tab="k8s">클러스터</a>
+          <a href="#/k8s-resources" data-tab="k8s-resources">리소스 전체</a>
+          <a href="#/k8s-workloads" data-tab="k8s-workloads">워크로드</a>
+          <a href="#/k8s-network" data-tab="k8s-network">네트워크</a>
+          <a href="#/k8s-storage" data-tab="k8s-storage">스토리지</a>
+          <a href="#/k8s-components" data-tab="k8s-components">구성요소</a>
+          <a href="#/k8s-devtools" data-tab="k8s-devtools">개발자 도구</a>
+          <a href="#/k8s-auth" data-tab="k8s-auth">인증·권한</a>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
           <a href="#/k8s-nodes" data-tab="k8s-nodes">노드 관리</a>
           <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
@@ -1182,6 +1189,13 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-actions', href: '#/k8s-actions', label: '액션 승인함', group: '대응', tags: 'approval action approve execute pending' },
       { tab: 'fleet', href: '#/fleet', label: 'FleetOps', group: '운영', tags: 'fleet global search multi cluster' },
       { tab: 'k8s', href: '#/k8s', label: '클러스터 관리', group: '리소스', tags: 'cluster register kubeconfig minikube' },
+      { tab: 'k8s-resources', href: '#/k8s-resources', label: '리소스 전체', group: '리소스', tags: 'resource inventory category workload network storage auth config' },
+      { tab: 'k8s-workloads', href: '#/k8s-workloads', label: '워크로드', group: '리소스', tags: 'deployment statefulset daemonset job cronjob replicaset pod workload' },
+      { tab: 'k8s-network', href: '#/k8s-network', label: '네트워크', group: '리소스', tags: 'service ingress endpoint networkpolicy gateway route dns' },
+      { tab: 'k8s-storage', href: '#/k8s-storage', label: '스토리지', group: '리소스', tags: 'pvc pv storageclass volume snapshot persistent' },
+      { tab: 'k8s-components', href: '#/k8s-components', label: '구성요소', group: '리소스', tags: 'namespace configmap secret hpa quota limitrange pdb component' },
+      { tab: 'k8s-devtools', href: '#/k8s-devtools', label: '개발자 도구', group: '리소스', tags: 'servicemonitor podmonitor prometheusrule helm kustomization certificate tekton' },
+      { tab: 'k8s-auth', href: '#/k8s-auth', label: '인증·권한', group: '리소스', tags: 'serviceaccount role rolebinding clusterrole rbac auth csr scc' },
       { tab: 'k8s-pods', href: '#/k8s-pods', label: 'Pod 관리', group: '리소스', tags: 'pod logs exec restart crashloop' },
       { tab: 'k8s-nodes', href: '#/k8s-nodes', label: '노드 관리', group: '리소스', tags: 'node pressure cordon capacity' },
       { tab: 'k8s-developer', href: '#/k8s-developer', label: '개발자 뷰', group: '리소스', tags: 'developer request self service' },
@@ -2391,6 +2405,13 @@ const adminHTML = `<!doctype html>
           case 'k8s-home':  await renderK8sHome(params); break;
           case 'fleet': await renderFleetOps(params); break;
           case 'k8s':       await renderK8sOperations(); break;
+          case 'k8s-resources': await renderK8sResourceHub(params); break;
+          case 'k8s-workloads': await renderK8sResourceCategory(params, 'workloads'); break;
+          case 'k8s-network': await renderK8sResourceCategory(params, 'network'); break;
+          case 'k8s-storage': await renderK8sResourceCategory(params, 'storage'); break;
+          case 'k8s-components': await renderK8sResourceCategory(params, 'components'); break;
+          case 'k8s-devtools': await renderK8sResourceCategory(params, 'devtools'); break;
+          case 'k8s-auth': await renderK8sResourceCategory(params, 'auth'); break;
           case 'k8s-pods': await renderK8sPods(params); break;
           case 'k8s-nodes': await renderK8sNodes(params); break;
           case 'k8s-developer': await renderK8sDeveloper(params); break;
@@ -8239,6 +8260,380 @@ const adminHTML = `<!doctype html>
       return k8sYamlChangeLink(clusterId, parts[1], ns, parts.slice(2).join('/'), label || 'YAML');
     }
 
+    const K8S_RESOURCE_CATEGORIES = {
+      workloads: {
+        tab: 'k8s-workloads',
+        title: '워크로드',
+        desc: 'Deployment, StatefulSet, DaemonSet, Job, CronJob, ReplicaSet, Pod를 서비스 실행 단위로 봅니다.',
+        kinds: ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'ReplicationController', 'Job', 'CronJob', 'Pod'],
+        createKinds: ['Deployment', 'Job', 'CronJob']
+      },
+      network: {
+        tab: 'k8s-network',
+        title: '네트워크',
+        desc: 'Service, Ingress, Endpoint, NetworkPolicy, Gateway API 계열을 연결 경로 중심으로 봅니다.',
+        kinds: ['Service', 'Ingress', 'NetworkPolicy', 'Endpoints', 'EndpointSlice', 'IngressClass', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute'],
+        createKinds: ['Service', 'Ingress', 'NetworkPolicy']
+      },
+      storage: {
+        tab: 'k8s-storage',
+        title: '스토리지',
+        desc: 'PV, PVC, StorageClass, Snapshot 계열을 데이터 보존·용량·바인딩 상태 중심으로 봅니다.',
+        kinds: ['PersistentVolume', 'PersistentVolumeClaim', 'StorageClass', 'VolumeSnapshot', 'VolumeSnapshotClass', 'CSIStorageCapacity'],
+        createKinds: ['PersistentVolumeClaim']
+      },
+      components: {
+        tab: 'k8s-components',
+        title: '구성요소',
+        desc: 'Namespace, ConfigMap, Secret, HPA, PDB, Quota처럼 워크로드를 둘러싼 운영 구성요소를 봅니다.',
+        kinds: ['Namespace', 'ConfigMap', 'Secret', 'ResourceQuota', 'LimitRange', 'PodDisruptionBudget', 'HorizontalPodAutoscaler', 'PriorityClass'],
+        createKinds: ['Namespace', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler']
+      },
+      devtools: {
+        tab: 'k8s-devtools',
+        title: '개발자 도구',
+        desc: 'Prometheus Operator, GitOps, 인증서, Tekton 같은 플랫폼 확장 리소스를 개발자 경험 관점으로 봅니다.',
+        kinds: ['ServiceMonitor', 'PodMonitor', 'PrometheusRule', 'Application', 'ApplicationSet', 'HelmRelease', 'Kustomization', 'Certificate', 'Issuer', 'ClusterIssuer', 'Pipeline', 'Task', 'PipelineRun', 'TaskRun'],
+        createKinds: ['ServiceMonitor', 'PodMonitor', 'PrometheusRule', 'Certificate']
+      },
+      auth: {
+        tab: 'k8s-auth',
+        title: '인증·권한',
+        desc: 'ServiceAccount, Role, Binding, ClusterRole, CSR 등 실행 주체와 권한 경계를 봅니다.',
+        kinds: ['ServiceAccount', 'Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding', 'CertificateSigningRequest', 'SecurityContextConstraints', 'PodSecurityPolicy'],
+        createKinds: ['ServiceAccount', 'Role', 'RoleBinding']
+      }
+    };
+    const K8S_RESOURCE_CATEGORY_ORDER = ['workloads', 'network', 'storage', 'components', 'devtools', 'auth'];
+
+    function k8sResourceKindKey(kind) {
+      const k = String(kind || '').trim();
+      const canon = (typeof k8sManifestCanonicalKind === 'function') ? k8sManifestCanonicalKind(k) : k;
+      return String(canon || k).toLowerCase();
+    }
+    function k8sResourceCategoryForKind(kind) {
+      const key = k8sResourceKindKey(kind);
+      for (const catKey of K8S_RESOURCE_CATEGORY_ORDER) {
+        const cat = K8S_RESOURCE_CATEGORIES[catKey];
+        if ((cat.kinds || []).some(k => k8sResourceKindKey(k) === key)) return catKey;
+      }
+      return '';
+    }
+    function k8sResourceCategoryKindSet(cat) {
+      const set = new Set();
+      (cat.kinds || []).forEach(k => set.add(k8sResourceKindKey(k)));
+      return set;
+    }
+    function k8sResourceClusterNameMap(clusters) {
+      const out = {};
+      (clusters || []).forEach(c => { out[c.id] = c.name || c.id; });
+      return out;
+    }
+    function k8sResourceCreateHref(clusterId, kind, namespace) {
+      const qs = new URLSearchParams();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      qs.set('mode', 'create');
+      if (kind) qs.set('kind', kind);
+      if (namespace) qs.set('namespace', namespace);
+      return '#/k8s-manifest-changes?' + qs.toString();
+    }
+    function k8sResourceTimelineHref(it) {
+      const qs = new URLSearchParams();
+      if (it.cluster_id) qs.set('cluster_id', it.cluster_id);
+      if (it.kind) qs.set('kind', it.kind);
+      if (it.namespace) qs.set('namespace', it.namespace);
+      if (it.name) qs.set('name', it.name);
+      return '#/k8s-timeline?' + qs.toString();
+    }
+    function k8sResourceGraphHref(it) {
+      const qs = new URLSearchParams();
+      if (it.cluster_id) qs.set('cluster_id', it.cluster_id);
+      if (it.kind) qs.set('kind', it.kind);
+      if (it.namespace) qs.set('namespace', it.namespace);
+      if (it.name) qs.set('name', it.name);
+      return '#/k8s-graph?' + qs.toString();
+    }
+    function k8sResourceStatusBadge(it) {
+      const risk = String(it.risk_level || '').toLowerCase();
+      const status = String(it.status || '').toLowerCase();
+      const cls = (risk === 'critical' || risk === 'high' || status === 'failed' || status === 'error') ? 'error' : (risk === 'medium' || status === 'pending' || status === 'warning' ? 'warn' : '');
+      const label = it.risk_level || it.status || '-';
+      return '<span class="status ' + cls + '" style="font-size:10px">' + escapeHTML(label) + '</span>';
+    }
+    function k8sResourceSpecValue(obj, path) {
+      let cur = obj || {};
+      for (const part of path.split('.')) {
+        if (cur == null) return undefined;
+        cur = cur[part];
+      }
+      return cur;
+    }
+    function k8sResourceList(v, limit) {
+      if (!Array.isArray(v)) return [];
+      return v.slice(0, limit || 4).map(x => String(x == null ? '' : x)).filter(Boolean);
+    }
+    function k8sResourceImageSummary(spec) {
+      const podSpec = k8sResourceSpecValue(spec, 'template.spec') || spec || {};
+      const containers = []
+        .concat(Array.isArray(podSpec.initContainers) ? podSpec.initContainers : [])
+        .concat(Array.isArray(podSpec.containers) ? podSpec.containers : []);
+      return containers.map(c => c.image || c.name || '').filter(Boolean).slice(0, 3).join(', ');
+    }
+    function k8sResourceMapKeys(v) {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return [];
+      return Object.keys(v);
+    }
+    function k8sResourceSpecSummary(it) {
+      const kind = k8sResourceKindKey(it.kind);
+      const spec = it.spec || {};
+      const st = it.status_object || {};
+      if (['deployment', 'statefulset', 'daemonset', 'replicaset', 'replicationcontroller'].includes(kind)) {
+        const replicas = spec.replicas != null ? spec.replicas : (st.replicas != null ? st.replicas : '-');
+        const ready = (st.readyReplicas != null || st.availableReplicas != null) ? ((st.readyReplicas || st.availableReplicas || 0) + '/' + (st.replicas || replicas || 0)) : '-';
+        return 'replicas ' + replicas + ' · ready ' + ready + (k8sResourceImageSummary(spec) ? ' · ' + k8sResourceImageSummary(spec) : '');
+      }
+      if (kind === 'pod') {
+        const node = spec.nodeName || '-';
+        return 'node ' + node + (k8sResourceImageSummary(spec) ? ' · ' + k8sResourceImageSummary(spec) : '');
+      }
+      if (kind === 'job' || kind === 'cronjob') {
+        const schedule = spec.schedule ? ' · ' + spec.schedule : '';
+        return 'parallelism ' + (spec.parallelism || '-') + schedule + (k8sResourceImageSummary(spec) ? ' · ' + k8sResourceImageSummary(spec) : '');
+      }
+      if (kind === 'service') {
+        const ports = k8sResourceList((spec.ports || []).map(p => (p.name ? p.name + ':' : '') + (p.port || '-') + '→' + (p.targetPort || p.port || '-')), 4).join(', ');
+        return (spec.type || 'ClusterIP') + (ports ? ' · ' + ports : '');
+      }
+      if (kind === 'ingress') {
+        const hosts = k8sResourceList((spec.rules || []).map(r => r.host || '*'), 4).join(', ');
+        return hosts ? 'hosts ' + hosts : 'rules ' + fmt((spec.rules || []).length);
+      }
+      if (kind === 'networkpolicy') {
+        return 'policyTypes ' + k8sResourceList(spec.policyTypes || [], 3).join(', ') + ' · ingress ' + fmt((spec.ingress || []).length) + ' · egress ' + fmt((spec.egress || []).length);
+      }
+      if (kind === 'persistentvolumeclaim') {
+        const req = k8sResourceSpecValue(spec, 'resources.requests.storage') || '-';
+        return 'storage ' + req + ' · ' + k8sResourceList(spec.accessModes || [], 3).join(', ') + (spec.storageClassName ? ' · ' + spec.storageClassName : '');
+      }
+      if (kind === 'persistentvolume') {
+        const cap = k8sResourceSpecValue(spec, 'capacity.storage') || '-';
+        return 'capacity ' + cap + (spec.storageClassName ? ' · ' + spec.storageClassName : '');
+      }
+      if (kind === 'storageclass') return 'provisioner ' + (spec.provisioner || '-');
+      if (kind === 'configmap') return 'data keys ' + fmt(k8sResourceMapKeys(spec.data).length);
+      if (kind === 'secret') return 'type ' + (spec.type || '-') + ' · keys ' + fmt(k8sResourceMapKeys(spec.data).length);
+      if (kind === 'serviceaccount') return 'secrets ' + fmt((spec.secrets || []).length) + ' · automount ' + String(spec.automountServiceAccountToken != null ? spec.automountServiceAccountToken : '-');
+      if (kind === 'role' || kind === 'clusterrole') return 'rules ' + fmt((spec.rules || []).length);
+      if (kind === 'rolebinding' || kind === 'clusterrolebinding') return 'subjects ' + fmt((spec.subjects || []).length) + ' · ' + ((spec.roleRef || {}).kind || '-') + '/' + ((spec.roleRef || {}).name || '-');
+      if (kind === 'horizontalpodautoscaler') {
+        const target = spec.scaleTargetRef || {};
+        return 'target ' + (target.kind || '-') + '/' + (target.name || '-') + ' · ' + (spec.minReplicas || '-') + '-' + (spec.maxReplicas || '-');
+      }
+      if (kind === 'poddisruptionbudget') return 'min ' + (spec.minAvailable || '-') + ' · maxUnavailable ' + (spec.maxUnavailable || '-');
+      if (kind === 'resourcequota') return 'hard keys ' + fmt(k8sResourceMapKeys(spec.hard).length);
+      if (kind === 'limitrange') return 'limits ' + fmt((spec.limits || []).length);
+      if (kind === 'node') return 'provider ' + (spec.providerID || '-') + ' · unschedulable ' + String(!!spec.unschedulable);
+      if (kind === 'namespace') return 'phase ' + (st.phase || it.status || '-');
+      if (kind === 'certificate' || kind === 'issuer' || kind === 'clusterissuer') return 'cert-manager · ' + (it.api_version || '-');
+      if (kind === 'servicemonitor' || kind === 'podmonitor') return 'endpoints ' + fmt((spec.endpoints || []).length);
+      return JSON.stringify(spec || {}).slice(0, 120) || '-';
+    }
+    function k8sResourceHaystack(it) {
+      const alias = (typeof k8sManifestKindAliases === 'function') ? k8sManifestKindAliases(it.kind || '').join(' ') : '';
+      return [
+        it.cluster_id || '', it.namespace || '-', it.kind || '', k8sResourceKindKey(it.kind), alias,
+        it.name || '', it.api_version || '', it.status || '', it.risk_level || '',
+        Object.keys(it.labels || {}).join(' '), Object.values(it.labels || {}).join(' '),
+        Object.keys(it.annotations || {}).join(' '), Object.values(it.annotations || {}).join(' ')
+      ].join(' ').toLowerCase();
+    }
+    function k8sResourceFilterItems(items, cat, params) {
+      const kindSet = cat ? k8sResourceCategoryKindSet(cat) : null;
+      const ns = (params && params.get('namespace') || '').trim();
+      const kind = (params && params.get('kind') || '').trim();
+      const risk = (params && params.get('risk') || '').trim().toLowerCase();
+      const q = (params && params.get('q') || '').trim().toLowerCase();
+      const terms = q.split(/\s+/).filter(Boolean);
+      return (items || []).filter(it => {
+        const key = k8sResourceKindKey(it.kind);
+        if (kindSet && !kindSet.has(key)) return false;
+        if (kind && key !== k8sResourceKindKey(kind)) return false;
+        if (ns && String(it.namespace || '') !== ns) return false;
+        if (risk && String(it.risk_level || '').toLowerCase() !== risk) return false;
+        if (terms.length) {
+          const hay = k8sResourceHaystack(it);
+          if (!terms.every(t => hay.includes(t))) return false;
+        }
+        return true;
+      });
+    }
+    function k8sResourceCategoryNav(activeKey, clusterId) {
+      const q = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">' +
+        '<a class="button secondary" href="#/k8s-resources' + q + '">전체</a>' +
+        K8S_RESOURCE_CATEGORY_ORDER.map(key => {
+          const cat = K8S_RESOURCE_CATEGORIES[key];
+          return '<a class="button ' + (key === activeKey ? '' : 'secondary') + '" href="#/' + cat.tab + q + '">' + escapeHTML(cat.title) + '</a>';
+        }).join('') + '</div>';
+    }
+    function k8sResourceCreateButtons(cat, clusterId, namespace) {
+      return (cat.createKinds || []).map(kind =>
+        '<a class="button secondary" href="' + escapeAttr(k8sResourceCreateHref(clusterId, kind, namespace)) + '">+ ' + escapeHTML(kind) + '</a>'
+      ).join('');
+    }
+    function k8sResourceFilterHTML(cat, params) {
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const ns = (params && params.get('namespace')) || '';
+      const kind = (params && params.get('kind')) || '';
+      const risk = (params && params.get('risk')) || '';
+      const q = (params && params.get('q')) || '';
+      const kindOpts = '<option value="">전체 Kind</option>' + (cat.kinds || []).map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k) + '</option>').join('');
+      const riskOpts = ['critical', 'high', 'medium', 'low'].map(r => '<option value="' + r + '"' + (r === risk ? ' selected' : '') + '>' + r + '</option>').join('');
+      return '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(170px,1fr) minmax(150px,1fr) minmax(150px,1fr) minmax(120px,1fr) minmax(220px,2fr) auto auto">' +
+        '<input id="res-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
+        '<input id="res-ns" value="' + escapeAttr(ns) + '" placeholder="namespace">' +
+        '<select id="res-kind">' + kindOpts + '</select>' +
+        '<select id="res-risk"><option value="">전체 위험도</option>' + riskOpts + '</select>' +
+        '<input id="res-q" value="' + escapeAttr(q) + '" placeholder="이름, label, image, apiVersion 검색" onkeydown="if(event.key===\'Enter\')k8sResourceCategoryGo(\'' + escapeAttr(cat.tab) + '\')">' +
+        '<button type="button" onclick="k8sResourceCategoryGo(\'' + escapeAttr(cat.tab) + '\')">검색</button>' +
+        '<button type="button" class="secondary" onclick="k8sResourceCategoryReset(\'' + escapeAttr(cat.tab) + '\')">초기화</button>' +
+        '</div></div>';
+    }
+    window.k8sResourceCategoryGo = (tab) => {
+      const qs = new URLSearchParams();
+      const clusterId = safeInputValue('res-cluster', '').trim();
+      const ns = safeInputValue('res-ns', '').trim();
+      const kind = safeInputValue('res-kind', '').trim();
+      const risk = safeInputValue('res-risk', '').trim();
+      const q = safeInputValue('res-q', '').trim();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      if (ns) qs.set('namespace', ns);
+      if (kind) qs.set('kind', kind);
+      if (risk) qs.set('risk', risk);
+      if (q) qs.set('q', q);
+      location.hash = '#/' + tab + (qs.toString() ? '?' + qs.toString() : '');
+    };
+    window.k8sResourceCategoryReset = (tab) => { location.hash = '#/' + tab; };
+    async function k8sResourceLoad(clusterId) {
+      const qs = new URLSearchParams({ limit: '10000' });
+      if (clusterId) qs.set('cluster_id', clusterId);
+      const [cl, inv] = await Promise.all([
+        api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+        api('/admin/k8s/inventory?' + qs.toString()),
+      ]);
+      return { clusters: cl.clusters || [], items: inv.items || [] };
+    }
+    function k8sResourceRows(items, clusterNames) {
+      if (!items.length) return '<tr><td colspan="8" class="muted">표시할 리소스가 없습니다.</td></tr>';
+      return items.slice(0, 500).map(it => {
+        const ns = it.namespace || '-';
+        const kindKey = k8sResourceKindKey(it.kind);
+        const actions = [
+          k8sYamlChangeLink(it.cluster_id, it.kind, it.namespace, it.name, 'YAML'),
+          '<a href="' + escapeAttr(k8sResourceTimelineHref(it)) + '">이력</a>',
+          '<a href="' + escapeAttr(k8sResourceGraphHref(it)) + '">그래프</a>',
+          kindKey === 'pod' ? k8sPodLink(it.cluster_id, it.namespace, it.name, 'Pod 상세') : '',
+          ['service', 'ingress', 'networkpolicy', 'endpoints', 'endpointslice'].includes(kindKey) ? '<a href="#/k8s-conn?cluster_id=' + encodeURIComponent(it.cluster_id || '') + '">연결성</a>' : ''
+        ].filter(Boolean).join(' · ');
+        return '<tr>' +
+          '<td data-num="' + escapeAttr(String(it.health_score || 0)) + '">' + k8sResourceStatusBadge(it) + '<div class="muted" style="font-size:10px;margin-top:2px">health ' + fmt(it.health_score || 0) + '</div></td>' +
+          '<td><strong>' + escapeHTML(it.kind || '-') + '/' + escapeHTML(it.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(ns) + ' · ' + escapeHTML(clusterNames[it.cluster_id] || it.cluster_id || '-') + '</div></td>' +
+          '<td>' + escapeHTML(it.api_version || '-') + '</td>' +
+          '<td>' + escapeHTML(k8sResourceCategoryForKind(it.kind) ? K8S_RESOURCE_CATEGORIES[k8sResourceCategoryForKind(it.kind)].title : '기타') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(k8sResourceSpecSummary(it)) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + ago(it.observed_at || it.updated_at) + '</td>' +
+          '<td class="muted" style="font-size:11px">' + ago(it.updated_at || it.observed_at) + '</td>' +
+          '<td>' + actions + '</td></tr>';
+      }).join('');
+    }
+    function k8sResourceKindBreakdown(items) {
+      const counts = {};
+      items.forEach(it => { counts[it.kind || '-'] = (counts[it.kind || '-'] || 0) + 1; });
+      const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, n]) =>
+        '<tr><td>' + escapeHTML(k) + '</td><td>' + fmt(n) + '</td></tr>').join('');
+      return rows || '<tr><td colspan="2" class="muted">종류 없음</td></tr>';
+    }
+    async function renderK8sResourceHub(params) {
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section('리소스 전체', '<div class="empty">불러오는 중...</div>');
+      let data;
+      try { data = await k8sResourceLoad(clusterId); } catch (e) {
+        view.innerHTML = section('리소스 전체', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const clusterNames = k8sResourceClusterNameMap(data.clusters);
+      const cards = K8S_RESOURCE_CATEGORY_ORDER.map(key => {
+        const cat = K8S_RESOURCE_CATEGORIES[key];
+        const filtered = k8sResourceFilterItems(data.items, cat, new URLSearchParams());
+        const risky = filtered.filter(x => ['critical', 'high'].includes(String(x.risk_level || '').toLowerCase())).length;
+        const kinds = [...new Set(filtered.map(x => x.kind).filter(Boolean))].slice(0, 5).join(', ') || '-';
+        const q = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
+        return '<div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel-alt);min-height:150px">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><h3 style="margin:0;font-size:15px">' + escapeHTML(cat.title) + '</h3>' +
+          '<span class="status ' + (risky ? 'warn' : '') + '" style="font-size:10px">' + fmt(filtered.length) + '개</span></div>' +
+          '<p class="muted" style="font-size:12px;min-height:36px">' + escapeHTML(cat.desc) + '</p>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:10px">Kind: ' + escapeHTML(kinds) + (risky ? ' · high+ ' + fmt(risky) : '') + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap"><a class="button" href="#/' + cat.tab + q + '">열기</a>' +
+          k8sResourceCreateButtons(cat, clusterId, '') + '</div></div>';
+      }).join('');
+      const high = data.items.filter(x => ['critical', 'high'].includes(String(x.risk_level || '').toLowerCase())).slice(0, 12);
+      const filter = '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(220px,1fr) auto auto"><input id="res-hub-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id"><button type="button" onclick="location.hash=\'#/k8s-resources\'+(safeInputValue(\'res-hub-cluster\',\'\').trim()?\'?cluster_id=\'+encodeURIComponent(safeInputValue(\'res-hub-cluster\',\'\').trim()):\'\')">필터</button><a class="button secondary" href="#/k8s-manifest-changes?mode=create' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 생성</a></div></div>';
+      view.innerHTML =
+        section('리소스 전체',
+          '<div class="kpis">' +
+          kpi('전체 리소스', fmt(data.items.length)) +
+          kpi('클러스터', fmt(new Set(data.items.map(x => x.cluster_id).filter(Boolean)).size)) +
+          kpi('네임스페이스', fmt(new Set(data.items.map(x => x.namespace).filter(Boolean)).size)) +
+          kpi('Kind', fmt(new Set(data.items.map(x => x.kind).filter(Boolean)).size)) +
+          kpi('High+', fmt(high.length)) + '</div>' +
+          k8sResourceCategoryNav('', clusterId)) +
+        card('필터', filter) +
+        card('카테고리', '<div class="card-body"><div class="grid3">' + cards + '</div></div>') +
+        card('위험 리소스 빠른 점검',
+          '<div class="card-body"><table id="k8s-resource-table"><thead><tr><th data-sort="num">상태</th><th data-sort="str">리소스</th><th data-sort="str">API</th><th data-sort="str">분류</th><th>요약</th><th data-sort="str">관측</th><th data-sort="str">수정</th><th></th></tr></thead><tbody>' +
+          k8sResourceRows(high, clusterNames) + '</tbody></table></div>') +
+        card('Kind 분포', '<div class="card-body"><table><thead><tr><th>Kind</th><th>수</th></tr></thead><tbody>' + k8sResourceKindBreakdown(data.items) + '</tbody></table></div>');
+      makeSortable('#view', 'k8s-resources');
+    }
+    async function renderK8sResourceCategory(params, key) {
+      const cat = K8S_RESOURCE_CATEGORIES[key];
+      const view = document.getElementById('view');
+      const clusterId = (params && params.get('cluster_id')) || '';
+      view.innerHTML = section(cat.title, '<div class="empty">불러오는 중...</div>');
+      let data;
+      try { data = await k8sResourceLoad(clusterId); } catch (e) {
+        view.innerHTML = section(cat.title, '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const filtered = k8sResourceFilterItems(data.items, cat, params || new URLSearchParams());
+      const clusterNames = k8sResourceClusterNameMap(data.clusters);
+      const risky = filtered.filter(x => ['critical', 'high'].includes(String(x.risk_level || '').toLowerCase())).length;
+      const namespaces = new Set(filtered.map(x => x.namespace).filter(Boolean)).size;
+      const kinds = new Set(filtered.map(x => x.kind).filter(Boolean)).size;
+      const createBar = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">' +
+        k8sResourceCreateButtons(cat, clusterId, (params && params.get('namespace')) || '') +
+        '<a class="button secondary" href="#/k8s-manifest-changes' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 변경</a>' +
+        '<a class="button secondary" href="#/k8s-timeline' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">타임라인</a></div>';
+      view.innerHTML =
+        section(cat.title,
+          '<div class="muted" style="font-size:12px;padding:0 4px">' + escapeHTML(cat.desc) + '</div>' +
+          '<div class="kpis" style="margin-top:8px">' +
+          kpi('리소스', fmt(filtered.length)) +
+          kpi('High+', fmt(risky)) +
+          kpi('네임스페이스', fmt(namespaces)) +
+          kpi('Kind', fmt(kinds)) +
+          kpi('표시', fmt(Math.min(filtered.length, 500)) + '/500') + '</div>' +
+          k8sResourceCategoryNav(key, clusterId) + createBar) +
+        card('필터', k8sResourceFilterHTML(cat, params || new URLSearchParams())) +
+        card(cat.title + ' 목록',
+          '<div class="card-body"><table id="k8s-resource-table"><thead><tr><th data-sort="num">상태</th><th data-sort="str">리소스</th><th data-sort="str">API</th><th data-sort="str">분류</th><th>요약</th><th data-sort="str">관측</th><th data-sort="str">수정</th><th></th></tr></thead><tbody>' +
+          k8sResourceRows(filtered, clusterNames) + '</tbody></table>' +
+          (filtered.length > 500 ? '<p class="muted" style="font-size:11px">상위 500개만 표시합니다. cluster_id, namespace, kind, 검색어로 좁혀보세요.</p>' : '') + '</div>') +
+        card('Kind 분포', '<div class="card-body"><table><thead><tr><th>Kind</th><th>수</th></tr></thead><tbody>' + k8sResourceKindBreakdown(filtered) + '</tbody></table></div>');
+      makeSortable('#view', 'k8s-resource-' + key);
+    }
+
     // ---------- FleetOps: multi-cluster health + global search ----------
     async function renderFleetOps(params) {
       const view = document.getElementById('view');
@@ -12643,6 +13038,14 @@ const adminHTML = `<!doctype html>
       view.innerHTML =
         section('YAML 변경/생성 (Manifest Change Studio)',
           '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, Namespace 등 단일 리소스 YAML을 생성 또는 변경 요청으로 저장하고 검증→승인→Server-Side Apply→사후 검증 흐름으로 처리합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
+        card('Ops Agent 초안',
+          '<div class="card-body">' +
+          '<textarea id="mchg-agent-prompt" rows="3" placeholder="예: default namespace에 nginx service 생성, 현재 Deployment image만 nginx:1.27로 변경" style="width:100%;min-height:72px"></textarea>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">' +
+          '<button type="button" class="secondary" onclick="k8sManifestAgentDraft(false)">초안 만들기</button>' +
+          '<button type="button" onclick="k8sManifestAgentDraft(true)">초안 + 요청 저장</button>' +
+          '<span class="muted" style="font-size:11px">Agent는 적용하지 않고 검증·승인·적용은 원장 흐름에서 진행됩니다.</span></div>' +
+          '<div id="mchg-agent-out" style="margin-top:8px"></div></div>') +
         card('리소스 선택과 요청 생성',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">' +
           '<button type="button" id="mchg-mode-update" class="secondary" onclick="k8sManifestSetMode(\'update\')">기존 리소스 변경</button>' +
@@ -12703,6 +13106,81 @@ const adminHTML = `<!doctype html>
         window.k8sManifestCreateTargetChanged && window.k8sManifestCreateTargetChanged();
       }, 0);
     }
+    window.k8sManifestAgentDraft = async (createRequest) => {
+      const out = document.getElementById('mchg-agent-out');
+      const promptEl = document.getElementById('mchg-agent-prompt');
+      const yamlEl = document.getElementById('mchg-yaml');
+      const apiEl = document.getElementById('mchg-template-apiver');
+      const body = k8sManifestFormTarget();
+      body.operation = window.k8sManifestMode === 'create' ? 'create' : 'update';
+      body.api_version = (apiEl && apiEl.value ? apiEl.value : '').trim();
+      body.prompt = (promptEl && promptEl.value ? promptEl.value : '').trim();
+      body.manifest_yaml = (yamlEl && yamlEl.value ? yamlEl.value : '').trim();
+      body.reason = (document.getElementById('mchg-reason').value || body.prompt || 'Ops Agent manifest draft').trim();
+      body.create_request = !!createRequest;
+      if (!body.cluster_id) {
+        out.innerHTML = '<span class="status warn">클러스터를 선택하세요</span>';
+        showToast('warn', 'Agent 초안 불가', '클러스터를 먼저 선택하세요.');
+        return;
+      }
+      if (!body.prompt && !body.manifest_yaml) {
+        out.innerHTML = '<span class="status warn">프롬프트 또는 YAML이 필요합니다</span>';
+        showToast('warn', 'Agent 초안 불가', '요청 내용을 입력하거나 YAML을 먼저 준비하세요.');
+        return;
+      }
+      out.innerHTML = '<span class="muted">Ops Agent 초안 검토 중...</span>';
+      try {
+        agentState.ctx = agentCollectContext();
+        await agentEnsureSession();
+        body.session_id = agentState.sessionId;
+        const d = await api('/admin/agent/manifest-drafts', { method: 'POST', body: JSON.stringify(body) });
+        const draft = d.draft || {};
+        if (draft.operation) {
+          window.k8sManifestMode = draft.operation === 'create' ? 'create' : 'update';
+          k8sManifestSyncModeUI();
+        }
+        if (draft.cluster_id) {
+          const cl = document.getElementById('mchg-cluster');
+          if (cl) cl.value = draft.cluster_id;
+        }
+        if (draft.kind) document.getElementById('mchg-kind').value = draft.kind;
+        if (draft.namespace != null) document.getElementById('mchg-ns').value = draft.namespace || '';
+        if (draft.name) document.getElementById('mchg-name').value = draft.name;
+        if (apiEl && draft.api_version) apiEl.value = draft.api_version;
+        if (yamlEl && draft.yaml) {
+          yamlEl.value = draft.yaml;
+          resizeK8sManifestYaml();
+        }
+        const review = draft.review || {};
+        const warnings = (draft.warnings || []).map(x => '<li>' + escapeHTML(x) + '</li>').join('');
+        const blockers = (draft.blockers || []).map(x => '<li>' + escapeHTML(x) + '</li>').join('');
+        const checklist = (draft.checklist || []).slice(0, 6).map(x => '<li>' + escapeHTML(x) + '</li>').join('');
+        const badge = '<span class="status ' + ((review.risk_level === 'blocked' || review.risk_level === 'critical' || review.risk_level === 'high') ? 'error' : (review.risk_level === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(review.risk_level || '-') + '</span>';
+        const req = d.request || {};
+        const reqLink = req.id ? '<a class="button secondary" href="' + escapeAttr(d.studio_href || ('#/k8s-manifest-changes?focus_id=' + encodeURIComponent(req.id))) + '">요청 보기</a>' : '';
+        out.innerHTML =
+          '<div class="kv">' +
+          row('대상', escapeHTML((draft.namespace || '-') + '/' + (draft.kind || '-') + '/' + (draft.name || '-'))) +
+          row('동작', escapeHTML(draft.operation || '-')) +
+          row('위험도', badge) +
+          row('승인 필요', review.requires_approval ? 'yes' : 'no') +
+          (req.id ? row('요청', '<code>' + escapeHTML(req.id) + '</code> ' + reqLink) : '') +
+          '</div>' +
+          (blockers ? '<div class="error-line" style="margin-top:8px"><strong>Blocker</strong><ul style="margin:4px 0 0;padding-left:18px">' + blockers + '</ul></div>' : '') +
+          (warnings ? '<details open style="margin-top:8px"><summary style="font-size:12px">주의</summary><ul style="margin:4px 0 0;padding-left:18px">' + warnings + '</ul></details>' : '') +
+          (checklist ? '<details style="margin-top:8px"><summary style="font-size:12px">체크리스트</summary><ul style="margin:4px 0 0;padding-left:18px">' + checklist + '</ul></details>' : '');
+        if (req.id) {
+          showToast('ok', 'Ops Agent 요청 저장', req.id + ' · 검증을 실행하세요.');
+          uxInvalidateActionQueue();
+          location.hash = d.studio_href || uxFlowFocusHref('manifest_change', req.id, draft.cluster_id || body.cluster_id);
+        } else {
+          showToast('ok', 'Ops Agent 초안 준비', (draft.kind || '') + '/' + (draft.name || ''));
+        }
+      } catch (e) {
+        out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
+        showToast('error', createRequest ? 'Agent 요청 저장 실패' : 'Agent 초안 실패', e.message);
+      }
+    };
     window.k8sManifestChangeGo = () => {
       const cl = document.getElementById('mchg-cluster').value;
       const mode = window.k8sManifestMode === 'create' ? 'create' : '';

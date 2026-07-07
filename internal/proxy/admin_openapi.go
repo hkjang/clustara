@@ -647,6 +647,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/agent/action-outcomes", []string{"get", "post"}, "agent", "Agent action outcome ledger", false},
 	{"/admin/agent/evaluations", []string{"get", "post"}, "agent", "Agent evaluation runs and results", false},
 	{"/admin/agent/evaluations/feedback", []string{"post"}, "agent", "Record feedback for an agent evaluation", false},
+	{"/admin/agent/manifest-drafts", []string{"post"}, "agent", "Ops Agent YAML create/update draft and Manifest Change bridge", false},
 	{"/admin/agent/messages", []string{"get", "post"}, "agent", "Agent message history", false},
 	{"/admin/agent/regression", []string{"get", "post"}, "agent", "Agent regression analysis and replay", false},
 	{"/admin/agent/sessions", []string{"get", "post"}, "agent", "Agent sessions", false},

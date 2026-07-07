@@ -148,39 +148,109 @@ func (s *Server) handleK8sManifestChanges(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ClusterID      string `json:"cluster_id"`
-		Namespace      string `json:"namespace"`
-		Kind           string `json:"kind"`
-		APIVersion     string `json:"api_version"`
-		Name           string `json:"name"`
-		Operation      string `json:"operation"`
-		AfterYAML      string `json:"after_yaml"`
-		Reason         string `json:"reason"`
-		IdempotencyKey string `json:"idempotency_key"`
-	}
+	var in manifestChangeCreateInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 		return
 	}
+	in.IdempotencyKey = firstNonEmpty(in.IdempotencyKey, r.Header.Get("Idempotency-Key"))
+	result, err := s.prepareK8sManifestChangeRequest(r.Context(), adminID(r), in)
+	if err != nil {
+		writeManifestChangeCreateError(w, err)
+		return
+	}
+	event := "k8s.manifest_change.request"
+	if result.Operation == "create" {
+		event = "k8s.manifest_change.create_request"
+	}
+	if result.IdempotentReplay {
+		event += ".replay"
+	}
+	s.auditAdmin(r, event, "", auditJSON(map[string]any{
+		"id": result.Request.ID, "cluster_id": result.Request.ClusterID, "kind": result.Request.Kind,
+		"namespace": result.Request.Namespace, "name": result.Request.Name, "risk": result.Request.RiskLevel,
+		"operation": result.Operation,
+	}))
+	status := http.StatusCreated
+	if result.IdempotentReplay {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, manifestChangeCreateResponse(result))
+}
+
+type manifestChangeCreateInput struct {
+	ClusterID      string `json:"cluster_id"`
+	Namespace      string `json:"namespace"`
+	Kind           string `json:"kind"`
+	APIVersion     string `json:"api_version"`
+	Name           string `json:"name"`
+	Operation      string `json:"operation"`
+	AfterYAML      string `json:"after_yaml"`
+	Reason         string `json:"reason"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type manifestChangeCreateResult struct {
+	Request          store.K8sManifestChangeRequest
+	Impact           map[string]any
+	Diffs            []store.K8sManifestFieldDiff
+	Operation        string
+	IdempotentReplay bool
+	Note             string
+}
+
+type manifestChangeCreateError struct {
+	status  int
+	message string
+	code    string
+}
+
+func (e manifestChangeCreateError) Error() string { return e.message }
+
+func manifestChangeCreateHTTPError(status int, message, code string) manifestChangeCreateError {
+	return manifestChangeCreateError{status: status, message: message, code: code}
+}
+
+func writeManifestChangeCreateError(w http.ResponseWriter, err error) {
+	var ce manifestChangeCreateError
+	if errors.As(err, &ce) {
+		errType := "invalid_request_error"
+		if ce.status >= 500 {
+			errType = "server_error"
+		}
+		writeOpenAIError(w, ce.status, ce.message, errType, ce.code)
+		return
+	}
+	writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_failed")
+}
+
+func manifestChangeCreateResponse(result manifestChangeCreateResult) map[string]any {
+	return map[string]any{
+		"request":           result.Request,
+		"impact":            result.Impact,
+		"diffs":             result.Diffs,
+		"operation":         result.Operation,
+		"idempotent_replay": result.IdempotentReplay,
+		"note":              result.Note,
+	}
+}
+
+func (s *Server) prepareK8sManifestChangeRequest(ctx context.Context, actor string, in manifestChangeCreateInput) (manifestChangeCreateResult, error) {
 	clusterID := strings.TrimSpace(in.ClusterID)
 	operation, err := normalizeManifestChangeOperation(in.Operation)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_manifest_operation")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, err.Error(), "invalid_manifest_operation")
 	}
 	kind := canonicalManifestKind(strings.TrimSpace(in.Kind))
 	namespace := strings.TrimSpace(in.Namespace)
 	name := strings.TrimSpace(in.Name)
 	afterRaw := strings.TrimSpace(in.AfterYAML)
 	if clusterID == "" || afterRaw == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "cluster_id and after_yaml are required", "invalid_request_error", "missing_fields")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, "cluster_id and after_yaml are required", "missing_fields")
 	}
 	afterDoc, err := parseSingleManifestDoc(afterRaw)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "after_yaml parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, "after_yaml parse error: "+err.Error(), "manifest_parse_failed")
 	}
 	docAPIVersion, docKind, docNamespace, docName := manifestDocIdentity(afterDoc)
 	if kind == "" {
@@ -196,49 +266,48 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 		namespace = "default"
 	}
 	if err := ensureManifestDocTarget(afterDoc, kind, namespace, name); err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "manifest_target_mismatch")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, err.Error(), "manifest_target_mismatch")
 	}
 	apiVersion := firstNonEmpty(strings.TrimSpace(in.APIVersion), docAPIVersion)
 	if clusterID == "" || kind == "" || name == "" || apiVersion == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "cluster_id, apiVersion, kind, name and after_yaml are required", "invalid_request_error", "missing_fields")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, "cluster_id, apiVersion, kind, name and after_yaml are required", "missing_fields")
 	}
-	idempotencyKey := strings.TrimSpace(firstNonEmpty(in.IdempotencyKey, r.Header.Get("Idempotency-Key")))
+	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
 	if idempotencyKey != "" {
-		existing, err := s.db.GetK8sManifestChangeRequestByIdempotencyKey(r.Context(), idempotencyKey)
+		existing, err := s.db.GetK8sManifestChangeRequestByIdempotencyKey(ctx, idempotencyKey)
 		if err == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"request": existing, "idempotent_replay": true})
-			return
+			return manifestChangeCreateResult{
+				Request:          existing,
+				Impact:           existing.Impact,
+				Diffs:            existing.Diffs,
+				Operation:        manifestChangeOperation(existing),
+				IdempotentReplay: true,
+				Note:             "동일 idempotency key의 기존 요청을 반환했습니다.",
+			}, nil
 		}
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_idempotency_lookup_failed")
-			return
+			return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_manifest_change_idempotency_lookup_failed")
 		}
 	}
 	if operation == "create" {
-		s.createK8sManifestCreateRequest(w, r, clusterID, namespace, kind, apiVersion, name, afterDoc, strings.TrimSpace(in.Reason), idempotencyKey)
-		return
+		return s.prepareK8sManifestCreateRequest(ctx, actor, clusterID, namespace, kind, apiVersion, name, afterDoc, strings.TrimSpace(in.Reason), idempotencyKey)
 	}
-	item, err := s.db.GetK8sInventoryItem(r.Context(), clusterID, kind, namespace, name)
+	item, err := s.db.GetK8sInventoryItem(ctx, clusterID, kind, namespace, name)
 	if errors.Is(err, store.ErrNotFound) {
-		writeOpenAIError(w, http.StatusNotFound, "live resource not found; 신규 리소스 생성은 operation=create로 요청하세요", "invalid_request_error", "resource_not_found")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusNotFound, "live resource not found; 신규 리소스 생성은 operation=create로 요청하세요", "resource_not_found")
 	}
 	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_inventory_failed")
 	}
 	if err := validateManifestTarget(afterDoc, item); err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "manifest_target_mismatch")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusBadRequest, err.Error(), "manifest_target_mismatch")
 	}
 	beforeDoc := sanitizeManifestDocForLedger(assembleManifest(item))
 	beforeYAML := mustManifestYAML(beforeDoc)
 	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
 	afterYAML := mustManifestYAML(storeAfterDoc)
 	diffs := diffManifestDocs(beforeDoc, storeAfterDoc)
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, _ := s.db.ListK8sPolicies(ctx)
 	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
 	impact, risk, requiresApproval := manifestChangeImpact(item, afterDoc, diffs, plan)
 	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
@@ -250,42 +319,34 @@ func (s *Server) createK8sManifestChange(w http.ResponseWriter, r *http.Request)
 		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: item.Kind, APIVersion: firstNonEmpty(apiVersion, item.APIVersion),
 		Name: item.Name, Status: "draft", RiskLevel: risk, RequiresApproval: requiresApproval, Reason: strings.TrimSpace(in.Reason),
 		BeforeYAML: beforeYAML, AfterYAML: afterYAML, BeforeHash: manifestHash(beforeYAML), AfterHash: manifestHash(afterYAML),
-		Diffs: diffs, Impact: impact, CreatedBy: adminID(r), IdempotencyKey: idempotencyKey,
+		Diffs: diffs, Impact: impact, CreatedBy: actor, IdempotencyKey: idempotencyKey,
 		TargetUID: item.UID, TargetResourceVersion: k8sActionTargetResourceVersion(item),
 		Result: "변경 요청 생성됨. validate를 실행해 schema/policy/server dry-run을 확인하세요.",
 	}
-	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), req); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_save_failed")
-		return
+	if err := s.db.CreateK8sManifestChangeRequest(ctx, req); err != nil {
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_manifest_change_save_failed")
 	}
-	s.auditAdmin(r, "k8s.manifest_change.request", "", auditJSON(map[string]any{
-		"id": req.ID, "cluster_id": clusterID, "kind": kind, "namespace": namespace, "name": name, "risk": risk,
-	}))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"request": req, "impact": impact, "diffs": diffs,
-		"note": "요청이 draft로 저장되었습니다. validate 후 위험도에 따라 승인 또는 바로 적용할 수 있습니다.",
-	})
+	return manifestChangeCreateResult{
+		Request: req, Impact: impact, Diffs: diffs, Operation: "update",
+		Note: "요청이 draft로 저장되었습니다. validate 후 위험도에 따라 승인 또는 바로 적용할 수 있습니다.",
+	}, nil
 }
 
-func (s *Server) createK8sManifestCreateRequest(w http.ResponseWriter, r *http.Request, clusterID, namespace, kind, apiVersion, name string, afterDoc map[string]any, reason, idempotencyKey string) {
-	if _, err := s.db.GetK8sCluster(r.Context(), clusterID); errors.Is(err, store.ErrNotFound) {
-		writeOpenAIError(w, http.StatusNotFound, "cluster not found: "+clusterID, "invalid_request_error", "k8s_cluster_not_found")
-		return
+func (s *Server) prepareK8sManifestCreateRequest(ctx context.Context, actor, clusterID, namespace, kind, apiVersion, name string, afterDoc map[string]any, reason, idempotencyKey string) (manifestChangeCreateResult, error) {
+	if _, err := s.db.GetK8sCluster(ctx, clusterID); errors.Is(err, store.ErrNotFound) {
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusNotFound, "cluster not found: "+clusterID, "k8s_cluster_not_found")
 	} else if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_cluster_failed")
 	}
-	if existing, err := s.db.GetK8sInventoryItem(r.Context(), clusterID, kind, namespace, name); err == nil {
-		writeOpenAIError(w, http.StatusConflict, fmt.Sprintf("resource already exists: %s/%s/%s (uid=%s)", kind, namespace, name, existing.UID), "invalid_request_error", "manifest_create_target_exists")
-		return
+	if existing, err := s.db.GetK8sInventoryItem(ctx, clusterID, kind, namespace, name); err == nil {
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusConflict, fmt.Sprintf("resource already exists: %s/%s/%s (uid=%s)", kind, namespace, name, existing.UID), "manifest_create_target_exists")
 	} else if !errors.Is(err, store.ErrNotFound) {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
-		return
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_inventory_failed")
 	}
 	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
 	afterYAML := mustManifestYAML(storeAfterDoc)
 	diffs := diffManifestDocs(map[string]any{}, storeAfterDoc)
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, _ := s.db.ListK8sPolicies(ctx)
 	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
 	item := store.K8sInventoryItem{ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion, Name: name}
 	impact, risk, requiresApproval := manifestCreateImpact(item, afterDoc, diffs, plan)
@@ -298,20 +359,16 @@ func (s *Server) createK8sManifestCreateRequest(w http.ResponseWriter, r *http.R
 		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion,
 		Name: name, Status: "draft", RiskLevel: risk, RequiresApproval: requiresApproval, Reason: reason,
 		BeforeYAML: "", AfterYAML: afterYAML, BeforeHash: manifestHash(""), AfterHash: manifestHash(afterYAML),
-		Diffs: diffs, Impact: impact, CreatedBy: adminID(r), IdempotencyKey: idempotencyKey,
+		Diffs: diffs, Impact: impact, CreatedBy: actor, IdempotencyKey: idempotencyKey,
 		Result: "생성 요청 생성됨. validate를 실행해 schema/policy/server dry-run을 확인하세요.",
 	}
-	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), req); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_create_save_failed")
-		return
+	if err := s.db.CreateK8sManifestChangeRequest(ctx, req); err != nil {
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_manifest_create_save_failed")
 	}
-	s.auditAdmin(r, "k8s.manifest_change.create_request", "", auditJSON(map[string]any{
-		"id": req.ID, "cluster_id": clusterID, "kind": kind, "namespace": namespace, "name": name, "risk": risk,
-	}))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"request": req, "impact": impact, "diffs": diffs,
-		"note": "신규 리소스 생성 요청이 draft로 저장되었습니다. validate 후 승인/적용하세요.",
-	})
+	return manifestChangeCreateResult{
+		Request: req, Impact: impact, Diffs: diffs, Operation: "create",
+		Note: "신규 리소스 생성 요청이 draft로 저장되었습니다. validate 후 승인/적용하세요.",
+	}, nil
 }
 
 // handleK8sManifestChangeByID returns detail or dispatches validate/impact/approve/reject/apply/verify/export.

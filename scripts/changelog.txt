@@ -1,3 +1,9 @@
+v0.9.98:
+- **K8s Resource Category Center (v0.9.98)**: Pod 중심이던 리소스 관리 동선을 워크로드, 네트워크, 스토리지, 구성요소, 개발자 도구, 인증·권한 카테고리로 확장했습니다. 리소스 관리 메뉴와 `/me/navigation` 권한 레지스트리, capability catalog, 빠른 이동 검색에 `리소스 전체`, `워크로드`, `네트워크`, `스토리지`, `구성요소`, `개발자 도구`, `인증·권한` 화면을 추가하고, 기존 `/admin/k8s/inventory`를 재사용해 category별 KPI, 위험 리소스, Kind 분포, 필터링, 정렬 가능한 리소스 표를 제공합니다. 각 리소스 행은 YAML 변경, 타임라인, 리소스 그래프, Pod 상세, 연결성 점검으로 바로 이동하며 카테고리별 생성 CTA는 기존 Manifest Change Studio의 `mode=create` 흐름으로 연결됩니다. Gateway 신규 기능은 계속 제외했습니다.
+
+v0.9.97:
+- **Ops Agent Manifest Bridge (v0.9.97)**: Ops Agent를 YAML 생성/변경 적용 체계의 안전한 진입점으로 연결했습니다. 신규 `POST /admin/agent/manifest-drafts`는 현재 화면·세션 컨텍스트, 자연어 프롬프트, 선택 대상, 기존 YAML을 받아 생성/변경 초안 YAML, 위험도, blocker/warning, 운영자 체크리스트를 반환하고, 사용자가 명시하면 기존 `k8s_manifest_change_requests` 원장에 draft 요청까지 저장합니다. Agent는 검증·승인·적용을 직접 수행하지 않고, 저장된 요청은 기존 Manifest Change Studio의 schema/policy/server dry-run 검증, 승인 게이트, Server-Side Apply, drift guard, evidence 흐름으로만 진행됩니다. YAML 변경/생성 화면에는 `Ops Agent 초안` 카드를 추가해 같은 화면에서 초안 생성과 요청 저장을 이어갈 수 있게 했고, Agent session 메시지와 audit에도 초안/요청 결과를 남깁니다. Gateway 신규 기능은 계속 제외했습니다.
+
 v0.9.96:
 - **Manifest Create Convenience (v0.9.96)**: YAML 생성 모드의 사용 동선을 보강했습니다. 생성 화면에 자주 쓰는 리소스 프리셋 버튼을 제공하고, 붙여넣은 YAML 본문에서 `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`를 읽어 입력 필드에 자동 반영할 수 있게 했습니다. 생성 대상 힌트는 API version, 대상 경로, 생성 가능 후보 여부, Secret payload 주의, YAML 본문과 입력 필드 불일치를 즉시 표시합니다. 제출 전에는 inventory 기준으로 같은 cluster/kind/namespace/name 대상이 이미 있으면 API 호출 전에 차단하고 기존 리소스 변경 모드로 유도합니다. 이 개선은 v0.9.95의 `operation=create` 원장·검증·승인·SSA 적용 흐름을 유지하면서, YAML을 직접 작성하는 운영자의 오입력과 중복 생성 시도를 줄이는 UX 보강입니다. Gateway 신규 기능은 계속 제외했습니다.
 

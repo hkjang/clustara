@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.96** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.98** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.96)
+## 기능 상태 (v0.9.98)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -20,6 +20,7 @@
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
+| 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.98) |
 | Pod 관리 센터 — 목록·상세·위험 Pod 자동 북마크·최근 접근·현재/previous 로그·로그 프리셋·마스킹 리포트·스냅샷·동일 workload 병합·증적 번들·Golden Pod Diff·Health Replay·조치 안전성·플레이북 | ✅ |
 | Pod Health Score(0~100) + 문제 유형 자동 태깅(CrashLoop/OOM/ImagePull/Pending/ProbeFailing/RecentRestart 등) · Health 낮은 순 정렬 | ✅ |
 | Restart Storm 탐지 — 같은 workload 다수 Pod의 **최근** 재시작/비정상 신호를 서비스 단위 장애로 묶어 경고(POD-RULE-06) · critical storm은 워크로드 incident 자동 생성 | ✅ |
@@ -139,6 +140,7 @@
 | Contract Audit & Runtime Hardening — API surface audit가 `cmd/clustara-cli/main.go`와 `sdk/typescript/clustara.ts` 실제 경로를 필수로 읽고 누락 시 실패하며, CLI/SDK 경로 불일치와 OpenAPI 누락·낡은 문서 경로를 모두 hard fail로 검증, 누락됐던 K8s/Agent/MCP Tool Scope/Mattermost 라우트를 OpenAPI 카탈로그에 보강하고 `go test`에서 repository zero-gap을 강제, README/Docker/CLI/SDK 기본 포트를 `:9090`으로 정렬하고 release test로 포트 정합성을 강제, production/strict 모드 기본 `GATEWAY_SECRET`·약한 admin token·열린 admin API 기동을 차단, HTTP read/write/idle/header timeout 기본값을 적용, `/ready`에 database component와 `/admin/ops/status` 참조를 포함 | ✅ (v0.9.94) |
 | Manifest Create Studio — YAML 변경 화면에 신규 리소스 생성 모드와 Deployment/Service/ConfigMap/Secret/ServiceAccount/RBAC/PVC/Ingress/NetworkPolicy/HPA/Namespace/Job/CronJob 템플릿을 추가하고, `operation=create` 요청을 같은 원장·검증·승인·SSA 적용 흐름으로 처리하며 이미 존재하는 대상은 요청/적용 단계에서 차단 | ✅ (v0.9.95) |
 | Manifest Create Convenience — 생성 모드에서 프리셋 버튼, YAML 본문 대상 자동 추출, 입력/YAML 불일치 감지, inventory 기반 중복 대상 미리보기와 제출 전 차단, Secret payload 경고를 제공해 YAML 생성 요청의 실수를 줄임 | ✅ (v0.9.96) |
+| Ops Agent Manifest Bridge — Ops Agent가 YAML 생성/변경 초안, 위험 리뷰, blocker/warning, 운영자 체크리스트를 만들고 사용자가 명시하면 기존 Manifest Change 원장에 draft 요청을 저장. 검증·승인·적용은 계속 Manifest Change Studio 상태머신에서만 진행 | ✅ (v0.9.97) |
 | Ops Status v2 — `/admin/ops/status`에 DB, async logger, ClickHouse, K8s collector, Mattermost, retention, alert worker component 상태와 overall(degraded/failed) 제공 | ✅ (v0.9.47) |
 
 수집은 Kubernetes API 기반 주기 폴링이며, 외부 collector가 보낼 표준 스냅샷(`POST /admin/k8s/snapshot`)을 지원합니다. v0.4.0부터 **실시간 watch delta 수신**(`POST /admin/k8s/agent/events`)도 지원합니다 — 인클러스터 `clustara-agent`가 watch 이벤트(ADDED/MODIFIED/DELETED)와 하트비트를 보내면 수동 수집 없이 인벤토리/리비전/incident가 즉시 갱신됩니다. 서버는 watch event를 `k8s_watch_events`에 idempotency key로 저장해 재전송 중복을 제거하고, `k8s_collector_offsets`에 kind별 resourceVersion checkpoint를 누적합니다. agent는 로컬 상태 파일과 offline queue로 재시작/일시 단절을 복구합니다. `수집 상태` 화면에서는 agent 하트비트·watch lag·resourceVersion·중복 이벤트·재연결·최근 watch 이벤트를 추적합니다. 배포 절차는 [K8s Agent 가이드](K8S_AGENT.md)를 참고하세요.
@@ -224,6 +226,7 @@
 | POST | `/admin/k8s/manifest-changes/{id}/validate` | schema basic check, 정책 검사, server dry-run(`dryRun=All`) 검증. Secret payload 원문 변경은 blocked 처리 |
 | POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, 적용 직전 drift guard 통과 후 Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성. 생성 요청은 대상이 이미 존재하면 적용을 차단하고, 의도한 덮어쓰기는 기존 변경 요청으로 재생성해야 함. 변경 요청의 의도한 덮어쓰기는 `apply` body에 `force_drift=true`와 `note`를 남김 |
 | GET | `/admin/k8s/manifest-changes/{id}/evidence`, `/git-patch` | 변경/생성 증적 Markdown bundle과 Git PR용 pseudo patch export |
+| POST | `/admin/agent/manifest-drafts` | Ops Agent 기반 YAML 생성/변경 초안 작성과 Manifest Change 원장 연결. `create_request=true`일 때만 draft 요청을 저장하며, 검증·승인·적용은 수행하지 않음 |
 | GET | `/admin/k8s/resource-graph` | 인벤토리 selector/backend/volume/node/HPA 관계 기반 리소스 그래프·blast radius (`cluster_id`,`kind`,`namespace`,`name`,`radius`) |
 | GET | `/admin/k8s/security` | Pod Security 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백 포스처 |
 | GET | `/admin/k8s/capacity` | HPA 현황·확장한계, 과소/과다 할당, 노드 bin-packing, GPU, 노드 용량 예측(SCALE-05) |
@@ -411,6 +414,21 @@ curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../test
 ```powershell
 curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 ```
+
+## 리소스 카테고리 센터
+
+`리소스 관리` 메뉴는 Pod 상세 진단 화면과 별도로 전체 Kubernetes 리소스를 운영 도메인별로 나눠 탐색합니다. `리소스 전체`는 카테고리별 자산 수와 high 이상 위험 리소스를 요약하고, 각 카테고리 화면은 같은 `/admin/k8s/inventory` 원천 데이터를 필터링해 상태, Kind, namespace, cluster, spec 요약, 최근 관측 시각, YAML 변경, 타임라인, 리소스 그래프 진입점을 제공합니다.
+
+| 화면 | 포함 리소스 예시 | 주요 동선 |
+| --- | --- | --- |
+| 워크로드 | Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod | YAML 변경/생성, Pod 상세, 타임라인, 리소스 그래프 |
+| 네트워크 | Service, Ingress, NetworkPolicy, Endpoints, EndpointSlice, Gateway API | 연결성 점검, 노출 영향 확인, YAML 변경 |
+| 스토리지 | PV, PVC, StorageClass, VolumeSnapshot | 바인딩·용량 요약, PVC 생성, YAML 변경 |
+| 구성요소 | Namespace, ConfigMap, Secret, HPA, PDB, Quota, LimitRange | 설정 변경 영향, 자동확장·중단예산 확인 |
+| 개발자 도구 | ServiceMonitor, PodMonitor, PrometheusRule, HelmRelease, Kustomization, Certificate, Tekton | 플랫폼 확장 리소스와 GitOps/관측 도구 탐색 |
+| 인증·권한 | ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, CSR | RBAC 변경 검토, 권한 리소스 YAML 변경 |
+
+카테고리별 `+ Kind` 버튼은 Manifest Change Studio의 `mode=create` 흐름으로 연결됩니다. 생성과 변경은 모두 요청 원장, 검증, 승인, Server-Side Apply, 사후 검증을 거치며 직접 적용하지 않습니다.
 
 ## Pod 관리와 증적 번들
 

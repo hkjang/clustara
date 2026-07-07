@@ -54,6 +54,8 @@ func RouteIntent(route string) string {
 		return IntentSLO
 	case strings.Contains(r, "k8s-stacks"):
 		return IntentStack
+	case strings.Contains(r, "k8s-manifest"):
+		return IntentStack
 	case strings.Contains(r, "k8s-actions"):
 		return IntentAction
 	case strings.Contains(r, "k8s-reports"):

@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 33
+const menuVersion = 34
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -31,6 +31,13 @@ var menuRegistry = []menuItem{
 	{ID: "ops.fleet", Label: "FleetOps", Path: "#/fleet", Tab: "fleet", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s", Label: "클러스터", Path: "#/k8s", Tab: "k8s", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_collector", Label: "수집 상태", Path: "#/k8s-collector", Tab: "k8s-collector", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_resources", Label: "리소스 전체", Path: "#/k8s-resources", Tab: "k8s-resources", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_workloads", Label: "워크로드", Path: "#/k8s-workloads", Tab: "k8s-workloads", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_network", Label: "네트워크", Path: "#/k8s-network", Tab: "k8s-network", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_storage", Label: "스토리지", Path: "#/k8s-storage", Tab: "k8s-storage", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_components", Label: "구성요소", Path: "#/k8s-components", Tab: "k8s-components", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_devtools", Label: "개발자 도구", Path: "#/k8s-devtools", Tab: "k8s-devtools", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_auth", Label: "인증·권한", Path: "#/k8s-auth", Tab: "k8s-auth", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_pods", Label: "Pod 관리", Path: "#/k8s-pods", Tab: "k8s-pods", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_nodes", Label: "노드 관리", Path: "#/k8s-nodes", Tab: "k8s-nodes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
