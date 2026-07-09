@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.102"
+const AppVersion = "v0.9.105"
 
 type Server struct {
 	cfg            config.Config
@@ -316,6 +316,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/config-changes", s.handleK8sConfigChanges)
 	mux.HandleFunc("/admin/k8s/config-changes/", s.handleK8sConfigChangeByID)
 	mux.HandleFunc("/admin/k8s/registries/pull-secret", s.handleK8sPullSecret)
+	mux.HandleFunc("/admin/harbor/registries/", s.handleHarborRegistryByID)
+	mux.HandleFunc("/admin/harbor/registries", s.handleHarborRegistries)
+	mux.HandleFunc("/admin/harbor/robots/verify", s.handleHarborRobotVerify)
+	mux.HandleFunc("/admin/harbor/robots", s.handleHarborRobots)
+	mux.HandleFunc("/admin/harbor/mappings", s.handleHarborMappings)
+	mux.HandleFunc("/admin/harbor/catalog/query", s.handleHarborCatalogQuery)
+	mux.HandleFunc("/admin/harbor/pull-secret/preview", s.handleHarborPullSecretPreview)
+	mux.HandleFunc("/admin/harbor/launches/preview", s.handleHarborLaunchPreview)
+	mux.HandleFunc("/admin/harbor/launches/", s.handleHarborLaunchByID)
+	mux.HandleFunc("/admin/harbor/launches", s.handleHarborLaunches)
 	mux.HandleFunc("/admin/k8s/rbac", s.handleK8sRBAC)
 	mux.HandleFunc("/admin/k8s/rbac/check", s.handleK8sRBAC)
 	mux.HandleFunc("/admin/k8s/revisions", s.handleK8sRevisions)

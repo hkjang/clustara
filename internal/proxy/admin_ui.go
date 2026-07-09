@@ -613,6 +613,10 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-collector" data-tab="k8s-collector">수집 상태</a>
           <a href="#/k8s-stacks" data-tab="k8s-stacks">앱 배포</a>
           <a href="#/k8s-manifest-changes" data-tab="k8s-manifest-changes">YAML 변경</a>
+          <a href="#/harbor" data-tab="harbor">Harbor 레지스트리</a>
+          <a href="#/harbor-robots" data-tab="harbor-robots">Harbor Robot</a>
+          <a href="#/app-launcher" data-tab="app-launcher">앱 런처</a>
+          <a href="#/app-launch-history" data-tab="app-launch-history">런칭 이력</a>
           <a href="#/gitops" data-tab="gitops">GitOps</a>
           <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
           <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
@@ -642,6 +646,7 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-security-sbom" data-tab="k8s-security-sbom">SBOM 분석</a>
           <a href="#/k8s-security-cluster-scan" data-tab="k8s-security-cluster-scan">클러스터 지속 스캔</a>
           <a href="#/k8s-security-admission" data-tab="k8s-security-admission">배포 차단 정책</a>
+          <a href="#/k8s-security-image-launch" data-tab="k8s-security-image-launch">이미지 런칭 보안</a>
           <a href="#/k8s-security-runtime" data-tab="k8s-security-runtime">런타임 탐지</a>
           <a href="#/k8s-security-benchmark" data-tab="k8s-security-benchmark">CIS Benchmark</a>
           <a href="#/k8s-security-exceptions" data-tab="k8s-security-exceptions">예외 승인</a>
@@ -1209,6 +1214,10 @@ const adminHTML = `<!doctype html>
       { tab: 'service-catalog', href: '#/service-catalog', label: '서비스 카탈로그', group: '리소스', tags: 'service catalog owner repo runtime scorecard developer platform' },
       { tab: 'k8s-stacks', href: '#/k8s-stacks', label: '앱 배포', group: '변경', tags: 'stack apply deploy rollback manifest' },
       { tab: 'k8s-manifest-changes', href: '#/k8s-manifest-changes', label: 'YAML 변경', group: '변경', tags: 'yaml manifest edit apply dryrun approval' },
+      { tab: 'harbor', href: '#/harbor', label: 'Harbor 레지스트리', group: '변경', tags: 'harbor registry project repository artifact digest robot' },
+      { tab: 'harbor-robots', href: '#/harbor-robots', label: 'Harbor Robot', group: '변경', tags: 'harbor robot account pull permission imagepullsecret' },
+      { tab: 'app-launcher', href: '#/app-launcher', label: '앱 런처', group: '변경', tags: 'application launch image deployment service secret manifest' },
+      { tab: 'app-launch-history', href: '#/app-launch-history', label: '런칭 이력', group: '변경', tags: 'launch history approval manifest harbor' },
       { tab: 'gitops', href: '#/gitops', label: 'GitOps', group: '변경', tags: 'git drift rollback stack pr' },
       { tab: 'k8s-timeline', href: '#/k8s-timeline', label: '변경 타임라인', group: '변경', tags: 'timeline revision diff event' },
       { tab: 'problems', href: '#/problems', label: 'Problem Inbox', group: '장애', tags: 'problem aiops grouping incident' },
@@ -1224,6 +1233,7 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-security-sbom', href: '#/k8s-security-sbom', label: 'SBOM 분석', group: '보안', tags: 'sbom cyclonedx spdx package license' },
       { tab: 'k8s-security-cluster-scan', href: '#/k8s-security-cluster-scan', label: '클러스터 지속 스캔', group: '보안', tags: 'trivy operator vulnerabilityreport stale scan' },
       { tab: 'k8s-security-admission', href: '#/k8s-security-admission', label: '배포 차단 정책', group: '보안', tags: 'admission deny digest latest critical cve' },
+      { tab: 'k8s-security-image-launch', href: '#/k8s-security-image-launch', label: '이미지 런칭 보안', group: '보안', tags: 'harbor launch image pull secret robot digest policy' },
       { tab: 'k8s-security-runtime', href: '#/k8s-security-runtime', label: '런타임 탐지', group: '보안', tags: 'falco runtime shell privilege node pod' },
       { tab: 'k8s-security-benchmark', href: '#/k8s-security-benchmark', label: 'CIS Benchmark', group: '보안', tags: 'kube-bench cis benchmark remediation' },
       { tab: 'k8s-security-exceptions', href: '#/k8s-security-exceptions', label: '보안 예외 승인', group: '보안', tags: 'exception approval cve expires ticket' },
@@ -2450,12 +2460,17 @@ const adminHTML = `<!doctype html>
           case 'k8s-collector': await renderK8sCollector(params); break;
           case 'k8s-stacks': await renderK8sStacks(params); break;
           case 'k8s-manifest-changes': await renderK8sManifestChanges(params); break;
+          case 'harbor': await renderHarborRegistry(params); break;
+          case 'harbor-robots': await renderHarborRobots(params); break;
+          case 'app-launcher': await renderAppLauncher(params); break;
+          case 'app-launch-history': await renderAppLaunchHistory(params); break;
           case 'gitops': await renderGitOps(params); break;
           case 'k8s-security': await renderK8sSecurity(params); break;
           case 'k8s-security-vulnerabilities': await renderK8sSecurityVulnerabilities(params); break;
           case 'k8s-security-sbom': await renderK8sSecuritySBOM(params); break;
           case 'k8s-security-cluster-scan': await renderK8sSecurityClusterScan(params); break;
           case 'k8s-security-admission': await renderK8sSecurityAdmission(params); break;
+          case 'k8s-security-image-launch': await renderK8sSecurityImageLaunch(params); break;
           case 'k8s-security-runtime': await renderK8sSecurityRuntime(params); break;
           case 'k8s-security-benchmark': await renderK8sSecurityBenchmark(params); break;
           case 'k8s-security-exceptions': await renderK8sSecurityExceptions(params); break;
@@ -11230,14 +11245,45 @@ const adminHTML = `<!doctype html>
         ['k8s-security-sbom', 'SBOM'],
         ['k8s-security-cluster-scan', '지속 스캔'],
         ['k8s-security-admission', '배포 차단'],
+        ['k8s-security-image-launch', '이미지 런칭'],
         ['k8s-security-runtime', '런타임'],
         ['k8s-security-benchmark', 'CIS'],
         ['k8s-security-exceptions', '예외 승인'],
         ['k8s-policy', '정책 센터']
       ];
-      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px">' + tabs.map(t =>
+      const current = ((location.hash || '#/k8s-security').replace(/^#\//, '').split('?')[0]) || 'k8s-security';
+      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px;align-items:center">' + tabs.map(t =>
         '<a class="button secondary" style="font-size:12px;text-decoration:none" href="' + escapeAttr(k8sSecurityHref(t[0], clusterId)) + '">' + escapeHTML(t[1]) + '</a>'
-      ).join('') + '</div>';
+      ).join('') + '<button type="button" class="secondary" style="font-size:12px;margin-left:auto" onclick="k8sSecurityOpenGuide(\'' + escapeAttr(current) + '\')">사용자 가이드</button></div>';
+    }
+    window.k8sSecurityOpenGuide = (tab) => {
+      openModal('보안 사용자 상세 가이드', k8sSecurityGuideHTML(tab || 'k8s-security'), null, { wide: true });
+    };
+    function k8sSecurityGuideHTML(tab) {
+      const guides = {
+        'k8s-security': ['보안 대시보드', '클러스터 보안 점수, Pod Security, RBAC, 이미지, Secret, NetworkPolicy, TLS, CVE, 런타임, CIS 신호를 한 화면에서 확인합니다.', ['위험 클러스터를 먼저 고릅니다.', 'Critical CVE, 런타임 High 이벤트, CIS Fail을 확인합니다.', '각 카드의 상세 화면으로 이동해 조치나 예외 요청을 진행합니다.']],
+        'k8s-security-vulnerabilities': ['이미지 취약점', 'Trivy/Grype/Trivy Operator 결과를 digest 기준 CVE 원장으로 조회합니다.', ['이미지는 tag보다 digest 기준으로 필터링합니다.', 'Fixable 항목은 이미지 재빌드나 베이스 이미지 갱신 후보입니다.', '운영 namespace의 Critical은 예외 없이는 Admission에서 차단됩니다.']],
+        'k8s-security-sbom': ['SBOM 분석', 'CycloneDX/SPDX SBOM을 이미지 digest와 연결해 package와 취약점 근거를 보강합니다.', ['CI에서 생성한 원본 SBOM JSON을 그대로 붙여넣거나 API로 전송합니다.', 'image_digest를 반드시 지정해 취약점 원장과 연결합니다.', '오래된 SBOM은 재생성 후 다시 업로드합니다.']],
+        'k8s-security-cluster-scan': ['클러스터 지속 스캔', 'Trivy Operator VulnerabilityReport와 수동/CI scan run의 신선도를 확인합니다.', ['24시간 이상 stale인 report를 먼저 확인합니다.', 'queued/running/failed scan run을 확인해 runner 상태를 점검합니다.', 'Trivy Operator report는 namespace, owner, container 맥락으로 자동 보정됩니다.']],
+        'k8s-security-admission': ['배포 차단 정책', 'manifest 또는 image list를 latest, digest, SBOM, Critical/High CVE 기준으로 평가합니다.', ['배포 전 multi-document YAML을 붙여넣어 시뮬레이션합니다.', 'deny는 실제 AdmissionReview에서 allowed=false가 됩니다.', 'approval_required는 운영 승인 흐름으로 넘길 신호이며 자동 적용을 의미하지 않습니다.']],
+        'k8s-security-image-launch': ['이미지 런칭 보안', 'Harbor Robot Account 기반 앱 런칭 요청의 digest, latest tag, robot 검증, imagePullSecret namespace 매핑을 확인합니다.', ['digest 없는 tag-only 런칭은 승인 필요로 봅니다.', 'latest 태그는 재현 불가능하므로 차단 기준으로 봅니다.', 'Robot Account 검증과 Secret namespace 매핑을 먼저 완료한 뒤 런칭 요청을 생성합니다.']],
+        'k8s-security-runtime': ['런타임 탐지', 'Falco/Falcosidekick 이벤트를 Pod, container, image, node 기준으로 조회하고 취약 이미지와 상관분석합니다.', ['High 이상 이벤트는 취약 이미지 CVE와 함께 봅니다.', 'shell 실행, 민감 경로 접근, 권한 상승 이벤트는 incident 후보입니다.', '동일 digest의 Critical/High CVE가 있으면 우선순위를 높입니다.']],
+        'k8s-security-benchmark': ['CIS Benchmark', 'kube-bench 결과를 import하고, 실행용 Job manifest를 생성합니다.', ['Clustara는 kube-bench를 직접 실행하지 않습니다.', 'Job YAML은 승인된 runner나 운영자가 적용합니다.', 'Job 결과 로그(JSON)를 다시 Clustara에 import해 CIS 결과로 보관합니다.']],
+        'k8s-security-exceptions': ['예외 승인', '취약점·정책 예외를 사유, 티켓, 만료일과 함께 관리합니다.', ['만료일 없는 예외는 만들 수 없습니다.', 'approved라도 만료되면 effective_status=expired로 표시되고 Admission 예외로 인정되지 않습니다.', '예외는 가능한 좁은 scope(image_digest, CVE, namespace)로 잡습니다.']],
+        'k8s-policy': ['정책 센터', 'Clustara 정책 팩과 Kyverno/Rego import/export를 관리합니다.', ['Deny/Warn/Audit action을 환경별로 다르게 사용합니다.', 'image digest, latest, SBOM, CVE, PSS 관련 rule type을 배포 전 시뮬레이션합니다.', '가져온 외부 정책은 비활성 상태로 검토 후 활성화합니다.']]
+      };
+      const g = guides[tab] || guides['k8s-security'];
+      const steps = g[2].map((x, i) => '<li><strong>' + (i + 1) + '.</strong> ' + escapeHTML(x) + '</li>').join('');
+      const flow = ['CI/Operator 결과 import', '이미지 digest와 SBOM 연결', 'Admission 시뮬레이션', '런타임 이벤트 상관분석', '예외 승인 또는 조치', '감사 증적 보관']
+        .map(x => '<span class="pill" style="margin:2px">' + escapeHTML(x) + '</span>').join('');
+      const curlScan = 'curl -X POST "$CLUSTARA/admin/k8s/security/scans/import?cluster_id=prod&scanner=trivy&image_digest=sha256:..." --data-binary @trivy.json';
+      const curlSBOM = 'curl -X POST "$CLUSTARA/admin/k8s/security/sboms?image_digest=sha256:...&generator=syft" --data-binary @sbom.cdx.json';
+      return '<div class="grid2" style="margin-top:0">' +
+        '<div class="card-body"><h3>' + escapeHTML(g[0]) + '</h3><p class="muted">' + escapeHTML(g[1]) + '</p><ul style="line-height:1.7;margin:10px 0 0 18px">' + steps + '</ul></div>' +
+        '<div class="card-body"><h3>운영 흐름</h3><div style="margin:8px 0">' + flow + '</div><div class="banner warn" style="margin-top:10px">스캐너, kube-bench, Falco 실행은 Clustara 서버가 직접 수행하지 않습니다. CI, agent runner, Operator, 승인된 Job 결과를 import하는 구조로 운영하세요.</div></div>' +
+        '<div class="card-body"><h3>업로드 예시</h3><pre style="white-space:pre-wrap;overflow:auto;background:var(--panel-alt);border:1px solid var(--line);border-radius:8px;padding:10px"><code>' + escapeHTML(curlScan + '\n' + curlSBOM) + '</code></pre></div>' +
+        '<div class="card-body"><h3>판단 기준</h3><ul style="line-height:1.7;margin:10px 0 0 18px"><li>운영 namespace의 <strong>Critical CVE</strong>는 예외 없으면 차단합니다.</li><li><strong>High CVE</strong>는 승인 또는 SLA 관리 대상으로 표시합니다.</li><li><strong>digest 미고정</strong>, <strong>latest tag</strong>, <strong>만료 예외</strong>는 배포 전 반드시 정리합니다.</li><li>예외는 사유, 티켓, 만료일, 좁은 scope를 갖춰야 합니다.</li></ul></div>' +
+      '</div>';
     }
     function k8sSecurityClusterSelect(clusters, clusterId, id, tab) {
       const opts = '<option value="">전체 클러스터</option>' + ((clusters && clusters.clusters) || []).map(cl =>
@@ -11951,6 +11997,229 @@ const adminHTML = `<!doctype html>
           '<button type="button" onclick="k8sSecurityCreateException()">예외 요청 생성</button> <span id="sec-ex-out" class="muted" style="font-size:12px"></span></div>') +
         card('예외 목록', '<div class="card-body"><table><thead><tr><th>상태</th><th>Scope</th><th>CVE</th><th>대상</th><th>사유</th><th>만료</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
+
+    function harborStatusBadge(st) {
+      const v = String(st || 'unknown');
+      const cls = (v === 'connected' || v === 'verified' || v === 'allow') ? '' : (v === 'error' || v === 'failed' || v === 'blocked' || v === 'deny' ? 'error' : 'warn');
+      return '<span class="status ' + cls + '">' + escapeHTML(v) + '</span>';
+    }
+    function harborRegistryOptions(regs, selected) {
+      const rows = regs || [];
+      return '<option value="">registry 선택</option>' + rows.map(r => '<option value="' + escapeAttr(r.id || '') + '"' + ((r.id || '') === selected ? ' selected' : '') + '>' + escapeHTML((r.name || r.id || '-') + ' · ' + (r.url || '')) + '</option>').join('');
+    }
+    function harborRobotOptions(robots, selected) {
+      const rows = robots || [];
+      return '<option value="">robot 선택</option>' + rows.map(r => '<option value="' + escapeAttr(r.id || '') + '"' + ((r.id || '') === selected ? ' selected' : '') + '>' + escapeHTML((r.project_name || '-') + ' / ' + (r.name || r.id || '-') + ' · ' + (r.status || '')) + '</option>').join('');
+    }
+    function harborSubnav() {
+      const items = [
+        ['harbor', 'Registry'],
+        ['harbor-robots', 'Robot'],
+        ['app-launcher', '앱 런처'],
+        ['app-launch-history', '런칭 이력'],
+        ['k8s-security-image-launch', '보안 판정']
+      ];
+      const current = ((location.hash || '#/harbor').replace(/^#\//, '').split('?')[0]) || 'harbor';
+      return '<div class="pill-row" style="margin:4px 0 12px">' + items.map(([tab, label]) => '<a class="pill ' + (tab === current ? 'active' : '') + '" href="#/' + tab + '">' + escapeHTML(label) + '</a>').join('') + '</div>';
+    }
+    async function renderHarborRegistry(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('Harbor 레지스트리', '<div class="empty">불러오는 중...</div>');
+      let regs, maps, clusters, robots;
+      try {
+        [regs, maps, clusters, robots] = await Promise.all([
+          api('/admin/harbor/registries').catch(() => ({ registries: [] })),
+          api('/admin/harbor/mappings').catch(() => ({ mappings: [] })),
+          api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+          api('/admin/harbor/robots').catch(() => ({ robots: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('Harbor 레지스트리', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const registryRows = (regs.registries || []).map(r =>
+        '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td>' +
+        '<td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(r.url || '') + '</td><td>' + harborStatusBadge(r.status) + '</td>' +
+        '<td>' + escapeHTML(r.version || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_checked_at ? ago(r.last_checked_at) : '-') + '</div></td>' +
+        '<td><button type="button" class="secondary" onclick="harborTestRegistry(\'' + escapeAttr(r.id || '') + '\')">연결 테스트</button></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">등록된 Harbor registry가 없습니다.</td></tr>';
+      const clusterOpts = (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '">' + escapeHTML(c.name || c.id || '') + '</option>').join('');
+      const mappingRows = (maps.mappings || []).map(m =>
+        '<tr><td>' + escapeHTML(m.project_name || '-') + '</td><td>' + escapeHTML(m.cluster_id || '-') + '</td><td>' + escapeHTML(m.namespace || '-') + '</td><td>' + escapeHTML(m.secret_name || '-') + '</td><td>' + escapeHTML(m.owner_team || '-') + '</td></tr>'
+      ).join('') || '<tr><td colspan="5" class="muted">namespace 매핑이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('Harbor 레지스트리', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Connected', fmt((regs.registries || []).filter(r => r.status === 'connected').length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
+        card('Registry 등록', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><input id="hb-reg-name" placeholder="name"><input id="hb-reg-url" placeholder="https://harbor.example.com" style="grid-column:span 2"><label style="font-size:12px;display:flex;align-items:center;gap:6px"><input id="hb-reg-insecure" type="checkbox"> insecure TLS</label></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRegistry()">등록</button> <span id="hb-reg-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Registry 목록', '<div class="card-body"><table><thead><tr><th>Registry</th><th>URL</th><th>상태</th><th>Version</th><th>마지막 점검</th><th></th></tr></thead><tbody>' + registryRows + '</tbody></table></div>') +
+        card('Harbor Catalog 조회', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Projects, repositories, artifacts(tags·digest 포함)를 조회합니다. private project는 robot name/token을 일회성으로 입력하세요. token은 저장·응답하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-cat-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-cat-target"><option value="projects">projects</option><option value="repositories">repositories</option><option value="artifacts">artifacts</option></select><input id="hb-cat-project" placeholder="project"><input id="hb-cat-repo" placeholder="repository(artifact 조회시)"><input id="hb-cat-robot" placeholder="robot name"><input id="hb-cat-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"><button type="button" onclick="harborQueryCatalog()">조회</button></div><pre id="hb-cat-out" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px"></pre></div>') +
+        card('Harbor Project → Namespace 매핑', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px"><select id="hb-map-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-map-project" placeholder="Harbor project"><select id="hb-map-cluster">' + clusterOpts + '</select><input id="hb-map-ns" placeholder="namespace"><input id="hb-map-secret" placeholder="secret name(자동 가능)"><input id="hb-map-owner" placeholder="owner team" style="grid-column:span 2"></div><button type="button" onclick="harborCreateMapping()">매핑 저장</button> <span id="hb-map-out" class="muted" style="font-size:12px"></span><table style="margin-top:10px"><thead><tr><th>Project</th><th>Cluster</th><th>Namespace</th><th>Secret</th><th>Owner</th></tr></thead><tbody>' + mappingRows + '</tbody></table></div>');
+    }
+    async function renderHarborRobots(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('Harbor Robot Account', '<div class="empty">불러오는 중...</div>');
+      let regs, robots;
+      try {
+        [regs, robots] = await Promise.all([
+          api('/admin/harbor/registries').catch(() => ({ registries: [] })),
+          api('/admin/harbor/robots').catch(() => ({ robots: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('Harbor Robot Account', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const rows = (robots.robots || []).map(r =>
+        '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td><td>' + escapeHTML(r.project_name || '-') + '</td><td>' + harborStatusBadge(r.status) + '</td><td>' + (r.has_token_hash ? '<span class="status">hash 저장</span>' : '<span class="status warn">hash 없음</span>') + '</td><td>' + escapeHTML(r.expires_at || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_verified_at ? ago(r.last_verified_at) : '-') + '</div></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">등록된 Robot Account가 없습니다.</td></tr>';
+      view.innerHTML =
+        section('Harbor Robot Account', harborSubnav() + '<div class="kpis">' + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Verified', fmt((robots.robots || []).filter(r => r.status === 'verified').length)) + kpi('Token Hash', fmt((robots.robots || []).filter(r => r.has_token_hash).length)) + '</div>') +
+        card('Robot 등록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Robot token은 일회성 입력이며 DB와 API 응답에 저장되지 않습니다. token hash만 회전·증적 용도로 보관됩니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-robot-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-robot-project" placeholder="project"><input id="hb-robot-name" placeholder="robot$project+name"><input id="hb-robot-exp" placeholder="expires_at RFC3339"><input id="hb-robot-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRobot()">등록</button> <span id="hb-robot-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Robot Pull 검증', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px"><select id="hb-verify-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-verify-token" type="password" placeholder="token(검증 후 폐기)"><button type="button" onclick="harborVerifyRobot()">pull 권한 검증</button></div><div id="hb-verify-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
+        card('Robot 목록', '<div class="card-body"><table><thead><tr><th>Robot</th><th>Project</th><th>상태</th><th>Token</th><th>만료</th><th>검증</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    async function renderAppLauncher(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('앱 런처', '<div class="empty">불러오는 중...</div>');
+      let regs, robots, maps;
+      try {
+        [regs, robots, maps] = await Promise.all([
+          api('/admin/harbor/registries').catch(() => ({ registries: [] })),
+          api('/admin/harbor/robots').catch(() => ({ robots: [] })),
+          api('/admin/harbor/mappings').catch(() => ({ mappings: [] }))
+        ]);
+      } catch (e) {
+        view.innerHTML = section('앱 런처', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const mapHint = (maps.mappings || []).slice(0, 5).map(m => escapeHTML(m.project_name + ' → ' + m.cluster_id + '/' + m.namespace + ' · ' + (m.secret_name || ''))).join('<br>') || '<span class="muted">매핑 없음</span>';
+      view.innerHTML =
+        section('앱 런처', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
+        card('imagePullSecret Preview', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">응답은 항상 redacted manifest입니다. 실제 dockerconfigjson token은 반환하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-ps-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-ps-project" placeholder="project"><input id="hb-ps-ns" placeholder="namespace" value="default"><input id="hb-ps-secret" placeholder="secret name"><input id="hb-ps-robot" placeholder="robot name"><input id="hb-ps-token" type="password" placeholder="token(선택, hash 확인용)" style="grid-column:span 2"><button type="button" onclick="harborPreviewPullSecret()">Secret Preview</button></div><textarea id="hb-ps-out" rows="9" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>') +
+        card('Deployment/Service 런칭 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">digest 우선 이미지 참조와 imagePullSecret을 포함한 Deployment/Service YAML을 생성합니다. 저장 시 Harbor 런칭 원장에 남고, 실제 적용은 YAML 변경/생성 또는 승인형 executor 경로를 사용합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-launch-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-launch-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-launch-project" placeholder="project"><input id="hb-launch-repo" placeholder="repository 예: team/app"><input id="hb-launch-tag" placeholder="tag"><input id="hb-launch-digest" placeholder="sha256:digest"><input id="hb-launch-cluster" placeholder="cluster_id"><input id="hb-launch-ns" placeholder="namespace" value="default"><input id="hb-launch-app" placeholder="app name"><input id="hb-launch-replicas" type="number" value="1" min="1"><input id="hb-launch-port" type="number" value="8080" min="1"><input id="hb-launch-secret" placeholder="imagePullSecret"></div><div style="margin-top:8px"><button type="button" onclick="harborPreviewLaunch(false)">Manifest Preview</button> <button type="button" onclick="harborPreviewLaunch(true)">런칭 요청 저장</button> <button type="button" class="secondary" onclick="harborCopyLaunchManifest()">YAML 복사</button> <span id="hb-launch-status" class="muted" style="font-size:12px"></span></div><div class="grid2" style="margin-top:10px"><div><h3>Project 매핑 힌트</h3><div class="muted" style="font-size:12px">' + mapHint + '</div></div><div><h3>정책 판정</h3><div id="hb-launch-policy" class="muted" style="font-size:12px">Preview 후 표시됩니다.</div></div></div><textarea id="hb-launch-out" rows="18" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>');
+    }
+    async function renderAppLaunchHistory(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('런칭 이력', '<div class="empty">불러오는 중...</div>');
+      let launches;
+      try { launches = await api('/admin/harbor/launches').catch(() => ({ launches: [] })); }
+      catch (e) { view.innerHTML = section('런칭 이력', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      window.harborLaunchHistoryCache = {};
+      const rows = (launches.launches || []).map(l => {
+        window.harborLaunchHistoryCache[l.id || ''] = l.manifest_preview || '';
+        return '<tr><td>' + harborStatusBadge(l.status) + '<div style="margin-top:4px">' + harborStatusBadge(l.decision) + '</div></td><td><strong>' + escapeHTML(l.app_name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(l.id || '') + '</div></td><td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(l.image || '') + '</td><td>' + escapeHTML((l.cluster_id || '-') + '/' + (l.namespace || '-')) + '</td><td>' + escapeHTML(l.secret_name || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(l.reason || '-') + '</td><td><button type="button" class="secondary" onclick="harborCopyHistoryManifest(\'' + escapeAttr(l.id || '') + '\')">YAML 복사</button> <button type="button" onclick="harborCreateManifestDraft(\'' + escapeAttr(l.id || '') + '\')">Manifest 초안</button></td></tr>';
+      }).join('') || '<tr><td colspan="7" class="muted">런칭 요청 이력이 없습니다.</td></tr>';
+      view.innerHTML = section('런칭 이력', harborSubnav()) + card('Harbor 런칭 요청', '<div class="card-body"><table><thead><tr><th>상태</th><th>App</th><th>Image</th><th>Target</th><th>Secret</th><th>Reason</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    async function renderK8sSecurityImageLaunch(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('이미지 런칭 보안', '<div class="empty">불러오는 중...</div>');
+      let launches;
+      try { launches = await api('/admin/harbor/launches').catch(() => ({ launches: [] })); }
+      catch (e) { view.innerHTML = section('이미지 런칭 보안', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
+      const blocked = (launches.launches || []).filter(l => l.status === 'blocked' || l.decision === 'deny').length;
+      const approval = (launches.launches || []).filter(l => l.decision === 'approval_required').length;
+      const rows = (launches.launches || []).map(l => {
+        let policies = [];
+        try { policies = JSON.parse(l.policy_json || '[]'); } catch (e) {}
+        const phtml = policies.map(p => '<div><span class="status ' + securityDecisionClass(p.decision || '') + '" style="font-size:10px">' + escapeHTML(p.decision || '-') + '</span> ' + escapeHTML((p.rule || '-') + ': ' + (p.message || '')) + '</div>').join('');
+        return '<tr><td>' + harborStatusBadge(l.decision) + '</td><td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(l.image || '') + '</td><td>' + escapeHTML(l.secret_name || '-') + '</td><td>' + phtml + '</td></tr>';
+      }).join('') || '<tr><td colspan="4" class="muted">보안 판정 대상 런칭 요청이 없습니다.</td></tr>';
+      view.innerHTML = section('이미지 런칭 보안', k8sSecuritySubnav('') + '<div class="kpis">' + kpi('Launches', fmt((launches.launches || []).length)) + kpi('Blocked', fmt(blocked)) + kpi('Approval Required', fmt(approval)) + '</div>') + card('Harbor Launch Policy Decisions', '<div class="card-body"><table><thead><tr><th>Decision</th><th>Image</th><th>Secret</th><th>Policy Findings</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+    }
+    window.harborCreateRegistry = async () => {
+      const out = document.getElementById('hb-reg-out');
+      try {
+        const res = await api('/admin/harbor/registries', { method: 'POST', body: JSON.stringify({ name: document.getElementById('hb-reg-name').value, url: document.getElementById('hb-reg-url').value, insecure_tls: document.getElementById('hb-reg-insecure').checked }) });
+        out.textContent = '등록됨: ' + ((res.registry || {}).id || '');
+        await renderHarborRegistry(new URLSearchParams());
+      } catch (e) { out.textContent = e.message; }
+    };
+    window.harborTestRegistry = async (id) => {
+      try {
+        const res = await api('/admin/harbor/registries/' + encodeURIComponent(id) + '/test', { method: 'POST' });
+        showToast(res.status === 'connected' ? 'ok' : 'error', 'Harbor 연결 테스트', (res.result || {}).error || res.status);
+        await renderHarborRegistry(new URLSearchParams());
+      } catch (e) { showToast('error', 'Harbor 연결 테스트 실패', e.message); }
+    };
+    window.harborCreateMapping = async () => {
+      const out = document.getElementById('hb-map-out');
+      try {
+        const body = { registry_id: document.getElementById('hb-map-reg').value, project_name: document.getElementById('hb-map-project').value, cluster_id: document.getElementById('hb-map-cluster').value, namespace: document.getElementById('hb-map-ns').value, secret_name: document.getElementById('hb-map-secret').value, owner_team: document.getElementById('hb-map-owner').value };
+        const res = await api('/admin/harbor/mappings', { method: 'POST', body: JSON.stringify(body) });
+        out.textContent = '저장됨: ' + ((res.mapping || {}).id || '');
+        await renderHarborRegistry(new URLSearchParams());
+      } catch (e) { out.textContent = e.message; }
+    };
+    window.harborQueryCatalog = async () => {
+      const out = document.getElementById('hb-cat-out');
+      try {
+        const body = { registry_id: document.getElementById('hb-cat-reg').value, target: document.getElementById('hb-cat-target').value, project_name: document.getElementById('hb-cat-project').value, repository: document.getElementById('hb-cat-repo').value, robot_name: document.getElementById('hb-cat-robot').value, token: document.getElementById('hb-cat-token').value };
+        const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('hb-cat-token').value = '';
+        out.textContent = JSON.stringify(res.result || res, null, 2);
+      } catch (e) {
+        out.textContent = e.message;
+      }
+    };
+    window.harborCreateRobot = async () => {
+      const out = document.getElementById('hb-robot-out');
+      try {
+        const body = { registry_id: document.getElementById('hb-robot-reg').value, project_name: document.getElementById('hb-robot-project').value, name: document.getElementById('hb-robot-name').value, token: document.getElementById('hb-robot-token').value, expires_at: document.getElementById('hb-robot-exp').value };
+        const res = await api('/admin/harbor/robots', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('hb-robot-token').value = '';
+        out.textContent = '등록됨: ' + ((res.robot || {}).id || '');
+        await renderHarborRobots(new URLSearchParams());
+      } catch (e) { out.textContent = e.message; }
+    };
+    window.harborVerifyRobot = async () => {
+      const out = document.getElementById('hb-verify-out');
+      try {
+        const body = { robot_id: document.getElementById('hb-verify-robot').value, token: document.getElementById('hb-verify-token').value };
+        const res = await api('/admin/harbor/robots/verify', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('hb-verify-token').value = '';
+        out.textContent = '검증 상태: ' + res.status + (((res.result || {}).error) ? ' · ' + (res.result || {}).error : '');
+        await renderHarborRobots(new URLSearchParams());
+      } catch (e) { out.textContent = e.message; }
+    };
+    window.harborPreviewPullSecret = async () => {
+      const out = document.getElementById('hb-ps-out');
+      try {
+        const body = { registry_id: document.getElementById('hb-ps-reg').value, project_name: document.getElementById('hb-ps-project').value, namespace: document.getElementById('hb-ps-ns').value, secret_name: document.getElementById('hb-ps-secret').value, robot_name: document.getElementById('hb-ps-robot').value, token: document.getElementById('hb-ps-token').value };
+        const res = await api('/admin/harbor/pull-secret/preview', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('hb-ps-token').value = '';
+        out.value = (res.manifest || '') + (res.dockerconfig_hash ? '\n# dockerconfig_hash: ' + res.dockerconfig_hash : '');
+      } catch (e) { out.value = e.message; }
+    };
+    function harborLaunchBody() {
+      return { registry_id: document.getElementById('hb-launch-reg').value, robot_id: document.getElementById('hb-launch-robot').value, project_name: document.getElementById('hb-launch-project').value, repository: document.getElementById('hb-launch-repo').value, tag: document.getElementById('hb-launch-tag').value, digest: document.getElementById('hb-launch-digest').value, cluster_id: document.getElementById('hb-launch-cluster').value, namespace: document.getElementById('hb-launch-ns').value, app_name: document.getElementById('hb-launch-app').value, replicas: Number(document.getElementById('hb-launch-replicas').value || 1), port: Number(document.getElementById('hb-launch-port').value || 8080), secret_name: document.getElementById('hb-launch-secret').value };
+    }
+    window.harborPreviewLaunch = async (save) => {
+      const out = document.getElementById('hb-launch-out');
+      const st = document.getElementById('hb-launch-status');
+      const pol = document.getElementById('hb-launch-policy');
+      try {
+        const res = await api(save ? '/admin/harbor/launches' : '/admin/harbor/launches/preview', { method: 'POST', body: JSON.stringify(harborLaunchBody()) });
+        const p = save ? (res.preview || {}) : res;
+        out.value = p.manifest || '';
+        st.textContent = (save ? '저장됨: ' + ((res.launch || {}).id || '') + ' · ' : '') + 'decision=' + (p.decision || '-');
+        pol.innerHTML = (p.policy_findings || []).map(x => '<div><span class="status ' + securityDecisionClass(x.decision || '') + '" style="font-size:10px">' + escapeHTML(x.decision || '-') + '</span> ' + escapeHTML((x.rule || '-') + ': ' + (x.message || '')) + '</div>').join('');
+      } catch (e) {
+        st.textContent = e.message;
+      }
+    };
+    window.harborCopyLaunchManifest = () => uxCopyText((document.getElementById('hb-launch-out') || {}).value || '', '런칭 YAML 복사');
+    window.harborCopyHistoryManifest = (id) => uxCopyText((window.harborLaunchHistoryCache || {})[id] || '', '런칭 YAML 복사');
+    window.harborCreateManifestDraft = async (id) => {
+      try {
+        const res = await api('/admin/harbor/launches/' + encodeURIComponent(id) + '/manifest-change', { method: 'POST' });
+        const changes = res.manifest_changes || [];
+        const mcid = res.manifest_change_id || (((res.manifest_change || {}).request || {}).id) || '';
+        showToast('ok', 'Manifest Change 초안 생성', (changes.length ? changes.length + '개 초안 · ' : '') + (mcid || id), 5000);
+        if (res.manifest_change_url) location.hash = res.manifest_change_url;
+        else await renderAppLaunchHistory(new URLSearchParams());
+      } catch (e) {
+        showToast('error', 'Manifest Change 초안 실패', e.message);
+      }
+    };
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
     async function renderK8sSettings(params) {

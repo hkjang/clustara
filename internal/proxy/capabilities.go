@@ -90,6 +90,19 @@ var capabilityRegistry = []Capability{
 		},
 	},
 	{
+		Key: "harbor_app_launch", Name: "Harbor 앱 런칭", Group: "ops",
+		Description: "Harbor Registry, Project, Robot Account, namespace 매핑, imagePullSecret preview, digest 기반 Deployment/Service manifest preview, 런칭 요청 원장, Manifest Change 초안 전환을 제공하는 안전한 애플리케이션 런칭 체계.",
+		APIs: []string{
+			"GET/POST /admin/harbor/registries", "POST /admin/harbor/registries/{id}/test",
+			"GET/POST /admin/harbor/robots", "POST /admin/harbor/robots/verify", "GET/POST /admin/harbor/mappings",
+			"POST /admin/harbor/catalog/query", "POST /admin/harbor/pull-secret/preview", "POST /admin/harbor/launches/preview", "GET/POST /admin/harbor/launches", "POST /admin/harbor/launches/{id}/manifest-change",
+		},
+		UITabs: []string{"harbor", "harbor-robots", "app-launcher", "app-launch-history", "k8s-security-image-launch"},
+		Scopes: []string{"admin:read", "admin:write", "security:read"},
+		Tables: []string{"harbor_registries", "harbor_robot_accounts", "harbor_project_mappings", "harbor_launch_requests"},
+		Docs:   []string{"docs/K8S_OPERATIONS_HUB.md", "docs/ADMIN_GUIDE.md"},
+	},
+	{
 		Key: "skill_studio", Name: "Skill Studio", Group: "assets",
 		Description: "Skill 등록·정책 enforce·보안 스캔·승격 게이트(모델 적합성 포함)·후보 추천.",
 		APIs:        []string{"GET/POST /admin/skills", "POST /admin/skills/promote", "GET /admin/skill-studio/readiness", "GET/POST /admin/skills/fitness"},

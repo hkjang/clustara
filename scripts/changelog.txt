@@ -1,3 +1,12 @@
+v0.9.105:
+- **Harbor Launch Draft Set (v0.9.105)**: Harbor 런칭 요청을 Manifest Change Studio로 넘기는 적용 전환 흐름을 완성했습니다. `POST /admin/harbor/launches/{id}/manifest-change`는 blocked가 아닌 런칭 요청의 multi-document manifest를 분리해 Deployment와 Service를 각각 `operation=create` draft 요청으로 저장하고, 기존 schema/policy/server dry-run, 승인, Server-Side Apply, 사후 검증 원장을 그대로 재사용합니다. 응답에는 기존 호환용 `manifest_change_id`와 함께 `manifest_changes`/`manifest_change_ids` 배열을 반환하며, 런칭 이력 UI의 버튼은 **Manifest 초안**으로 바뀌어 생성된 초안 수를 토스트로 알려줍니다. Secret 참조는 Manifest Change 원장 저장 시 기존 마스킹 정책을 유지하고, idempotency key는 launch id와 리소스 identity 기준으로 부여해 같은 handoff 재시도에서 중복 초안을 만들지 않습니다. Gateway 신규 기능은 계속 제외했습니다.
+
+v0.9.104:
+- **Harbor Robot App Launch (v0.9.104)**: Harbor Robot Account 기반 애플리케이션 런칭 체계를 추가했습니다. `/admin/harbor/registries`로 Harbor registry를 등록하고 `/api/v2.0/systeminfo` 연결 테스트를 수행하며, `/admin/harbor/robots`는 Robot token 원문을 저장·응답하지 않고 hash 증적만 보관합니다. `/admin/harbor/robots/verify`는 일회성 token으로 project pull/list 권한을 검증하고, `/admin/harbor/catalog/query`는 같은 일회성 token 원칙으로 projects/repositories/artifacts(tags·digest 포함)를 조회합니다. Project→cluster/namespace/imagePullSecret 매핑, redacted imagePullSecret preview, digest 기반 Deployment/Service manifest preview, 런칭 요청 원장, 이미지 런칭 보안 판정 화면을 추가했습니다. `latest`는 차단, digest 없는 tag-only 이미지는 승인 필요, 검증되지 않은 Robot은 승인 필요로 판정합니다. Gateway 신규 기능은 계속 제외했습니다.
+
+v0.9.103:
+- **Security User Guide Modal (v0.9.103)**: 보안 메뉴 전반에 사용자 상세 가이드 모달을 추가했습니다. 보안 서브내비에 `사용자 가이드` 버튼을 상시 노출하고, 대시보드·이미지 취약점·SBOM·지속 스캔·Admission·런타임 탐지·CIS Benchmark·예외 승인·정책 센터별로 현재 화면에서 해야 할 일, 운영 흐름, Trivy/SBOM 업로드 curl 예시, Critical/High CVE·digest·latest·만료 예외 판단 기준을 모달에서 바로 확인할 수 있습니다. 서버가 scanner나 kube-bench를 직접 실행하지 않는 운영 원칙도 모달 안에 명확히 표시했습니다. Gateway 신규 기능은 계속 제외했습니다.
+
 v0.9.102:
 - **Security Manifest & SBOM Ops (v0.9.102)**: 보안 Admission 평가와 SBOM 업로드의 실제 사용성을 보강했습니다. Admission manifest 이미지 추출은 단일 YAML만 보던 방식에서 `---`로 분리된 multi-document YAML 전체를 순회하도록 바뀌어 ConfigMap+Deployment, Service+Ingress+Workload 같은 묶음에서도 컨테이너 이미지를 놓치지 않습니다. `/admin/k8s/security/sboms`는 래퍼 JSON뿐 아니라 원본 CycloneDX/SPDX JSON body를 직접 받아 `image`, `image_digest`, `generator`, `artifact_ref`를 query/body metadata로 보정합니다. 이로써 CI에서 `syft ... -o cyclonedx-json | curl --data-binary @-` 형태의 간단한 업로드가 가능해졌고, 기존 스캐너 직접 업로드 흐름과 일관됩니다. Gateway 신규 기능은 계속 제외했습니다.
 

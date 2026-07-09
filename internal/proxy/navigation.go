@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 35
+const menuVersion = 36
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -44,6 +44,10 @@ var menuRegistry = []menuItem{
 	{ID: "ops.service_catalog", Label: "서비스 카탈로그", Path: "#/service-catalog", Tab: "service-catalog", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_stacks", Label: "앱 배포", Path: "#/k8s-stacks", Tab: "k8s-stacks", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경/생성", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.harbor", Label: "Harbor 레지스트리", Path: "#/harbor", Tab: "harbor", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.harbor_robots", Label: "Harbor Robot", Path: "#/harbor-robots", Tab: "harbor-robots", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.app_launcher", Label: "앱 런처", Path: "#/app-launcher", Tab: "app-launcher", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.app_launch_history", Label: "런칭 이력", Path: "#/app-launch-history", Tab: "app-launch-history", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.gitops", Label: "GitOps", Path: "#/gitops", Tab: "gitops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_timeline", Label: "변경 타임라인", Path: "#/k8s-timeline", Tab: "k8s-timeline", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.problems", Label: "Problem Inbox", Path: "#/problems", Tab: "problems", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -68,6 +72,7 @@ var menuRegistry = []menuItem{
 	{ID: "sec.k8s_security_sbom", Label: "SBOM 분석", Path: "#/k8s-security-sbom", Tab: "k8s-security-sbom", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_cluster_scan", Label: "클러스터 지속 스캔", Path: "#/k8s-security-cluster-scan", Tab: "k8s-security-cluster-scan", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_admission", Label: "배포 차단 정책", Path: "#/k8s-security-admission", Tab: "k8s-security-admission", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
+	{ID: "sec.k8s_security_image_launch", Label: "이미지 런칭 보안", Path: "#/k8s-security-image-launch", Tab: "k8s-security-image-launch", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_runtime", Label: "런타임 탐지", Path: "#/k8s-security-runtime", Tab: "k8s-security-runtime", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_benchmark", Label: "CIS Benchmark", Path: "#/k8s-security-benchmark", Tab: "k8s-security-benchmark", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_exceptions", Label: "예외 승인", Path: "#/k8s-security-exceptions", Tab: "k8s-security-exceptions", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
