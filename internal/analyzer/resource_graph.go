@@ -178,7 +178,7 @@ func BuildResourceGraph(items []store.K8sInventoryItem, owners []store.K8sNamesp
 	}
 	return ResourceGraph{
 		Nodes: nodes, Edges: edges, FocusID: focusID, Impact: graphImpact(nodes, edges),
-		Note: "인벤토리의 selector/backend/volume/node/HPA 관계에서 계산한 현재 스냅샷 그래프입니다.",
+		Note: "인벤토리의 selector/backend/volume/node/HPA 관계에서 계산한 현재 스냅샷 그래프입니다. 포커스가 없으면 관계가 있는 리소스를 우선 표시합니다.",
 	}
 }
 
@@ -244,8 +244,17 @@ func materializeGraph(nodeByID map[string]ResourceGraphNode, edgeByID map[string
 			}
 		}
 	} else {
-		for id := range nodeByID {
-			include[id] = true
+		// The default resource graph is a topology view, not a raw inventory dump.
+		// Showing every isolated object makes large RBAC catalogs dominate the map,
+		// so prefer resources that participate in at least one derived relationship.
+		for _, e := range edgeByID {
+			include[e.From] = true
+			include[e.To] = true
+		}
+		if len(include) == 0 {
+			for id := range nodeByID {
+				include[id] = true
+			}
 		}
 	}
 	nodes := make([]ResourceGraphNode, 0, len(include))

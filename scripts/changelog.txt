@@ -1,3 +1,6 @@
+v0.9.107:
+- **Resource Graph Topology UX (v0.9.107)**: 리소스 그래프를 표 중심 화면에서 실제 토폴로지 맵 중심 UX로 확장했습니다. `#/k8s-graph`와 Incident Workspace의 영향도 그래프에 SVG 기반 토폴로지 캔버스, 관계별 색상 범례, 포커스 강조, 빈 그래프·관계 없음·포커스 누락 안내를 추가했습니다. YAML 변경 링크가 보이는 주요 운영 동선에는 `토폴로지` 링크를 함께 노출하고, 클릭 시 페이지 이동 대신 필터가 포함된 넓은 모달에서 그래프를 열어 현재 작업 맥락을 유지합니다. 모달의 기본 반경은 2-hop이며, 모달 안에서 노드를 클릭하면 같은 모달에서 해당 리소스 기준 2-hop 그래프를 다시 조회합니다. 포커스 없는 기본 그래프는 관계가 있는 리소스를 우선 표시해 고립된 ClusterRole/ClusterRoleBinding 같은 RBAC 노이즈가 맵을 지배하지 않도록 보정했습니다.
+
 v0.9.106:
 - **Harbor Management UX (v0.9.106)**: Harbor 연동 화면을 등록 중심에서 운영 관리 중심으로 확장했습니다. Harbor Registry, Robot Account, Project→Namespace Mapping에 개별 조회·수정·삭제 API와 UI 버튼을 추가하고, Registry 삭제는 연결된 robot/mapping/launch history가 있으면 기본 차단하며 `force=true`에서 registry/robot/mapping 메타데이터만 정리하도록 안전장치를 뒀습니다. Robot 수정 시 token을 입력하면 hash 증적을 회전하고 검증 상태를 재등록 상태로 되돌리며, token 원문과 hash는 계속 응답하지 않습니다. 앱 런처와 매핑/Robot 화면에는 Harbor catalog query를 이용한 project, repository, tag/digest select picker를 추가해 운영자가 입력값을 손으로 맞추는 부담을 줄였고, private project는 기존처럼 robot token을 일회성으로만 사용합니다. Gateway 신규 기능은 계속 제외했습니다.
 

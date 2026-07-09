@@ -54,6 +54,28 @@ func TestBuildResourceGraphLinksIngressServicePodPVCAndNode(t *testing.T) {
 	}
 }
 
+func TestBuildResourceGraphDefaultViewExcludesIsolatedRBACNoise(t *testing.T) {
+	items := []store.K8sInventoryItem{
+		{ClusterID: "c1", Kind: "Service", Namespace: "default", Name: "web", Spec: map[string]any{"selector": map[string]any{"app": "web"}}},
+		{ClusterID: "c1", Kind: "Pod", Namespace: "default", Name: "web-123", Labels: map[string]string{"app": "web"}},
+		{ClusterID: "c1", Kind: "ClusterRole", Name: "system:discovery"},
+		{ClusterID: "c1", Kind: "ClusterRoleBinding", Name: "system:discovery"},
+	}
+
+	g := BuildResourceGraph(items, nil, ResourceGraphFocus{ClusterID: "c1"})
+	if len(g.Nodes) != 2 {
+		t.Fatalf("default topology should include only connected nodes, got %+v", g.Nodes)
+	}
+	for _, n := range g.Nodes {
+		if n.Kind == "ClusterRole" || n.Kind == "ClusterRoleBinding" {
+			t.Fatalf("default topology should not be dominated by isolated RBAC nodes: %+v", g.Nodes)
+		}
+	}
+	if !hasGraphRelation(g.Edges, "selects") {
+		t.Fatalf("default topology should keep service selector edge: %+v", g.Edges)
+	}
+}
+
 func hasGraphRelation(edges []ResourceGraphEdge, relation string) bool {
 	for _, e := range edges {
 		if e.Relation == relation {

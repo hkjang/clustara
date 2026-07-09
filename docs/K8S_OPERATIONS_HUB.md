@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.106** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.107** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.106)
+## 기능 상태 (v0.9.107)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -20,6 +20,7 @@
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
+| Resource Graph Topology UX — 리소스 관계를 SVG 토폴로지 맵으로 표시, YAML 링크 옆 토폴로지 모달 진입, 기본 2-hop 포커스, 고립 RBAC 노이즈 억제 | ✅ (v0.9.107) |
 | 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.98) |
 | Harbor Management UX — Harbor registry·Robot Account·Project mapping 개별 조회/수정/삭제, registry force delete 안전장치, Harbor catalog 기반 project/repository/tag·digest select picker | ✅ (v0.9.106) |
 | Harbor Launch Draft Set — Harbor registry 등록·연결 테스트, Robot Account token hash 원장·pull 검증, project→namespace imagePullSecret 매핑, redacted pull secret preview, digest 기반 Deployment/Service 런칭 요청 원장, Manifest Change Studio Deployment/Service 초안 전환, 이미지 런칭 보안 판정 제공 | ✅ (v0.9.105) |

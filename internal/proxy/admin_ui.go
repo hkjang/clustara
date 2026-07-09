@@ -317,6 +317,35 @@ const adminHTML = `<!doctype html>
     .graph-node .name { margin-top: 4px; font-weight: 800; overflow-wrap: anywhere; }
     .graph-node .meta { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
     .graph-edge-label { font-weight: 800; color: var(--accent); white-space: nowrap; }
+    .resource-graph-canvas {
+      border: 1px solid var(--line); border-radius: 8px; background: var(--panel-alt);
+      overflow: auto; min-height: 360px; position: relative;
+    }
+    .resource-graph-toolbar {
+      display: flex; gap: 8px; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; margin-bottom: 10px;
+    }
+    .resource-graph-legend { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--muted); }
+    .resource-graph-legend .legend-item { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+    .resource-graph-legend .legend-line { width: 18px; height: 3px; border-radius: 999px; background: #64748b; display: inline-block; }
+    .resource-graph-svg { display: block; min-width: 100%; }
+    .resource-graph-edge { fill: none; stroke: #64748b; stroke-width: 2; opacity: 0.72; }
+    .resource-graph-edge.focus { stroke-width: 3; opacity: 1; }
+    .resource-graph-edge.routes_to, .resource-graph-legend .routes_to { stroke: #2563eb; background: #2563eb; }
+    .resource-graph-edge.selects, .resource-graph-legend .selects { stroke: #16a34a; background: #16a34a; }
+    .resource-graph-edge.owns, .resource-graph-legend .owns { stroke: #7c3aed; background: #7c3aed; }
+    .resource-graph-edge.scheduled_on, .resource-graph-legend .scheduled_on { stroke: #0f766e; background: #0f766e; }
+    .resource-graph-edge.mounts, .resource-graph-legend .mounts { stroke: #c2410c; background: #c2410c; stroke-dasharray: 5 4; }
+    .resource-graph-edge.scales, .resource-graph-legend .scales { stroke: #ca8a04; background: #ca8a04; stroke-dasharray: 8 4; }
+    .rg-node-rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.4; }
+    .rg-node-rect.focus { stroke: var(--accent); stroke-width: 3; fill: rgba(29,78,216,0.08); }
+    .rg-node-kind { fill: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+    .rg-node-name { fill: var(--ink); font-size: 13px; font-weight: 800; }
+    .rg-node-meta { fill: var(--muted); font-size: 11px; }
+    .rg-layer-label { fill: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; }
+    .rg-risk { fill: #94a3b8; }
+    .rg-risk.warn { fill: var(--warn); }
+    .rg-risk.error { fill: var(--bad); }
 
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(15,23,42,0.55);
@@ -1664,7 +1693,6 @@ const adminHTML = `<!doctype html>
       qs.set('autoload', '1');
       const yamlHref = '#/k8s-manifest-changes?' + qs.toString();
       const timelineHref = '#/k8s-timeline?' + qs.toString();
-      const graphHref = '#/k8s-graph?' + qs.toString();
       const primaryHref = item.kind === 'Pod'
         ? '#/k8s-pods?' + new URLSearchParams({ cluster_id: item.cluster_id || '', namespace: item.namespace || '', pod: item.name || '' }).toString()
         : (item.catalog_id ? '#/service-catalog?entity_id=' + encodeURIComponent(item.catalog_id) : yamlHref);
@@ -1677,7 +1705,7 @@ const adminHTML = `<!doctype html>
       if (item.catalog_id) add('카탈로그', '#/service-catalog?entity_id=' + encodeURIComponent(item.catalog_id), 'service-catalog');
       add('YAML 변경', yamlHref, 'k8s-manifest-changes');
       add('타임라인', timelineHref, 'k8s-timeline');
-      add('그래프', graphHref, 'k8s-graph');
+      if (uxAllowed('k8s-graph')) links.push(k8sGraphModalLink(item.cluster_id, item.kind, item.namespace, item.name, '그래프', '2'));
       links.push('<a href="#" onclick="' + pinAction + '">' + (uxPinnedResource(item) ? '고정 해제' : '고정') + '</a>');
       return '<div class="quick-access-resource-card">' +
         '<a class="quick-access-resource-main" href="' + escapeAttr(primaryHref) + '" onclick="' + remember + '">' +
@@ -7230,7 +7258,6 @@ const adminHTML = `<!doctype html>
         const links = [];
         if (rt) {
           links.push(k8sYamlChangeLink(rt.cluster_id, rt.kind, rt.namespace, rt.name, 'YAML'));
-          links.push('<a href="#/k8s-graph?cluster_id=' + encodeURIComponent(rt.cluster_id) + '&namespace=' + encodeURIComponent(rt.namespace) + '&kind=' + encodeURIComponent(rt.kind) + '&name=' + encodeURIComponent(rt.name) + '">Graph</a>');
           links.push('<a href="#/problems?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">Problems</a>');
           links.push('<a href="#/finops?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">FinOps</a>');
           links.push('<a href="#/gitops?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">GitOps</a>');
@@ -7502,7 +7529,6 @@ const adminHTML = `<!doctype html>
       const runtimeLinks = detail.runtime_valid
         ? '<div class="toolbar" style="margin-top:10px">' +
             k8sYamlChangeLink(rt.cluster_id, rt.kind, rt.namespace, rt.name, 'YAML 변경') +
-            '<a class="button secondary" href="#/k8s-graph?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '&namespace=' + encodeURIComponent(rt.namespace || '') + '&kind=' + encodeURIComponent(rt.kind || '') + '&name=' + encodeURIComponent(rt.name || '') + '">Graph</a>' +
             '<a class="button secondary" href="#/problems?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">Problem Inbox</a>' +
             '<a class="button secondary" href="#/finops?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">FinOps</a>' +
             '<a class="button secondary" href="#/k8s-security?cluster_id=' + encodeURIComponent(rt.cluster_id || '') + '">Security</a>' +
@@ -8287,13 +8313,34 @@ const adminHTML = `<!doctype html>
     }
     function k8sYamlChangeLink(clusterId, kind, namespace, name, label) {
       if (!kind || !name) return '';
-      return '<a href="' + escapeAttr(k8sYamlChangeHref(clusterId, kind, namespace, name, true)) + '">' + escapeHTML(label || 'YAML 변경') + '</a>';
+      return '<a href="' + escapeAttr(k8sYamlChangeHref(clusterId, kind, namespace, name, true)) + '">' + escapeHTML(label || 'YAML 변경') + '</a>' +
+        ' · ' + k8sGraphModalLink(clusterId, kind, namespace, name, '토폴로지', '2');
     }
     function k8sYamlChangeLinkFromTarget(clusterId, target, label) {
       const parts = String(target || '').split('/');
       if (parts.length < 3) return '';
       const ns = parts[0] === '-' ? '' : parts[0];
       return k8sYamlChangeLink(clusterId, parts[1], ns, parts.slice(2).join('/'), label || 'YAML');
+    }
+    function k8sGraphHref(clusterId, kind, namespace, name, radius) {
+      const qs = new URLSearchParams();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      if (kind) qs.set('kind', kind);
+      if (namespace) qs.set('namespace', namespace);
+      if (name) qs.set('name', name);
+      if (radius) qs.set('radius', radius);
+      return '#/k8s-graph' + (qs.toString() ? '?' + qs.toString() : '');
+    }
+    function k8sGraphModalLink(clusterId, kind, namespace, name, label, radius) {
+      if (!kind || !name) return '';
+      const href = k8sGraphHref(clusterId, kind, namespace, name, radius || '2');
+      const onclick = "openK8sGraphModal('" + escapeAttr(clusterId || '') + "','" + escapeAttr(kind || '') + "','" + escapeAttr(namespace || '') + "','" + escapeAttr(name || '') + "','" + escapeAttr(radius || '2') + "');return false";
+      return '<a href="' + escapeAttr(href) + '" onclick="' + onclick + '">' + escapeHTML(label || '그래프') + '</a>';
+    }
+    function k8sGraphModalButton(clusterId, kind, namespace, name, label, radius) {
+      if (!kind || !name) return '';
+      const onclick = "openK8sGraphModal('" + escapeAttr(clusterId || '') + "','" + escapeAttr(kind || '') + "','" + escapeAttr(namespace || '') + "','" + escapeAttr(name || '') + "','" + escapeAttr(radius || '2') + "');return false";
+      return '<button type="button" class="secondary" onclick="' + onclick + '">' + escapeHTML(label || '영향도 그래프') + '</button>';
     }
 
     const K8S_RESOURCE_CATEGORIES = {
@@ -8382,12 +8429,10 @@ const adminHTML = `<!doctype html>
       return '#/k8s-timeline?' + qs.toString();
     }
     function k8sResourceGraphHref(it) {
-      const qs = new URLSearchParams();
-      if (it.cluster_id) qs.set('cluster_id', it.cluster_id);
-      if (it.kind) qs.set('kind', it.kind);
-      if (it.namespace) qs.set('namespace', it.namespace);
-      if (it.name) qs.set('name', it.name);
-      return '#/k8s-graph?' + qs.toString();
+      return k8sGraphHref(it.cluster_id, it.kind, it.namespace, it.name, '2');
+    }
+    function k8sResourceGraphLink(it, label) {
+      return k8sGraphModalLink(it.cluster_id, it.kind, it.namespace, it.name, label || '그래프', '2');
     }
     function k8sResourceStatusBadge(it) {
       const risk = String(it.risk_level || '').toLowerCase();
@@ -8567,7 +8612,6 @@ const adminHTML = `<!doctype html>
         const actions = [
           k8sYamlChangeLink(it.cluster_id, it.kind, it.namespace, it.name, 'YAML'),
           '<a href="' + escapeAttr(k8sResourceTimelineHref(it)) + '">이력</a>',
-          '<a href="' + escapeAttr(k8sResourceGraphHref(it)) + '">그래프</a>',
           kindKey === 'pod' ? k8sPodLink(it.cluster_id, it.namespace, it.name, 'Pod 상세') : '',
           ['service', 'ingress', 'networkpolicy', 'endpoints', 'endpointslice'].includes(kindKey) ? '<a href="#/k8s-conn?cluster_id=' + encodeURIComponent(it.cluster_id || '') + '">연결성</a>' : ''
         ].filter(Boolean).join(' · ');
@@ -9865,7 +9909,6 @@ const adminHTML = `<!doctype html>
         const yaml = k8sYamlChangeLink(n.cluster_id, 'Node', '', n.name, 'YAML');
         const podHref = '#/k8s-pods?' + new URLSearchParams({ cluster_id: n.cluster_id || '', node: n.name || '' }).toString();
         const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '' }).toString();
-        const graphHref = '#/k8s-graph?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '', radius: '2' }).toString();
         const readyCond = k8sNodeCondition(n, 'Ready');
         return '<tr><td>' + k8sNodeStatusBadge(n) + '<div class="muted" style="font-size:10px">' + ago(n.observed_at || n.updated_at) + '</div></td>' +
           '<td><strong>' + escapeHTML(n.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(n.cluster_id || '-') + ' · ' + escapeHTML(k8sNodeRole(n)) + '</div></td>' +
@@ -9873,7 +9916,7 @@ const adminHTML = `<!doctype html>
           '<td>' + fmt(nodePods.length) + '<div class="muted" style="font-size:10px">req CPU ' + fmt(pack.requested_cpu_m || 0) + 'm</div></td>' +
           '<td><span class="status ' + (cpuPct >= 90 ? 'error' : (cpuPct >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(cpuPct) + '%</span><div class="muted" style="font-size:10px">' + escapeHTML(k8sNodeAlloc(n, 'cpu')) + ' CPU · ' + escapeHTML(k8sNodeAlloc(n, 'memory')) + ' mem</div></td>' +
           '<td class="muted" style="font-size:11px">' + escapeHTML(readyCond.reason || '-') + '<div>' + escapeHTML(readyCond.message || '') + '</div></td>' +
-          '<td><a href="' + escapeAttr(podHref) + '">Pod</a> · <a href="' + escapeAttr(tlHref) + '">타임라인</a> · <a href="' + escapeAttr(graphHref) + '">그래프</a> · ' + yaml +
+          '<td><a href="' + escapeAttr(podHref) + '">Pod</a> · <a href="' + escapeAttr(tlHref) + '">타임라인</a> · ' + yaml +
           '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' +
           '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeDrainPreview(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\')">Drain 분석</button>' +
           (k8sNodeUnschedulable(n)
@@ -9980,7 +10023,7 @@ const adminHTML = `<!doctype html>
             (watch ? '<div style="font-size:11px;color:var(--muted);margin-bottom:2px">참고 신호</div><ul style="margin:0;padding-left:16px">' + watch + '</ul>' : '') +
             '</div>');
         })() +
-        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a><a class="secondary" href="#/k8s-graph?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">영향도 그래프</a><a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
+        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a>' + k8sGraphModalButton(clusterId || '', 'Pod', ns, pod, '영향도 그래프', '2') + '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
@@ -10551,6 +10594,10 @@ const adminHTML = `<!doctype html>
       if (!n) return '-';
       return (n.namespace ? n.namespace + '/' : '') + (n.kind || '-') + '/' + (n.name || '-');
     }
+    function k8sGraphKindOptions(selected) {
+      const kinds = ['', 'Ingress', 'Service', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Pod', 'PersistentVolumeClaim', 'PersistentVolume', 'ConfigMap', 'Secret', 'ServiceAccount', 'NetworkPolicy', 'Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding', 'Node', 'HorizontalPodAutoscaler'];
+      return kinds.map(k => '<option value="' + escapeAttr(k) + '"' + (k === selected ? ' selected' : '') + '>' + escapeHTML(k || '전체 종류') + '</option>').join('');
+    }
     function k8sGraphImpactKpis(g) {
       const im = (g && g.impact) || {};
       const nodes = (g && g.nodes) || [];
@@ -10606,6 +10653,229 @@ const adminHTML = `<!doctype html>
       '</tbody></table>' +
       (((g && g.edges) || []).length > edges.length ? '<p class="muted" style="font-size:12px;margin:8px 0 0">상위 ' + edges.length + '개 관계만 표시했습니다.</p>' : '');
     }
+    function k8sGraphRelationClass(rel) {
+      return String(rel || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '_') || 'related';
+    }
+    function k8sGraphKindLayer(kind) {
+      const k = String(kind || '');
+      if (k === 'Ingress' || k === 'Gateway' || k === 'HTTPRoute') return 0;
+      if (k === 'Service') return 1;
+      if (k === 'HorizontalPodAutoscaler') return 2;
+      if (['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob'].includes(k)) return 3;
+      if (k === 'Pod') return 4;
+      if (['PersistentVolumeClaim', 'PersistentVolume', 'ConfigMap', 'Secret', 'ServiceAccount'].includes(k)) return 5;
+      if (['Node', 'Namespace', 'NetworkPolicy', 'Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding'].includes(k)) return 6;
+      return 7;
+    }
+    function k8sGraphLayerName(layer) {
+      return ({
+        0: 'Ingress',
+        1: 'Service',
+        2: 'Autoscale',
+        3: 'Workload',
+        4: 'Pod',
+        5: 'Config & Storage',
+        6: 'Infra & Auth',
+        7: 'Other'
+      })[layer] || 'Other';
+    }
+    function k8sGraphShortText(text, max) {
+      text = String(text || '');
+      max = max || 24;
+      return text.length > max ? text.slice(0, Math.max(0, max - 1)) + '…' : text;
+    }
+    function k8sGraphRiskRank(risk) {
+      return ({ critical: 4, high: 3, medium: 2, low: 1 })[String(risk || '').toLowerCase()] || 0;
+    }
+    function k8sGraphNodeFocusHref(n, radius) {
+      const qs = new URLSearchParams();
+      if (n.cluster_id) qs.set('cluster_id', n.cluster_id);
+      if (n.kind) qs.set('kind', n.kind);
+      if (n.namespace) qs.set('namespace', n.namespace);
+      if (n.name) qs.set('name', n.name);
+      if (radius) qs.set('radius', radius);
+      return '#/k8s-graph?' + qs.toString();
+    }
+    function k8sGraphLegendHTML(edges) {
+      const seen = {};
+      (edges || []).forEach(e => { if (e.relation) seen[e.relation] = true; });
+      const relations = Object.keys(seen).sort();
+      if (!relations.length) return '<span class="muted">관계 없음</span>';
+      return relations.map(rel => '<span class="legend-item"><span class="legend-line ' + k8sGraphRelationClass(rel) + '"></span>' + escapeHTML(k8sGraphRelationLabel(rel)) + '</span>').join('');
+    }
+    function k8sGraphStatusHTML(g) {
+      const nodes = (g && g.nodes) || [];
+      const edges = (g && g.edges) || [];
+      const focusMissing = !!((g && g.focus_id) && !nodes.some(n => n.id === g.focus_id));
+      if (!nodes.length) {
+        return '<div class="banner warn" style="margin-bottom:10px">그래프에 표시할 리소스가 없습니다. 클러스터 수집이 완료됐는지 확인하거나 필터를 전체 클러스터·전체 종류로 넓혀보세요.</div>';
+      }
+      if (focusMissing) {
+        return '<div class="banner warn" style="margin-bottom:10px">선택한 리소스를 현재 인벤토리에서 찾지 못했습니다. 이름, 네임스페이스, 클러스터를 확인하거나 최근 수집을 다시 실행해보세요.</div>';
+      }
+      if (!edges.length) {
+        return '<div class="banner warn" style="margin-bottom:10px">노드는 수집됐지만 관계가 없습니다. Service selector, Ingress backend, Pod nodeName/PVC, HPA target 같은 필드가 수집되어야 선이 연결됩니다.</div>';
+      }
+      return '';
+    }
+    function k8sGraphNodeAnchorAttrs(n, radius, modalMode) {
+      const href = k8sGraphNodeFocusHref(n, radius || '2');
+      if (!modalMode) return 'href="' + escapeAttr(href) + '"';
+      const onclick = "openK8sGraphModal('" + escapeAttr(n.cluster_id || '') + "','" + escapeAttr(n.kind || '') + "','" + escapeAttr(n.namespace || '') + "','" + escapeAttr(n.name || '') + "','" + escapeAttr(radius || '2') + "');return false";
+      return 'href="' + escapeAttr(href) + '" onclick="' + onclick + '"';
+    }
+    function k8sGraphVisualHTML(g, radius, modalMode) {
+      const allNodes = (g && g.nodes) || [];
+      const allEdges = (g && g.edges) || [];
+      if (!allNodes.length) {
+        return '<div class="empty">시각화할 노드가 없습니다.</div>';
+      }
+      const nodeLimit = 120;
+      const degree = {};
+      allEdges.forEach(e => {
+        degree[e.from] = (degree[e.from] || 0) + 1;
+        degree[e.to] = (degree[e.to] || 0) + 1;
+      });
+      const visibleNodes = allNodes.slice().sort((a, b) => {
+        if (!!b.focus !== !!a.focus) return a.focus ? -1 : 1;
+        const d = (degree[b.id] || 0) - (degree[a.id] || 0);
+        if (d) return d;
+        const risk = k8sGraphRiskRank(b.risk_level) - k8sGraphRiskRank(a.risk_level);
+        if (risk) return risk;
+        const layer = k8sGraphKindLayer(a.kind) - k8sGraphKindLayer(b.kind);
+        if (layer) return layer;
+        return k8sGraphNodeTitle(a).localeCompare(k8sGraphNodeTitle(b));
+      }).slice(0, nodeLimit);
+      const visible = {};
+      visibleNodes.forEach(n => { visible[n.id] = true; });
+      const groups = {};
+      visibleNodes.forEach(n => {
+        const layer = k8sGraphKindLayer(n.kind);
+        (groups[layer] || (groups[layer] = [])).push(n);
+      });
+      const layers = Object.keys(groups).map(Number).sort((a, b) => a - b);
+      layers.forEach(layer => groups[layer].sort((a, b) => {
+        if (!!b.focus !== !!a.focus) return a.focus ? -1 : 1;
+        const risk = k8sGraphRiskRank(b.risk_level) - k8sGraphRiskRank(a.risk_level);
+        if (risk) return risk;
+        return k8sGraphNodeTitle(a).localeCompare(k8sGraphNodeTitle(b));
+      }));
+      const nodeW = 178, nodeH = 72, colGap = 230, rowGap = 104, padX = 34, padY = 56;
+      let maxRows = 1;
+      const pos = {};
+      layers.forEach((layer, layerIdx) => {
+        const arr = groups[layer] || [];
+        maxRows = Math.max(maxRows, arr.length);
+        arr.forEach((n, rowIdx) => {
+          pos[n.id] = { x: padX + layerIdx * colGap, y: padY + rowIdx * rowGap, layer: layer };
+        });
+      });
+      const width = Math.max(720, padX * 2 + Math.max(0, layers.length - 1) * colGap + nodeW);
+      const height = Math.max(360, padY + maxRows * rowGap + 28);
+      const edgeSvg = allEdges.filter(e => visible[e.from] && visible[e.to]).map(e => {
+        const a = pos[e.from], b = pos[e.to];
+        if (!a || !b) return '';
+        const forward = b.x >= a.x;
+        const x1 = forward ? a.x + nodeW : a.x;
+        const y1 = a.y + nodeH / 2;
+        const x2 = forward ? b.x : b.x + nodeW;
+        const y2 = b.y + nodeH / 2;
+        const dx = Math.max(64, Math.abs(x2 - x1) * 0.45);
+        const c1 = forward ? x1 + dx : x1 - dx;
+        const c2 = forward ? x2 - dx : x2 + dx;
+        const cls = k8sGraphRelationClass(e.relation);
+        const focus = (g && g.focus_id && (e.from === g.focus_id || e.to === g.focus_id)) ? ' focus' : '';
+        return '<path class="resource-graph-edge ' + cls + focus + '" marker-end="url(#rg-arrow)" d="M ' + x1 + ' ' + y1 + ' C ' + c1 + ' ' + y1 + ', ' + c2 + ' ' + y2 + ', ' + x2 + ' ' + y2 + '"><title>' + escapeHTML(k8sGraphNodeTitle((allNodes.find(n => n.id === e.from) || {}))) + ' ' + k8sGraphRelationLabel(e.relation) + ' ' + escapeHTML(k8sGraphNodeTitle((allNodes.find(n => n.id === e.to) || {}))) + ' · ' + escapeHTML(e.reason || '') + '</title></path>';
+      }).join('');
+      const headerSvg = layers.map((layer, idx) => '<text class="rg-layer-label" x="' + (padX + idx * colGap) + '" y="24">' + escapeHTML(k8sGraphLayerName(layer)) + '</text>').join('');
+      const nodeSvg = visibleNodes.map(n => {
+        const p = pos[n.id];
+        const riskClass = k8sSeverityClass(n.risk_level || '');
+        const meta = [n.namespace || '-', n.status || '', n.team || n.service || ''].filter(Boolean).join(' · ');
+        return '<a ' + k8sGraphNodeAnchorAttrs(n, radius || '2', !!modalMode) + '>' +
+          '<g class="resource-graph-svg-node">' +
+            '<rect class="rg-node-rect' + (n.focus ? ' focus' : '') + '" x="' + p.x + '" y="' + p.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8"></rect>' +
+            '<circle class="rg-risk ' + riskClass + '" cx="' + (p.x + 14) + '" cy="' + (p.y + 16) + '" r="5"></circle>' +
+            '<text class="rg-node-kind" x="' + (p.x + 26) + '" y="' + (p.y + 20) + '">' + escapeHTML(n.kind || '-') + (n.focus ? ' · FOCUS' : '') + '</text>' +
+            '<text class="rg-node-name" x="' + (p.x + 14) + '" y="' + (p.y + 42) + '">' + escapeHTML(k8sGraphShortText(n.name || '-', 23)) + '</text>' +
+            '<text class="rg-node-meta" x="' + (p.x + 14) + '" y="' + (p.y + 61) + '">' + escapeHTML(k8sGraphShortText(meta, 28)) + '</text>' +
+            '<title>' + escapeHTML(k8sGraphNodeTitle(n)) + '</title>' +
+          '</g></a>';
+      }).join('');
+      const omitted = allNodes.length > visibleNodes.length ? '<span class="pill">노드 ' + fmt(allNodes.length - visibleNodes.length) + '개는 표에서만 표시</span>' : '';
+      return '<div class="resource-graph-toolbar">' +
+          '<div class="resource-graph-legend">' + k8sGraphLegendHTML(allEdges) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap"><span class="pill">클릭하면 해당 리소스로 포커스 이동</span>' + omitted + '</div>' +
+        '</div>' +
+        '<div class="resource-graph-canvas">' +
+          '<svg class="resource-graph-svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Kubernetes resource topology graph">' +
+            '<defs><marker id="rg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"></path></marker></defs>' +
+            headerSvg + edgeSvg + nodeSvg +
+          '</svg>' +
+        '</div>';
+    }
+    function k8sGraphModalFilterHTML(clusters, clusterId, kind, namespace, name, radius, graph) {
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters || []).map(cl =>
+        '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name || cl.id) + '</option>').join('');
+      const pageHref = k8sGraphHref(clusterId, kind, namespace, name, radius || '2');
+      return '<div class="card-body" style="padding:0 0 12px">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end">' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">클러스터<select id="k8sgraph-modal-cluster">' + clusterOpts + '</select></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">종류<select id="k8sgraph-modal-kind">' + k8sGraphKindOptions(kind || '') + '</select></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">네임스페이스<input id="k8sgraph-modal-namespace" value="' + escapeAttr(namespace || '') + '" placeholder="default"></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">이름<input id="k8sgraph-modal-name" value="' + escapeAttr(name || '') + '" placeholder="nginx"></label>' +
+          '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">반경<select id="k8sgraph-modal-radius"><option value="1"' + (radius === '1' ? ' selected' : '') + '>1-hop</option><option value="2"' + (radius === '2' ? ' selected' : '') + '>2-hop</option><option value="3"' + (radius === '3' ? ' selected' : '') + '>3-hop</option></select></label>' +
+          '<button type="button" onclick="k8sGraphModalGo()">조회</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">' +
+          '<a class="button secondary" href="' + escapeAttr(pageHref) + '" onclick="closeModal()">전체 화면으로 열기</a>' +
+          (kind && name ? '<a class="button secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId, kind, namespace, name, true)) + '">YAML 변경</a>' : '<span class="muted" style="font-size:12px">종류와 이름을 지정하면 YAML 변경 링크가 표시됩니다.</span>') +
+        '</div>' +
+        '<p class="muted" style="font-size:12px;margin:10px 0 0">' + escapeHTML((graph && graph.note) || '인벤토리 관계에서 현재 영향 범위를 계산합니다.') + '</p>' +
+      '</div>';
+    }
+    async function renderK8sGraphModal(clusterId, kind, namespace, name, radius) {
+      radius = radius || '2';
+      const body = document.getElementById('modal-body');
+      if (!body) return;
+      body.innerHTML = '<div class="empty">토폴로지 불러오는 중...</div>';
+      const qs = new URLSearchParams();
+      if (clusterId) qs.set('cluster_id', clusterId);
+      if (kind) qs.set('kind', kind);
+      if (namespace) qs.set('namespace', namespace);
+      if (name) qs.set('name', name);
+      if (radius) qs.set('radius', radius);
+      try {
+        const [clusters, data] = await Promise.all([
+          api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+          api('/admin/k8s/resource-graph' + (qs.toString() ? '?' + qs.toString() : '')),
+        ]);
+        const graph = data.graph || {};
+        body.innerHTML =
+          k8sGraphModalFilterHTML(clusters.clusters || [], clusterId, kind, namespace, name, radius, graph) +
+          k8sGraphImpactKpis(graph) +
+          '<div style="margin-top:12px">' + k8sGraphStatusHTML(graph) + k8sGraphVisualHTML(graph, radius, true) + '</div>' +
+          '<div class="grid2">' +
+            card('영향도 요약', '<div class="card-body">' + k8sGraphImpactHTML(graph) + '</div>') +
+            card('관계', '<div class="card-body">' + k8sGraphEdgesHTML(graph, 40) + '</div>') +
+          '</div>';
+      } catch (e) {
+        body.innerHTML = '<div class="error-line">' + escapeHTML(e.message) + '</div>';
+      }
+    }
+    function openK8sGraphModal(clusterId, kind, namespace, name, radius) {
+      openModal('리소스 토폴로지 맵', '<div class="empty">토폴로지 불러오는 중...</div>', null, { wide: true });
+      renderK8sGraphModal(clusterId || '', kind || '', namespace || '', name || '', radius || '2');
+    }
+    window.openK8sGraphModal = openK8sGraphModal;
+    window.k8sGraphModalGo = () => {
+      const clusterId = (document.getElementById('k8sgraph-modal-cluster') || {}).value || '';
+      const kind = (document.getElementById('k8sgraph-modal-kind') || {}).value || '';
+      const namespace = ((document.getElementById('k8sgraph-modal-namespace') || {}).value || '').trim();
+      const name = ((document.getElementById('k8sgraph-modal-name') || {}).value || '').trim();
+      const radius = (document.getElementById('k8sgraph-modal-radius') || {}).value || '2';
+      renderK8sGraphModal(clusterId, kind, namespace, name, radius);
+    };
 
     async function renderK8sIncidents(params) {
       const id = params && params.get('id');
@@ -10653,7 +10923,6 @@ const adminHTML = `<!doctype html>
       const i = d.incident || {};
       const sevClass = (s) => s === 'critical' || s === 'high' ? 'error' : (s === 'medium' ? 'warn' : '');
       const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '' }).toString();
-      const graphHref = '#/k8s-graph?' + new URLSearchParams({ cluster_id: i.cluster_id || '', namespace: i.namespace || '', name: i.name || '', kind: i.kind || '', radius: '2' }).toString();
       const yamlBtn = (i.kind && i.name) ? '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(i.cluster_id || '', i.kind || '', i.namespace || '', i.name || '', true)) + '">YAML 변경</a> ' : '';
       const evid = (i.evidence || []).map(e => '<li style="font-size:12px">' + escapeHTML(e) + '</li>').join('') || '<li class="muted">근거 없음</li>';
       const actRows = (d.actions || []).length ? (d.actions || []).map(a =>
@@ -10685,7 +10954,7 @@ const adminHTML = `<!doctype html>
           '<div class="muted" style="font-size:12px;margin-top:6px">대상: ' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + ' · 상태: ' + escapeHTML(i.status) + ' · 발생: ' + ago(i.opened_at) + '</div>' +
           '<div style="margin-top:8px">' +
           '<a href="' + escapeAttr(tlHref) + '"><button type="button" class="secondary">변경 타임라인·Diff</button></a> ' +
-          '<a href="' + escapeAttr(graphHref) + '"><button type="button" class="secondary">영향도 그래프</button></a> ' +
+          k8sGraphModalButton(i.cluster_id || '', i.kind || '', i.namespace || '', i.name || '', '영향도 그래프', '2') + ' ' +
           yamlBtn +
           '<button type="button" class="secondary" onclick="k8sIncidentAI(\'' + escapeAttr(i.cluster_id) + '\',\'' + escapeAttr(i.namespace) + '\',\'' + escapeAttr(i.kind) + '\',\'' + escapeAttr(i.name) + '\')">AI 설명</button> ' +
           (i.status === 'open' ? '<button type="button" onclick="k8sIncidentResolve(\'' + escapeAttr(i.id) + '\')">해결 처리</button>' : '') +
@@ -10705,6 +10974,7 @@ const adminHTML = `<!doctype html>
             '<ul style="margin:0;padding-left:16px">' + facts + '</ul></div>');
         })() +
         card('영향도 그래프', '<div class="card-body">' + k8sGraphImpactKpis(graph) +
+          '<div style="margin-top:12px">' + k8sGraphStatusHTML(graph) + k8sGraphVisualHTML(graph, '2') + '</div>' +
           '<div style="margin-top:12px">' + k8sGraphImpactHTML(graph) + '</div>' +
           '<h3 style="font-size:12px;margin:14px 0 8px;color:var(--muted)">관련 노드</h3>' + k8sGraphNodesHTML(graph, 8) +
           '<h3 style="font-size:12px;margin:14px 0 8px;color:var(--muted)">관계</h3>' + k8sGraphEdgesHTML(graph, 10) + '</div>') +
@@ -10759,8 +11029,7 @@ const adminHTML = `<!doctype html>
       const graph = data.graph || {};
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
         '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
-      const kinds = ['', 'Ingress', 'Service', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Pod', 'PersistentVolumeClaim', 'Node', 'HorizontalPodAutoscaler'];
-      const kindOpts = kinds.map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k || '전체 종류') + '</option>').join('');
+      const kindOpts = k8sGraphKindOptions(kind);
       const filter =
         '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end">' +
           '<label style="display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--muted)">클러스터<select id="k8sgraph-cluster">' + clusterOpts + '</select></label>' +
@@ -10773,6 +11042,7 @@ const adminHTML = `<!doctype html>
       view.innerHTML =
         section('K8s 리소스 그래프', k8sGraphImpactKpis(graph)) +
         card('필터', filter) +
+        card('토폴로지 맵', '<div class="card-body">' + k8sGraphStatusHTML(graph) + k8sGraphVisualHTML(graph, radius) + '</div>') +
         card('영향도 요약', '<div class="card-body">' + k8sGraphImpactHTML(graph) + '</div>') +
         card('노드', '<div class="card-body">' + k8sGraphNodesHTML(graph, 80) + '</div>') +
         card('관계', '<div class="card-body">' + k8sGraphEdgesHTML(graph, 120) + '</div>');
