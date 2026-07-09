@@ -12011,6 +12011,104 @@ const adminHTML = `<!doctype html>
       const rows = robots || [];
       return '<option value="">robot 선택</option>' + rows.map(r => '<option value="' + escapeAttr(r.id || '') + '"' + ((r.id || '') === selected ? ' selected' : '') + '>' + escapeHTML((r.project_name || '-') + ' / ' + (r.name || r.id || '-') + ' · ' + (r.status || '')) + '</option>').join('');
     }
+    function harborRobotNameById(id) {
+      const row = (window.harborRobotsCache || {})[id || ''] || {};
+      return row.name || '';
+    }
+    function harborCatalogItems(result) {
+      const items = ((result || {}).items || []);
+      return Array.isArray(items) ? items : [];
+    }
+    function harborProjectName(item) {
+      return String((item || {}).name || (item || {}).project_name || (item || {}).project || '').trim();
+    }
+    function harborRepositoryName(item) {
+      return String((item || {}).name || (item || {}).repository_name || (item || {}).repository || '').trim();
+    }
+    function harborArtifactRows(items) {
+      const rows = [];
+      (items || []).forEach(item => {
+        const digest = String((item || {}).digest || '').trim();
+        const tags = Array.isArray((item || {}).tags) ? (item || {}).tags : [];
+        if (tags.length) {
+          tags.forEach(t => {
+            const tag = typeof t === 'string' ? t : String((t || {}).name || '').trim();
+            rows.push({ tag, digest });
+          });
+        } else if (digest) {
+          rows.push({ tag: '', digest });
+        }
+      });
+      return rows;
+    }
+    function harborSetOptions(id, values, placeholder) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const unique = [];
+      const seen = {};
+      (values || []).forEach(v => {
+        const value = String(v || '').trim();
+        if (value && !seen[value]) { seen[value] = true; unique.push(value); }
+      });
+      el.innerHTML = '<option value="">' + escapeHTML(placeholder || '선택') + '</option>' + unique.map(v => '<option value="' + escapeAttr(v) + '">' + escapeHTML(v) + '</option>').join('');
+    }
+    function harborSelectToInput(selectId, inputId) {
+      const sel = document.getElementById(selectId);
+      const input = document.getElementById(inputId);
+      if (sel && input && sel.value) input.value = sel.value;
+    }
+    function harborUseArtifactSelect(selectId, tagId, digestId) {
+      const sel = document.getElementById(selectId);
+      if (!sel || !sel.value) return;
+      try {
+        const row = JSON.parse(sel.value);
+        const tag = document.getElementById(tagId);
+        const digest = document.getElementById(digestId);
+        if (tag) tag.value = row.tag || '';
+        if (digest) digest.value = row.digest || '';
+      } catch (e) {}
+    }
+    async function harborLoadProjects(registryId, robotId, tokenId, selectId, inputId) {
+      const registryID = safeInputValue(registryId, '');
+      const robotID = safeInputValue(robotId, '');
+      const token = safeInputValue(tokenId, '');
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'projects', robot_name: harborRobotNameById(robotID), token }) });
+      const projects = harborCatalogItems(res.result || res).map(harborProjectName);
+      harborSetOptions(selectId, projects, 'project 선택');
+      if (projects.length === 1 && inputId) {
+        const input = document.getElementById(inputId);
+        if (input) input.value = projects[0];
+      }
+      return projects;
+    }
+    async function harborLoadRepositories(registryId, projectId, robotId, tokenId, selectId, inputId) {
+      const registryID = safeInputValue(registryId, '');
+      const project = safeInputValue(projectId, '');
+      const robotID = safeInputValue(robotId, '');
+      const token = safeInputValue(tokenId, '');
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'repositories', project_name: project, robot_name: harborRobotNameById(robotID), token }) });
+      const repos = harborCatalogItems(res.result || res).map(harborRepositoryName);
+      harborSetOptions(selectId, repos, 'repository 선택');
+      if (repos.length === 1 && inputId) {
+        const input = document.getElementById(inputId);
+        if (input) input.value = repos[0];
+      }
+      return repos;
+    }
+    async function harborLoadArtifacts(registryId, projectId, repoId, robotId, tokenId, selectId) {
+      const registryID = safeInputValue(registryId, '');
+      const project = safeInputValue(projectId, '');
+      const repo = safeInputValue(repoId, '');
+      const robotID = safeInputValue(robotId, '');
+      const token = safeInputValue(tokenId, '');
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'artifacts', project_name: project, repository: repo, robot_name: harborRobotNameById(robotID), token }) });
+      const rows = harborArtifactRows(harborCatalogItems(res.result || res));
+      const el = document.getElementById(selectId);
+      if (el) {
+        el.innerHTML = '<option value="">tag/digest 선택</option>' + rows.map(row => '<option value="' + escapeAttr(JSON.stringify(row)) + '">' + escapeHTML((row.tag || '(no tag)') + ' · ' + (row.digest || '')) + '</option>').join('');
+      }
+      return rows;
+    }
     function harborSubnav() {
       const items = [
         ['harbor', 'Registry'],
@@ -12037,22 +12135,28 @@ const adminHTML = `<!doctype html>
         view.innerHTML = section('Harbor 레지스트리', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
         return;
       }
+      window.harborRegistriesCache = {};
+      window.harborMappingsCache = {};
+      window.harborRobotsCache = {};
+      (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
+      (maps.mappings || []).forEach(m => { window.harborMappingsCache[m.id || ''] = m; });
+      (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
       const registryRows = (regs.registries || []).map(r =>
         '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td>' +
         '<td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(r.url || '') + '</td><td>' + harborStatusBadge(r.status) + '</td>' +
         '<td>' + escapeHTML(r.version || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_checked_at ? ago(r.last_checked_at) : '-') + '</div></td>' +
-        '<td><button type="button" class="secondary" onclick="harborTestRegistry(\'' + escapeAttr(r.id || '') + '\')">연결 테스트</button></td></tr>'
+        '<td><button type="button" class="secondary" onclick="harborEditRegistry(\'' + escapeAttr(r.id || '') + '\')">수정</button> <button type="button" class="secondary" onclick="harborTestRegistry(\'' + escapeAttr(r.id || '') + '\')">연결 테스트</button> <button type="button" class="danger" onclick="harborDeleteRegistry(\'' + escapeAttr(r.id || '') + '\')">삭제</button></td></tr>'
       ).join('') || '<tr><td colspan="6" class="muted">등록된 Harbor registry가 없습니다.</td></tr>';
       const clusterOpts = (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '">' + escapeHTML(c.name || c.id || '') + '</option>').join('');
       const mappingRows = (maps.mappings || []).map(m =>
-        '<tr><td>' + escapeHTML(m.project_name || '-') + '</td><td>' + escapeHTML(m.cluster_id || '-') + '</td><td>' + escapeHTML(m.namespace || '-') + '</td><td>' + escapeHTML(m.secret_name || '-') + '</td><td>' + escapeHTML(m.owner_team || '-') + '</td></tr>'
-      ).join('') || '<tr><td colspan="5" class="muted">namespace 매핑이 없습니다.</td></tr>';
+        '<tr><td>' + escapeHTML(m.project_name || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(m.id || '') + '</div></td><td>' + escapeHTML(m.cluster_id || '-') + '</td><td>' + escapeHTML(m.namespace || '-') + '</td><td>' + escapeHTML(m.secret_name || '-') + '</td><td>' + escapeHTML(m.owner_team || '-') + '</td><td><button type="button" class="secondary" onclick="harborEditMapping(\'' + escapeAttr(m.id || '') + '\')">수정</button> <button type="button" class="danger" onclick="harborDeleteMapping(\'' + escapeAttr(m.id || '') + '\')">삭제</button></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="muted">namespace 매핑이 없습니다.</td></tr>';
       view.innerHTML =
         section('Harbor 레지스트리', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Connected', fmt((regs.registries || []).filter(r => r.status === 'connected').length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
-        card('Registry 등록', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><input id="hb-reg-name" placeholder="name"><input id="hb-reg-url" placeholder="https://harbor.example.com" style="grid-column:span 2"><label style="font-size:12px;display:flex;align-items:center;gap:6px"><input id="hb-reg-insecure" type="checkbox"> insecure TLS</label></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRegistry()">등록</button> <span id="hb-reg-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Registry 등록/수정', '<div class="card-body"><input id="hb-reg-id" type="hidden"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><input id="hb-reg-name" placeholder="name"><input id="hb-reg-url" placeholder="https://harbor.example.com" style="grid-column:span 2"><label style="font-size:12px;display:flex;align-items:center;gap:6px"><input id="hb-reg-insecure" type="checkbox"> insecure TLS</label><input id="hb-reg-ca" placeholder="CA ref(선택)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRegistry()">저장</button> <button type="button" class="secondary" onclick="harborResetRegistryForm()">새로 입력</button> <span id="hb-reg-out" class="muted" style="font-size:12px"></span></div></div>') +
         card('Registry 목록', '<div class="card-body"><table><thead><tr><th>Registry</th><th>URL</th><th>상태</th><th>Version</th><th>마지막 점검</th><th></th></tr></thead><tbody>' + registryRows + '</tbody></table></div>') +
         card('Harbor Catalog 조회', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Projects, repositories, artifacts(tags·digest 포함)를 조회합니다. private project는 robot name/token을 일회성으로 입력하세요. token은 저장·응답하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-cat-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-cat-target"><option value="projects">projects</option><option value="repositories">repositories</option><option value="artifacts">artifacts</option></select><input id="hb-cat-project" placeholder="project"><input id="hb-cat-repo" placeholder="repository(artifact 조회시)"><input id="hb-cat-robot" placeholder="robot name"><input id="hb-cat-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"><button type="button" onclick="harborQueryCatalog()">조회</button></div><pre id="hb-cat-out" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px"></pre></div>') +
-        card('Harbor Project → Namespace 매핑', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px"><select id="hb-map-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-map-project" placeholder="Harbor project"><select id="hb-map-cluster">' + clusterOpts + '</select><input id="hb-map-ns" placeholder="namespace"><input id="hb-map-secret" placeholder="secret name(자동 가능)"><input id="hb-map-owner" placeholder="owner team" style="grid-column:span 2"></div><button type="button" onclick="harborCreateMapping()">매핑 저장</button> <span id="hb-map-out" class="muted" style="font-size:12px"></span><table style="margin-top:10px"><thead><tr><th>Project</th><th>Cluster</th><th>Namespace</th><th>Secret</th><th>Owner</th></tr></thead><tbody>' + mappingRows + '</tbody></table></div>');
+        card('Harbor Project → Namespace 매핑', '<div class="card-body"><input id="hb-map-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Harbor에서 project 목록을 불러온 뒤 선택할 수 있습니다. private project는 robot/token을 일회성으로 입력하세요.</div><div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px"><select id="hb-map-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-map-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-map-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadMapProjects()">Projects 불러오기</button><select id="hb-map-project-select" onchange="harborSelectToInput(\'hb-map-project-select\',\'hb-map-project\')"><option value="">project 선택</option></select><input id="hb-map-project" placeholder="Harbor project"><select id="hb-map-cluster">' + clusterOpts + '</select><input id="hb-map-ns" placeholder="namespace"><input id="hb-map-secret" placeholder="secret name(자동 가능)"><input id="hb-map-owner" placeholder="owner team"></div><button type="button" onclick="harborCreateMapping()">매핑 저장</button> <button type="button" class="secondary" onclick="harborResetMappingForm()">새로 입력</button> <span id="hb-map-out" class="muted" style="font-size:12px"></span><table style="margin-top:10px"><thead><tr><th>Project</th><th>Cluster</th><th>Namespace</th><th>Secret</th><th>Owner</th><th></th></tr></thead><tbody>' + mappingRows + '</tbody></table></div>');
     }
     async function renderHarborRobots(params) {
       const view = document.getElementById('view');
@@ -12067,34 +12171,44 @@ const adminHTML = `<!doctype html>
         view.innerHTML = section('Harbor Robot Account', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
         return;
       }
+      window.harborRegistriesCache = {};
+      window.harborRobotsCache = {};
+      (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
+      (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
       const rows = (robots.robots || []).map(r =>
-        '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td><td>' + escapeHTML(r.project_name || '-') + '</td><td>' + harborStatusBadge(r.status) + '</td><td>' + (r.has_token_hash ? '<span class="status">hash 저장</span>' : '<span class="status warn">hash 없음</span>') + '</td><td>' + escapeHTML(r.expires_at || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_verified_at ? ago(r.last_verified_at) : '-') + '</div></td></tr>'
-      ).join('') || '<tr><td colspan="6" class="muted">등록된 Robot Account가 없습니다.</td></tr>';
+        '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td><td>' + escapeHTML(r.project_name || '-') + '</td><td>' + harborStatusBadge(r.status) + '</td><td>' + (r.has_token_hash ? '<span class="status">hash 저장</span>' : '<span class="status warn">hash 없음</span>') + '</td><td>' + escapeHTML(r.expires_at || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_verified_at ? ago(r.last_verified_at) : '-') + '</div></td><td><button type="button" class="secondary" onclick="harborEditRobot(\'' + escapeAttr(r.id || '') + '\')">수정</button> <button type="button" class="danger" onclick="harborDeleteRobot(\'' + escapeAttr(r.id || '') + '\')">삭제</button></td></tr>'
+      ).join('') || '<tr><td colspan="7" class="muted">등록된 Robot Account가 없습니다.</td></tr>';
       view.innerHTML =
         section('Harbor Robot Account', harborSubnav() + '<div class="kpis">' + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Verified', fmt((robots.robots || []).filter(r => r.status === 'verified').length)) + kpi('Token Hash', fmt((robots.robots || []).filter(r => r.has_token_hash).length)) + '</div>') +
-        card('Robot 등록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Robot token은 일회성 입력이며 DB와 API 응답에 저장되지 않습니다. token hash만 회전·증적 용도로 보관됩니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-robot-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-robot-project" placeholder="project"><input id="hb-robot-name" placeholder="robot$project+name"><input id="hb-robot-exp" placeholder="expires_at RFC3339"><input id="hb-robot-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRobot()">등록</button> <span id="hb-robot-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Robot 등록/수정', '<div class="card-body"><input id="hb-robot-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Robot token은 일회성 입력이며 DB와 API 응답에 저장되지 않습니다. token hash만 회전·증적 용도로 보관됩니다. Project는 Harbor에서 불러와 선택할 수 있습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-robot-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><button type="button" class="secondary" onclick="harborLoadRobotProjects()">Projects 불러오기</button><select id="hb-robot-project-select" onchange="harborSelectToInput(\'hb-robot-project-select\',\'hb-robot-project\')"><option value="">project 선택</option></select><input id="hb-robot-project" placeholder="project"><input id="hb-robot-name" placeholder="robot$project+name"><input id="hb-robot-exp" placeholder="expires_at RFC3339"><input id="hb-robot-token" type="password" placeholder="token(입력 시 회전)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRobot()">저장</button> <button type="button" class="secondary" onclick="harborResetRobotForm()">새로 입력</button> <span id="hb-robot-out" class="muted" style="font-size:12px"></span></div></div>') +
         card('Robot Pull 검증', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px"><select id="hb-verify-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-verify-token" type="password" placeholder="token(검증 후 폐기)"><button type="button" onclick="harborVerifyRobot()">pull 권한 검증</button></div><div id="hb-verify-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
-        card('Robot 목록', '<div class="card-body"><table><thead><tr><th>Robot</th><th>Project</th><th>상태</th><th>Token</th><th>만료</th><th>검증</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        card('Robot 목록', '<div class="card-body"><table><thead><tr><th>Robot</th><th>Project</th><th>상태</th><th>Token</th><th>만료</th><th>검증</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     async function renderAppLauncher(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('앱 런처', '<div class="empty">불러오는 중...</div>');
-      let regs, robots, maps;
+      let regs, robots, maps, clusters;
       try {
-        [regs, robots, maps] = await Promise.all([
+        [regs, robots, maps, clusters] = await Promise.all([
           api('/admin/harbor/registries').catch(() => ({ registries: [] })),
           api('/admin/harbor/robots').catch(() => ({ robots: [] })),
-          api('/admin/harbor/mappings').catch(() => ({ mappings: [] }))
+          api('/admin/harbor/mappings').catch(() => ({ mappings: [] })),
+          api('/admin/k8s/clusters').catch(() => ({ clusters: [] }))
         ]);
       } catch (e) {
         view.innerHTML = section('앱 런처', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
         return;
       }
+      window.harborRegistriesCache = {};
+      window.harborRobotsCache = {};
+      (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
+      (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
       const mapHint = (maps.mappings || []).slice(0, 5).map(m => escapeHTML(m.project_name + ' → ' + m.cluster_id + '/' + m.namespace + ' · ' + (m.secret_name || ''))).join('<br>') || '<span class="muted">매핑 없음</span>';
+      const clusterOpts = '<option value="">cluster 선택</option>' + (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '">' + escapeHTML(c.name || c.id || '') + '</option>').join('');
       view.innerHTML =
         section('앱 런처', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
         card('imagePullSecret Preview', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">응답은 항상 redacted manifest입니다. 실제 dockerconfigjson token은 반환하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-ps-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-ps-project" placeholder="project"><input id="hb-ps-ns" placeholder="namespace" value="default"><input id="hb-ps-secret" placeholder="secret name"><input id="hb-ps-robot" placeholder="robot name"><input id="hb-ps-token" type="password" placeholder="token(선택, hash 확인용)" style="grid-column:span 2"><button type="button" onclick="harborPreviewPullSecret()">Secret Preview</button></div><textarea id="hb-ps-out" rows="9" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>') +
-        card('Deployment/Service 런칭 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">digest 우선 이미지 참조와 imagePullSecret을 포함한 Deployment/Service YAML을 생성합니다. 저장 시 Harbor 런칭 원장에 남고, 실제 적용은 YAML 변경/생성 또는 승인형 executor 경로를 사용합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-launch-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-launch-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-launch-project" placeholder="project"><input id="hb-launch-repo" placeholder="repository 예: team/app"><input id="hb-launch-tag" placeholder="tag"><input id="hb-launch-digest" placeholder="sha256:digest"><input id="hb-launch-cluster" placeholder="cluster_id"><input id="hb-launch-ns" placeholder="namespace" value="default"><input id="hb-launch-app" placeholder="app name"><input id="hb-launch-replicas" type="number" value="1" min="1"><input id="hb-launch-port" type="number" value="8080" min="1"><input id="hb-launch-secret" placeholder="imagePullSecret"></div><div style="margin-top:8px"><button type="button" onclick="harborPreviewLaunch(false)">Manifest Preview</button> <button type="button" onclick="harborPreviewLaunch(true)">런칭 요청 저장</button> <button type="button" class="secondary" onclick="harborCopyLaunchManifest()">YAML 복사</button> <span id="hb-launch-status" class="muted" style="font-size:12px"></span></div><div class="grid2" style="margin-top:10px"><div><h3>Project 매핑 힌트</h3><div class="muted" style="font-size:12px">' + mapHint + '</div></div><div><h3>정책 판정</h3><div id="hb-launch-policy" class="muted" style="font-size:12px">Preview 후 표시됩니다.</div></div></div><textarea id="hb-launch-out" rows="18" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>');
+        card('Deployment/Service 런칭 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">digest 우선 이미지 참조와 imagePullSecret을 포함한 Deployment/Service YAML을 생성합니다. Harbor에서 project/repository/tag·digest를 불러와 선택할 수 있고, 실제 적용은 YAML 변경/생성 승인 흐름을 사용합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-launch-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-launch-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-launch-catalog-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadLaunchProjects()">Projects 불러오기</button><select id="hb-launch-project-select" onchange="harborSelectToInput(\'hb-launch-project-select\',\'hb-launch-project\')"><option value="">project 선택</option></select><input id="hb-launch-project" placeholder="project"><button type="button" class="secondary" onclick="harborLoadLaunchRepositories()">Repositories 불러오기</button><select id="hb-launch-repo-select" onchange="harborSelectToInput(\'hb-launch-repo-select\',\'hb-launch-repo\')"><option value="">repository 선택</option></select><input id="hb-launch-repo" placeholder="repository 예: team/app"><button type="button" class="secondary" onclick="harborLoadLaunchArtifacts()">Tags/Digest 불러오기</button><select id="hb-launch-artifact-select" onchange="harborUseArtifactSelect(\'hb-launch-artifact-select\',\'hb-launch-tag\',\'hb-launch-digest\')"><option value="">tag/digest 선택</option></select><input id="hb-launch-tag" placeholder="tag"><input id="hb-launch-digest" placeholder="sha256:digest"><select id="hb-launch-cluster">' + clusterOpts + '</select><input id="hb-launch-ns" placeholder="namespace" value="default"><input id="hb-launch-app" placeholder="app name"><input id="hb-launch-replicas" type="number" value="1" min="1"><input id="hb-launch-port" type="number" value="8080" min="1"><input id="hb-launch-secret" placeholder="imagePullSecret"></div><div style="margin-top:8px"><button type="button" onclick="harborPreviewLaunch(false)">Manifest Preview</button> <button type="button" onclick="harborPreviewLaunch(true)">런칭 요청 저장</button> <button type="button" class="secondary" onclick="harborCopyLaunchManifest()">YAML 복사</button> <span id="hb-launch-status" class="muted" style="font-size:12px"></span></div><div class="grid2" style="margin-top:10px"><div><h3>Project 매핑 힌트</h3><div class="muted" style="font-size:12px">' + mapHint + '</div></div><div><h3>정책 판정</h3><div id="hb-launch-policy" class="muted" style="font-size:12px">Preview 후 표시됩니다.</div></div></div><textarea id="hb-launch-out" rows="18" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>');
     }
     async function renderAppLaunchHistory(params) {
       const view = document.getElementById('view');
@@ -12128,10 +12242,46 @@ const adminHTML = `<!doctype html>
     window.harborCreateRegistry = async () => {
       const out = document.getElementById('hb-reg-out');
       try {
-        const res = await api('/admin/harbor/registries', { method: 'POST', body: JSON.stringify({ name: document.getElementById('hb-reg-name').value, url: document.getElementById('hb-reg-url').value, insecure_tls: document.getElementById('hb-reg-insecure').checked }) });
-        out.textContent = '등록됨: ' + ((res.registry || {}).id || '');
+        const id = safeInputValue('hb-reg-id', '').trim();
+        const body = { name: safeInputValue('hb-reg-name', ''), url: safeInputValue('hb-reg-url', ''), insecure_tls: !!((document.getElementById('hb-reg-insecure') || {}).checked), ca_ref: safeInputValue('hb-reg-ca', '') };
+        const res = await api(id ? '/admin/harbor/registries/' + encodeURIComponent(id) : '/admin/harbor/registries', { method: 'POST', body: JSON.stringify(body) });
+        out.textContent = (id ? '수정됨: ' : '등록됨: ') + ((res.registry || {}).id || '');
         await renderHarborRegistry(new URLSearchParams());
       } catch (e) { out.textContent = e.message; }
+    };
+    window.harborEditRegistry = (id) => {
+      const r = (window.harborRegistriesCache || {})[id || ''];
+      if (!r) return;
+      const set = (k, v) => { const el = document.getElementById(k); if (el) el.value = v || ''; };
+      set('hb-reg-id', r.id);
+      set('hb-reg-name', r.name);
+      set('hb-reg-url', r.url);
+      set('hb-reg-ca', r.ca_ref);
+      const insecure = document.getElementById('hb-reg-insecure');
+      if (insecure) insecure.checked = !!r.insecure_tls;
+      const out = document.getElementById('hb-reg-out');
+      if (out) out.textContent = '수정 모드: ' + (r.id || '');
+    };
+    window.harborResetRegistryForm = () => {
+      ['hb-reg-id','hb-reg-name','hb-reg-url','hb-reg-ca'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      const insecure = document.getElementById('hb-reg-insecure');
+      if (insecure) insecure.checked = false;
+      const out = document.getElementById('hb-reg-out');
+      if (out) out.textContent = '';
+    };
+    window.harborDeleteRegistry = async (id) => {
+      if (!confirm('Harbor registry를 삭제할까요? 연결된 Robot/매핑이 있으면 먼저 차단됩니다.')) return;
+      try {
+        await api('/admin/harbor/registries/' + encodeURIComponent(id), { method: 'DELETE' });
+      } catch (e) {
+        if (!confirm('연결된 Robot/매핑/런칭 이력이 있습니다. Robot/매핑 메타데이터까지 같이 정리하려면 확인을 누르세요. 런칭 이력은 감사 목적으로 남습니다.')) {
+          showToast('error', 'Registry 삭제 취소', e.message);
+          return;
+        }
+        await api('/admin/harbor/registries/' + encodeURIComponent(id) + '?force=true', { method: 'DELETE' });
+      }
+      showToast('ok', 'Registry 삭제', id);
+      await renderHarborRegistry(new URLSearchParams());
     };
     window.harborTestRegistry = async (id) => {
       try {
@@ -12143,11 +12293,48 @@ const adminHTML = `<!doctype html>
     window.harborCreateMapping = async () => {
       const out = document.getElementById('hb-map-out');
       try {
-        const body = { registry_id: document.getElementById('hb-map-reg').value, project_name: document.getElementById('hb-map-project').value, cluster_id: document.getElementById('hb-map-cluster').value, namespace: document.getElementById('hb-map-ns').value, secret_name: document.getElementById('hb-map-secret').value, owner_team: document.getElementById('hb-map-owner').value };
-        const res = await api('/admin/harbor/mappings', { method: 'POST', body: JSON.stringify(body) });
-        out.textContent = '저장됨: ' + ((res.mapping || {}).id || '');
+        const id = safeInputValue('hb-map-id', '').trim();
+        const body = { registry_id: safeInputValue('hb-map-reg', ''), project_name: safeInputValue('hb-map-project', ''), cluster_id: safeInputValue('hb-map-cluster', ''), namespace: safeInputValue('hb-map-ns', ''), secret_name: safeInputValue('hb-map-secret', ''), owner_team: safeInputValue('hb-map-owner', '') };
+        const res = await api(id ? '/admin/harbor/mappings/' + encodeURIComponent(id) : '/admin/harbor/mappings', { method: 'POST', body: JSON.stringify(body) });
+        out.textContent = (id ? '수정됨: ' : '저장됨: ') + ((res.mapping || {}).id || '');
         await renderHarborRegistry(new URLSearchParams());
       } catch (e) { out.textContent = e.message; }
+    };
+    window.harborEditMapping = (id) => {
+      const m = (window.harborMappingsCache || {})[id || ''];
+      if (!m) return;
+      const set = (k, v) => { const el = document.getElementById(k); if (el) el.value = v || ''; };
+      set('hb-map-id', m.id);
+      set('hb-map-reg', m.registry_id);
+      set('hb-map-project', m.project_name);
+      set('hb-map-cluster', m.cluster_id);
+      set('hb-map-ns', m.namespace);
+      set('hb-map-secret', m.secret_name);
+      set('hb-map-owner', m.owner_team);
+      harborSetOptions('hb-map-project-select', [m.project_name], 'project 선택');
+      set('hb-map-project-select', m.project_name);
+      const out = document.getElementById('hb-map-out');
+      if (out) out.textContent = '수정 모드: ' + (m.id || '');
+    };
+    window.harborResetMappingForm = () => {
+      ['hb-map-id','hb-map-project','hb-map-ns','hb-map-secret','hb-map-owner','hb-map-token'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      harborSetOptions('hb-map-project-select', [], 'project 선택');
+      const out = document.getElementById('hb-map-out');
+      if (out) out.textContent = '';
+    };
+    window.harborDeleteMapping = async (id) => {
+      if (!confirm('Harbor project 매핑을 삭제할까요?')) return;
+      try {
+        await api('/admin/harbor/mappings/' + encodeURIComponent(id), { method: 'DELETE' });
+        showToast('ok', '매핑 삭제', id);
+        await renderHarborRegistry(new URLSearchParams());
+      } catch (e) { showToast('error', '매핑 삭제 실패', e.message); }
+    };
+    window.harborLoadMapProjects = async () => {
+      try {
+        const projects = await harborLoadProjects('hb-map-reg', 'hb-map-robot', 'hb-map-token', 'hb-map-project-select', 'hb-map-project');
+        showToast('ok', 'Harbor projects 불러오기', fmt(projects.length) + '개');
+      } catch (e) { showToast('error', 'Projects 불러오기 실패', e.message); }
     };
     window.harborQueryCatalog = async () => {
       const out = document.getElementById('hb-cat-out');
@@ -12163,12 +12350,54 @@ const adminHTML = `<!doctype html>
     window.harborCreateRobot = async () => {
       const out = document.getElementById('hb-robot-out');
       try {
-        const body = { registry_id: document.getElementById('hb-robot-reg').value, project_name: document.getElementById('hb-robot-project').value, name: document.getElementById('hb-robot-name').value, token: document.getElementById('hb-robot-token').value, expires_at: document.getElementById('hb-robot-exp').value };
-        const res = await api('/admin/harbor/robots', { method: 'POST', body: JSON.stringify(body) });
+        const id = safeInputValue('hb-robot-id', '').trim();
+        const body = { registry_id: safeInputValue('hb-robot-reg', ''), project_name: safeInputValue('hb-robot-project', ''), name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', ''), expires_at: safeInputValue('hb-robot-exp', '') };
+        const res = await api(id ? '/admin/harbor/robots/' + encodeURIComponent(id) : '/admin/harbor/robots', { method: 'POST', body: JSON.stringify(body) });
         document.getElementById('hb-robot-token').value = '';
-        out.textContent = '등록됨: ' + ((res.robot || {}).id || '');
+        out.textContent = (id ? '수정됨: ' : '등록됨: ') + ((res.robot || {}).id || '');
         await renderHarborRobots(new URLSearchParams());
       } catch (e) { out.textContent = e.message; }
+    };
+    window.harborEditRobot = (id) => {
+      const r = (window.harborRobotsCache || {})[id || ''];
+      if (!r) return;
+      const set = (k, v) => { const el = document.getElementById(k); if (el) el.value = v || ''; };
+      set('hb-robot-id', r.id);
+      set('hb-robot-reg', r.registry_id);
+      set('hb-robot-project', r.project_name);
+      set('hb-robot-name', r.name);
+      set('hb-robot-exp', r.expires_at);
+      set('hb-robot-token', '');
+      harborSetOptions('hb-robot-project-select', [r.project_name], 'project 선택');
+      set('hb-robot-project-select', r.project_name);
+      const out = document.getElementById('hb-robot-out');
+      if (out) out.textContent = '수정 모드: ' + (r.id || '') + ' · token 입력 시 회전';
+    };
+    window.harborResetRobotForm = () => {
+      ['hb-robot-id','hb-robot-project','hb-robot-name','hb-robot-exp','hb-robot-token'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      harborSetOptions('hb-robot-project-select', [], 'project 선택');
+      const out = document.getElementById('hb-robot-out');
+      if (out) out.textContent = '';
+    };
+    window.harborDeleteRobot = async (id) => {
+      if (!confirm('Harbor Robot Account 메타데이터를 삭제할까요? token 원문은 저장되어 있지 않습니다.')) return;
+      try {
+        await api('/admin/harbor/robots/' + encodeURIComponent(id), { method: 'DELETE' });
+        showToast('ok', 'Robot 삭제', id);
+        await renderHarborRobots(new URLSearchParams());
+      } catch (e) { showToast('error', 'Robot 삭제 실패', e.message); }
+    };
+    window.harborLoadRobotProjects = async () => {
+      try {
+        const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: safeInputValue('hb-robot-reg', ''), target: 'projects', robot_name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', '') }) });
+        const projects = harborCatalogItems(res.result || res).map(harborProjectName);
+        harborSetOptions('hb-robot-project-select', projects, 'project 선택');
+        if (projects.length === 1) {
+          const input = document.getElementById('hb-robot-project');
+          if (input) input.value = projects[0];
+        }
+        showToast('ok', 'Harbor projects 불러오기', fmt(projects.length) + '개');
+      } catch (e) { showToast('error', 'Projects 불러오기 실패', e.message); }
     };
     window.harborVerifyRobot = async () => {
       const out = document.getElementById('hb-verify-out');
@@ -12192,6 +12421,32 @@ const adminHTML = `<!doctype html>
     function harborLaunchBody() {
       return { registry_id: document.getElementById('hb-launch-reg').value, robot_id: document.getElementById('hb-launch-robot').value, project_name: document.getElementById('hb-launch-project').value, repository: document.getElementById('hb-launch-repo').value, tag: document.getElementById('hb-launch-tag').value, digest: document.getElementById('hb-launch-digest').value, cluster_id: document.getElementById('hb-launch-cluster').value, namespace: document.getElementById('hb-launch-ns').value, app_name: document.getElementById('hb-launch-app').value, replicas: Number(document.getElementById('hb-launch-replicas').value || 1), port: Number(document.getElementById('hb-launch-port').value || 8080), secret_name: document.getElementById('hb-launch-secret').value };
     }
+    window.harborLoadLaunchProjects = async () => {
+      try {
+        const projects = await harborLoadProjects('hb-launch-reg', 'hb-launch-robot', 'hb-launch-catalog-token', 'hb-launch-project-select', 'hb-launch-project');
+        harborSetOptions('hb-launch-repo-select', [], 'repository 선택');
+        const artifact = document.getElementById('hb-launch-artifact-select');
+        if (artifact) artifact.innerHTML = '<option value="">tag/digest 선택</option>';
+        showToast('ok', 'Harbor projects 불러오기', fmt(projects.length) + '개');
+      } catch (e) { showToast('error', 'Projects 불러오기 실패', e.message); }
+    };
+    window.harborLoadLaunchRepositories = async () => {
+      try {
+        harborSelectToInput('hb-launch-project-select', 'hb-launch-project');
+        const repos = await harborLoadRepositories('hb-launch-reg', 'hb-launch-project', 'hb-launch-robot', 'hb-launch-catalog-token', 'hb-launch-repo-select', 'hb-launch-repo');
+        const artifact = document.getElementById('hb-launch-artifact-select');
+        if (artifact) artifact.innerHTML = '<option value="">tag/digest 선택</option>';
+        showToast('ok', 'Harbor repositories 불러오기', fmt(repos.length) + '개');
+      } catch (e) { showToast('error', 'Repositories 불러오기 실패', e.message); }
+    };
+    window.harborLoadLaunchArtifacts = async () => {
+      try {
+        harborSelectToInput('hb-launch-project-select', 'hb-launch-project');
+        harborSelectToInput('hb-launch-repo-select', 'hb-launch-repo');
+        const rows = await harborLoadArtifacts('hb-launch-reg', 'hb-launch-project', 'hb-launch-repo', 'hb-launch-robot', 'hb-launch-catalog-token', 'hb-launch-artifact-select');
+        showToast('ok', 'Harbor tag/digest 불러오기', fmt(rows.length) + '개');
+      } catch (e) { showToast('error', 'Tags/Digest 불러오기 실패', e.message); }
+    };
     window.harborPreviewLaunch = async (save) => {
       const out = document.getElementById('hb-launch-out');
       const st = document.getElementById('hb-launch-status');

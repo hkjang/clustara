@@ -129,6 +129,41 @@ func (s *SQLStore) GetHarborRegistry(ctx context.Context, id string) (HarborRegi
 	return r, err
 }
 
+func (s *SQLStore) CountHarborRegistryReferences(ctx context.Context, id string) (map[string]int, error) {
+	out := map[string]int{"robots": 0, "mappings": 0, "launches": 0}
+	for table, query := range map[string]string{
+		"robots":   `SELECT COUNT(*) FROM harbor_robot_accounts WHERE registry_id=?`,
+		"mappings": `SELECT COUNT(*) FROM harbor_project_mappings WHERE registry_id=?`,
+		"launches": `SELECT COUNT(*) FROM harbor_launch_requests WHERE registry_id=?`,
+	} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, s.bind(query), id).Scan(&n); err != nil {
+			return out, err
+		}
+		out[table] = n
+	}
+	return out, nil
+}
+
+func (s *SQLStore) DeleteHarborRegistry(ctx context.Context, id string, force bool) error {
+	if force {
+		if _, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM harbor_robot_accounts WHERE registry_id=?`), id); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM harbor_project_mappings WHERE registry_id=?`), id); err != nil {
+			return err
+		}
+	}
+	res, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM harbor_registries WHERE id=?`), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLStore) UpsertHarborRobotAccount(ctx context.Context, r HarborRobotAccount) error {
 	now := nowString()
 	if r.CreatedAt == "" {
@@ -193,6 +228,17 @@ func (s *SQLStore) GetHarborRobotAccount(ctx context.Context, id string) (Harbor
 	return r, err
 }
 
+func (s *SQLStore) DeleteHarborRobotAccount(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM harbor_robot_accounts WHERE id=?`), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLStore) UpsertHarborProjectMapping(ctx context.Context, m HarborProjectMapping) error {
 	now := nowString()
 	if m.CreatedAt == "" {
@@ -234,6 +280,28 @@ func (s *SQLStore) ListHarborProjectMappings(ctx context.Context, registryID str
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLStore) GetHarborProjectMapping(ctx context.Context, id string) (HarborProjectMapping, error) {
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id, registry_id, project_name, cluster_id, namespace, secret_name, owner_team, created_by, created_at, updated_at
+		FROM harbor_project_mappings WHERE id=?`), id)
+	var m HarborProjectMapping
+	err := row.Scan(&m.ID, &m.RegistryID, &m.ProjectName, &m.ClusterID, &m.Namespace, &m.SecretName, &m.OwnerTeam, &m.CreatedBy, &m.CreatedAt, &m.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return HarborProjectMapping{}, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *SQLStore) DeleteHarborProjectMapping(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM harbor_project_mappings WHERE id=?`), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *SQLStore) CreateHarborLaunchRequest(ctx context.Context, r HarborLaunchRequest) error {

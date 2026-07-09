@@ -93,8 +93,9 @@ var capabilityRegistry = []Capability{
 		Key: "harbor_app_launch", Name: "Harbor 앱 런칭", Group: "ops",
 		Description: "Harbor Registry, Project, Robot Account, namespace 매핑, imagePullSecret preview, digest 기반 Deployment/Service manifest preview, 런칭 요청 원장, Manifest Change 초안 전환을 제공하는 안전한 애플리케이션 런칭 체계.",
 		APIs: []string{
-			"GET/POST /admin/harbor/registries", "POST /admin/harbor/registries/{id}/test",
-			"GET/POST /admin/harbor/robots", "POST /admin/harbor/robots/verify", "GET/POST /admin/harbor/mappings",
+			"GET/POST /admin/harbor/registries", "GET/POST/DELETE /admin/harbor/registries/{id}", "POST /admin/harbor/registries/{id}/test",
+			"GET/POST /admin/harbor/robots", "GET/POST/DELETE /admin/harbor/robots/{id}", "POST /admin/harbor/robots/verify",
+			"GET/POST /admin/harbor/mappings", "GET/POST/DELETE /admin/harbor/mappings/{id}",
 			"POST /admin/harbor/catalog/query", "POST /admin/harbor/pull-secret/preview", "POST /admin/harbor/launches/preview", "GET/POST /admin/harbor/launches", "POST /admin/harbor/launches/{id}/manifest-change",
 		},
 		UITabs: []string{"harbor", "harbor-robots", "app-launcher", "app-launch-history", "k8s-security-image-launch"},

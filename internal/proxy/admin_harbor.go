@@ -81,6 +81,65 @@ func (s *Server) handleHarborRegistryByID(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, map[string]any{"registry": reg})
 		return
 	}
+	if len(parts) == 1 && r.Method == http.MethodPost {
+		var in struct {
+			Name        string `json:"name"`
+			URL         string `json:"url"`
+			InsecureTLS bool   `json:"insecure_tls"`
+			CARef       string `json:"ca_ref"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+			return
+		}
+		url := harbor.NormalizeRegistryURL(firstNonEmpty(in.URL, reg.URL))
+		if strings.TrimSpace(in.Name) == "" || url == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "name and url are required", "invalid_request_error", "missing_fields")
+			return
+		}
+		if url != reg.URL {
+			reg.Status = "registered"
+			reg.Version = ""
+			reg.LastCheckedAt = ""
+			reg.LastError = ""
+		}
+		reg.Name = strings.TrimSpace(in.Name)
+		reg.URL = url
+		reg.InsecureTLS = in.InsecureTLS
+		reg.CARef = strings.TrimSpace(in.CARef)
+		if err := s.db.UpsertHarborRegistry(r.Context(), reg); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_registry_save_failed")
+			return
+		}
+		s.auditAdmin(r, "harbor.registry.update", reg.ID, auditJSON(map[string]any{"name": reg.Name, "url": reg.URL, "insecure_tls": reg.InsecureTLS}))
+		writeJSON(w, http.StatusOK, map[string]any{"registry": reg})
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		force := boolQuery(r.URL.Query().Get("force"))
+		refs, err := s.db.CountHarborRegistryReferences(r.Context(), reg.ID)
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_registry_reference_failed")
+			return
+		}
+		if !force && refs["robots"]+refs["mappings"]+refs["launches"] > 0 {
+			writeOpenAIError(w, http.StatusConflict, "registry has linked robots, mappings or launch history; retry with force=true to remove registry metadata and linked robots/mappings", "invalid_request_error", "harbor_registry_has_references")
+			return
+		}
+		if err := s.db.DeleteHarborRegistry(r.Context(), reg.ID, force); err != nil {
+			status := http.StatusInternalServerError
+			code := "harbor_registry_delete_failed"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "not_found"
+			}
+			writeOpenAIError(w, status, err.Error(), "server_error", code)
+			return
+		}
+		s.auditAdmin(r, "harbor.registry.delete", reg.ID, auditJSON(map[string]any{"force": force, "references": refs}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": reg.ID, "force": force, "references": refs})
+		return
+	}
 	if len(parts) == 2 && parts[1] == "test" && r.Method == http.MethodPost {
 		client := &http.Client{Timeout: 8 * time.Second}
 		result := harbor.CheckSystemInfo(r.Context(), client, reg.URL)
@@ -94,6 +153,90 @@ func (s *Server) handleHarborRegistryByID(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeOpenAIError(w, http.StatusNotFound, "unknown harbor registry operation", "invalid_request_error", "not_found")
+}
+
+func (s *Server) handleHarborRobotByID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/harbor/robots/"), "/")
+	if id == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "robot id required", "invalid_request_error", "missing_robot_id")
+		return
+	}
+	robot, err := s.db.GetHarborRobotAccount(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "robot account not found", "invalid_request_error", "not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_robot_failed")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"robot": robot})
+	case http.MethodPost:
+		var in struct {
+			RegistryID  string `json:"registry_id"`
+			ProjectName string `json:"project_name"`
+			Name        string `json:"name"`
+			Token       string `json:"token"`
+			ExpiresAt   string `json:"expires_at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+			return
+		}
+		robot.RegistryID = firstNonEmpty(in.RegistryID, robot.RegistryID)
+		robot.ProjectName = firstNonEmpty(in.ProjectName, robot.ProjectName)
+		robot.Name = firstNonEmpty(in.Name, robot.Name)
+		robot.ExpiresAt = strings.TrimSpace(in.ExpiresAt)
+		if _, err := s.db.GetHarborRegistry(r.Context(), robot.RegistryID); err != nil {
+			status := http.StatusInternalServerError
+			code := "harbor_registry_failed"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "harbor_registry_not_found"
+			}
+			writeOpenAIError(w, status, err.Error(), "server_error", code)
+			return
+		}
+		if strings.TrimSpace(robot.RegistryID) == "" || strings.TrimSpace(robot.ProjectName) == "" || strings.TrimSpace(robot.Name) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "registry_id, project_name and name are required", "invalid_request_error", "missing_fields")
+			return
+		}
+		if strings.TrimSpace(in.Token) != "" {
+			robot.TokenHash = harbor.TokenHash(in.Token)
+			robot.HasTokenHash = true
+			robot.Status = "registered"
+			robot.LastVerifiedAt = ""
+			robot.LastError = ""
+		}
+		if err := s.db.UpsertHarborRobotAccount(r.Context(), robot); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_robot_save_failed")
+			return
+		}
+		robot.TokenHash = ""
+		s.auditAdmin(r, "harbor.robot.update", robot.ID, auditJSON(map[string]any{"registry_id": robot.RegistryID, "project": robot.ProjectName, "name": robot.Name, "token_rotated": strings.TrimSpace(in.Token) != ""}))
+		writeJSON(w, http.StatusOK, map[string]any{"robot": robot, "token_policy": "token is one-time input and is never returned"})
+	case http.MethodDelete:
+		if err := s.db.DeleteHarborRobotAccount(r.Context(), robot.ID); err != nil {
+			status := http.StatusInternalServerError
+			code := "harbor_robot_delete_failed"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "not_found"
+			}
+			writeOpenAIError(w, status, err.Error(), "server_error", code)
+			return
+		}
+		s.auditAdmin(r, "harbor.robot.delete", robot.ID, auditJSON(map[string]any{"registry_id": robot.RegistryID, "project": robot.ProjectName, "name": robot.Name}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": robot.ID})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
 }
 
 func (s *Server) handleHarborRobots(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +374,78 @@ func (s *Server) handleHarborMappings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.auditAdmin(r, "harbor.mapping.upsert", in.ID, auditJSON(map[string]any{"registry_id": in.RegistryID, "project": in.ProjectName, "cluster_id": in.ClusterID, "namespace": in.Namespace}))
 		writeJSON(w, http.StatusCreated, map[string]any{"mapping": in})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
+}
+
+func (s *Server) handleHarborMappingByID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/harbor/mappings/"), "/")
+	if id == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "mapping id required", "invalid_request_error", "missing_mapping_id")
+		return
+	}
+	mapping, err := s.db.GetHarborProjectMapping(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "harbor mapping not found", "invalid_request_error", "not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_mapping_failed")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"mapping": mapping})
+	case http.MethodPost:
+		var in store.HarborProjectMapping
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+			return
+		}
+		mapping.RegistryID = firstNonEmpty(in.RegistryID, mapping.RegistryID)
+		mapping.ProjectName = firstNonEmpty(in.ProjectName, mapping.ProjectName)
+		mapping.ClusterID = firstNonEmpty(in.ClusterID, mapping.ClusterID)
+		mapping.Namespace = firstNonEmpty(in.Namespace, mapping.Namespace)
+		mapping.SecretName = firstNonEmpty(in.SecretName, harbor.DefaultSecretName(mapping.ProjectName))
+		mapping.OwnerTeam = strings.TrimSpace(in.OwnerTeam)
+		if strings.TrimSpace(mapping.RegistryID) == "" || strings.TrimSpace(mapping.ProjectName) == "" || strings.TrimSpace(mapping.ClusterID) == "" || strings.TrimSpace(mapping.Namespace) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "registry_id, project_name, cluster_id and namespace are required", "invalid_request_error", "missing_fields")
+			return
+		}
+		if _, err := s.db.GetHarborRegistry(r.Context(), mapping.RegistryID); err != nil {
+			status := http.StatusInternalServerError
+			code := "harbor_registry_failed"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "harbor_registry_not_found"
+			}
+			writeOpenAIError(w, status, err.Error(), "server_error", code)
+			return
+		}
+		if err := s.db.UpsertHarborProjectMapping(r.Context(), mapping); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_mapping_save_failed")
+			return
+		}
+		s.auditAdmin(r, "harbor.mapping.update", mapping.ID, auditJSON(map[string]any{"registry_id": mapping.RegistryID, "project": mapping.ProjectName, "cluster_id": mapping.ClusterID, "namespace": mapping.Namespace}))
+		writeJSON(w, http.StatusOK, map[string]any{"mapping": mapping})
+	case http.MethodDelete:
+		if err := s.db.DeleteHarborProjectMapping(r.Context(), mapping.ID); err != nil {
+			status := http.StatusInternalServerError
+			code := "harbor_mapping_delete_failed"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "not_found"
+			}
+			writeOpenAIError(w, status, err.Error(), "server_error", code)
+			return
+		}
+		s.auditAdmin(r, "harbor.mapping.delete", mapping.ID, auditJSON(map[string]any{"registry_id": mapping.RegistryID, "project": mapping.ProjectName, "cluster_id": mapping.ClusterID, "namespace": mapping.Namespace}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": mapping.ID})
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
@@ -653,6 +868,11 @@ func harborManifestDraftKey(kind, namespace, name string, index int) string {
 		key = "doc-" + strconv.Itoa(index+1)
 	}
 	return key
+}
+
+func boolQuery(v string) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	return v == "1" || v == "true" || v == "yes" || v == "y"
 }
 
 func harborMaxInt(v, fallback int) int {

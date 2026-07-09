@@ -1,3 +1,6 @@
+v0.9.106:
+- **Harbor Management UX (v0.9.106)**: Harbor 연동 화면을 등록 중심에서 운영 관리 중심으로 확장했습니다. Harbor Registry, Robot Account, Project→Namespace Mapping에 개별 조회·수정·삭제 API와 UI 버튼을 추가하고, Registry 삭제는 연결된 robot/mapping/launch history가 있으면 기본 차단하며 `force=true`에서 registry/robot/mapping 메타데이터만 정리하도록 안전장치를 뒀습니다. Robot 수정 시 token을 입력하면 hash 증적을 회전하고 검증 상태를 재등록 상태로 되돌리며, token 원문과 hash는 계속 응답하지 않습니다. 앱 런처와 매핑/Robot 화면에는 Harbor catalog query를 이용한 project, repository, tag/digest select picker를 추가해 운영자가 입력값을 손으로 맞추는 부담을 줄였고, private project는 기존처럼 robot token을 일회성으로만 사용합니다. Gateway 신규 기능은 계속 제외했습니다.
+
 v0.9.105:
 - **Harbor Launch Draft Set (v0.9.105)**: Harbor 런칭 요청을 Manifest Change Studio로 넘기는 적용 전환 흐름을 완성했습니다. `POST /admin/harbor/launches/{id}/manifest-change`는 blocked가 아닌 런칭 요청의 multi-document manifest를 분리해 Deployment와 Service를 각각 `operation=create` draft 요청으로 저장하고, 기존 schema/policy/server dry-run, 승인, Server-Side Apply, 사후 검증 원장을 그대로 재사용합니다. 응답에는 기존 호환용 `manifest_change_id`와 함께 `manifest_changes`/`manifest_change_ids` 배열을 반환하며, 런칭 이력 UI의 버튼은 **Manifest 초안**으로 바뀌어 생성된 초안 수를 토스트로 알려줍니다. Secret 참조는 Manifest Change 원장 저장 시 기존 마스킹 정책을 유지하고, idempotency key는 launch id와 리소스 identity 기준으로 부여해 같은 handoff 재시도에서 중복 초안을 만들지 않습니다. Gateway 신규 기능은 계속 제외했습니다.
 

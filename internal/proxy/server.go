@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.105"
+const AppVersion = "v0.9.106"
 
 type Server struct {
 	cfg            config.Config
@@ -319,7 +319,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/harbor/registries/", s.handleHarborRegistryByID)
 	mux.HandleFunc("/admin/harbor/registries", s.handleHarborRegistries)
 	mux.HandleFunc("/admin/harbor/robots/verify", s.handleHarborRobotVerify)
+	mux.HandleFunc("/admin/harbor/robots/", s.handleHarborRobotByID)
 	mux.HandleFunc("/admin/harbor/robots", s.handleHarborRobots)
+	mux.HandleFunc("/admin/harbor/mappings/", s.handleHarborMappingByID)
 	mux.HandleFunc("/admin/harbor/mappings", s.handleHarborMappings)
 	mux.HandleFunc("/admin/harbor/catalog/query", s.handleHarborCatalogQuery)
 	mux.HandleFunc("/admin/harbor/pull-secret/preview", s.handleHarborPullSecretPreview)

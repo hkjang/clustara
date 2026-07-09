@@ -46,6 +46,22 @@ func TestHarborRegistryRobotAndLaunchFlow(t *testing.T) {
 	if regOut.Registry.ID == "" || regOut.Registry.URL != "mock://harbor.local" {
 		t.Fatalf("registry mismatch: %+v", regOut.Registry)
 	}
+	regUpdateResp := postJSON(t, srv.URL+"/admin/harbor/registries/"+regOut.Registry.ID, "", map[string]any{
+		"name":         "corp-harbor-prod",
+		"url":          "mock://harbor.local",
+		"insecure_tls": true,
+		"ca_ref":       "cm/harbor-ca",
+	})
+	defer regUpdateResp.Body.Close()
+	var regUpdateOut struct {
+		Registry store.HarborRegistry `json:"registry"`
+	}
+	if err := json.NewDecoder(regUpdateResp.Body).Decode(&regUpdateOut); err != nil {
+		t.Fatal(err)
+	}
+	if regUpdateResp.StatusCode != http.StatusOK || regUpdateOut.Registry.Name != "corp-harbor-prod" || !regUpdateOut.Registry.InsecureTLS || regUpdateOut.Registry.CARef != "cm/harbor-ca" {
+		t.Fatalf("registry update mismatch status=%d out=%+v", regUpdateResp.StatusCode, regUpdateOut)
+	}
 
 	testResp := postJSON(t, srv.URL+"/admin/harbor/registries/"+regOut.Registry.ID+"/test", "", map[string]any{})
 	defer testResp.Body.Close()
@@ -81,6 +97,18 @@ func TestHarborRegistryRobotAndLaunchFlow(t *testing.T) {
 	}
 	if !robotOut.Robot.HasTokenHash {
 		t.Fatalf("robot should report hash evidence without returning it: %+v", robotOut.Robot)
+	}
+	robotUpdateResp := postJSON(t, srv.URL+"/admin/harbor/robots/"+robotOut.Robot.ID, "", map[string]any{
+		"registry_id":   regOut.Registry.ID,
+		"project_name":  "platform",
+		"name":          "robot$platform+pull",
+		"expires_at":    "2099-06-01T00:00:00Z",
+		"ignored_token": "not-a-real-field",
+	})
+	robotUpdateBody, _ := io.ReadAll(robotUpdateResp.Body)
+	robotUpdateResp.Body.Close()
+	if robotUpdateResp.StatusCode != http.StatusOK || strings.Contains(string(robotUpdateBody), robotToken) || strings.Contains(string(robotUpdateBody), "sha256:") {
+		t.Fatalf("robot update mismatch or leaked token material status=%d body=%s", robotUpdateResp.StatusCode, robotUpdateBody)
 	}
 
 	verifyResp := postJSON(t, srv.URL+"/admin/harbor/robots/verify", "", map[string]any{
@@ -121,6 +149,43 @@ func TestHarborRegistryRobotAndLaunchFlow(t *testing.T) {
 	}
 	if strings.Contains(string(catalogBody), robotToken) || !strings.Contains(string(catalogBody), "sha256:abc") {
 		t.Fatalf("catalog response should include digest sample but not token: %s", catalogBody)
+	}
+
+	mappingResp := postJSON(t, srv.URL+"/admin/harbor/mappings", "", map[string]any{
+		"registry_id":  regOut.Registry.ID,
+		"project_name": "platform",
+		"cluster_id":   "prod-cluster",
+		"namespace":    "prod",
+		"secret_name":  "harbor-platform-pull",
+		"owner_team":   "platform",
+	})
+	defer mappingResp.Body.Close()
+	var mappingOut struct {
+		Mapping store.HarborProjectMapping `json:"mapping"`
+	}
+	if err := json.NewDecoder(mappingResp.Body).Decode(&mappingOut); err != nil {
+		t.Fatal(err)
+	}
+	if mappingResp.StatusCode != http.StatusCreated || mappingOut.Mapping.ID == "" {
+		t.Fatalf("mapping create mismatch status=%d out=%+v", mappingResp.StatusCode, mappingOut)
+	}
+	mappingUpdateResp := postJSON(t, srv.URL+"/admin/harbor/mappings/"+mappingOut.Mapping.ID, "", map[string]any{
+		"registry_id":  regOut.Registry.ID,
+		"project_name": "platform",
+		"cluster_id":   "prod-cluster",
+		"namespace":    "prod",
+		"secret_name":  "harbor-platform-pull",
+		"owner_team":   "sre-platform",
+	})
+	defer mappingUpdateResp.Body.Close()
+	var mappingUpdateOut struct {
+		Mapping store.HarborProjectMapping `json:"mapping"`
+	}
+	if err := json.NewDecoder(mappingUpdateResp.Body).Decode(&mappingUpdateOut); err != nil {
+		t.Fatal(err)
+	}
+	if mappingUpdateResp.StatusCode != http.StatusOK || mappingUpdateOut.Mapping.OwnerTeam != "sre-platform" {
+		t.Fatalf("mapping update mismatch status=%d out=%+v", mappingUpdateResp.StatusCode, mappingUpdateOut)
 	}
 
 	secretResp := postJSON(t, srv.URL+"/admin/harbor/pull-secret/preview", "", map[string]any{
@@ -242,4 +307,42 @@ func TestHarborRegistryRobotAndLaunchFlow(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("expected two manifest change requests for launch, got %d: %+v", len(reqs), reqs)
 	}
+
+	regDeleteBlocked := deleteReq(t, srv.URL+"/admin/harbor/registries/"+regOut.Registry.ID)
+	_, _ = io.Copy(io.Discard, regDeleteBlocked.Body)
+	regDeleteBlocked.Body.Close()
+	if regDeleteBlocked.StatusCode != http.StatusConflict {
+		t.Fatalf("registry delete should be blocked while linked rows/history exist, got %d", regDeleteBlocked.StatusCode)
+	}
+	robotDelete := deleteReq(t, srv.URL+"/admin/harbor/robots/"+robotOut.Robot.ID)
+	_, _ = io.Copy(io.Discard, robotDelete.Body)
+	robotDelete.Body.Close()
+	if robotDelete.StatusCode != http.StatusOK {
+		t.Fatalf("robot delete status=%d", robotDelete.StatusCode)
+	}
+	mappingDelete := deleteReq(t, srv.URL+"/admin/harbor/mappings/"+mappingOut.Mapping.ID)
+	_, _ = io.Copy(io.Discard, mappingDelete.Body)
+	mappingDelete.Body.Close()
+	if mappingDelete.StatusCode != http.StatusOK {
+		t.Fatalf("mapping delete status=%d", mappingDelete.StatusCode)
+	}
+	regDeleteForce := deleteReq(t, srv.URL+"/admin/harbor/registries/"+regOut.Registry.ID+"?force=true")
+	_, _ = io.Copy(io.Discard, regDeleteForce.Body)
+	regDeleteForce.Body.Close()
+	if regDeleteForce.StatusCode != http.StatusOK {
+		t.Fatalf("registry force delete status=%d", regDeleteForce.StatusCode)
+	}
+}
+
+func deleteReq(t *testing.T, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
 }
