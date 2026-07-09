@@ -194,6 +194,9 @@ const adminHTML = `<!doctype html>
     .gitops-quick-form label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; margin-bottom: 7px; }
     .gitops-quick-form input, .gitops-quick-form select, .gitops-quick-form textarea { width: 100%; }
     .gitops-quick-form textarea { min-height: 58px; resize: vertical; }
+    .gitops-provider-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+    .gitops-provider-note { padding:8px 10px; background:rgba(15,23,42,.04); border:1px solid var(--line); border-radius:8px; font-size:11px; color:var(--muted); }
+    .gitops-catalog-results { margin-top:10px; max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
     .action-flow-summary {
       display: flex; justify-content: space-between; gap: 12px; align-items: center;
       margin: 0 0 10px; padding: 10px; border: 1px solid var(--line);
@@ -13744,6 +13747,196 @@ const adminHTML = `<!doctype html>
         gitOpsStepHTML('Rollout/Evidence', (rolloutCount || evidenceCount) ? 'rollout ' + fmt(rolloutCount) + ' · evidence ' + fmt(evidenceCount) : '단계적 배포와 증적을 남기면 운영 인계가 쉬워집니다.', (rolloutCount + evidenceCount) > 0) +
       '</div>';
     }
+    function gitOpsProviderOptions(providers, selected) {
+      const opts = ['<option value="">직접 입력 / 선택 안 함</option>'];
+      (providers || []).forEach(p => {
+        const pay = p.payload || {};
+        const label = (p.name || p.id || '-') + ' · ' + (pay.provider || '-') + ' · ' + (pay.base_url || p.source_ref || '-');
+        opts.push('<option value="' + escapeAttr(p.id || '') + '"' + ((p.id || '') === (selected || '') ? ' selected' : '') + '>' + escapeHTML(label) + '</option>');
+      });
+      return opts.join('');
+    }
+    function gitOpsProviderCardHTML(providers) {
+      const opts = gitOpsProviderOptions(providers, '');
+      return '<div class="card-body">' +
+        '<p class="muted" style="font-size:12px;margin-top:0">사내 GitLab과 Bitbucket Server 6.x 계열을 GitOps 원장에 연결합니다. 토큰은 저장하지 않고 연결 확인과 탐색 요청에만 일회성으로 사용합니다.</p>' +
+        '<div class="gitops-quick-form">' +
+          '<div class="mini-panel"><h3>Provider 등록</h3>' +
+            '<label>기존 Provider<select id="gitops-provider-existing" onchange="gitOpsFillProviderDefaults()">' + opts + '</select></label>' +
+            '<label>종류<select id="gitops-provider-kind"><option value="gitlab">GitLab</option><option value="bitbucket_server">Bitbucket Server 6.x</option></select></label>' +
+            '<label>이름<input id="gitops-provider-name" placeholder="prod gitlab"></label>' +
+            '<label>Base URL<input id="gitops-provider-url" placeholder="https://gitlab.internal 또는 https://bitbucket.local"></label>' +
+            '<label>Username <span class="muted">(Bitbucket Basic Auth 선택)</span><input id="gitops-provider-user" placeholder="svc-clustara"></label>' +
+            '<label>일회성 Token/Password<input id="gitops-provider-token" type="password" autocomplete="new-password" placeholder="저장되지 않음"></label>' +
+            '<div class="gitops-provider-actions"><button type="button" onclick="gitOpsSaveProvider()">저장/수정</button><button type="button" class="secondary" onclick="gitOpsTestProvider()">연결 확인</button><button type="button" class="secondary" onclick="gitOpsArchiveProvider()">비활성화</button></div>' +
+            '<div id="gitops-provider-result" class="gitops-provider-note" style="margin-top:8px">mock://gitlab 또는 mock://bitbucket_server 를 넣으면 폐쇄망 UI 테스트용 샘플 데이터를 볼 수 있습니다.</div>' +
+          '</div>' +
+          '<div class="mini-panel"><h3>Catalog 불러오기</h3>' +
+            '<label>Provider<select id="gitops-cat-provider" onchange="gitOpsFillProviderDefaults()">' + opts + '</select></label>' +
+            '<label>대상<select id="gitops-cat-target"><option value="projects">Projects</option><option value="repositories">Repositories</option><option value="branches">Branches</option><option value="tree">Repository Tree</option><option value="file">Raw File Preview</option></select></label>' +
+            '<label>검색어<input id="gitops-cat-search" placeholder="repo, branch, project 검색어"></label>' +
+            '<label>GitLab Project ID/Path<input id="gitops-cat-project-id" placeholder="123 또는 group/project"></label>' +
+            '<label>Bitbucket Project Key<input id="gitops-cat-project-key" placeholder="OPS"></label>' +
+            '<label>Bitbucket Repo Slug<input id="gitops-cat-repo-slug" placeholder="platform"></label>' +
+            '<label>Branch<input id="gitops-cat-branch" value="main"></label>' +
+            '<label>Path<input id="gitops-cat-path" placeholder="deploy/prod"></label>' +
+            '<label>일회성 Token/Password<input id="gitops-cat-token" type="password" autocomplete="new-password" placeholder="저장되지 않음"></label>' +
+            '<button type="button" onclick="gitOpsLoadProviderCatalog()">목록 불러오기</button>' +
+          '</div>' +
+          '<div class="mini-panel"><h3>PR API Template</h3>' +
+            '<label>Provider<select id="gitops-pr-provider">' + opts + '</select></label>' +
+            '<label>Source Branch<input id="gitops-pr-source-branch" placeholder="clustara/change-123"></label>' +
+            '<label>Target Branch<input id="gitops-pr-target-branch" value="main"></label>' +
+            '<label>제목<input id="gitops-pr-provider-title" placeholder="Clustara GitOps change"></label>' +
+            '<label>설명<textarea id="gitops-pr-provider-desc" placeholder="PR에 넣을 변경 요약"></textarea></label>' +
+            '<button type="button" onclick="gitOpsBuildPRTemplate()">Payload 보기</button>' +
+            '<div id="gitops-pr-template-result" class="gitops-provider-note" style="margin-top:8px">외부 Git에 바로 쓰지 않고 API payload만 미리 만듭니다.</div>' +
+          '</div>' +
+        '</div>' +
+        '<div id="gitops-catalog-results" class="gitops-catalog-results"><table><tbody><tr><td class="muted">Catalog를 불러오면 프로젝트, 저장소, 브랜치, 경로를 선택해 Git Source 폼에 채울 수 있습니다.</td></tr></tbody></table></div>' +
+      '</div>';
+    }
+    function gitOpsProviderByID(id) {
+      return (window.gitOpsProviderCache || []).find(p => (p.id || '') === (id || '')) || null;
+    }
+    function gitOpsActiveProviderID(field) {
+      return safeInputValue(field || 'gitops-provider-existing', '').trim();
+    }
+    function gitOpsProviderBodyFromForm() {
+      const providerID = gitOpsActiveProviderID('gitops-provider-existing');
+      const kind = safeInputValue('gitops-provider-kind', 'gitlab').trim();
+      const url = safeInputValue('gitops-provider-url', '').trim();
+      const username = safeInputValue('gitops-provider-user', '').trim();
+      const token = safeInputValue('gitops-provider-token', '').trim();
+      return {
+        id: providerID,
+        name: safeInputValue('gitops-provider-name', '').trim() || (kind + ' ' + url),
+        scope_type: 'git_provider',
+        scope_id: kind + ':' + url,
+        source_ref: url,
+        payload: { provider: kind, base_url: url, username, token }
+      };
+    }
+    window.gitOpsFillProviderDefaults = () => {
+      const providerID = gitOpsActiveProviderID('gitops-provider-existing') || gitOpsActiveProviderID('gitops-cat-provider') || gitOpsActiveProviderID('gitops-pr-provider');
+      const p = gitOpsProviderByID(providerID);
+      if (!p) return;
+      const pay = p.payload || {};
+      const set = (id, value) => { const el = document.getElementById(id); if (el && value !== undefined && value !== null) el.value = value; };
+      set('gitops-provider-existing', p.id || '');
+      set('gitops-cat-provider', p.id || '');
+      set('gitops-pr-provider', p.id || '');
+      set('gitops-provider-kind', pay.provider || 'gitlab');
+      set('gitops-provider-name', p.name || '');
+      set('gitops-provider-url', pay.base_url || p.source_ref || '');
+      set('gitops-provider-user', pay.username || '');
+      set('gitops-cat-project-id', pay.default_project_id || '');
+      set('gitops-cat-project-key', pay.default_project_key || '');
+      set('gitops-cat-repo-slug', pay.default_repo_slug || '');
+      set('gitops-cat-branch', pay.default_branch || 'main');
+    };
+    window.gitOpsSaveProvider = async () => {
+      const body = gitOpsProviderBodyFromForm();
+      if (!body.payload.base_url) { showToast('warn', 'Base URL 필요', 'GitLab 또는 Bitbucket Server URL을 입력하세요.'); return; }
+      const endpoint = body.id ? '/admin/gitops/providers/' + encodeURIComponent(body.id) : '/admin/gitops/providers';
+      try {
+        await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+        showToast('ok', 'Git Provider 저장', body.name);
+        await renderGitOps(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        showToast('error', 'Git Provider 저장 실패', e.message);
+      }
+    };
+    window.gitOpsArchiveProvider = async () => {
+      const id = gitOpsActiveProviderID('gitops-provider-existing');
+      if (!id) { showToast('warn', 'Provider 선택 필요', '비활성화할 provider를 선택하세요.'); return; }
+      try {
+        await api('/admin/gitops/providers/' + encodeURIComponent(id), { method: 'DELETE' });
+        showToast('ok', 'Git Provider 비활성화', id);
+        await renderGitOps(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        showToast('error', 'Git Provider 비활성화 실패', e.message);
+      }
+    };
+    function gitOpsCatalogRequest(providerField, tokenField) {
+      const providerID = gitOpsActiveProviderID(providerField || 'gitops-cat-provider');
+      const p = gitOpsProviderByID(providerID);
+      const pay = (p && p.payload) || {};
+      return {
+        provider_id: providerID,
+        provider: pay.provider || safeInputValue('gitops-provider-kind', 'gitlab'),
+        base_url: pay.base_url || safeInputValue('gitops-provider-url', ''),
+        username: pay.username || safeInputValue('gitops-provider-user', ''),
+        token: safeInputValue(tokenField || 'gitops-cat-token', '') || safeInputValue('gitops-provider-token', ''),
+        target: safeInputValue('gitops-cat-target', 'projects'),
+        search: safeInputValue('gitops-cat-search', ''),
+        project_id: safeInputValue('gitops-cat-project-id', ''),
+        project_key: safeInputValue('gitops-cat-project-key', ''),
+        repo_slug: safeInputValue('gitops-cat-repo-slug', ''),
+        branch: safeInputValue('gitops-cat-branch', 'main'),
+        path: safeInputValue('gitops-cat-path', ''),
+        limit: 100
+      };
+    }
+    window.gitOpsTestProvider = async () => {
+      const body = gitOpsCatalogRequest('gitops-provider-existing', 'gitops-provider-token');
+      if (!body.provider_id && !body.base_url) { showToast('warn', 'Provider 정보 필요', '저장된 provider를 선택하거나 URL을 입력하세요.'); return; }
+      try {
+        const res = await api('/admin/gitops/providers/test', { method: 'POST', body: JSON.stringify(body) });
+        const result = res.result || {};
+        const el = document.getElementById('gitops-provider-result');
+        if (el) el.innerHTML = '<strong>' + (result.ok ? 'OK' : 'FAILED') + '</strong> · ' + escapeHTML(result.request_path || result.error || '-') + ' · items ' + fmt((result.items || []).length || 0);
+        showToast(result.ok ? 'ok' : 'warn', 'Git Provider 연결 확인', result.ok ? '응답을 확인했습니다.' : (result.error || '실패'));
+      } catch (e) {
+        showToast('error', 'Git Provider 연결 확인 실패', e.message);
+      }
+    };
+    window.gitOpsLoadProviderCatalog = async () => {
+      const body = gitOpsCatalogRequest('gitops-cat-provider', 'gitops-cat-token');
+      try {
+        const res = await api('/admin/gitops/providers/catalog', { method: 'POST', body: JSON.stringify(body) });
+        const result = res.result || {};
+        window.gitOpsCatalogCache = result.items || [];
+        const rows = (result.items || []).map((it, idx) => {
+          const main = it.name || it.path || it.repo_url || it.project_key || it.id || '-';
+          const detail = [it.repo_url, it.path, it.branch, it.project_key, it.repo_slug].filter(Boolean).join(' · ');
+          return '<tr><td><button type="button" class="secondary" onclick="gitOpsUseCatalogItem(' + idx + ')">선택</button></td><td><strong>' + escapeHTML(main) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(detail || '-') + '</div></td><td>' + escapeHTML(it.type || '-') + '</td><td>' + escapeHTML(it.provider || result.provider || '-') + '</td></tr>';
+        }).join('') || '<tr><td class="muted">결과 없음 · ' + escapeHTML(result.error || '') + '</td></tr>';
+        const el = document.getElementById('gitops-catalog-results');
+        if (el) el.innerHTML = '<table><thead><tr><th></th><th>항목</th><th>Type</th><th>Provider</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        showToast(result.ok ? 'ok' : 'warn', 'Catalog 조회', (result.items || []).length + '개 항목');
+      } catch (e) {
+        showToast('error', 'Catalog 조회 실패', e.message);
+      }
+    };
+    window.gitOpsUseCatalogItem = (idx) => {
+      const it = (window.gitOpsCatalogCache || [])[idx] || {};
+      const set = (id, value) => { const el = document.getElementById(id); if (el && value !== undefined && value !== null && String(value) !== '') el.value = value; };
+      set('gitops-src-repo', it.repo_url || it.web_url || it.path);
+      set('gitops-src-branch', it.default_branch || it.branch || it.name);
+      if (it.type === 'tree' || it.type === 'blob' || it.type === 'file') set('gitops-src-path', it.path || it.name);
+      set('gitops-cat-project-id', it.id || it.path);
+      set('gitops-cat-project-key', it.project_key);
+      set('gitops-cat-repo-slug', it.repo_slug || it.slug);
+      set('gitops-cat-branch', it.default_branch || it.branch);
+      showToast('ok', 'Git Source 폼에 반영', it.name || it.path || it.repo_url || '');
+    };
+    window.gitOpsBuildPRTemplate = async () => {
+      const body = gitOpsCatalogRequest('gitops-pr-provider', 'gitops-cat-token');
+      body.source_branch = safeInputValue('gitops-pr-source-branch', 'clustara/change');
+      body.target_branch = safeInputValue('gitops-pr-target-branch', 'main');
+      body.title = safeInputValue('gitops-pr-provider-title', 'Clustara GitOps change');
+      body.description = safeInputValue('gitops-pr-provider-desc', '');
+      try {
+        const res = await api('/admin/gitops/providers/pr-template', { method: 'POST', body: JSON.stringify(body) });
+        const item = ((res.result || {}).items || [])[0] || {};
+        const el = document.getElementById('gitops-pr-template-result');
+        if (el) el.innerHTML = '<div class="muted" style="font-size:11px">' + escapeHTML(item.method || '-') + ' ' + escapeHTML(item.endpoint || '-') + '</div><pre style="white-space:pre-wrap;font-size:11px">' + escapeHTML(JSON.stringify(item.payload || {}, null, 2)) + '</pre>';
+        showToast('ok', 'PR API Template 생성', item.endpoint || '');
+      } catch (e) {
+        showToast('error', 'PR API Template 실패', e.message);
+      }
+    };
     function gitOpsQuickFormHTML(clusterId, stackOptions) {
       return '<div class="gitops-quick-form">' +
         '<div class="mini-panel"><h3>Git Source 연결</h3>' +
@@ -13879,9 +14072,9 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('GitOps Change Manager', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts;
+      let clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers;
       try {
-        [clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts] = await Promise.all([
+        [clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/gitops/overview' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/gitops/drift' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { drift: [] } })),
@@ -13891,6 +14084,7 @@ const adminHTML = `<!doctype html>
           api('/admin/gitops/deployment-evidence').catch(() => ({ data: { evidence: [] } })),
           api('/admin/gitops/pr-drafts').catch(() => ({ data: { drafts: [] } })),
           api('/admin/gitops/progressive-rollouts').catch(() => ({ data: { rollouts: [] } })),
+          api('/admin/gitops/providers').catch(() => ({ data: { providers: [] } })),
         ]);
       } catch (e) {
         view.innerHTML = section('GitOps Change Manager', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -13938,6 +14132,8 @@ const adminHTML = `<!doctype html>
       const prList = ((prDrafts && prDrafts.data && prDrafts.data.drafts) || prDrafts.drafts || []);
       const rolloutList = ((rollouts && rollouts.data && rollouts.data.rollouts) || rollouts.rollouts || []);
       const evidenceList = ((evidence && evidence.data && evidence.data.evidence) || evidence.evidence || []);
+      const providerList = ((providers && providers.data && providers.data.providers) || providers.providers || []);
+      window.gitOpsProviderCache = providerList;
       const stackOptions = '<option value="">Stack 선택 안 함</option>' + (data.stacks || []).map(x => {
         const st = x.stack || {};
         const value = [st.id || '', st.cluster_id || '', st.namespace || '', st.name || ''].join('|');
@@ -13962,6 +14158,7 @@ const adminHTML = `<!doctype html>
           '</div><div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div>' +
           gitOpsWorkflowHTML(sum, sourceList.length, actionableDriftCount, prList.length, rolloutList.length, evidenceList.length) +
           '</div>') +
+        card('사내 Git Provider 연동', gitOpsProviderCardHTML(providerList)) +
         card('GitOps 빠른 등록', '<div class="card-body"><p class="muted" style="font-size:12px;margin-top:0">이 카드의 항목은 실제 Git provider에 바로 쓰지 않고 GitOps 원장에 초안·계획·증적으로 저장합니다. 이후 Stack Apply, YAML 변경, 외부 PR 자동화와 연결하세요.</p>' + gitOpsQuickFormHTML(clusterId, stackOptions) + '</div>') +
         card('Drift and Change Readiness', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>Git Source</th><th>Sync</th><th>Drift</th><th>Last Op</th><th>Rollback</th><th>사유</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
         '<div class="grid2">' +

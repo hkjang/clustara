@@ -24,7 +24,7 @@
 | **Pod 관리** | Pod 목록·상세, 위험 Pod 자동 북마크, 최근 접근 이력, 컨테이너 상태, 이벤트, 현재/previous 로그, 로그 분석·프리셋·마스킹 리포트·스냅샷·동일 workload 병합, 증적 번들, Golden Pod Diff, Health Replay, 조치 안전성·플레이북 |
 | **터미널·디버그 정책** | Pod exec/web terminal 사전 정책: role·namespace·label·명령 allow/deny·승인·세션 시간·감사 평가, Risk Briefing, 명령 템플릿, 세션 요청 이력·승인함·상세 리플레이·감사 리포트, Debug Container 요청·승인 이력 |
 | **변경 추적** | 리소스 spec 리비전(append-only), Resource Diff, 변경 타임라인, Manifest Viewer(민감값 마스킹), YAML 변경/생성 요청 원장, Ops Agent YAML 초안/요청 브리지 |
-| **GitOps 변경관리** | Application Stack의 Git source 연결, drift 분류, PR draft 원장, progressive rollout 계획, change calendar, deployment evidence, rollback 후보 관리 |
+| **GitOps 변경관리** | Application Stack의 Git source 연결, 사내 GitLab·Bitbucket Server catalog picker, drift 분류, PR draft 원장, progressive rollout 계획, change calendar, deployment evidence, rollback 후보 관리 |
 | **장애 분석(RCA)** | CrashLoop·OOM·ImagePull·Pending·Unavailable + Readiness/Liveness probe·DNS·NodePressure(노드 condition) + 직전 Config 변경·배포 후 오류 연계, 근거 기반 장애 분석 센터 |
 | **연결성 점검** | Service selector↔Endpoint, Ingress backend/host/TLS, PVC, Rollout, Job/CronJob |
 | **액션 센터** | 영향도 분석·승인·감사 공통화 + 실클러스터 executor(scale / rollout restart / cordon / uncordon / delete pod) — Action/Config/YAML/Exec/Debug 요청을 다음 행동 흐름으로 묶는 승인 게이트 |

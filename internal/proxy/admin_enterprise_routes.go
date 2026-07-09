@@ -63,6 +63,11 @@ func (s *Server) registerFinOpsRoutes(mux *http.ServeMux) {
 
 func (s *Server) registerGitOpsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/gitops/overview", s.handleGitOpsOverview)
+	mux.HandleFunc("/admin/gitops/providers/test", s.handleGitOpsProviderTest)
+	mux.HandleFunc("/admin/gitops/providers/catalog", s.handleGitOpsProviderCatalog)
+	mux.HandleFunc("/admin/gitops/providers/pr-template", s.handleGitOpsProviderPRTemplate)
+	mux.HandleFunc("/admin/gitops/providers/", s.handleGitOpsProviderItem)
+	mux.HandleFunc("/admin/gitops/providers", s.handleGitOpsProviders)
 	mux.HandleFunc("/admin/gitops/sources", s.handleGitOpsSources)
 	mux.HandleFunc("/admin/gitops/drift", s.handleGitOpsDrift)
 	mux.HandleFunc("/admin/gitops/pr-drafts", s.handleGitOpsPRDrafts)

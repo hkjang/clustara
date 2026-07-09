@@ -1,3 +1,6 @@
+v0.9.109:
+- **Internal Git Provider Integration for GitOps (v0.9.109)**: 사내 오프라인망에서 GitLab과 Bitbucket Server 6.x 계열을 GitOps Change Manager에 쉽게 연결할 수 있도록 Git provider 원장과 catalog 탐색 API/UI를 추가했습니다. `/admin/gitops/providers`는 provider metadata만 저장하고 token/password 원문은 저장·응답하지 않으며, `/admin/gitops/providers/test`, `/catalog`, `/pr-template`은 일회성 token으로 GitLab projects/branches/tree/file 또는 Bitbucket Server projects/repos/branches/browse/raw를 조회합니다. UI에는 provider 등록/수정/비활성화, 연결 확인, 프로젝트·저장소·브랜치·경로 picker, Git Source 폼 자동 채우기, GitLab Merge Request·Bitbucket Pull Request payload preview를 추가했습니다. mock/offline URL도 지원해 폐쇄망 도입 전 화면과 workflow를 검증할 수 있습니다.
+
 v0.9.108:
 - **GitOps Change Manager Guide UX (v0.9.108)**: GitOps 화면이 단순 overview 표처럼 보이지 않도록 `운영 가이드` 모달, Stack→Git Source→Drift→PR Draft→Rollout/Evidence 5단계 흐름 카드, 현재 데이터 상태 기반 다음 행동 신호, `GitOps 빠른 등록` 폼을 추가했습니다. 운영자는 같은 화면에서 Git Source(repo/branch/path), PR Draft(cluster→Git 또는 Git→cluster 방향), Change Window, Progressive Rollout, Deployment Evidence를 바로 원장에 저장할 수 있습니다. 새 문서 `docs/GITOPS_CHANGE_MANAGER.md`를 추가하고 README, 관리자 가이드, K8s 운영 허브 문서에 GitOps의 목적과 안전 원칙을 정리했습니다. PR Draft와 Rollout은 외부 Git provider에 즉시 쓰지 않는 감사 가능한 초안·계획이며, 실제 Kubernetes 변경은 기존 Stack Apply 또는 YAML 변경/생성의 검증·승인·Server-Side Apply 흐름만 사용합니다.
 
