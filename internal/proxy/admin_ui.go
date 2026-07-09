@@ -175,6 +175,25 @@ const adminHTML = `<!doctype html>
     .kpi { background: var(--panel); padding: 14px; min-height: 80px; }
     .kpi .label { color: var(--muted); font-size: 12px; font-weight: 700; }
     .kpi .value { margin-top: 8px; font-size: 22px; font-weight: 800; overflow-wrap: anywhere; }
+    .gitops-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-top: 12px; }
+    .gitops-step {
+      border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; background: var(--panel-alt);
+      min-height: 88px;
+    }
+    .gitops-step strong { display: block; font-size: 12px; margin-bottom: 5px; }
+    .gitops-step .muted { font-size: 11px; line-height: 1.38; }
+    .gitops-step.ready { border-color: rgba(34,197,94,0.45); box-shadow: inset 3px 0 0 var(--good); }
+    .gitops-step.attention { border-color: rgba(245,158,11,0.55); box-shadow: inset 3px 0 0 var(--warn); }
+    .gitops-quick-form {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
+    }
+    .gitops-quick-form .mini-panel {
+      border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-alt);
+    }
+    .gitops-quick-form .mini-panel h3 { margin: 0 0 8px; font-size: 13px; }
+    .gitops-quick-form label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; margin-bottom: 7px; }
+    .gitops-quick-form input, .gitops-quick-form select, .gitops-quick-form textarea { width: 100%; }
+    .gitops-quick-form textarea { min-height: 58px; resize: vertical; }
     .action-flow-summary {
       display: flex; justify-content: space-between; gap: 12px; align-items: center;
       margin: 0 0 10px; padding: 10px; border: 1px solid var(--line);
@@ -646,7 +665,7 @@ const adminHTML = `<!doctype html>
           <a href="#/harbor-robots" data-tab="harbor-robots">Harbor Robot</a>
           <a href="#/app-launcher" data-tab="app-launcher">앱 런처</a>
           <a href="#/app-launch-history" data-tab="app-launch-history">런칭 이력</a>
-          <a href="#/gitops" data-tab="gitops">GitOps</a>
+          <a href="#/gitops" data-tab="gitops">GitOps 변경관리</a>
           <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
           <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
           <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
@@ -1247,7 +1266,7 @@ const adminHTML = `<!doctype html>
       { tab: 'harbor-robots', href: '#/harbor-robots', label: 'Harbor Robot', group: '변경', tags: 'harbor robot account pull permission imagepullsecret' },
       { tab: 'app-launcher', href: '#/app-launcher', label: '앱 런처', group: '변경', tags: 'application launch image deployment service secret manifest' },
       { tab: 'app-launch-history', href: '#/app-launch-history', label: '런칭 이력', group: '변경', tags: 'launch history approval manifest harbor' },
-      { tab: 'gitops', href: '#/gitops', label: 'GitOps', group: '변경', tags: 'git drift rollback stack pr' },
+      { tab: 'gitops', href: '#/gitops', label: 'GitOps 변경관리', group: '변경', tags: 'git drift rollback stack pr' },
       { tab: 'k8s-timeline', href: '#/k8s-timeline', label: '변경 타임라인', group: '변경', tags: 'timeline revision diff event' },
       { tab: 'problems', href: '#/problems', label: 'Problem Inbox', group: '장애', tags: 'problem aiops grouping incident' },
       { tab: 'k8s-rca', href: '#/k8s-rca', label: '장애 분석', group: '장애', tags: 'rca crashloop oom pending imagepull' },
@@ -13688,6 +13707,174 @@ const adminHTML = `<!doctype html>
     }
 
     // ---------- GitOps Change Manager ----------
+    function gitOpsGuideHTML() {
+      return '<div class="card-body" style="padding:0">' +
+        '<p class="muted" style="font-size:13px;margin:0 0 12px">Clustara의 GitOps는 Git 저장소를 직접 sync하는 CD 대체물이 아니라, 현재 Application Stack과 Git 선언 사이의 관계를 추적하고 drift를 안전한 변경 요청·PR 초안·단계적 rollout·rollback 증적으로 이어주는 변경관리 허브입니다.</p>' +
+        '<div class="gitops-flow">' +
+          '<div class="gitops-step ready"><strong>1. Stack 연결</strong><div class="muted">앱 배포(Application Stack)에 repo, branch, path를 연결하거나 Git Source Registry에 기록합니다.</div></div>' +
+          '<div class="gitops-step ready"><strong>2. Drift 판단</strong><div class="muted">live-only, spec-diff, in-sync를 구분하고 위험도와 권장 행동을 확인합니다.</div></div>' +
+          '<div class="gitops-step ready"><strong>3. PR 초안</strong><div class="muted">클러스터 변경을 Git으로 되돌릴지, Git 선언을 클러스터에 맞출지 PR draft로 남깁니다.</div></div>' +
+          '<div class="gitops-step ready"><strong>4. 단계적 rollout</strong><div class="muted">dev, qa, canary, prod 같은 단계와 gate를 기록해 한 번에 prod 전체로 밀지 않습니다.</div></div>' +
+          '<div class="gitops-step ready"><strong>5. 증적·rollback</strong><div class="muted">apply 이력, evidence id, 이전 revision을 묶어 장애 시 되돌릴 후보를 확인합니다.</div></div>' +
+        '</div>' +
+        '<h3 style="margin:16px 0 8px;font-size:14px">언제 사용하나요?</h3>' +
+        '<table><thead><tr><th>상황</th><th>권장 동선</th></tr></thead><tbody>' +
+          '<tr><td>운영자가 UI/YAML 변경으로 hotfix를 만들었음</td><td>Drift Diff 확인 → PR Draft 생성 → Git에 반영 → Evidence 저장</td></tr>' +
+          '<tr><td>Git 선언과 live cluster가 다름</td><td>Drift 분류 확인 → Git을 기준으로 되돌릴지, live를 Git에 반영할지 선택</td></tr>' +
+          '<tr><td>운영 배포 전 freeze 여부 확인 필요</td><td>Change Calendar 확인 → freeze면 emergency reason과 추가 승인 사용</td></tr>' +
+          '<tr><td>실패한 배포를 되돌려야 함</td><td>Rollback Plans에서 이전 Stack revision 확인 → Manifest Change/Stack Rollback으로 요청</td></tr>' +
+        '</tbody></table>' +
+        '<h3 style="margin:16px 0 8px;font-size:14px">주의할 점</h3>' +
+        '<ul style="margin-top:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.55">' +
+          '<li>현재 화면의 PR Draft와 Rollout은 승인·검토용 원장입니다. 외부 Git provider에 실제 PR을 만드는 자동화는 별도 연동 단계에서 연결합니다.</li>' +
+          '<li>실제 Kubernetes 변경은 Stack Apply 또는 YAML 변경/생성의 검증·승인·Server-Side Apply 흐름을 사용합니다.</li>' +
+          '<li>Secret 원문은 GitOps 원장에 저장하지 말고 secret manager, sealed secret, external secret 같은 외부 체계를 사용하세요.</li>' +
+        '</ul></div>';
+    }
+    window.gitOpsOpenGuide = () => openModal('GitOps 운영 가이드', gitOpsGuideHTML(), null, { wide: true });
+    function gitOpsStepHTML(title, detail, ready) {
+      return '<div class="gitops-step ' + (ready ? 'ready' : 'attention') + '"><strong>' + escapeHTML(title) + '</strong><div class="muted">' + escapeHTML(detail) + '</div></div>';
+    }
+    function gitOpsWorkflowHTML(sum, sourceCount, driftCount, prCount, rolloutCount, evidenceCount) {
+      return '<div class="gitops-flow">' +
+        gitOpsStepHTML('Stack 등록', (sum.stacks || 0) ? fmt(sum.stacks || 0) + '개 Stack을 추적 중입니다.' : '앱 배포에서 Application Stack을 먼저 저장하세요.', (sum.stacks || 0) > 0) +
+        gitOpsStepHTML('Git Source 연결', sourceCount ? fmt(sourceCount) + '개 Git source가 연결됐습니다.' : 'repo/branch/path를 연결해야 drift 판단이 쉬워집니다.', sourceCount > 0) +
+        gitOpsStepHTML('Drift 검토', driftCount ? fmt(driftCount) + '개 drift 후보를 검토하세요.' : '현재 표 기준 drift 후보가 없습니다.', driftCount === 0) +
+        gitOpsStepHTML('PR Draft', prCount ? fmt(prCount) + '개 PR 초안이 있습니다.' : 'drift나 hotfix를 Git 반영 초안으로 남길 수 있습니다.', prCount > 0) +
+        gitOpsStepHTML('Rollout/Evidence', (rolloutCount || evidenceCount) ? 'rollout ' + fmt(rolloutCount) + ' · evidence ' + fmt(evidenceCount) : '단계적 배포와 증적을 남기면 운영 인계가 쉬워집니다.', (rolloutCount + evidenceCount) > 0) +
+      '</div>';
+    }
+    function gitOpsQuickFormHTML(clusterId, stackOptions) {
+      return '<div class="gitops-quick-form">' +
+        '<div class="mini-panel"><h3>Git Source 연결</h3>' +
+          '<label>Stack<select id="gitops-src-stack">' + stackOptions + '</select></label>' +
+          '<label>Repo URL<input id="gitops-src-repo" placeholder="https://github.com/org/repo.git"></label>' +
+          '<label>Branch<input id="gitops-src-branch" value="main"></label>' +
+          '<label>Path<input id="gitops-src-path" placeholder="deploy/prod/app"></label>' +
+          '<button type="button" onclick="gitOpsCreateSource()">저장</button>' +
+        '</div>' +
+        '<div class="mini-panel"><h3>PR Draft 생성</h3>' +
+          '<label>Stack<select id="gitops-pr-stack">' + stackOptions + '</select></label>' +
+          '<label>방향<select id="gitops-pr-mode"><option value="cluster_to_git">클러스터 변경을 Git에 반영</option><option value="git_to_cluster">Git 선언을 클러스터에 적용</option></select></label>' +
+          '<label>제목<input id="gitops-pr-title" placeholder="sync live hotfix into Git"></label>' +
+          '<label>요약<textarea id="gitops-pr-summary" placeholder="어떤 drift를 어떤 방향으로 정리할지 적습니다."></textarea></label>' +
+          '<button type="button" onclick="gitOpsCreatePRDraft()">초안 저장</button>' +
+        '</div>' +
+        '<div class="mini-panel"><h3>Change Window</h3>' +
+          '<label>유형<select id="gitops-cal-type"><option value="freeze">Freeze</option><option value="maintenance">Maintenance</option><option value="business_critical">Business Critical</option></select></label>' +
+          '<label>이름<input id="gitops-cal-name" placeholder="prod freeze"></label>' +
+          '<label>시작<input id="gitops-cal-start" type="datetime-local"></label>' +
+          '<label>종료<input id="gitops-cal-end" type="datetime-local"></label>' +
+          '<button type="button" onclick="gitOpsCreateChangeWindow()">캘린더 저장</button>' +
+        '</div>' +
+        '<div class="mini-panel"><h3>Progressive Rollout</h3>' +
+          '<label>Stack<select id="gitops-roll-stack">' + stackOptions + '</select></label>' +
+          '<label>이름<input id="gitops-roll-name" placeholder="payments prod rollout"></label>' +
+          '<label>단계<input id="gitops-roll-stages" value="dev,qa,canary,prod"></label>' +
+          '<label>Gate<select id="gitops-roll-gate"><option value="healthy">Healthy</option><option value="slo_ok">SLO OK</option><option value="approval">Approval</option></select></label>' +
+          '<button type="button" onclick="gitOpsCreateRollout()">계획 저장</button>' +
+        '</div>' +
+        '<div class="mini-panel"><h3>Deployment Evidence</h3>' +
+          '<label>Stack<select id="gitops-evi-stack">' + stackOptions + '</select></label>' +
+          '<label>이름<input id="gitops-evi-name" placeholder="prod deploy evidence"></label>' +
+          '<label>결과<select id="gitops-evi-result"><option value="verified">verified</option><option value="applied">applied</option><option value="failed">failed</option><option value="rolled_back">rolled_back</option></select></label>' +
+          '<label>메모<textarea id="gitops-evi-note" placeholder="승인, 적용, 검증, 관련 incident나 ticket을 남깁니다."></textarea></label>' +
+          '<button type="button" onclick="gitOpsCreateEvidence()">증적 저장</button>' +
+        '</div>' +
+      '</div>';
+    }
+    function gitOpsSelectedStack(id) {
+      const value = safeInputValue(id, '').trim();
+      if (!value) return { stack_id: '', cluster_id: '', namespace: '', name: '' };
+      const parts = value.split('|');
+      return { stack_id: parts[0] || '', cluster_id: parts[1] || '', namespace: parts[2] || '', name: parts[3] || '' };
+    }
+    function gitOpsRecordScope(stack, fallbackCluster) {
+      if (stack && stack.stack_id) return { scope_type: 'stack', scope_id: stack.stack_id, source_ref: stack.stack_id };
+      if (fallbackCluster) return { scope_type: 'cluster', scope_id: fallbackCluster, source_ref: fallbackCluster };
+      return { scope_type: 'gitops', scope_id: '*', source_ref: '' };
+    }
+    function gitOpsDateTimeRFC(id) {
+      const value = safeInputValue(id, '').trim();
+      if (!value) return '';
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? value : d.toISOString();
+    }
+    function gitOpsRolloutStages() {
+      const gate = safeInputValue('gitops-roll-gate', 'healthy');
+      return safeInputValue('gitops-roll-stages', 'dev,qa,canary,prod').split(',').map(s => s.trim()).filter(Boolean).map((name, idx, arr) => ({
+        name,
+        gate: idx === arr.length - 1 && gate !== 'healthy' ? gate : (name === 'prod' ? 'approval' : gate)
+      }));
+    }
+    async function gitOpsPostRecord(endpoint, body, title) {
+      try {
+        await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+        showToast('ok', title, body.name || body.scope_id || '');
+        await renderGitOps(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        showToast('error', title + ' 실패', e.message);
+      }
+    }
+    window.gitOpsCreateSource = async () => {
+      const stack = gitOpsSelectedStack('gitops-src-stack');
+      const repo = safeInputValue('gitops-src-repo', '').trim();
+      if (!repo) { showToast('warn', 'Repo URL 필요', 'Git 저장소 URL을 입력하세요.'); return; }
+      const scope = gitOpsRecordScope(stack, (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '');
+      await gitOpsPostRecord('/admin/gitops/sources', {
+        name: stack.name ? stack.name + ' Git Source' : repo,
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        source_ref: scope.source_ref,
+        payload: { stack_id: stack.stack_id, cluster_id: stack.cluster_id, namespace: stack.namespace, repo, branch: safeInputValue('gitops-src-branch', 'main').trim() || 'main', path: safeInputValue('gitops-src-path', '').trim(), source_of_truth: 'git' }
+      }, 'Git Source 저장');
+    };
+    window.gitOpsCreatePRDraft = async () => {
+      const stack = gitOpsSelectedStack('gitops-pr-stack');
+      const scope = gitOpsRecordScope(stack, (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '');
+      const mode = safeInputValue('gitops-pr-mode', 'cluster_to_git');
+      const title = safeInputValue('gitops-pr-title', '').trim() || (mode === 'cluster_to_git' ? 'Sync live change into Git' : 'Apply Git desired state');
+      await gitOpsPostRecord('/admin/gitops/pr-drafts', {
+        name: title,
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        source_ref: scope.source_ref,
+        payload: { stack_id: stack.stack_id, direction: mode, summary: safeInputValue('gitops-pr-summary', '').trim(), patch_source: mode, operator_note: 'created_from_gitops_quick_form' }
+      }, 'PR Draft 저장');
+    };
+    window.gitOpsCreateChangeWindow = async () => {
+      const clusterId = (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '';
+      const name = safeInputValue('gitops-cal-name', '').trim() || safeInputValue('gitops-cal-type', 'freeze') + ' window';
+      await gitOpsPostRecord('/admin/gitops/change-calendar', {
+        name,
+        scope_type: clusterId ? 'cluster' : 'gitops',
+        scope_id: clusterId || '*',
+        payload: { type: safeInputValue('gitops-cal-type', 'freeze'), start_at: gitOpsDateTimeRFC('gitops-cal-start'), end_at: gitOpsDateTimeRFC('gitops-cal-end'), note: 'created_from_gitops_quick_form' }
+      }, 'Change Window 저장');
+    };
+    window.gitOpsCreateRollout = async () => {
+      const stack = gitOpsSelectedStack('gitops-roll-stack');
+      const scope = gitOpsRecordScope(stack, (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '');
+      await gitOpsPostRecord('/admin/gitops/progressive-rollouts', {
+        name: safeInputValue('gitops-roll-name', '').trim() || ((stack.name || 'stack') + ' progressive rollout'),
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        source_ref: scope.source_ref,
+        payload: { stack_id: stack.stack_id, stages: gitOpsRolloutStages(), gate_policy: safeInputValue('gitops-roll-gate', 'healthy'), note: 'created_from_gitops_quick_form' }
+      }, 'Progressive Rollout 저장');
+    };
+    window.gitOpsCreateEvidence = async () => {
+      const stack = gitOpsSelectedStack('gitops-evi-stack');
+      const scope = gitOpsRecordScope(stack, (new URLSearchParams(location.hash.split('?')[1] || '')).get('cluster_id') || '');
+      await gitOpsPostRecord('/admin/gitops/deployment-evidence', {
+        name: safeInputValue('gitops-evi-name', '').trim() || ((stack.name || 'stack') + ' deployment evidence'),
+        status: safeInputValue('gitops-evi-result', 'verified'),
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        source_ref: scope.source_ref,
+        payload: { stack_id: stack.stack_id, result: safeInputValue('gitops-evi-result', 'verified'), note: safeInputValue('gitops-evi-note', '').trim(), evidence_kind: 'manual_gitops_note' }
+      }, 'Deployment Evidence 저장');
+    };
     async function renderGitOps(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -13727,13 +13914,15 @@ const adminHTML = `<!doctype html>
           '<td class="muted" style="font-size:11px">' + escapeHTML((x.reasons || []).join(', ')) + '</td>' +
           '<td><a href="#/k8s-stacks' + (st.cluster_id ? '?cluster_id=' + encodeURIComponent(st.cluster_id) : '') + '">Stack</a></td></tr>';
       }).join('') : '<tr><td colspan="9" class="muted">Stack 없음. 앱 배포에서 Git metadata를 가진 Stack을 저장하면 표시됩니다.</td></tr>';
-      const driftRows = (((drift && drift.data && drift.data.drift) || drift.drift || [])).slice(0, 25).map(d =>
+      const driftList = ((drift && drift.data && drift.data.drift) || drift.drift || []);
+      const driftRows = driftList.slice(0, 25).map(d =>
         '<tr><td><span class="status ' + riskClass(d.risk_level) + '">' + escapeHTML(d.risk_level || '-') + '</span></td>' +
         '<td><strong>' + escapeHTML(d.stack || d.stack_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML((d.cluster_id || '-') + ' · ' + (d.namespace || '-')) + '</div></td>' +
         '<td>' + escapeHTML(d.classification || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML((d.reasons || []).join(', ') || '-') + '</td><td>' + escapeHTML(d.recommended_action || '-') + '</td></tr>'
       ).join('') || '<tr><td colspan="5" class="muted">drift 없음</td></tr>';
       const srcData = (sources && sources.data) || sources || {};
-      const sourceRows = ((srcData.stack_sources || []).concat(srcData.sources || [])).slice(0, 20).map(s =>
+      const sourceList = (srcData.stack_sources || []).concat(srcData.sources || []);
+      const sourceRows = sourceList.slice(0, 20).map(s =>
         '<tr><td><strong>' + escapeHTML(s.name || s.id || s.stack_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.cluster_id || s.scope_id || '') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(s.repo || (s.payload && s.payload.repo) || s.source_ref || '-') + '</td>' +
         '<td>' + escapeHTML(s.branch || (s.payload && s.payload.branch) || '-') + '</td><td>' + escapeHTML(s.path || (s.payload && s.payload.path) || '-') + '</td></tr>'
@@ -13746,6 +13935,15 @@ const adminHTML = `<!doctype html>
       const evidenceRows = (((evidence && evidence.data && evidence.data.evidence) || evidence.evidence || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">deployment evidence 없음</td></tr>';
       const prRows = (((prDrafts && prDrafts.data && prDrafts.data.drafts) || prDrafts.drafts || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">PR draft 없음</td></tr>';
       const rolloutRows = (((rollouts && rollouts.data && rollouts.data.rollouts) || rollouts.rollouts || [])).slice(0, 12).map(governanceRecordRow).join('') || '<tr><td colspan="5" class="muted">progressive rollout 없음</td></tr>';
+      const prList = ((prDrafts && prDrafts.data && prDrafts.data.drafts) || prDrafts.drafts || []);
+      const rolloutList = ((rollouts && rollouts.data && rollouts.data.rollouts) || rollouts.rollouts || []);
+      const evidenceList = ((evidence && evidence.data && evidence.data.evidence) || evidence.evidence || []);
+      const stackOptions = '<option value="">Stack 선택 안 함</option>' + (data.stacks || []).map(x => {
+        const st = x.stack || {};
+        const value = [st.id || '', st.cluster_id || '', st.namespace || '', st.name || ''].join('|');
+        return '<option value="' + escapeAttr(value) + '">' + escapeHTML((st.name || st.id || '-') + ' · ' + (st.cluster_id || '-') + ' · ' + (st.namespace || '-')) + '</option>';
+      }).join('');
+      const actionableDriftCount = driftList.filter(d => String(d.classification || '') !== 'in_sync').length;
       view.innerHTML =
         section('GitOps Change Manager', '<div class="card-body">' +
           '<div class="kpis">' +
@@ -13755,12 +13953,16 @@ const adminHTML = `<!doctype html>
             kpi('Rollback Ready', fmt(sum.rollback_ready || 0)) +
             kpi('Freeze Active', ((calendar && calendar.data && calendar.data.active_freeze) ? 'YES' : 'NO')) +
           '</div>' +
-          '<div class="inline-form" style="grid-template-columns:minmax(180px,1fr) 90px auto auto;margin-top:12px">' +
+          '<div class="inline-form" style="grid-template-columns:minmax(180px,1fr) repeat(4, auto);margin-top:12px">' +
             '<select id="gitops-cluster">' + clusterOpts + '</select>' +
             '<button type="button" onclick="gitOpsGo()">필터</button>' +
+            '<button type="button" class="secondary" onclick="gitOpsOpenGuide()">운영 가이드</button>' +
             '<a class="button secondary" href="#/k8s-stacks' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">Application Stack</a>' +
             '<a class="button secondary" href="#/k8s-manifest-changes' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 변경</a>' +
-          '</div><div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div></div>') +
+          '</div><div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div>' +
+          gitOpsWorkflowHTML(sum, sourceList.length, actionableDriftCount, prList.length, rolloutList.length, evidenceList.length) +
+          '</div>') +
+        card('GitOps 빠른 등록', '<div class="card-body"><p class="muted" style="font-size:12px;margin-top:0">이 카드의 항목은 실제 Git provider에 바로 쓰지 않고 GitOps 원장에 초안·계획·증적으로 저장합니다. 이후 Stack Apply, YAML 변경, 외부 PR 자동화와 연결하세요.</p>' + gitOpsQuickFormHTML(clusterId, stackOptions) + '</div>') +
         card('Drift and Change Readiness', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>Git Source</th><th>Sync</th><th>Drift</th><th>Last Op</th><th>Rollback</th><th>사유</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
         '<div class="grid2">' +
           card('Drift Diff', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>분류</th><th>사유</th><th>권장</th></tr></thead><tbody>' + driftRows + '</tbody></table></div>') +

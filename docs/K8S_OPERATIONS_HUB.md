@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.107** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.108** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.107)
+## 기능 상태 (v0.9.108)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -20,6 +20,7 @@
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
+| GitOps Change Manager UX Guide — GitOps 개념 가이드 모달, Stack→Git Source→Drift→PR Draft→Rollout/Evidence 흐름 카드, 빠른 등록 폼, 전용 운영 가이드 문서 | ✅ (v0.9.108) |
 | Resource Graph Topology UX — 리소스 관계를 SVG 토폴로지 맵으로 표시, YAML 링크 옆 토폴로지 모달 진입, 기본 2-hop 포커스, 고립 RBAC 노이즈 억제 | ✅ (v0.9.107) |
 | 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.98) |
 | Harbor Management UX — Harbor registry·Robot Account·Project mapping 개별 조회/수정/삭제, registry force delete 안전장치, Harbor catalog 기반 project/repository/tag·digest select picker | ✅ (v0.9.106) |
@@ -465,6 +466,20 @@ curl.exe -X POST http://localhost:9090/admin/k8s/clusters/k8scl_.../collect
 | 인증·권한 | ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, CSR | RBAC 변경 검토, 권한 리소스 YAML 변경 |
 
 카테고리별 `+ Kind` 버튼은 Manifest Change Studio의 `mode=create` 흐름으로 연결됩니다. 생성과 변경은 모두 요청 원장, 검증, 승인, Server-Side Apply, 사후 검증을 거치며 직접 적용하지 않습니다.
+
+## GitOps Change Manager
+
+`#/gitops`는 외부 CD 엔진을 대체하는 sync 화면이 아니라, Clustara의 Application Stack과 live cluster 상태를 Git 선언·PR 초안·단계적 rollout·rollback 증적으로 연결하는 변경관리 허브입니다. 자세한 사용 순서는 [GitOps Change Manager 가이드](GITOPS_CHANGE_MANAGER.md)를 참고하세요.
+
+| 흐름 | 설명 |
+| --- | --- |
+| Stack → Git Source | Stack 또는 서비스에 repo, branch, path를 연결해 Git 기준점을 기록합니다. |
+| Drift 검토 | `live_only`, `spec_diff`, `in_sync` 분류와 위험도, 권장 행동을 확인합니다. |
+| PR Draft | live hotfix를 Git에 반영할지, Git 선언을 클러스터에 적용할지 초안 원장으로 남깁니다. |
+| Progressive Rollout | dev, qa, canary, prod 같은 단계와 gate를 저장해 운영 배포를 한 번에 밀지 않습니다. |
+| Evidence/Rollback | apply history, evidence id, 이전 revision을 묶어 인계와 사후 복구에 사용합니다. |
+
+GitOps 화면의 빠른 등록 폼은 원장과 계획을 저장합니다. 실제 Kubernetes 변경은 Stack Apply 또는 YAML 변경/생성의 검증·승인·Server-Side Apply 흐름으로만 진행합니다.
 
 ## Pod 관리와 증적 번들
 

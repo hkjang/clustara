@@ -48,7 +48,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.harbor_robots", Label: "Harbor Robot", Path: "#/harbor-robots", Tab: "harbor-robots", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.app_launcher", Label: "앱 런처", Path: "#/app-launcher", Tab: "app-launcher", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.app_launch_history", Label: "런칭 이력", Path: "#/app-launch-history", Tab: "app-launch-history", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
-	{ID: "ops.gitops", Label: "GitOps", Path: "#/gitops", Tab: "gitops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.gitops", Label: "GitOps 변경관리", Path: "#/gitops", Tab: "gitops", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_timeline", Label: "변경 타임라인", Path: "#/k8s-timeline", Tab: "k8s-timeline", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.problems", Label: "Problem Inbox", Path: "#/problems", Tab: "problems", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_rca", Label: "장애 분석", Path: "#/k8s-rca", Tab: "k8s-rca", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
