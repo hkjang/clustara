@@ -560,11 +560,23 @@ func summarizeStatus(kind string, obj map[string]any) string {
 	case "PersistentVolumeClaim":
 		return firstNonEmpty(str(status["phase"]), "Unknown")
 	case "Job":
-		if intValue(status["failed"]) > 0 {
-			return "Failed"
+		for _, raw := range asSlice(status["conditions"]) {
+			condition := asMap(raw)
+			if str(condition["status"]) != "True" {
+				continue
+			}
+			if str(condition["type"]) == "Failed" {
+				return "Failed"
+			}
+			if str(condition["type"]) == "Complete" {
+				return "Succeeded"
+			}
 		}
 		if intValue(status["succeeded"]) > 0 {
 			return "Succeeded"
+		}
+		if intValue(status["active"]) == 0 {
+			return "Pending"
 		}
 		return "Running"
 	default:

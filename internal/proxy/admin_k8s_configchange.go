@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -390,20 +391,98 @@ func configChangeResourceKey(namespace, kind, name string) string {
 }
 
 func configChangeUnhealthy(it store.K8sInventoryItem) bool {
+	unhealthy, _, _ := configChangeHealth(it)
+	return unhealthy
+}
+
+// configChangeHealth applies kind-specific semantics and returns evidence suitable for operators.
+// A completed Job is healthy even when generic workload scoring still reflects its terminated Pods.
+func configChangeHealth(it store.K8sInventoryItem) (bool, string, []string) {
+	if strings.EqualFold(it.Kind, "Job") {
+		return configChangeJobHealth(it)
+	}
 	if it.HealthScore > 0 && it.HealthScore < 80 {
-		return true
+		return true, "unhealthy", []string{"health_score_below_80"}
 	}
 	switch strings.ToLower(it.RiskLevel) {
 	case "medium", "high", "critical":
-		return true
+		return true, "unhealthy", []string{"risk_level_" + strings.ToLower(it.RiskLevel)}
 	}
 	status := strings.ToLower(it.Status)
 	for _, marker := range []string{"crash", "error", "fail", "unavail", "pending", "backoff", "oom", "imagepull"} {
 		if strings.Contains(status, marker) {
-			return true
+			return true, "unhealthy", []string{"status_" + marker}
 		}
 	}
-	return false
+	return false, "healthy", nil
+}
+
+func configChangeJobHealth(it store.K8sInventoryItem) (bool, string, []string) {
+	status := it.StatusObject
+	for _, raw := range anySlice(status["conditions"]) {
+		condition, _ := raw.(map[string]any)
+		if !strings.EqualFold(fmt.Sprint(condition["status"]), "True") {
+			continue
+		}
+		typ := fmt.Sprint(condition["type"])
+		reason := fmt.Sprint(condition["reason"])
+		if strings.EqualFold(typ, "Failed") {
+			code := "job_failed"
+			if reason != "" {
+				code = "job_" + strings.ToLower(reason)
+			}
+			return true, "failed", []string{code}
+		}
+		if strings.EqualFold(typ, "Complete") {
+			return false, "succeeded", []string{"job_complete"}
+		}
+	}
+	succeeded := anyInt(status["succeeded"])
+	active := anyInt(status["active"])
+	completions := anyInt(it.Spec["completions"])
+	// status.failed is a failed Pod attempt count, not a terminal Job verdict. A Job may retry and
+	// later complete successfully, so only the Failed condition (above) or an explicit status wins.
+	if strings.Contains(strings.ToLower(it.Status), "fail") {
+		return true, "failed", []string{"job_failed"}
+	}
+	if succeeded > 0 && (completions == 0 || succeeded >= completions) {
+		return false, "succeeded", []string{"job_succeeded"}
+	}
+	if active > 0 || strings.EqualFold(it.Status, "Running") {
+		return false, "active", []string{"job_active"}
+	}
+	if truthy(status["suspended"]) {
+		return false, "suspended", []string{"job_suspended"}
+	}
+	return false, "pending", []string{"job_pending"}
+}
+
+func anySlice(v any) []any {
+	if out, ok := v.([]any); ok {
+		return out
+	}
+	return nil
+}
+
+func anyInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	default:
+		return 0
+	}
+}
+
+func truthy(v any) bool {
+	b, _ := v.(bool)
+	return b || strings.EqualFold(fmt.Sprint(v), "true")
 }
 
 func configChangeEventMatchesImpacts(ev store.K8sEvent, impacts []store.K8sConfigChangeImpact) bool {

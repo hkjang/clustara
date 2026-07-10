@@ -15625,10 +15625,14 @@ const adminHTML = `<!doctype html>
       try {
         const d = await api('/admin/k8s/manifest-changes/' + encodeURIComponent(id));
         const r = d.request || {};
+		const verify = r.verify_result || {};
+		const verifyReasons = (verify.reason_codes || []).map(x => '<span class="pill">' + escapeHTML(x) + '</span>').join(' ') || '<span class="muted">없음</span>';
+		const verifyClass = ['execution_failed', 'incident_detected', 'resource_missing'].includes(verify.status) ? 'error' : (['observation_pending', 'verified_with_warning'].includes(verify.status) ? 'warn' : '');
         const diffs = (r.diffs || []).map(df => '<tr><td><code>' + escapeHTML(df.path || '') + '</code></td><td><span class="status ' + (df.risk === 'critical' || df.risk === 'high' ? 'error' : (df.risk === 'medium' ? 'warn' : '')) + '" style="font-size:10px">' + escapeHTML(df.risk || '') + '</span></td><td>' + escapeHTML(df.type || '') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(df.old_value || '') + ' → ' + escapeHTML(df.new_value || '') + '</td></tr>').join('') || '<tr><td colspan="4" class="muted">필드 diff 없음</td></tr>';
         out.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
           '<div><div class="kv">' + row('상태', escapeHTML(r.status || '')) + row('위험도', escapeHTML(r.risk_level || '')) + row('승인 필요', r.requires_approval ? 'yes' : 'no') + row('Before hash', '<code>' + escapeHTML((r.before_hash || '').slice(0, 16)) + '</code>') + row('After hash', '<code>' + escapeHTML((r.after_hash || '').slice(0, 16)) + '</code>') + '</div></div>' +
           '<div><pre style="white-space:pre-wrap;font-size:11px;max-height:220px;overflow:auto">' + escapeHTML(JSON.stringify({ impact: r.impact || {}, validation: r.validation || {}, apply: r.apply_result || {}, verify: r.verify_result || {} }, null, 2)) + '</pre></div></div>' +
+		  (Object.keys(verify).length ? '<h3 style="margin-top:10px">사후 검증 상세</h3><div class="kv">' + row('결과', '<span class="status ' + verifyClass + '">' + escapeHTML(verify.status || '-') + '</span>') + row('리소스 상태', escapeHTML(verify.resource_state || '-')) + row('관찰 출처', escapeHTML(verify.verification_source || '-')) + row('인벤토리 갱신', verify.refreshed_after_apply ? 'yes' : 'no') + row('Warning / Incident', fmt(verify.warning_events || 0) + ' / ' + fmt(verify.open_incidents || 0)) + row('판정 사유', verifyReasons) + '</div>' : '') +
           '<h3 style="margin-top:10px">Field Diff</h3><table><thead><tr><th>Path</th><th>위험</th><th>유형</th><th>값</th></tr></thead><tbody>' + diffs + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };

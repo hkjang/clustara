@@ -1,3 +1,6 @@
+v0.9.115:
+- **Manifest Change Live API Verification (v0.9.115)**: Manifest 변경 후 사후 검증 단계의 정확성을 대폭 강화했습니다. 백그라운드 수집기의 스캔 주기 차이(timing gap)로 인한 판정 오류를 우회하기 위해, Kubernetes API 서버에 직접 실시간으로 리소스를 조회하는 `ResourceGetter` 인터페이스 및 실시간 조회 흐름(`verification_source=api_server`)을 도입했습니다. 또한, Job/Pod 간의 warning 관계 매핑을 보완해 생성된 자식 Pod들의 경고도 Job의 사후 검증에 포함하도록 확장하였으며, 상세 판정 결과 코드(`execution_failed`, `verified_with_warning`, `observation_pending`, `incident_detected`)를 신설하여 UI의 변경 요청 상세 뷰에서 사후 검증 결과를 직관적으로 파악할 수 있도록 UI 카드 및 KPI 요소를 업데이트했습니다.
+
 v0.9.114:
 - **Manifest Change Risk Explain & Verification Sync (v0.9.114)**: K8s Action 및 Manifest 변경 요청 목록에 위험도 사유(Reason) 설명 모달을 연동했습니다. 위험도 등급(low, medium, high, critical, blocked)에 따른 위험도 요약, 승인 전 체크리스트 및 해당 작업이 이 등급으로 분류된 상세 필드 정보/정책 위반 사유를 카드 옆 물음표 배지를 통해 바로 확인할 수 있습니다. 또한, Manifest 변경 적용 후 사후 검증 단계에서 백그라운드 수집기의 스캔 주기 차이(timing gap)로 인해 실제 리소스는 잘 배포되었으나 observed_at 갱신 지연 때문에 작업이 "확인 필요" 상태로 오인되는 문제를 해소하기 위해 `passed_pending_observation` 검증 결과를 도입해 자동으로 정상 완료 처리되도록 로직을 보완했습니다. 평문 환경 변수 분석기(`looksSensitiveEnv`)의 DB 연결 문자열(Suffix, Combo) 및 자격증명 내장 URI(Scheme) 탐지 필터도 강화해 민감 정보 오노출을 줄였습니다.
 

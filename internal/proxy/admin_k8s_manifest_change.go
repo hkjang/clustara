@@ -691,14 +691,33 @@ func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request,
 	found := false
 	refreshed := false
 	unhealthy := false
+	resourceState := "unknown"
+	reasonCodes := []string{}
+	verificationSource := "inventory"
+	liveReadError := ""
 	for _, it := range items {
-		if strings.EqualFold(it.Kind, req.Kind) && it.Namespace == req.Namespace && it.Name == req.Name {
+		if strings.EqualFold(it.Kind, req.Kind) && manifestNamespaceEqual(it.Namespace, req.Namespace) && it.Name == req.Name {
 			found = true
 			if !appliedAt.IsZero() && !parseConfigChangeTime(firstNonEmpty(it.ObservedAt, it.UpdatedAt)).Before(appliedAt) {
 				refreshed = true
 			}
-			unhealthy = configChangeUnhealthy(it)
+			unhealthy, resourceState, reasonCodes = configChangeHealth(it)
 			break
+		}
+	}
+	// Prefer a direct API-server observation when the cluster client supports it. Inventory remains
+	// the compatibility fallback for agents and test clients that only implement collection/apply.
+	if cluster, getErr := s.db.GetK8sCluster(r.Context(), req.ClusterID); getErr == nil {
+		if client, clientErr := s.k8sClientForCluster(r.Context(), cluster); clientErr == nil {
+			if getter, ok := client.(kube.ResourceGetter); ok {
+				if live, liveErr := getter.GetResource(r.Context(), req.APIVersion, req.Kind, req.Namespace, req.Name); liveErr == nil {
+					item := manifestInventoryFromLive(req, live)
+					found, refreshed, verificationSource = true, true, "api_server"
+					unhealthy, resourceState, reasonCodes = configChangeHealth(item)
+				} else {
+					liveReadError = liveErr.Error()
+				}
+			}
 		}
 	}
 	warnings := 0
@@ -706,14 +725,15 @@ func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request,
 		if !appliedAt.IsZero() && parseConfigChangeTime(firstNonEmpty(ev.LastSeen, ev.CreatedAt)).Before(appliedAt) {
 			continue
 		}
-		if strings.EqualFold(ev.Type, "Warning") && ev.Namespace == req.Namespace &&
-			(strings.EqualFold(ev.InvolvedKind, req.Kind) && ev.InvolvedName == req.Name) {
+		if strings.EqualFold(ev.Type, "Warning") && manifestNamespaceEqual(ev.Namespace, req.Namespace) &&
+			((strings.EqualFold(ev.InvolvedKind, req.Kind) && ev.InvolvedName == req.Name) ||
+				(strings.EqualFold(req.Kind, "Job") && strings.EqualFold(ev.InvolvedKind, "Pod") && strings.HasPrefix(ev.InvolvedName, req.Name+"-"))) {
 			warnings++
 		}
 	}
 	openIncidents := 0
 	for _, inc := range incidents {
-		if inc.ClusterID == req.ClusterID && inc.Namespace == req.Namespace && strings.EqualFold(inc.Kind, req.Kind) && inc.Name == req.Name {
+		if inc.ClusterID == req.ClusterID && manifestNamespaceEqual(inc.Namespace, req.Namespace) && strings.EqualFold(inc.Kind, req.Kind) && inc.Name == req.Name {
 			openIncidents++
 		}
 	}
@@ -725,23 +745,32 @@ func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request,
 	// filtered to events at/after apply) and open `openIncidents` are post-apply signals and
 	// apply regardless of the refresh timing.
 	//
-	// The apply step itself already confirmed the API server accepted the change (status moved
-	// to `applied`). So when no real problem is detected we mark the change `verified` even if
-	// the background collector has not re-scanned yet — a scan-timing gap must not strand an
-	// operator's completed change in "확인 필요" forever. We still record that live
-	// re-observation was pending so the evidence stays honest.
+	// The apply step itself already confirmed the API server accepted the change. A collector timing
+	// gap is recorded separately as observation_pending; warnings are also preserved as
+	// verified_with_warning instead of being reported as execution failure.
 	verifyStatus := "verified"
 	resultStatus := "passed"
 	switch {
-	case (refreshed && (!found || unhealthy)) || warnings > 0 || openIncidents > 0:
+	case refreshed && (!found || unhealthy):
 		verifyStatus = "verify_failed"
-		resultStatus = "attention_required"
+		resultStatus = "execution_failed"
+	case openIncidents > 0:
+		verifyStatus = "verify_failed"
+		resultStatus = "incident_detected"
 	case !refreshed:
-		resultStatus = "passed_pending_observation"
+		resultStatus = "observation_pending"
+		reasonCodes = append(reasonCodes, "inventory_not_refreshed")
+	case warnings > 0:
+		resultStatus = "verified_with_warning"
+		reasonCodes = append(reasonCodes, "warning_events_present")
 	}
 	result := map[string]any{
 		"status": resultStatus, "resource_found": found, "refreshed_after_apply": refreshed,
 		"unhealthy": unhealthy, "warning_events": warnings, "open_incidents": openIncidents,
+		"resource_state": resourceState, "reason_codes": reasonCodes, "verification_source": verificationSource,
+	}
+	if liveReadError != "" {
+		result["live_read_error"] = liveReadError
 	}
 	if err := s.db.UpdateK8sManifestChangeVerifyResult(r.Context(), id, verifyStatus, adminID(r), result, "verification: "+resultStatus); err != nil {
 		if errors.Is(err, store.ErrInvalidTransition) {
@@ -754,6 +783,54 @@ func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request,
 	s.auditAdmin(r, "k8s.manifest_change.verify", id, auditJSON(result))
 	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "verification": result})
+}
+
+func manifestNamespaceEqual(a, b string) bool {
+	normalize := func(ns string) string {
+		if strings.TrimSpace(ns) == "" {
+			return "default"
+		}
+		return strings.TrimSpace(ns)
+	}
+	return normalize(a) == normalize(b)
+}
+
+func manifestInventoryFromLive(req store.K8sManifestChangeRequest, live map[string]any) store.K8sInventoryItem {
+	metadata := manifestAnyMap(live["metadata"])
+	return store.K8sInventoryItem{
+		ClusterID: req.ClusterID, Kind: firstNonEmpty(asStr(live["kind"]), req.Kind),
+		APIVersion: firstNonEmpty(asStr(live["apiVersion"]), req.APIVersion),
+		Namespace:  firstNonEmpty(asStr(metadata["namespace"]), req.Namespace), Name: firstNonEmpty(asStr(metadata["name"]), req.Name),
+		Spec: manifestAnyMap(live["spec"]), StatusObject: manifestAnyMap(live["status"]), Status: manifestLiveStatus(req.Kind, manifestAnyMap(live["status"])),
+	}
+}
+
+func manifestAnyMap(v any) map[string]any {
+	if out, ok := v.(map[string]any); ok {
+		return out
+	}
+	return map[string]any{}
+}
+
+func manifestLiveStatus(kind string, status map[string]any) string {
+	if !strings.EqualFold(kind, "Job") {
+		return firstNonEmpty(asStr(status["phase"]), "Observed")
+	}
+	for _, raw := range anySlice(status["conditions"]) {
+		condition, _ := raw.(map[string]any)
+		if strings.EqualFold(asStr(condition["status"]), "True") {
+			if strings.EqualFold(asStr(condition["type"]), "Failed") {
+				return "Failed"
+			}
+			if strings.EqualFold(asStr(condition["type"]), "Complete") {
+				return "Succeeded"
+			}
+		}
+	}
+	if anyInt(status["active"]) > 0 {
+		return "Running"
+	}
+	return "Pending"
 }
 
 func (s *Server) rollbackK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {

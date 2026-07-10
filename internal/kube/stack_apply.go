@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,6 +15,29 @@ import (
 // declarative and idempotent — re-applying the same manifest is a no-op.
 type StackApplier interface {
 	Apply(ctx context.Context, apiVersion, kind, namespace, name string, manifestYAML []byte, dryRun bool) error
+}
+
+// ResourceGetter is the optional live-read surface used by post-apply verification. It avoids
+// treating an inventory collection delay as a resource failure.
+type ResourceGetter interface {
+	GetResource(ctx context.Context, apiVersion, kind, namespace, name string) (map[string]any, error)
+}
+
+// GetResource fetches one resource directly from the Kubernetes API server.
+func (c *HTTPClient) GetResource(ctx context.Context, apiVersion, kind, namespace, name string) (map[string]any, error) {
+	path, err := apiResourcePath(apiVersion, kind, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.RawGet(ctx, path, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	var resource map[string]any
+	if err := json.Unmarshal(body, &resource); err != nil {
+		return nil, fmt.Errorf("decode Kubernetes resource %s/%s: %w", kind, name, err)
+	}
+	return resource, nil
 }
 
 // Apply performs a Server-Side Apply (SSA) of one manifest document. fieldManager identifies
