@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.112** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.113** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.112)
+## 기능 상태 (v0.9.113)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -20,6 +20,7 @@
 | ClickHouse 장기 적재(sink/bootstrap/report) | ✅ (CH 연결 시) |
 | 실시간 수집 — 서버측 delta 수신 API, watch event 원장, resourceVersion checkpoint, agent 하트비트/수집 상태 화면 | ✅ (v0.4.0) |
 | 실시간 수집 — 인클러스터 `clustara-agent` 바이너리, 읽기 전용 RBAC, 재시작 checkpoint, offline queue | ✅ |
+| Personal Workspace UX — 로그아웃 메뉴 위와 상단 `내 영역` 메뉴에서 내 홈, 업무 캘린더, 개인 키, 나의 외부연동, 개인화 설정을 제공하고 `/me/work-calendar`로 나와 관련된 운영 업무를 날짜별 집계 | ✅ (v0.9.113) |
 | Cluster Group Membership CRUD — 추가한 클러스터를 그룹에 배정·변경·해제하고, 그룹 수정/삭제·오너십 수정/삭제까지 `#/k8s-meta`에서 처리 | ✅ (v0.9.112) |
 | External Integration Credential Vault — 설정 그룹의 외부연동 설정 메뉴에서 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 사용자별 암호화 저장하고 GitOps/Harbor 화면에서 `credential_id`로 재사용 | ✅ (v0.9.111) |
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |

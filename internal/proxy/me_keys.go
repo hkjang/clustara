@@ -27,6 +27,9 @@ func (s *Server) meKeyContext(r *http.Request) (meIdentity, bool) {
 	if _, authCtx, ok := s.authenticateProxyContext(r); ok && authCtx != nil && strings.TrimSpace(authCtx.UserID) != "" {
 		return meIdentity{UserID: authCtx.UserID, TeamID: authCtx.TeamID, Role: authCtx.Role, Scopes: authCtx.Scopes}, true
 	}
+	if bearerToken(r.Header.Get("Authorization")) != "" && s.authorizeAdmin(r) {
+		return meIdentity{UserID: adminID(r), Role: "admin", Scopes: append([]string{}, allScopes...)}, true
+	}
 	return meIdentity{}, false
 }
 

@@ -131,6 +131,29 @@ const adminHTML = `<!doctype html>
       padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
       background: var(--panel-alt); font-size: 12px; color: var(--muted); line-height: 1.45;
     }
+    .personal-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+    .personal-calendar-day {
+      min-height: 116px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--panel-alt); padding: 8px; overflow: hidden;
+    }
+    .personal-calendar-day.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .personal-calendar-date { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 900; margin-bottom: 6px; }
+    .personal-calendar-events { display: flex; flex-direction: column; gap: 4px; }
+    .personal-calendar-event {
+      display: block; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--panel); color: var(--ink); text-decoration: none; font-size: 11px; line-height: 1.25;
+    }
+    .personal-calendar-event:hover { border-color: var(--accent); }
+    .personal-calendar-event.attention { border-left: 3px solid var(--bad); }
+    .personal-calendar-event.approval { border-left: 3px solid var(--warn); }
+    .personal-calendar-event.ready, .personal-calendar-event.verify { border-left: 3px solid var(--accent); }
+    .personal-quick-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .personal-quick-grid a {
+      padding: 12px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--panel-alt); color: var(--ink); text-decoration: none;
+    }
+    .personal-quick-grid a strong { display: block; font-size: 13px; margin-bottom: 4px; }
+    .personal-quick-grid a span { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; }
     .header-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 18px 28px 60px; }
     section {
@@ -648,6 +671,8 @@ const adminHTML = `<!doctype html>
       .kpis, .grid3, .grid2 { grid-template-columns: 1fr; }
       .external-layout, .external-form-grid { grid-template-columns: 1fr; }
       .external-form-wide { grid-column: auto; }
+      .personal-calendar { grid-template-columns: 1fr; }
+      .personal-quick-grid { grid-template-columns: 1fr; }
       .chat-pop { grid-template-columns: 1fr; }
       .chat-pop > .chat-stream { border-right: none; border-bottom: 1px solid var(--line); }
       .chat-pop > .chat-debug { padding: 14px 0 0; }
@@ -663,6 +688,16 @@ const adminHTML = `<!doctype html>
       <a href="#/k8s-home" data-tab="k8s-home" class="active">운영 홈</a>
       <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함<span id="k8s-action-nav-badge" class="nav-badge warn" style="display:none"></span></a>
       <a href="#/fleet" data-tab="fleet">FleetOps</a>
+      <div class="nav-group">
+        <button class="nav-group-toggle" type="button">내 영역</button>
+        <div class="nav-group-menu">
+          <a href="#/me" data-tab="me">내 홈</a>
+          <a href="#/my-calendar" data-tab="my-calendar">내 업무 캘린더</a>
+          <a href="#/mykeys" data-tab="mykeys">개인 키 관리</a>
+          <a href="#/my-integrations" data-tab="my-integrations">나의 외부 연동</a>
+          <a href="#/my-profile" data-tab="my-profile">개인화 설정</a>
+        </div>
+      </div>
       <div class="nav-group">
         <button class="nav-group-toggle" type="button">리소스 관리</button>
         <div class="nav-group-menu">
@@ -789,8 +824,11 @@ const adminHTML = `<!doctype html>
       <div class="user-menu-wrap">
         <span id="auth-user" class="user-chip" title="개인 메뉴 열기"></span>
         <div id="user-menu" class="user-menu" style="display:none">
-          <a href="#/personalization" data-tab="personalization">개인화</a>
-          <a href="#/mykeys" data-tab="mykeys">내 키</a>
+          <a href="#/me" data-tab="me">내 홈</a>
+          <a href="#/my-calendar" data-tab="my-calendar">내 업무 캘린더</a>
+          <a href="#/mykeys" data-tab="mykeys">개인 키 관리</a>
+          <a href="#/my-integrations" data-tab="my-integrations">나의 외부 연동</a>
+          <a href="#/my-profile" data-tab="my-profile">개인화 설정</a>
           <button id="auth-logout" class="ghost" type="button" style="display:none" title="로그아웃">로그아웃</button>
           <div id="session-expiry" class="user-menu-meta" style="display:none"></div>
           <div class="user-menu-sep"></div>
@@ -1273,6 +1311,11 @@ const adminHTML = `<!doctype html>
 
     // ---------- UX shortcuts: quick access, recent visits, context actions ----------
     const UX_COMMANDS = [
+      { tab: 'me', href: '#/me', label: '내 홈', group: '내 영역', tags: 'my home personal profile notification recommendation session' },
+      { tab: 'my-calendar', href: '#/my-calendar', label: '내 업무 캘린더', group: '내 영역', tags: 'my work calendar approval action yaml change task' },
+      { tab: 'mykeys', href: '#/mykeys', label: '개인 키 관리', group: '내 영역', tags: 'my api key token rotate revoke mcp' },
+      { tab: 'my-integrations', href: '#/my-integrations', label: '나의 외부 연동', group: '내 영역', tags: 'my external integration credential gitlab bitbucket harbor mattermost' },
+      { tab: 'my-profile', href: '#/my-profile', label: '개인화 설정', group: '내 영역', tags: 'personalization preference shortcut guide' },
       { tab: 'k8s-home', href: '#/k8s-home', label: '운영 홈', group: '운영', tags: 'home overview cluster incident cost security' },
       { tab: 'k8s-actions', href: '#/k8s-actions', label: '액션 승인함', group: '대응', tags: 'approval action approve execute pending' },
       { tab: 'fleet', href: '#/fleet', label: 'FleetOps', group: '운영', tags: 'fleet global search multi cluster' },
@@ -2474,6 +2517,9 @@ const adminHTML = `<!doctype html>
       try {
         switch (tab) {
           case 'me':        await renderMeHome(); break;
+          case 'my-calendar': await renderMyCalendar(params); break;
+          case 'my-integrations': await renderMyIntegrations(params); break;
+          case 'my-profile': await renderMyProfile(params); break;
           case 'team':      await renderTeamHome(); break;
           case 'team-portal': await renderTeamPortal(); break;
           case 'data-products': await renderDataProducts(); break;
@@ -20712,6 +20758,140 @@ const adminHTML = `<!doctype html>
 
     // renderMeHome is the personalized landing for non-operators: their own usage, cost,
     // models, failures, key alerts, risk, and recommendations — no operational metrics.
+    function personalQuickLinksHTML() {
+      const links = [
+        ['#/my-calendar', '내 업무 캘린더', '승인·실행·검증 등 나와 관련된 운영 업무를 날짜별로 확인'],
+        ['#/mykeys', '개인 키 관리', '개발도구와 MCP에서 사용할 내 API Key 발급·회전·폐기'],
+        ['#/my-integrations', '나의 외부 연동', 'GitLab, Bitbucket, Harbor, Mattermost Credential 관리'],
+        ['#/my-profile', '개인화 설정', '최근 사용, 세션, 알림, 추천과 개인 빠른 이동 확인']
+      ];
+      return '<div class="personal-quick-grid">' + links.map(l =>
+        '<a href="' + l[0] + '"><strong>' + escapeHTML(l[1]) + '</strong><span>' + escapeHTML(l[2]) + '</span></a>'
+      ).join('') + '</div>';
+    }
+
+    function myCalendarMonthFromParams(params) {
+      const raw = params && params.get ? params.get('month') : '';
+      const m = /^(\d{4})-(\d{2})$/.exec(raw || '');
+      if (m) return { year: parseInt(m[1], 10), month: parseInt(m[2], 10) - 1 };
+      const now = new Date();
+      return { year: now.getFullYear(), month: now.getMonth() };
+    }
+    function myCalendarMonthHref(year, month) {
+      const d = new Date(year, month, 1);
+      return '#/my-calendar?month=' + d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    }
+    function myCalendarDateKey(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function myCalendarLaneLabel(lane) {
+      return ({ attention: '확인', approval: '승인', ready: '실행', verify: '검증', prepare: '준비', done: '완료' })[lane] || lane || '-';
+    }
+    function myCalendarEventClass(ev) {
+      const lane = String((ev && ev.lane) || '').toLowerCase();
+      return ['attention','approval','ready','verify','done','prepare'].includes(lane) ? lane : '';
+    }
+    async function renderMyCalendar(params) {
+      const view = document.getElementById('view');
+      const cursor = myCalendarMonthFromParams(params || new URLSearchParams());
+      view.innerHTML = section('내 업무 캘린더', '<div class="empty">불러오는 중...</div>');
+      let data;
+      try { data = await api('/me/work-calendar?window_days=180&limit=500'); }
+      catch (e) {
+        view.innerHTML = section('내 업무 캘린더', '<div class="card-body"><p class="muted">업무 캘린더를 불러올 수 없습니다. 상세: ' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const events = data.events || [];
+      const byDate = {};
+      events.forEach(ev => {
+        const k = ev.date || '';
+        if (!byDate[k]) byDate[k] = [];
+        byDate[k].push(ev);
+      });
+      const first = new Date(cursor.year, cursor.month, 1);
+      const start = new Date(cursor.year, cursor.month, 1 - first.getDay());
+      const todayKey = myCalendarDateKey(new Date());
+      const cells = [];
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const key = myCalendarDateKey(d);
+        const inMonth = d.getMonth() === cursor.month;
+        const dayEvents = (byDate[key] || []).slice(0, 4);
+        cells.push('<div class="personal-calendar-day' + (key === todayKey ? ' today' : '') + '" style="' + (!inMonth ? 'opacity:.48' : '') + '">' +
+          '<div class="personal-calendar-date"><span>' + d.getDate() + '</span><span class="muted">' + ((byDate[key] || []).length || '') + '</span></div>' +
+          '<div class="personal-calendar-events">' + dayEvents.map(ev =>
+            '<a class="personal-calendar-event ' + myCalendarEventClass(ev) + '" href="' + escapeAttr(ev.href || '#/k8s-actions') + '" title="' + escapeAttr((ev.description || '') + ' ' + (ev.actor_hint || '')) + '">' +
+              '<strong>' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</strong> ' + escapeHTML(ev.title || ev.kind || '-') +
+              '<div class="muted" style="font-size:10px">' + escapeHTML(ev.target || ev.namespace || '-') + '</div>' +
+            '</a>'
+          ).join('') + (((byDate[key] || []).length > 4) ? '<div class="muted" style="font-size:10px">외 ' + ((byDate[key] || []).length - 4) + '건</div>' : '') + '</div>' +
+        '</div>');
+      }
+      const monthLabel = cursor.year + '년 ' + (cursor.month + 1) + '월';
+      const summary = data.summary || {};
+      const listRows = events.slice(0, 80).map(ev => '<tr>' +
+        '<td class="muted">' + escapeHTML(ev.date || '-') + '</td>' +
+        '<td><span class="status ' + (ev.lane === 'attention' ? 'error' : (ev.lane === 'approval' ? 'warn' : '')) + '">' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</span></td>' +
+        '<td><a href="' + escapeAttr(ev.href || '#/k8s-actions') + '">' + escapeHTML(ev.title || ev.kind || '-') + '</a><div class="muted" style="font-size:11px">' + escapeHTML(ev.description || '') + '</div></td>' +
+        '<td>' + escapeHTML(ev.target || '-') + '</td>' +
+        '<td class="muted">' + escapeHTML((ev.roles || []).join(', ') || ev.actor_hint || '-') + '</td>' +
+        '<td class="muted">' + escapeHTML(ev.sla_status || '-') + '</td>' +
+      '</tr>').join('') || '<tr><td colspan="6" class="muted">표시할 내 업무가 없습니다.</td></tr>';
+      view.innerHTML = section('내 업무 캘린더',
+        '<div class="card-body">' +
+          '<div class="toolbar" style="padding:0 0 10px;border-bottom:0"><a class="button secondary" href="' + myCalendarMonthHref(cursor.year, cursor.month - 1) + '">이전</a><strong>' + escapeHTML(monthLabel) + '</strong><a class="button secondary" href="' + myCalendarMonthHref(cursor.year, cursor.month + 1) + '">다음</a><span class="muted">역할 ' + escapeHTML(data.role || '-') + ' · 최근 ' + fmt(data.window_days || 0) + '일</span></div>' +
+          '<div class="kpis">' + kpi('전체', fmt(summary.total || 0)) + kpi('확인 필요', fmt(summary.attention || 0)) + kpi('승인', fmt(summary.approval || 0)) + kpi('실행/검증', fmt((summary.ready || 0) + (summary.verify || 0))) + kpi('SLA 주의', fmt(summary.sla || 0)) + '</div>' +
+          '<div class="personal-calendar" style="margin-top:12px">' + cells.join('') + '</div>' +
+        '</div>') +
+        card('내 업무 목록', '<div class="card-body"><table><thead><tr><th>날짜</th><th>단계</th><th>업무</th><th>대상</th><th>나와의 관계</th><th>SLA</th></tr></thead><tbody>' + listRows + '</tbody></table></div>');
+    }
+
+    async function renderMyIntegrations(params) {
+      await renderExternalIntegrations({ personal: true });
+    }
+
+    async function renderMyProfile(params) {
+      const view = document.getElementById('view');
+      const pinned = uxJSONRead(UX_PIN_KEY, []);
+      const recent = uxJSONRead(UX_RECENT_KEY, []);
+      const pinnedResources = uxJSONRead(UX_PINNED_RESOURCE_KEY, []);
+      const notes = '<p class="muted">개인 빠른 이동과 최근 방문은 브라우저 로컬 저장소에 보관됩니다. 서버에는 저장되지 않습니다.</p>' +
+        '<div style="margin-top:10px">' + personalQuickLinksHTML() + '</div>';
+      const prefCard = card('개인 빠른 이동 설정',
+        '<div class="card-body">' +
+          '<div class="kpis">' + kpi('고정 메뉴', fmt(pinned.length)) + kpi('최근 방문', fmt(recent.length)) + kpi('고정 리소스', fmt(pinnedResources.length)) + '</div>' +
+          '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button type="button" class="secondary" onclick="myProfileClearRecent()">최근 방문 초기화</button>' +
+            '<button type="button" class="secondary" onclick="myProfileClearPins()">고정 메뉴 초기화</button>' +
+            '<button type="button" class="secondary" onclick="myProfileClearResourcePins()">고정 리소스 초기화</button>' +
+          '</div><div id="my-profile-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>');
+      view.innerHTML = section('개인화 설정', '<div class="card-body">' + notes + '</div>') +
+        prefCard +
+        '<div id="my-profile-notifications"></div><div id="me-sessions"></div>';
+      try {
+        const n = await api('/me/notifications');
+        const rows = (n.notifications || []).slice(0, 12).map(x => '<tr><td><span class="status ' + (x.level === 'critical' ? 'error' : (x.level === 'warning' ? 'warn' : '')) + '">' + escapeHTML(x.level || '-') + '</span></td><td>' + escapeHTML(x.title || '') + '<div class="muted" style="font-size:11px">' + escapeHTML(x.detail || '') + '</div></td><td class="muted">' + ago(x.created_at) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">알림이 없습니다.</td></tr>';
+        const host = document.getElementById('my-profile-notifications');
+        if (host) host.innerHTML = card('내 알림', '<div class="card-body"><table><thead><tr><th>수준</th><th>내용</th><th>시각</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+      } catch {}
+      meLoadSessions();
+    }
+    window.myProfileClearRecent = () => {
+      try { localStorage.removeItem(UX_RECENT_KEY); localStorage.removeItem(UX_FREQ_KEY); } catch {}
+      const out = document.getElementById('my-profile-out'); if (out) out.textContent = '최근 방문을 초기화했습니다.';
+      if (typeof uxRenderQuickAccess === 'function') uxRenderQuickAccess();
+    };
+    window.myProfileClearPins = () => {
+      try { localStorage.removeItem(UX_PIN_KEY); } catch {}
+      const out = document.getElementById('my-profile-out'); if (out) out.textContent = '고정 메뉴를 초기화했습니다.';
+      if (typeof uxRenderQuickAccess === 'function') uxRenderQuickAccess();
+    };
+    window.myProfileClearResourcePins = () => {
+      try { localStorage.removeItem(UX_PINNED_RESOURCE_KEY); } catch {}
+      const out = document.getElementById('my-profile-out'); if (out) out.textContent = '고정 리소스를 초기화했습니다.';
+      if (typeof uxRenderQuickAccess === 'function') uxRenderQuickAccess();
+    };
+
     async function renderMeHome() {
       const view = document.getElementById('view');
       view.innerHTML = section('내 홈', '<div class="empty">불러오는 중...</div>');
@@ -20828,6 +21008,7 @@ const adminHTML = `<!doctype html>
         '<div class="card-body"><div id="me-recs"><button type="button" class="secondary" onclick="meLoadRecommendations()">추천 불러오기</button></div></div>');
 
       view.innerHTML = section('내 홈', kpis) +
+        section('개인 바로가기', '<div class="card-body">' + personalQuickLinksHTML() + '</div>') +
         '<div id="me-actions"></div><div id="me-report"></div>' +
         profCard + usageCard + modelsCard + '<div id="me-failures">' + failCard + '</div>' + blockCard + '<div id="me-reports">' + reportsCard + '</div>' + keyCard + mcpCard + recCard +
         '<div id="me-requests"></div><div id="me-recmodels"></div><div id="me-skills"></div><div id="me-notifications"></div><div id="me-sessions"></div>';
@@ -23361,7 +23542,8 @@ const adminHTML = `<!doctype html>
       if (!group || group === 'all') return credentials || [];
       return (credentials || []).filter(c => externalCredentialProviderGroup((c.payload || {}).provider || '') === group);
     }
-    function externalCredentialTabs(credentials, active) {
+    function externalCredentialTabs(credentials, active, baseRoute) {
+      baseRoute = baseRoute || '#/external-integrations';
       const count = (group) => externalCredentialFilterCredentials(credentials, group).length;
       const tabs = [
         ['all', '전체', (credentials || []).length],
@@ -23371,7 +23553,7 @@ const adminHTML = `<!doctype html>
         ['mattermost', 'Mattermost', count('mattermost')]
       ];
       return '<div class="external-tabs">' + tabs.map(([key, label, n]) =>
-        '<a href="#/external-integrations' + (key === 'all' ? '' : '?provider=' + key) + '"' + (active === key ? ' class="active"' : '') + '>' + escapeHTML(label) + ' <span>(' + fmt(n) + ')</span></a>'
+        '<a href="' + baseRoute + (key === 'all' ? '' : '?provider=' + key) + '"' + (active === key ? ' class="active"' : '') + '>' + escapeHTML(label) + ' <span>(' + fmt(n) + ')</span></a>'
       ).join('') + '</div>';
     }
     function externalCredentialProviderGuide(group) {
@@ -23416,16 +23598,21 @@ const adminHTML = `<!doctype html>
       }).join('');
       return rows || '<tr><td colspan="8" class="muted">저장된 외부 연동 Credential이 없습니다.</td></tr>';
     }
-    async function renderExternalIntegrations() {
+    async function renderExternalIntegrations(opts) {
+      opts = opts || {};
+      const personalMode = !!opts.personal;
+      const title = personalMode ? '나의 외부 연동' : '외부연동 설정';
+      const baseRoute = personalMode ? '#/my-integrations' : '#/external-integrations';
+      window.externalCredentialPersonalMode = personalMode;
       const view = document.getElementById('view');
-      view.innerHTML = section('외부연동 설정', '<div class="empty">불러오는 중...</div>');
+      view.innerHTML = section(title, '<div class="empty">불러오는 중...</div>');
       const activeGroupRaw = (parseHash().params.get('provider') || 'all').toLowerCase();
       const activeGroup = ['all', 'gitlab', 'bitbucket', 'harbor', 'mattermost'].indexOf(activeGroupRaw) >= 0 ? activeGroupRaw : 'all';
       let data;
       try {
         data = await api('/admin/external-integrations/credentials').catch(() => ({ data: { credentials: [] } }));
       } catch (e) {
-        view.innerHTML = section('외부연동 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        view.innerHTML = section(title, '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
         return;
       }
       const credentials = ((data && data.data && data.data.credentials) || data.credentials || []);
@@ -23435,15 +23622,15 @@ const adminHTML = `<!doctype html>
       const defaultProvider = externalCredentialDefaultProviderForGroup(activeGroup);
       const guide = externalCredentialProviderGuide(activeGroup === 'all' ? 'gitlab' : activeGroup).map(x => '<div class="external-hint">' + escapeHTML(x) + '</div>').join('');
       view.innerHTML =
-        section('외부연동 설정', '<div class="card-body">' +
+        section(title, '<div class="card-body">' +
           '<div class="kpis">' +
             kpi('Credentials', fmt(credentials.length)) +
             kpi('Git', fmt(credentials.filter(c => ['gitlab','bitbucket_server'].indexOf(externalProviderNormalized((c.payload || {}).provider)) >= 0).length)) +
             kpi('Harbor', fmt(credentials.filter(c => ['harbor','harbor_robot'].indexOf(externalProviderNormalized((c.payload || {}).provider)) >= 0).length)) +
             kpi('Mattermost', fmt(credentials.filter(c => externalProviderNormalized((c.payload || {}).provider) === 'mattermost').length)) +
           '</div>' +
-          '<p class="muted" style="font-size:12px;margin:10px 0 0">GitLab, Bitbucket Server, Harbor, Mattermost 같은 외부 연동 Token/Password를 사용자별로 암호화 저장합니다. Secret 원문은 저장 후 다시 표시되지 않고, GitOps/Harbor 화면에서는 Credential ID만 선택해 재사용합니다.</p>' +
-          externalCredentialTabs(credentials, activeGroup) +
+          '<p class="muted" style="font-size:12px;margin:10px 0 0">' + (personalMode ? '내 계정에 귀속된' : 'GitLab, Bitbucket Server, Harbor, Mattermost 같은') + ' 외부 연동 Token/Password를 사용자별로 암호화 저장합니다. Secret 원문은 저장 후 다시 표시되지 않고, GitOps/Harbor 화면에서는 Credential ID만 선택해 재사용합니다.</p>' +
+          externalCredentialTabs(credentials, activeGroup, baseRoute) +
         '</div>') +
         '<div class="external-layout">' +
           card('Credential 등록/수정', '<div class="card-body"><input id="ext-cred-id" type="hidden">' +
@@ -23471,7 +23658,7 @@ const adminHTML = `<!doctype html>
               '<div class="external-hint-list">' + guide + '</div>' +
             '</div>' +
             '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px"><button type="button" onclick="externalCredentialSave()">저장</button> <button type="button" class="secondary" onclick="externalCredentialResetForm()">새로 입력</button> <a class="button secondary" href="#/gitops">GitOps에서 사용</a> <a class="button secondary" href="#/harbor">Harbor에서 사용</a> <span id="ext-cred-out" class="muted" style="font-size:12px"></span></div></div>') +
-          card('Credential 목록', '<div class="card-body"><div class="toolbar" style="padding:0 0 10px;border-bottom:0"><span class="status">' + escapeHTML(activeGroup === 'all' ? '전체' : activeGroup) + '</span><span class="muted" style="font-size:12px">현재 탭 ' + fmt(visibleCredentials.length) + '개 / 전체 ' + fmt(credentials.length) + '개</span><a class="button secondary" href="#/external-integrations">전체 보기</a></div><table><thead><tr><th>상태</th><th>이름</th><th>Provider</th><th>Base URL</th><th>Username</th><th>Secret</th><th>메모</th><th></th></tr></thead><tbody>' + externalCredentialRows(credentials, activeGroup) + '</tbody></table><div id="ext-cred-test-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
+          card('Credential 목록', '<div class="card-body"><div class="toolbar" style="padding:0 0 10px;border-bottom:0"><span class="status">' + escapeHTML(activeGroup === 'all' ? '전체' : activeGroup) + '</span><span class="muted" style="font-size:12px">현재 탭 ' + fmt(visibleCredentials.length) + '개 / 전체 ' + fmt(credentials.length) + '개</span><a class="button secondary" href="' + baseRoute + '">전체 보기</a></div><table><thead><tr><th>상태</th><th>이름</th><th>Provider</th><th>Base URL</th><th>Username</th><th>Secret</th><th>메모</th><th></th></tr></thead><tbody>' + externalCredentialRows(credentials, activeGroup) + '</tbody></table><div id="ext-cred-test-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
         '</div>';
       makeSortable('#view', 'external-integrations');
     }
@@ -23526,7 +23713,7 @@ const adminHTML = `<!doctype html>
         const res = await api(id ? '/admin/external-integrations/credentials/' + encodeURIComponent(id) : '/admin/external-integrations/credentials', { method: 'POST', body: JSON.stringify(body) });
         if (out) out.textContent = (id ? '수정됨: ' : '저장됨: ') + (((res.data || {}).credential || res.credential || {}).id || id);
         showToast('ok', '외부연동 Credential 저장', body.name);
-        await renderExternalIntegrations();
+        await renderExternalIntegrations({ personal: !!window.externalCredentialPersonalMode });
       } catch (e) {
         if (out) out.textContent = e.message;
         showToast('error', 'Credential 저장 실패', e.message);
@@ -23537,7 +23724,7 @@ const adminHTML = `<!doctype html>
       try {
         await api('/admin/external-integrations/credentials/' + encodeURIComponent(id), { method: 'DELETE' });
         showToast('ok', 'Credential 삭제', id);
-        await renderExternalIntegrations();
+        await renderExternalIntegrations({ personal: !!window.externalCredentialPersonalMode });
       } catch (e) {
         showToast('error', 'Credential 삭제 실패', e.message);
       }

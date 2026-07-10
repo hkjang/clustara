@@ -20,8 +20,8 @@ func tabSet(scopes []string, features map[string]bool) map[string]bool {
 }
 
 func TestResolveDefaultHome(t *testing.T) {
-	// Clustara is an admin-oriented K8s tool: admin:read lands on the ops home; everyone
-	// else also lands on the ops home (a security-only role would get the security view).
+	// Clustara is admin-oriented for K8s, but non-admin users land on their personal
+	// workspace so key management, notifications, and self-service work stay reachable.
 	cases := []struct {
 		role string
 		want string
@@ -30,8 +30,8 @@ func TestResolveDefaultHome(t *testing.T) {
 		{"viewer", "#/k8s-home"},
 		{"readonly_admin", "#/k8s-home"},
 		{"security_admin", "#/k8s-home"}, // has admin:read (role override applies via resolveHome)
-		{"developer", "#/k8s-home"},
-		{"service_account", "#/k8s-home"},
+		{"developer", "#/me"},
+		{"service_account", "#/me"},
 	}
 	for _, c := range cases {
 		if got := resolveDefaultHome(roleScopes[c.role]); got != c.want {
@@ -50,10 +50,15 @@ func TestAccessibleMenusByRole(t *testing.T) {
 			t.Errorf("developer must NOT see %q", forbidden)
 		}
 	}
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile"} {
+		if !devTabs[want] {
+			t.Errorf("developer should see personal tab %q", want)
+		}
+	}
 
 	// ai_admin: admin:read but NOT security:read → ops tabs + settings, but no security.
 	aiTabs := tabSet(roleScopes["ai_admin"], features)
-	for _, want := range []string{"k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "finops", "ai-governance", "enterprise", "settings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "finops", "ai-governance", "enterprise", "settings"} {
 		if !aiTabs[want] {
 			t.Errorf("ai_admin should see %q", want)
 		}
@@ -64,7 +69,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// admin: every K8s area incl. security + nested settings children.
 	adminTabs := tabSet(roleScopes["admin"], features)
-	for _, want := range []string{"k8s-home", "fleet", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "enterprise", "settings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "enterprise", "settings"} {
 		if !adminTabs[want] {
 			t.Errorf("admin should see %q", want)
 		}
@@ -111,7 +116,7 @@ func TestMeNavigationLegacyModeReturnsFullMenu(t *testing.T) {
 	for _, tb := range nav.AllowedTabs {
 		tabs[tb] = true
 	}
-	for _, want := range []string{"k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-nodes", "service-catalog", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "runtimesettings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-nodes", "service-catalog", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "runtimesettings"} {
 		if !tabs[want] {
 			t.Errorf("legacy allowed_tabs missing %q", want)
 		}
@@ -130,8 +135,8 @@ func TestRoleCatalog(t *testing.T) {
 	if !byRole["admin"].IsAdmin || byRole["admin"].DefaultHome != "#/k8s-home" {
 		t.Errorf("admin should be is_admin with ops home: %+v", byRole["admin"])
 	}
-	if byRole["developer"].IsAdmin || byRole["developer"].DefaultHome != "#/k8s-home" {
-		t.Errorf("developer should be non-admin with ops home: %+v", byRole["developer"])
+	if byRole["developer"].IsAdmin || byRole["developer"].DefaultHome != "#/me" {
+		t.Errorf("developer should be non-admin with personal home: %+v", byRole["developer"])
 	}
 	// Highest rank first.
 	if cat[0].Rank < cat[len(cat)-1].Rank {
@@ -178,15 +183,20 @@ func TestPermissionsEffectiveLegacyMode(t *testing.T) {
 func TestTeamManagerNavigation(t *testing.T) {
 	features := map[string]bool{}
 	scopes := roleScopes["team_manager"]
-	// team_manager has neither admin:read nor security:read → lands on the ops home and
-	// sees no K8s menu (this is now an admin-oriented K8s tool).
-	if got := resolveDefaultHome(scopes); got != "#/k8s-home" {
-		t.Errorf("team_manager default_home = %q, want #/k8s-home", got)
+	// team_manager has neither admin:read nor security:read → lands on personal home and
+	// sees no K8s menu (K8s remains admin-oriented).
+	if got := resolveDefaultHome(scopes); got != "#/me" {
+		t.Errorf("team_manager default_home = %q, want #/me", got)
 	}
 	tabs := tabSet(scopes, features)
 	for _, forbidden := range []string{"k8s-home", "k8s", "settings", "k8s-security"} {
 		if tabs[forbidden] {
 			t.Errorf("team_manager must NOT see %q", forbidden)
+		}
+	}
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile"} {
+		if !tabs[want] {
+			t.Errorf("team_manager should see personal tab %q", want)
 		}
 	}
 }

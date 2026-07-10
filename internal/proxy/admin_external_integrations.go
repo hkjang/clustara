@@ -216,7 +216,7 @@ func (s *Server) decodeExternalCredential(w http.ResponseWriter, r *http.Request
 	}
 	rec.Kind = externalCredentialKind
 	rec.ScopeType = "user"
-	rec.ScopeID = adminID(r)
+	rec.ScopeID = s.meStableScopeID(r)
 	rec.Name = strings.TrimSpace(in.Name)
 	rec.Status = firstNonEmptyStr(strings.TrimSpace(in.Status), rec.Status, "active")
 	rec.OwnerTeamID = ""
@@ -257,9 +257,21 @@ func (s *Server) decodeExternalCredential(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) listExternalCredentials(r *http.Request) ([]store.EnterpriseRecord, error) {
-	rows, err := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: externalCredentialKind, ScopeType: "user", ScopeID: adminID(r), Limit: intParam(r.URL.Query().Get("limit"), 500)})
-	if err != nil {
-		return nil, err
+	limit := intParam(r.URL.Query().Get("limit"), 500)
+	rows := []store.EnterpriseRecord{}
+	seen := map[string]bool{}
+	for _, scopeID := range s.meLegacyScopeIDs(r) {
+		part, err := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: externalCredentialKind, ScopeType: "user", ScopeID: scopeID, Limit: limit})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range part {
+			if seen[row.ID] {
+				continue
+			}
+			seen[row.ID] = true
+			rows = append(rows, row)
+		}
 	}
 	providers := splitCSVLower(r.URL.Query().Get("provider"))
 	if len(providers) == 0 {
@@ -279,13 +291,15 @@ func (s *Server) listExternalCredentials(r *http.Request) ([]store.EnterpriseRec
 }
 
 func (s *Server) findExternalCredentialRecord(r *http.Request, id string) (store.EnterpriseRecord, bool, error) {
-	rows, err := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: externalCredentialKind, ScopeType: "user", ScopeID: adminID(r), Limit: 1000})
-	if err != nil {
-		return store.EnterpriseRecord{}, false, err
-	}
-	for _, row := range rows {
-		if row.ID == id {
-			return row, true, nil
+	for _, scopeID := range s.meLegacyScopeIDs(r) {
+		rows, err := s.db.ListEnterpriseRecords(r.Context(), store.EnterpriseRecordFilter{Kind: externalCredentialKind, ScopeType: "user", ScopeID: scopeID, Limit: 1000})
+		if err != nil {
+			return store.EnterpriseRecord{}, false, err
+		}
+		for _, row := range rows {
+			if row.ID == id {
+				return row, true, nil
+			}
 		}
 	}
 	return store.EnterpriseRecord{}, false, nil

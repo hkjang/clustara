@@ -20,7 +20,32 @@ func (s *Server) meUserID(r *http.Request) (string, bool) {
 	if _, authCtx, ok := s.authenticateProxyContext(r); ok && authCtx != nil && strings.TrimSpace(authCtx.UserID) != "" {
 		return authCtx.UserID, true
 	}
+	if bearerToken(r.Header.Get("Authorization")) != "" && s.authorizeAdmin(r) {
+		return adminID(r), true
+	}
 	return "", false
+}
+
+// meStableScopeID is used for per-user vault data. JWT users are keyed by subject so
+// refresh-token rotation does not orphan their saved credentials; legacy admin-token
+// mode keeps the historical admin token hash scope.
+func (s *Server) meStableScopeID(r *http.Request) string {
+	if claims, ok := s.currentAccessClaims(r); ok && strings.TrimSpace(claims.Subject) != "" {
+		return "user:" + strings.TrimSpace(claims.Subject)
+	}
+	if _, authCtx, ok := s.authenticateProxyContext(r); ok && authCtx != nil && strings.TrimSpace(authCtx.UserID) != "" {
+		return "user:" + strings.TrimSpace(authCtx.UserID)
+	}
+	return adminID(r)
+}
+
+func (s *Server) meLegacyScopeIDs(r *http.Request) []string {
+	primary := s.meStableScopeID(r)
+	legacy := adminID(r)
+	if primary == legacy {
+		return []string{primary}
+	}
+	return []string{primary, legacy}
 }
 
 // cheapestAdequateModel returns the cheapest model whose success rate is within 5pp of the

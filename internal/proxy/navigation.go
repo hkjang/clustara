@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 38
+const menuVersion = 39
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -26,6 +26,12 @@ type menuItem struct {
 
 // menuRegistry is the single source of truth for navigation. Order = display order.
 var menuRegistry = []menuItem{
+	// 개인 영역 — 현재 로그인 사용자 기준의 업무와 자격증명.
+	{ID: "me.home", Label: "내 홈", Path: "#/me", Tab: "me", Group: "me", DataScope: "self"},
+	{ID: "me.calendar", Label: "내 업무 캘린더", Path: "#/my-calendar", Tab: "my-calendar", Group: "me", DataScope: "self"},
+	{ID: "me.keys", Label: "개인 키 관리", Path: "#/mykeys", Tab: "mykeys", Group: "me", DataScope: "self"},
+	{ID: "me.integrations", Label: "나의 외부 연동", Path: "#/my-integrations", Tab: "my-integrations", Group: "me", DataScope: "self"},
+	{ID: "me.profile", Label: "개인화 설정", Path: "#/my-profile", Tab: "my-profile", Group: "me", DataScope: "self"},
 	// 운영 영역 — Kubernetes 운영 허브 (admin:read).
 	{ID: "ops.k8s_home", Label: "운영 홈", Path: "#/k8s-home", Tab: "k8s-home", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.fleet", Label: "FleetOps", Path: "#/fleet", Tab: "fleet", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -187,7 +193,7 @@ func resolveDefaultHome(scopes []string) string {
 	if hasScope(scopes, "security:read") {
 		return "#/k8s-security"
 	}
-	return "#/k8s-home"
+	return "#/me"
 }
 
 // resolveHome is the role-aware landing: a per-role override wins, otherwise scope-based.

@@ -1,3 +1,6 @@
+v0.9.113:
+- **Personal Workspace UX (v0.9.113)**: 로그아웃 메뉴 위와 상단 네비게이션에 `내 영역`을 추가하고, 내 홈·내 업무 캘린더·개인 키 관리·나의 외부 연동·개인화 설정을 정식 메뉴로 등록했습니다. `/me/work-calendar`는 Action/Config/YAML/Exec/Debug 요청 중 현재 사용자와 관련된 항목을 날짜·레인·역할 관계로 집계해 캘린더와 목록에서 확인하게 하며, 비관리자 기본 랜딩은 `#/me`로 조정했습니다. 외부연동 Credential Vault는 JWT 사용자 기준 stable `user:<subject>` scope로 저장해 세션/토큰 갱신 후에도 계속 보이도록 하고, 기존 token-hash scope 항목도 호환 조회합니다. 개인화 설정 화면은 빠른 이동 고정/최근 방문/고정 리소스 관리와 내 알림·세션 진입점을 제공합니다.
+
 v0.9.112:
 - **Cluster Group Membership CRUD (v0.9.112)**: `#/k8s-meta` 그룹·오너십 화면을 생성 중심에서 운영 관리 중심으로 확장했습니다. 클러스터 그룹은 목록에서 바로 수정·삭제할 수 있고, 삭제 시 기존 멤버 클러스터의 `group_id`를 자동으로 비워 orphan 참조가 남지 않도록 했습니다. 추가된 클러스터는 별도 멤버십 카드에서 그룹에 배정·변경·해제할 수 있으며, API로는 `POST /admin/k8s/clusters/{id}/group`를 제공합니다. 네임스페이스 오너십도 같은 화면에서 수정 모드로 재사용하고 `DELETE /admin/k8s/ownership/{cluster_id}/{namespace}`로 삭제할 수 있게 했습니다. OpenAPI, 관리자/K8s 문서, 회귀 테스트에 그룹 수정·삭제, 멤버십 변경, 오너십 갱신·삭제 흐름을 반영했습니다.
 
