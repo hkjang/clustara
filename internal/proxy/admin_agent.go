@@ -179,7 +179,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 
 		// 3. Extract the accumulated text to save in DB
 		rawSSE := interceptor.buf.Bytes()
-		answer := extractTextFromSSE(rawSSE)
+		answer, reasoning := extractAgentTextFromSSE(rawSSE)
 		llmOK := strings.TrimSpace(answer) != ""
 
 		if !llmOK {
@@ -208,7 +208,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: newID("k8samsg"), SessionID: sess.ID, Role: "user", Content: in.Question, Intent: intent, CreatedAt: nowK8sAgentTime()})
 		_ = s.db.AppendK8sAgentMessage(r.Context(), store.K8sAgentMessage{ID: agentMsgID, SessionID: sess.ID, Role: "agent", Content: answer, Intent: intent, Evidence: string(evJSON), LLMAvailable: llmOK, CreatedAt: nowK8sAgentTime()})
 		s.recordAgentEvaluation(r.Context(), sess, agentMsgID, intent, pctx, toolPlan, evidence, answer, !llmOK, llmOK, start)
-		s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan), "stream": true}))
+		s.auditAdmin(r, "k8s.agent.message", sess.ID, auditJSON(map[string]any{"intent": intent, "llm": llmOK, "tools": len(toolPlan), "stream": true, "reasoning_provided": strings.TrimSpace(reasoning) != ""}))
 		return
 	}
 
@@ -291,32 +291,95 @@ func (i *streamingInterceptor) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func extractTextFromSSE(data []byte) string {
-	var sb strings.Builder
+func extractAgentTextFromSSE(data []byte) (string, string) {
+	var content, reasoning strings.Builder
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		dataStr := strings.TrimPrefix(line, "data: ")
+		dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if dataStr == "[DONE]" {
 			continue
 		}
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content          any    `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}
 		if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
 			if len(chunk.Choices) > 0 {
-				sb.WriteString(chunk.Choices[0].Delta.Content)
+				content.WriteString(toString(chunk.Choices[0].Delta.Content))
+				reasoning.WriteString(firstNonEmpty(chunk.Choices[0].Delta.ReasoningContent, chunk.Choices[0].Delta.Reasoning))
 			}
 		}
 	}
-	return sb.String()
+	answer, embedded := splitAgentThinking(content.String())
+	if embedded != "" {
+		if reasoning.Len() > 0 {
+			reasoning.WriteByte('\n')
+		}
+		reasoning.WriteString(embedded)
+	}
+	return strings.TrimSpace(answer), strings.TrimSpace(reasoning.String())
+}
+
+// splitAgentThinking removes provider-specific <think>/<analysis> blocks from the answer stored in
+// the operations ledger. The raw stream is still passed through so the UI can show the separate,
+// collapsible reasoning panel when a provider intentionally exposes it.
+func splitAgentThinking(raw string) (answer, reasoning string) {
+	lower := strings.ToLower(raw)
+	cursor := 0
+	var visible, hidden strings.Builder
+	for cursor < len(raw) {
+		thinkAt, analysisAt := strings.Index(lower[cursor:], "<think>"), strings.Index(lower[cursor:], "<analysis>")
+		offset, tag, closeTag := -1, "", ""
+		if thinkAt >= 0 && (analysisAt < 0 || thinkAt <= analysisAt) {
+			offset, tag, closeTag = thinkAt, "<think>", "</think>"
+		}
+		if analysisAt >= 0 && (thinkAt < 0 || analysisAt < thinkAt) {
+			offset, tag, closeTag = analysisAt, "<analysis>", "</analysis>"
+		}
+		if offset < 0 {
+			visible.WriteString(raw[cursor:])
+			break
+		}
+		start := cursor + offset
+		visible.WriteString(raw[cursor:start])
+		bodyStart := start + len(tag)
+		closeOffset := strings.Index(lower[bodyStart:], closeTag)
+		if closeOffset < 0 {
+			hidden.WriteString(raw[bodyStart:])
+			cursor = len(raw)
+			break
+		}
+		if hidden.Len() > 0 {
+			hidden.WriteByte('\n')
+		}
+		hidden.WriteString(raw[bodyStart : bodyStart+closeOffset])
+		cursor = bodyStart + closeOffset + len(closeTag)
+	}
+	answer = strings.TrimSpace(visible.String())
+	reasoning = strings.TrimSpace(hidden.String())
+	if reasoning == "" {
+		lowerAnswer := strings.ToLower(answer)
+		for _, prefix := range []string{"thinking process:", "thinking:", "reasoning:"} {
+			if !strings.HasPrefix(lowerAnswer, prefix) {
+				continue
+			}
+			if split := strings.Index(answer, "\n\n"); split >= 0 {
+				reasoning = strings.TrimSpace(answer[len(prefix):split])
+				answer = strings.TrimSpace(answer[split+2:])
+			}
+			break
+		}
+	}
+	return answer, reasoning
 }
 
 func nowK8sAgentTime() string { return time.Now().UTC().Format(time.RFC3339Nano) }

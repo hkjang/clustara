@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.117** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.118** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.117)
+## 기능 상태 (v0.9.118)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -24,6 +24,7 @@
 | Manifest Change Risk Explain & Verification Sync — K8s Action 및 Manifest 변경 요청에 필드/정책 기반 위험도 사유(Reason) 설명 모달을 연동하고, 검증 완료 시 백그라운드 수집 주기 격차(timing gap)로 인한 대기 상태에 대해 passed_pending_observation으로 자동 정합 | ✅ (v0.9.114) |
 | Manifest Change Live API Verification — 백그라운드 인벤토리 수집 주기 딜레이를 우회하도록 API 서버에 실시간 직접 읽기(ResourceGetter)를 연동해 timing gap 오탐을 최소화하고, Job과 Pod warning 관계 매핑 및 상세 판정 사유(execution_failed, verified_with_warning, observation_pending 등) UI 연동 | ✅ (v0.9.115) |
 | Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하는 통합 운영 캘린더 제공 | ✅ (v0.9.116) |
+| Reasoning Agent Stream & Calendar Names — Ollama 등 추론형 모델의 생각 과정(thinking) 스트리밍 토글 렌더링을 보강하고, 전체 업무 캘린더의 담당자 ID(UUID/Email)를 실시간 사용자 디렉토리(User Directory)와 결합해 인체공학적인 담당자 실명으로 매핑 표시 | ✅ (v0.9.118) |
 | Cluster Group Membership CRUD — 추가한 클러스터를 그룹에 배정·변경·해제하고, 그룹 수정/삭제·오너십 수정/삭제까지 `#/k8s-meta`에서 처리 | ✅ (v0.9.112) |
 | External Integration Credential Vault — 설정 그룹의 외부연동 설정 메뉴에서 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 사용자별 암호화 저장하고 GitOps/Harbor 화면에서 `credential_id`로 재사용 | ✅ (v0.9.111) |
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |

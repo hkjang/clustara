@@ -42,9 +42,10 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 		t.Fatalf("GET /admin/work-calendar = %d", resp.StatusCode)
 	}
 	var out struct {
-		Events  []adminCalendarEvent `json:"events"`
-		Summary map[string]int       `json:"summary"`
-		Options map[string][]string  `json:"options"`
+		Events       []adminCalendarEvent       `json:"events"`
+		Summary      map[string]int             `json:"summary"`
+		Options      map[string][]string        `json:"options"`
+		ActorOptions []adminCalendarActorOption `json:"actor_options"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
@@ -58,6 +59,9 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 	if len(out.Options["clusters"]) != 2 || len(out.Options["actors"]) != 2 {
 		t.Fatalf("filter options must describe the unfiltered data set: %+v", out.Options)
 	}
+	if len(out.ActorOptions) != 2 {
+		t.Fatalf("actor options = %+v", out.ActorOptions)
+	}
 }
 
 func TestAdminWorkCalendarMenuRequiresAdminRead(t *testing.T) {
@@ -67,5 +71,16 @@ func TestAdminWorkCalendarMenuRequiresAdminRead(t *testing.T) {
 	}
 	if !tabSet(roleScopes["admin"], features)["work-calendar"] {
 		t.Fatal("admin must see admin work calendar")
+	}
+}
+
+func TestAdminCalendarActorNameKeepsIDSeparateFromDisplayName(t *testing.T) {
+	directory := map[string]string{"usr_123": "홍길동"}
+	if got := adminCalendarActorName("usr_123", directory); got != "홍길동" {
+		t.Fatalf("display name = %q", got)
+	}
+	options := adminCalendarActorOptions(map[string]bool{"usr_123": true}, directory)
+	if len(options) != 1 || options[0].Value != "usr_123" || options[0].Label != "홍길동" {
+		t.Fatalf("actor options = %+v", options)
 	}
 }

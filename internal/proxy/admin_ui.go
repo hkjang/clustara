@@ -187,6 +187,19 @@ const adminHTML = `<!doctype html>
 	.resource-subnav-signal { flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:var(--good-ink); }
 	.resource-subnav-signal.warn { background:var(--warn); box-shadow:0 0 0 3px var(--warn-bg); }
 	.resource-subnav-item.active .resource-subnav-signal { box-shadow:none; }
+	.security-subnav-shell { margin:10px 0 12px; padding:9px; border:1px solid var(--line); border-radius:11px; background:var(--panel-alt); }
+	.security-subnav-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+	.security-subnav-head strong { font-size:11px; letter-spacing:.04em; color:var(--muted); }
+	.security-subnav { display:flex; gap:6px; overflow-x:auto; padding:1px 1px 5px; scrollbar-width:thin; scroll-snap-type:x proximity; }
+	.security-subnav-item { flex:1 0 116px; min-width:116px; display:flex; align-items:center; gap:7px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); text-decoration:none; scroll-snap-align:center; transition:border-color .15s ease,transform .15s ease,background .15s ease; }
+	.security-subnav-item:hover { border-color:var(--accent); transform:translateY(-1px); }
+	.security-subnav-item.active { color:#fff; background:linear-gradient(135deg,#7f1d1d,#b42318); border-color:#b42318; box-shadow:0 3px 10px rgba(180,35,24,.2); }
+	.security-subnav-icon { flex:0 0 25px; width:25px; height:25px; display:grid; place-items:center; border-radius:7px; background:var(--bad-bg); color:var(--bad); font-size:12px; font-weight:900; }
+	.security-subnav-item.active .security-subnav-icon { background:rgba(255,255,255,.16); color:#fff; }
+	.security-subnav-copy { min-width:0; }
+	.security-subnav-copy strong { display:block; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+	.security-subnav-copy span { display:block; margin-top:2px; font-size:8px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+	.security-subnav-item.active .security-subnav-copy span { color:#fff; opacity:.78; }
     .header-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 18px 28px 60px; }
     section {
@@ -203,6 +216,13 @@ const adminHTML = `<!doctype html>
     /* Indented content body for panels whose content would otherwise sit flush to the section edge. */
     .card-body { padding: 14px; }
     .card-body > table:first-child, .card-body > :first-child { margin-top: 0; }
+	.section-lead { display:flex; align-items:flex-start; gap:10px; margin:12px 14px 10px; padding:10px 12px; border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; background:var(--panel-alt); color:var(--muted); font-size:12px; line-height:1.55; }
+	.section-lead-icon { flex:0 0 24px; width:24px; height:24px; display:grid; place-items:center; border-radius:7px; background:var(--good-bg); color:var(--good-ink); font-size:12px; font-weight:900; }
+	.section-lead-text { min-width:0; flex:1; padding-top:2px; }
+	.section-lead-text strong { color:var(--ink); }
+	.section-lead.warn { border-left-color:var(--warn); background:var(--warn-bg); }
+	.section-lead.warn .section-lead-icon { background:var(--panel); color:var(--warn); }
+	.section-lead.compact { margin-bottom:6px; padding-top:8px; padding-bottom:8px; }
     input, button, select, textarea {
       height: 34px; border: 1px solid var(--line); border-radius: 6px;
       background: var(--panel); color: var(--ink); padding: 0 10px; font: inherit;
@@ -710,6 +730,9 @@ const adminHTML = `<!doctype html>
 	  .resource-flow-column:not(:last-child)::after { content:'↓'; right:50%; top:auto; bottom:-12px; transform:translate(50%,50%); }
 	  .resource-subnav { display:flex; scroll-snap-type:x proximity; }
 	  .resource-subnav-item { flex:0 0 142px; scroll-snap-align:start; }
+	  .security-subnav-shell { margin-left:0; margin-right:0; }
+      .security-subnav-item { flex-basis:132px; }
+	  .section-lead { margin:10px; }
       .chat-pop { grid-template-columns: 1fr; }
       .chat-pop > .chat-stream { border-right: none; border-bottom: 1px solid var(--line); }
       .chat-pop > .chat-debug { padding: 14px 0 0; }
@@ -930,16 +953,22 @@ const adminHTML = `<!doctype html>
   <div id="agent-drawer" style="display:none;position:fixed;right:20px;bottom:84px;width:390px;max-width:92vw;height:62vh;max-height:580px;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--border,#ccc);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.28);z-index:9999;display:none;flex-direction:column;overflow:hidden">
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border,#ddd)">
       <strong style="flex:0 0 auto">🤖 Ops Agent</strong><span id="agent-ctx" class="muted" style="flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+	  <button type="button" class="secondary" style="font-size:11px;padding:2px 8px" title="새 대화" onclick="agentNewSession()">＋</button>
       <button type="button" class="secondary" style="font-size:11px;padding:2px 8px" onclick="agentToggle()">✕</button>
     </div>
     <div id="agent-suggest" style="padding:8px 12px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border,#eee)"></div>
     <div id="agent-msgs" style="flex:1;overflow:auto;padding:10px 12px;font-size:13px"></div>
-    <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--border,#ddd)">
+	<div id="agent-status" class="muted" style="display:none;font-size:10px;padding:5px 12px;border-top:1px solid var(--border,#eee)"></div>
+	<div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--border,#ddd)">
       <input id="agent-q" placeholder="이 화면에 대해 물어보세요…" style="flex:1" onkeydown="if(event.key==='Enter')agentSend()">
-      <button type="button" onclick="agentSend()">전송</button>
+	  <button id="agent-send" type="button" onclick="agentSend()">전송</button>
+	  <button id="agent-stop" class="secondary" type="button" style="display:none" onclick="agentStop()">중단</button>
     </div>
     <div class="muted" style="font-size:10px;padding:0 12px 8px">조회·분석만 즉시 수행 · 변경은 Action Center 승인 흐름</div>
   </div>
+	<datalist id="ux-k8s-cluster-options"></datalist>
+	<datalist id="ux-k8s-namespace-options"></datalist>
+	<datalist id="ux-k8s-kind-options"></datalist>
 
   <script>
     // ---------- theme ----------
@@ -1399,6 +1428,88 @@ const adminHTML = `<!doctype html>
       if (res.status === 204) return null;
       return res.json();
     }
+
+	// K8s input assistance: retain free-form entry for not-yet-collected resources while offering
+	// native, keyboard-accessible previews sourced from registered clusters and live inventory.
+	let uxK8sSuggestionPromise = null;
+	let uxK8sSuggestionLoadedAt = 0;
+	let uxK8sSuggestionData = { clusters:[], items:[] };
+	let uxK8sDatalistSeq = 0;
+	function uxK8sInputSuggestionType(input) {
+	  if (!input || !['INPUT','SELECT'].includes(input.tagName) || (input.tagName === 'INPUT' && input.type === 'hidden') || input.dataset.noK8sSuggest === '1') return '';
+	  if (input.dataset.k8sSuggest) return input.dataset.k8sSuggest;
+	  const hint = ((input.id || '') + ' ' + (input.name || '') + ' ' + (input.placeholder || '')).toLowerCase();
+	  if (/cluster[_ -]?id|(?:^|[-_])cluster(?:$|[-_])/.test(hint)) return 'cluster';
+	  if (/namespace|(?:^|[-_])ns(?:$|[-_])/.test(hint) && !/csv|glob|pattern|label/.test(hint)) return 'namespace';
+	  if (/(^|[-_ ])kind($|[-_ (])/.test(hint)) return 'kind';
+	  return '';
+	}
+	function uxAttachK8sSuggestions(root) {
+	  const scope = root && root.querySelectorAll ? root : document;
+	  const inputs = [];
+	  if (root && root.matches && root.matches('input')) inputs.push(root);
+	  scope.querySelectorAll('input').forEach(el => inputs.push(el));
+	  inputs.forEach(input => {
+		const type = uxK8sInputSuggestionType(input);
+		if (!type) return;
+		input.setAttribute('list', 'ux-k8s-' + type + '-options');
+		input.setAttribute('autocomplete', 'off');
+		if (!input.title) input.title = type === 'cluster' ? '등록된 클러스터 ID를 선택하거나 입력하세요.' : (type === 'namespace' ? '수집된 namespace를 선택하거나 입력하세요.' : '수집된 Kubernetes Kind를 선택하거나 입력하세요.');
+		if (type === 'namespace' && input.dataset.k8sSuggestBound !== '1') {
+		  input.dataset.k8sSuggestBound = '1';
+		  input.addEventListener('focus', () => uxPrepareNamespaceSuggestions(input));
+		}
+	  });
+	}
+	function uxPrepareNamespaceSuggestions(input) {
+	  const scope = input.closest('.card-body, form, section, .modal') || document;
+	  const candidates = [...scope.querySelectorAll('input,select')].filter(el => el !== input && uxK8sInputSuggestionType(el) === 'cluster');
+	  const clusterId = candidates.length ? String(candidates[0].value || '').trim() : '';
+	  if (!clusterId) { input.setAttribute('list', 'ux-k8s-namespace-options'); return; }
+	  if (!input.dataset.k8sNamespaceList) {
+		input.dataset.k8sNamespaceList = 'ux-k8s-namespace-local-' + (++uxK8sDatalistSeq);
+		const list = document.createElement('datalist'); list.id = input.dataset.k8sNamespaceList; document.body.appendChild(list);
+	  }
+	  const namespaces = [...new Set((uxK8sSuggestionData.items || []).filter(it => it.cluster_id === clusterId).map(it => it.namespace).filter(Boolean))].sort();
+	  uxFillK8sDatalist(input.dataset.k8sNamespaceList, namespaces.map(ns => ({ value:ns, label:clusterId })));
+	  input.setAttribute('list', input.dataset.k8sNamespaceList);
+	}
+	function uxFillK8sDatalist(id, values) {
+	  const list = document.getElementById(id); if (!list) return;
+	  list.replaceChildren();
+	  (values || []).forEach(item => {
+		const option = document.createElement('option');
+		option.value = item.value;
+		if (item.label && item.label !== item.value) option.label = item.label;
+		list.appendChild(option);
+	  });
+	}
+	async function uxLoadK8sSuggestions(force) {
+	  if (!force && uxK8sSuggestionPromise && Date.now() - uxK8sSuggestionLoadedAt < 5 * 60 * 1000) return uxK8sSuggestionPromise;
+	  uxK8sSuggestionLoadedAt = Date.now();
+	  uxK8sSuggestionPromise = Promise.all([
+		api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+		api('/admin/k8s/inventory?limit=10000').catch(() => ({ items: [] }))
+	  ]).then(([clusterData, inventoryData]) => {
+		const clusters = clusterData.clusters || [], items = inventoryData.items || [];
+		uxK8sSuggestionData = { clusters, items };
+		const clusterNames = {}; clusters.forEach(c => clusterNames[c.id] = c.name || c.id);
+		uxFillK8sDatalist('ux-k8s-cluster-options', clusters.map(c => ({ value:c.id, label:(c.name || c.id) + (c.status ? ' · ' + c.status : '') })));
+		const nsClusters = {};
+		items.forEach(it => { if (it.namespace) (nsClusters[it.namespace] = nsClusters[it.namespace] || new Set()).add(clusterNames[it.cluster_id] || it.cluster_id || ''); });
+		uxFillK8sDatalist('ux-k8s-namespace-options', Object.keys(nsClusters).sort().map(ns => ({ value:ns, label:[...nsClusters[ns]].filter(Boolean).sort().join(', ') })));
+		const kinds = [...new Set(items.map(it => it.kind).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+		uxFillK8sDatalist('ux-k8s-kind-options', kinds.map(kind => ({ value:kind, label:kind })));
+		uxAttachK8sSuggestions(document);
+		return { clusters, items };
+	  });
+	  return uxK8sSuggestionPromise;
+	}
+	window.uxRefreshK8sSuggestions = () => uxLoadK8sSuggestions(true);
+	const uxK8sInputObserver = new MutationObserver(mutations => mutations.forEach(m => m.addedNodes.forEach(node => { if (node.nodeType === 1) uxAttachK8sSuggestions(node); })));
+	uxK8sInputObserver.observe(document.body, { childList:true, subtree:true });
+	uxAttachK8sSuggestions(document);
+	setTimeout(() => uxLoadK8sSuggestions(false), 0);
 
     // ---------- formatting ----------
     function fmt(value) { return Number(value || 0).toLocaleString('ko-KR'); }
@@ -2786,7 +2897,29 @@ const adminHTML = `<!doctype html>
     setInterval(updateK8sActionNavBadge, 30000);
 
     // ---------- Floating Ops Agent (Page Context SDK + drawer) ----------
-    var agentState = { sessionId: null, ctx: {}, open: false };
+	var agentState = { sessionId: null, ctx: {}, contextKey: '', open: false, controller: null, busy: false };
+	function agentSetStatus(text, tone) {
+	  const el = document.getElementById('agent-status');
+	  if (!el) return;
+	  el.style.display = text ? 'block' : 'none';
+	  el.className = tone === 'error' ? 'status error' : (tone === 'warn' ? 'status warn' : 'muted');
+	  el.textContent = text || '';
+	}
+	function agentSetBusy(busy) {
+	  agentState.busy = !!busy;
+	  const send = document.getElementById('agent-send'), stop = document.getElementById('agent-stop'), input = document.getElementById('agent-q');
+	  if (send) { send.disabled = !!busy; send.style.display = busy ? 'none' : ''; }
+	  if (stop) stop.style.display = busy ? '' : 'none';
+	  if (input) input.disabled = !!busy;
+	}
+	window.agentStop = () => { if (agentState.controller) agentState.controller.abort(); };
+	window.agentNewSession = () => {
+	  if (agentState.busy && !confirm('진행 중인 분석을 중단하고 새 대화를 시작할까요?')) return;
+	  agentStop(); agentState.sessionId = null;
+	  const msgs = document.getElementById('agent-msgs'); if (msgs) { msgs.innerHTML = ''; msgs.dataset.init = '1'; }
+	  agentSetStatus('새 대화가 준비되었습니다. 현재 화면 컨텍스트가 다음 질문에 적용됩니다.');
+	  agentLoadSuggestions();
+	};
     // Collect the current screen context from the hash route + params (Page Context Registry).
     function agentCollectContext() {
       const { parts, params } = parseHash();
@@ -2805,7 +2938,13 @@ const adminHTML = `<!doctype html>
       return q.toString();
     }
     function agentOnRoute() {
-      agentState.ctx = agentCollectContext();
+	  const nextCtx = agentCollectContext();
+	  const nextKey = JSON.stringify(nextCtx);
+	  if (agentState.contextKey && agentState.contextKey !== nextKey && agentState.sessionId) {
+		agentState.sessionId = null;
+		agentSetStatus('화면 컨텍스트가 변경되어 다음 질문부터 새 대화로 분리됩니다.');
+	  }
+	  agentState.ctx = nextCtx; agentState.contextKey = nextKey;
       const label = (agentState.ctx.pod || agentState.ctx.incident_id || agentState.ctx.stack_id || agentState.ctx.namespace || agentState.ctx.route || '').toString();
       const el = document.getElementById('agent-ctx'); if (el) el.textContent = label;
       if (agentState.open) agentLoadSuggestions();
@@ -2837,12 +2976,46 @@ const adminHTML = `<!doctype html>
       m.innerHTML += '<div style="text-align:' + align + ';margin:6px 0"><div style="display:inline-block;max-width:90%;text-align:left;background:' + bg + ';padding:6px 10px;border-radius:10px">' + html + '</div></div>';
       m.scrollTop = m.scrollHeight;
     }
+	// Split provider-specific embedded reasoning without mutating accumulated state. Re-parsing the
+	// complete content on each paint makes chunk boundaries (<thi + nk>) safe and prevents duplicate
+	// reasoning when another token arrives.
+	function agentSplitThinking(raw) {
+	  raw = String(raw || '');
+	  let answer = '', reasoning = '', cursor = 0;
+	  const openRE = /<(think|analysis)>/ig;
+	  let match;
+	  while ((match = openRE.exec(raw)) !== null) {
+		answer += raw.slice(cursor, match.index);
+		const tag = match[1], closeRE = new RegExp('<\\/' + tag + '>', 'ig');
+		closeRE.lastIndex = openRE.lastIndex;
+		const close = closeRE.exec(raw);
+		if (!close) {
+		  reasoning += (reasoning ? '\n' : '') + raw.slice(openRE.lastIndex);
+		  cursor = raw.length;
+		  break;
+		}
+		reasoning += (reasoning ? '\n' : '') + raw.slice(openRE.lastIndex, close.index);
+		cursor = closeRE.lastIndex;
+		openRE.lastIndex = cursor;
+	  }
+	  answer += raw.slice(cursor);
+	  // Do not flash a partial opening tag while streaming.
+	  const partial = answer.match(/<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|a(?:n(?:a(?:l(?:y(?:s(?:i(?:s)?)?)?)?)?)?)?)?$/i);
+	  if (partial) answer = answer.slice(0, partial.index);
+	  if (!reasoning) {
+		const prefixed = answer.match(/^\s*(?:Thinking Process|Thinking process|Thinking|Reasoning)\s*:\s*([\s\S]*?)(?:\n\s*\n(?=\S)([\s\S]*))?$/i);
+		if (prefixed && prefixed[2]) { reasoning = prefixed[1] || ''; answer = prefixed[2] || ''; }
+	  }
+	  return { answer: answer.trimStart(), reasoning: reasoning.trim() };
+	}
     window.agentAsk = (text) => { document.getElementById('agent-q').value = text; agentSend(); };
     window.agentSend = async () => {
       const input = document.getElementById('agent-q');
       const q = (input.value || '').trim();
-      if (!q) return;
+	  if (!q || agentState.busy) return;
       input.value = '';
+	  agentSetBusy(true); agentSetStatus('질문을 분석하고 현재 화면의 근거를 수집하는 중…');
+	  agentState.controller = new AbortController();
       agentAppend('user', escapeHTML(q));
       agentAppend('agent', '<span class="muted">분석 중…</span>');
       const m = document.getElementById('agent-msgs');
@@ -2856,7 +3029,8 @@ const adminHTML = `<!doctype html>
               ...requestHeaders,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ session_id: agentState.sessionId, question: q })
+			body: JSON.stringify({ session_id: agentState.sessionId, question: q }),
+			signal: agentState.controller.signal
           });
         };
         let response = await doFetch();
@@ -2885,7 +3059,7 @@ const adminHTML = `<!doctype html>
         reasoningDiv.style.marginBottom = '8px';
         reasoningDiv.style.display = 'none';
         reasoningDiv.open = true;
-        reasoningDiv.innerHTML = '<summary style="cursor:pointer;font-weight:bold;margin-bottom:4px;outline:none;user-select:none">생각 과정</summary><div class="reasoning-text" style="white-space:pre-wrap"></div>';
+		reasoningDiv.innerHTML = '<summary style="cursor:pointer;font-weight:bold;margin-bottom:4px;outline:none;user-select:none">모델 추론 정보</summary><div class="muted" style="font-size:10px;margin-bottom:4px">모델이 별도 reasoning 필드 또는 태그로 제공한 정보입니다.</div><div class="reasoning-text" style="white-space:pre-wrap"></div>';
         agentBubble.appendChild(reasoningDiv);
 
         const contentDiv = document.createElement('div');
@@ -2903,6 +3077,17 @@ const adminHTML = `<!doctype html>
         let note = '';
         let llmAvailable = true;
         let buffer = '';
+		const paintAgentAnswer = () => {
+		  const split = agentSplitThinking(accumulatedAnswer);
+		  const reasoning = [accumulatedReasoning.trim(), split.reasoning].filter(Boolean).join('\n');
+		  if (reasoning) {
+			reasoningDiv.style.display = 'block';
+			reasoningDiv.querySelector('.reasoning-text').textContent = reasoning;
+		  }
+		  contentDiv.innerHTML = split.answer ? renderMarkdown(split.answer) : '<span class="muted">답변을 구성하는 중…</span>';
+		  if (split.answer && reasoningDiv.open) reasoningDiv.open = false;
+		  m.scrollTop = m.scrollHeight;
+		};
 
         while (true) {
           const { value, done } = await reader.read();
@@ -2912,8 +3097,8 @@ const adminHTML = `<!doctype html>
           buffer = lines.pop();
           for (const line of lines) {
             if (!line.trim()) continue;
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim();
+			if (line.trimStart().startsWith('data:')) {
+			  const dataStr = line.trimStart().slice(5).trim();
               if (dataStr === '[DONE]') continue;
               try {
                 const chunk = JSON.parse(dataStr);
@@ -2922,50 +3107,11 @@ const adminHTML = `<!doctype html>
                   toolPlan = chunk.tool_plan || [];
                   note = chunk.note || '';
                   llmAvailable = chunk.llm_available !== false;
+				  agentSetStatus('근거 ' + evidence.length + '건 · 도구 계획 ' + toolPlan.length + '개 · 답변 생성 중…');
                 } else if (chunk.event === 'delta') {
                   accumulatedAnswer += chunk.content || '';
-                  
-                  let displayAnswer = accumulatedAnswer;
-                  let displayReasoning = accumulatedReasoning;
-
-                  if (displayAnswer.includes('<think>')) {
-                    const parts = displayAnswer.split('<think>');
-                    const before = parts[0];
-                    const rest = parts.slice(1).join('<think>');
-                    if (rest.includes('</think>')) {
-                      const subparts = rest.split('</think>');
-                      displayReasoning += (displayReasoning ? '\n' : '') + subparts[0];
-                      displayAnswer = before + subparts.slice(1).join('</think>');
-                    } else {
-                      displayReasoning += (displayReasoning ? '\n' : '') + rest;
-                      displayAnswer = before;
-                    }
-                  }
-
-                  if (!accumulatedAnswer.includes('<think>')) {
-                    const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
-                    for (const prefix of prefixes) {
-                      if (displayAnswer.trim().startsWith(prefix)) {
-                        const raw = displayAnswer.trim().slice(prefix.length).trim();
-                        displayReasoning += (displayReasoning ? '\n' : '') + raw;
-                        displayAnswer = '';
-                        break;
-                      }
-                    }
-                  }
-
-                  if (displayReasoning) {
-                    if (reasoningDiv.style.display === 'none') {
-                      reasoningDiv.style.display = 'block';
-                    }
-                    reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
-                    if ((accumulatedAnswer.includes('</think>') || displayAnswer.trim()) && reasoningDiv.open) {
-                      reasoningDiv.open = false;
-                    }
-                  }
-
-                  contentDiv.innerHTML = renderMarkdown(displayAnswer);
-                  m.scrollTop = m.scrollHeight;
+				  if (chunk.reasoning || chunk.reasoning_content) accumulatedReasoning += chunk.reasoning || chunk.reasoning_content;
+				  paintAgentAnswer();
                 } else if (chunk.event === 'error') {
                   contentDiv.innerHTML = '<span class="status error">' + escapeHTML(chunk.message) + '</span>';
                 } else if (chunk.choices && chunk.choices.length > 0) {
@@ -2973,59 +3119,14 @@ const adminHTML = `<!doctype html>
                   
                   const reasoningText = delta.reasoning || delta.reasoning_content || '';
                   if (reasoningText) {
-                    if (reasoningDiv.style.display === 'none') {
-                      reasoningDiv.style.display = 'block';
-                    }
                     accumulatedReasoning += reasoningText;
-                    reasoningDiv.querySelector('.reasoning-text').textContent = accumulatedReasoning;
-                    m.scrollTop = m.scrollHeight;
+					paintAgentAnswer();
                   }
 
                   const text = delta.content || '';
                   if (text) {
                     accumulatedAnswer += text;
-
-                    let displayAnswer = accumulatedAnswer;
-                    let displayReasoning = accumulatedReasoning;
-
-                    if (displayAnswer.includes('<think>')) {
-                      const parts = displayAnswer.split('<think>');
-                      const before = parts[0];
-                      const rest = parts.slice(1).join('<think>');
-                      if (rest.includes('</think>')) {
-                        const subparts = rest.split('</think>');
-                        displayReasoning += (displayReasoning ? '\n' : '') + subparts[0];
-                        displayAnswer = before + subparts.slice(1).join('</think>');
-                      } else {
-                        displayReasoning += (displayReasoning ? '\n' : '') + rest;
-                        displayAnswer = before;
-                      }
-                    }
-
-                    if (!accumulatedAnswer.includes('<think>')) {
-                      const prefixes = ['Thinking Process:', 'Thinking:', 'Thinking process:'];
-                      for (const prefix of prefixes) {
-                        if (displayAnswer.trim().startsWith(prefix)) {
-                          const raw = displayAnswer.trim().slice(prefix.length).trim();
-                          displayReasoning += (displayReasoning ? '\n' : '') + raw;
-                          displayAnswer = '';
-                          break;
-                        }
-                      }
-                    }
-
-                    if (displayReasoning) {
-                      if (reasoningDiv.style.display === 'none') {
-                        reasoningDiv.style.display = 'block';
-                      }
-                      reasoningDiv.querySelector('.reasoning-text').textContent = displayReasoning;
-                      if ((accumulatedAnswer.includes('</think>') || displayAnswer.trim()) && reasoningDiv.open) {
-                        reasoningDiv.open = false;
-                      }
-                    }
-
-                    contentDiv.innerHTML = renderMarkdown(displayAnswer);
-                    m.scrollTop = m.scrollHeight;
+					paintAgentAnswer();
                   }
                 }
               } catch (e) {
@@ -3044,9 +3145,9 @@ const adminHTML = `<!doctype html>
         if (ev) {
           footerHtml += '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer">근거 ' + evidence.length + '건</summary><ul style="margin:4px 0 0;padding-left:16px">' + ev + '</ul></details>';
         }
-        const tools = toolPlan.map(t => escapeHTML(t.tool)).join(', ');
+		const tools = toolPlan.map(t => escapeHTML(t.tool)).join(', ');
         if (tools) {
-          footerHtml += '<div class="muted" style="font-size:10px;margin-top:4px">사용 도구: ' + tools + '</div>';
+		  footerHtml += '<div class="muted" style="font-size:10px;margin-top:4px">계획된 점검 도구: ' + tools + '</div>';
         }
         if (footerHtml) {
           const footerDiv = document.createElement('div');
@@ -3054,9 +3155,20 @@ const adminHTML = `<!doctype html>
           agentBubble.appendChild(footerDiv);
           m.scrollTop = m.scrollHeight;
         }
+		agentSetStatus('완료 · 근거 ' + evidence.length + '건 · 도구 계획 ' + toolPlan.length + '개');
       } catch (e) {
-        m.lastElementChild.remove();
-        agentAppend('agent', '<span class="status error">' + escapeHTML(e.message) + '</span>');
+		if (e && e.name === 'AbortError') {
+		  agentSetStatus('사용자가 분석을 중단했습니다.', 'warn');
+		  agentAppend('agent', '<span class="status warn">분석이 중단되었습니다. 생성된 일부 답변은 위에 유지됩니다.</span>');
+		} else {
+		  const last = m.lastElementChild;
+		  if (last && String(last.textContent || '').includes('분석 중…')) last.remove();
+		  agentSetStatus('처리 실패: ' + (e.message || '알 수 없는 오류'), 'error');
+		  agentAppend('agent', '<span class="status error">' + escapeHTML(e.message || '처리 중 오류가 발생했습니다.') + '</span>');
+		}
+	  } finally {
+		agentState.controller = null;
+		agentSetBusy(false);
       }
     };
 
@@ -3929,7 +4041,7 @@ const adminHTML = `<!doctype html>
     function renderRegressionSection(regResp) {
       const rep = (regResp && regResp.report) || null;
       if (!rep || !rep.total) {
-        return section('Agent Regression Suite', '<div class="muted" style="font-size:12px;padding:0 14px 10px">회귀 케이스가 없습니다.</div>');
+		return section('Agent Regression Suite', '<div class="empty">회귀 케이스가 없습니다.</div>');
       }
       const pct = (v) => (v || 0).toFixed(1) + '%';
       const base = regResp.baseline;
@@ -3965,7 +4077,7 @@ const adminHTML = `<!doctype html>
     function renderActionOutcomeSection(outcomeResp) {
       const o = (outcomeResp && outcomeResp.stats) || null;
       if (!o || !o.total) {
-        return section('Action Outcome Analytics', '<div class="muted" style="font-size:12px;padding:0 14px 10px">아직 제안된 Action Card가 없습니다 — 에이전트가 조치를 제안하고 승인/실행되면 채택률·성공률·재발률이 집계됩니다.</div>');
+		return section('Action Outcome Analytics', '<div class="empty">아직 제안된 Action Card가 없습니다.<div class="muted" style="font-size:11px;margin-top:5px">에이전트가 조치를 제안하고 승인·실행되면 채택률, 성공률, 재발률이 집계됩니다.</div></div>');
       }
       const pct = (v) => (v || 0).toFixed(1) + '%';
       const kpis = '<div class="kpis">' +
@@ -5057,6 +5169,9 @@ const adminHTML = `<!doctype html>
     }
     function section(title, inner) { return '<section><h2>' + escapeHTML(title) + '</h2>' + inner + '</section>'; }
     function card(title, inner)    { return '<section><h2>' + escapeHTML(title) + '</h2>' + inner + '</section>'; }
+	function sectionLead(html, icon, tone) {
+	  return '<div class="section-lead' + (tone ? ' ' + escapeAttr(tone) : '') + '"><span class="section-lead-icon" aria-hidden="true">' + escapeHTML(icon || 'ⓘ') + '</span><span class="section-lead-text">' + html + '</span></div>';
+	}
     function cardWithID(id, title, inner) { return '<section id="' + escapeHTML(id) + '"><h2>' + escapeHTML(title) + '</h2>' + inner + '</section>'; }
 
     // ---------- LLM observability ----------
@@ -8966,7 +9081,8 @@ const adminHTML = `<!doctype html>
           k8sResourceCreateButtons(cat, clusterId, '') + '</div></div>';
       }).join('');
       const high = data.items.filter(x => ['critical', 'high'].includes(String(x.risk_level || '').toLowerCase())).slice(0, 12);
-      const filter = '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(220px,1fr) auto auto"><input id="res-hub-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id"><button type="button" onclick="location.hash=\'#/k8s-resources\'+(safeInputValue(\'res-hub-cluster\',\'\').trim()?\'?cluster_id=\'+encodeURIComponent(safeInputValue(\'res-hub-cluster\',\'\').trim()):\'\')">필터</button><a class="button secondary" href="#/k8s-manifest-changes?mode=create' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 생성</a></div></div>';
+	  const hubClusterOpts = '<option value="">전체 클러스터</option>' + data.clusters.map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+	  const filter = '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(220px,1fr) auto auto"><select id="res-hub-cluster">' + hubClusterOpts + '</select><button type="button" onclick="location.hash=\'#/k8s-resources\'+(safeInputValue(\'res-hub-cluster\',\'\').trim()?\'?cluster_id=\'+encodeURIComponent(safeInputValue(\'res-hub-cluster\',\'\').trim()):\'\')">필터</button><a class="button secondary" href="#/k8s-manifest-changes?mode=create' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '') + '">YAML 생성</a></div></div>';
       view.innerHTML =
         section('리소스 전체',
           '<div class="kpis">' +
@@ -9006,7 +9122,7 @@ const adminHTML = `<!doctype html>
         '<a class="button secondary" href="#/k8s-timeline' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '') + '">타임라인</a></div>';
       view.innerHTML =
         section(cat.title,
-          '<div class="muted" style="font-size:12px;padding:0 4px">' + escapeHTML(cat.desc) + '</div>' +
+		  sectionLead(escapeHTML(cat.desc), cat.icon || 'ⓘ') +
           '<div class="kpis" style="margin-top:8px">' +
           kpi('리소스', fmt(filtered.length)) +
           kpi('High+', fmt(risky)) +
@@ -11822,21 +11938,23 @@ const adminHTML = `<!doctype html>
     }
     function k8sSecuritySubnav(clusterId) {
       const tabs = [
-        ['k8s-security', '대시보드'],
-        ['k8s-security-vulnerabilities', '이미지 취약점'],
-        ['k8s-security-sbom', 'SBOM'],
-        ['k8s-security-cluster-scan', '지속 스캔'],
-        ['k8s-security-admission', '배포 차단'],
-        ['k8s-security-image-launch', '이미지 런칭'],
-        ['k8s-security-runtime', '런타임'],
-        ['k8s-security-benchmark', 'CIS'],
-        ['k8s-security-exceptions', '예외 승인'],
-        ['k8s-policy', '정책 센터']
+		['k8s-security', '대시보드', '⌂', '전체 위험'],
+		['k8s-security-vulnerabilities', '이미지 취약점', '⚠', 'CVE·Fix'],
+		['k8s-security-sbom', 'SBOM', '▤', '구성 증적'],
+		['k8s-security-cluster-scan', '지속 스캔', '◎', '신선도'],
+		['k8s-security-admission', '배포 차단', '⊘', 'Admission'],
+		['k8s-security-image-launch', '이미지 런칭', '▶', '공급망'],
+		['k8s-security-runtime', '런타임', '⌁', '행위 탐지'],
+		['k8s-security-benchmark', 'CIS', '✓', '기준 준수'],
+		['k8s-security-exceptions', '예외 승인', '◇', '만료·승인'],
+		['k8s-policy', '정책 센터', '⚙', '규칙·시뮬']
       ];
       const current = ((location.hash || '#/k8s-security').replace(/^#\//, '').split('?')[0]) || 'k8s-security';
-      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px;align-items:center">' + tabs.map(t =>
-        '<a class="button secondary" style="font-size:12px;text-decoration:none" href="' + escapeAttr(k8sSecurityHref(t[0], clusterId)) + '">' + escapeHTML(t[1]) + '</a>'
-      ).join('') + '<button type="button" class="secondary" style="font-size:12px;margin-left:auto" onclick="k8sSecurityOpenGuide(\'' + escapeAttr(current) + '\')">사용자 가이드</button></div>';
+	  setTimeout(() => { const el=document.querySelector('.security-subnav-item.active'); if(el&&el.scrollIntoView) el.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'}); }, 0);
+	  return '<nav class="security-subnav-shell" aria-label="Kubernetes 보안 영역"><div class="security-subnav-head"><strong>K8S SECURITY · 탐지 → 예방 → 대응</strong><button type="button" class="secondary" style="font-size:10px;height:28px" onclick="k8sSecurityOpenGuide(\'' + escapeAttr(current) + '\')">현재 화면 가이드</button></div><div class="security-subnav">' + tabs.map(t => {
+		const active = t[0] === current;
+		return '<a class="security-subnav-item' + (active ? ' active' : '') + '" href="' + escapeAttr(k8sSecurityHref(t[0], clusterId)) + '"' + (active ? ' aria-current="page"' : '') + ' title="' + escapeAttr(t[1] + ' — ' + t[3]) + '"><span class="security-subnav-icon">' + escapeHTML(t[2]) + '</span><span class="security-subnav-copy"><strong>' + escapeHTML(t[1]) + '</strong><span>' + escapeHTML(t[3]) + '</span></span></a>';
+	  }).join('') + '</div></nav>';
     }
     window.k8sSecurityOpenGuide = (tab) => {
       openModal('보안 사용자 상세 가이드', k8sSecurityGuideHTML(tab || 'k8s-security'), null, { wide: true });
@@ -13131,7 +13249,7 @@ const adminHTML = `<!doctype html>
           '<td class="muted" style="font-size:11px">' + escapeHTML(s.requested_by || '-') + '<div>' + ago(s.created_at) + '</div></td><td>' + actions + '</td></tr>';
       }).join('') : '<tr><td colspan="7" class="muted">최근 debug 세션 요청이 없습니다.</td></tr>';
       view.innerHTML =
-        section('K8s 운영 설정', '<div class="muted" style="font-size:12px;padding:0 4px">비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.</div>') +
+		section('K8s 운영 설정', sectionLead('비용 단가와 알림(조용한 시간·담당팀 채널)을 한 곳에서 설정합니다. 수집 주기·보존 기간은 게이트웨이 설정을 따릅니다.', '⚙')) +
         card('비용 단가',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<input id="set-cpu" type="number" value="' + escapeAttr(String(pr.cpu_core_monthly_krw || 0)) + '" style="width:140px"> <span class="muted" style="font-size:11px">KRW/vCPU·월</span>' +
@@ -13367,8 +13485,9 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 정책 센터 (SEC-05 Admission 시뮬레이터 + SEC-10 정책 팩) ----------
-    async function renderK8sPolicy() {
+	async function renderK8sPolicy(params) {
       const view = document.getElementById('view');
+	  const clusterId = (params && params.get && params.get('cluster_id')) || '';
       view.innerHTML = section('K8s 정책 센터', '<div class="empty">불러오는 중...</div>');
       let data, comp, term;
       try {
@@ -13409,7 +13528,7 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
       view.innerHTML =
-        section('K8s 정책 센터', '<div class="kpis">' + kpi('정책', fmt((data.policies || []).length)) + kpi('위반 리소스', fmt((comp.violations || []).length)) + kpi('활성 터미널 정책', fmt(activeTermPolicies)) + '</div>') +
+		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + '<div class="kpis">' + kpi('정책', fmt((data.policies || []).length)) + kpi('위반 리소스', fmt((comp.violations || []).length)) + kpi('활성 터미널 정책', fmt(activeTermPolicies)) + '</div>') +
         card('터미널 정책 템플릿 (Pod exec)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 터미널(exec)은 기본 거부입니다 — 매칭되는 활성 정책이 없으면 차단됩니다. 아래 템플릿을 적용하면 해당 스코프의 정책이 즉시 활성화됩니다. cluster_id·namespace는 적용 전 조정하세요. 세부 편집·삭제·평가는 <a href="#/k8s-settings">운영 설정</a>의 Terminal Policy Builder에서 합니다.</div>' +
           tmplCards + '<div id="tmpl-msg" class="muted" style="font-size:12px;margin-top:4px"></div></div>') +
@@ -14688,7 +14807,7 @@ const adminHTML = `<!doctype html>
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
         '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
       view.innerHTML =
-        section('K8s AI 분석', '<div class="muted" style="font-size:12px;padding:0 4px">현재 수집된 RCA·이벤트·변경 diff를 근거로 답합니다. 근거에 없는 내용은 추측하지 않습니다.</div>') +
+		section('K8s AI 분석', sectionLead('현재 수집된 RCA·이벤트·변경 diff를 근거로 답합니다. 근거에 없는 내용은 추측하지 않습니다.', '✦')) +
         card('자연어 장애 질문 (AI-OPS-01)',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
           '<select id="ai-cluster">' + clusterOpts + '</select>' +
@@ -14909,7 +15028,7 @@ const adminHTML = `<!doctype html>
         '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackDelete(\'' + escapeAttr(s.id) + '\')">삭제</button></td></tr>').join('')
         : '<tr><td colspan="7" class="muted">저장된 Stack이 없습니다.</td></tr>';
       view.innerHTML =
-        section('앱 배포 (Application Stack)', '<div class="muted" style="font-size:12px;padding:0 4px">매니페스트를 검증·저장하면 리비전이 관리됩니다. <strong>적용</strong>은 Server-Side Apply(정책 Deny 차단·승인 게이트)로 클러스터에 반영하고, <strong>승격</strong>은 다른 환경 스택으로, <strong>롤백</strong>은 이전 리비전으로 복원합니다. 드리프트는 존재 여부와 필드 단위(image·replicas·env·resource·probe·label) 비교를 제공합니다.</div>') +
+		section('앱 배포 (Application Stack)', sectionLead('매니페스트를 검증·저장하면 리비전이 관리됩니다. <strong>적용</strong>은 Server-Side Apply(정책 Deny 차단·승인 게이트)로 클러스터에 반영하고, <strong>승격</strong>은 다른 환경 스택으로, <strong>롤백</strong>은 이전 리비전으로 복원합니다. 드리프트는 존재 여부와 필드 단위(image·replicas·env·resource·probe·label) 비교를 제공합니다.', '▦')) +
         card('Stack 저장 (검증 후 버전 관리)',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
           '<input id="stk-name" placeholder="Stack 이름" style="min-width:160px"><select id="stk-cluster">' + clusterOpts + '</select><input id="stk-ns" placeholder="namespace" style="min-width:120px"></div>' +
@@ -15084,7 +15203,7 @@ const adminHTML = `<!doctype html>
       }).join('') : '<tr><td colspan="7" class="muted">YAML 변경 요청이 없습니다.</td></tr>';
       view.innerHTML =
         section('YAML 변경/생성 (Manifest Change Studio)',
-          '<div class="muted" style="font-size:12px;padding:0 4px">Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, Namespace 등 단일 리소스 YAML을 생성 또는 변경 요청으로 저장하고 검증→승인→Server-Side Apply→사후 검증 흐름으로 처리합니다. Secret 원문은 저장·적용하지 않습니다.</div>') +
+		  sectionLead('Deployment, Service, ConfigMap, Secret, ServiceAccount, RBAC, PVC, Ingress, NetworkPolicy, HPA, Namespace 등 단일 리소스 YAML을 생성 또는 변경 요청으로 저장하고 검증→승인→Server-Side Apply→사후 검증 흐름으로 처리합니다. <strong>Secret 원문은 저장·적용하지 않습니다.</strong>', 'Y', 'warn')) +
         card('Ops Agent 초안',
           '<div class="card-body">' +
           '<textarea id="mchg-agent-prompt" rows="3" placeholder="예: default namespace에 nginx service 생성, 현재 Deployment image만 nginx:1.27로 변경" style="width:100%;min-height:72px"></textarea>' +
@@ -21099,10 +21218,11 @@ const adminHTML = `<!doctype html>
 		const dayEvents = (byDate[key] || []).slice(0, 5);
 		cells.push('<div class="personal-calendar-day' + (key === todayKey ? ' today' : '') + '" style="' + (!inMonth ? 'opacity:.48' : '') + '"><div class="personal-calendar-date"><span>' + d.getDate() + '</span><span class="muted">' + ((byDate[key] || []).length || '') + '</span></div><div class="personal-calendar-events">' + dayEvents.map(ev => '<a class="personal-calendar-event ' + myCalendarEventClass(ev) + '" href="' + escapeAttr(ev.href || '#/k8s-actions') + '" title="' + escapeAttr(ev.description || '') + '"><strong>' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</strong> ' + escapeHTML(ev.title || ev.kind || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(ev.target || '-') + '</div></a>').join('') + (((byDate[key] || []).length > 5) ? '<div class="muted" style="font-size:10px">외 ' + ((byDate[key] || []).length - 5) + '건</div>' : '') + '</div></div>');
 	  }
-	  const actorText = ev => Object.keys(ev.actors || {}).sort().map(role => role + ': ' + ev.actors[role]).join(', ');
-	  const rows = events.slice(0, 500).map(ev => '<tr><td class="muted">' + escapeHTML(ev.date || '-') + '</td><td><span class="status ' + (ev.lane === 'attention' ? 'error' : (ev.lane === 'approval' ? 'warn' : '')) + '">' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</span></td><td>' + escapeHTML(ev.kind || '-') + '</td><td><a href="' + escapeAttr(ev.href || '#/k8s-actions') + '">' + escapeHTML(ev.title || '-') + '</a><div class="muted" style="font-size:11px">' + escapeHTML(ev.description || '') + '</div></td><td>' + escapeHTML(ev.cluster_id || '-') + '<div class="muted">' + escapeHTML(ev.namespace || '-') + '</div></td><td class="muted">' + escapeHTML(actorText(ev) || ev.actor_hint || '-') + '</td><td>' + escapeHTML(ev.status || '-') + '</td><td>' + escapeHTML(ev.sla_status || '-') + '</td></tr>').join('') || '<tr><td colspan="8" class="muted">조건에 맞는 업무가 없습니다.</td></tr>';
+	  const actorText = ev => [...new Set(Object.keys(ev.actors || {}).sort().map(role => (ev.actor_names || {})[role] || ev.actors[role]).filter(Boolean))].join(', ');
+	  const actorOptionHTML = '<option value="">전체 담당자</option>' + (data.actor_options || []).map(a => '<option value="' + escapeAttr(a.value || '') + '"' + ((a.value || '') === filters.actor ? ' selected' : '') + '>' + escapeHTML(a.label || a.value || '-') + '</option>').join('');
+	  const rows = events.slice(0, 500).map(ev => '<tr><td class="muted">' + escapeHTML(ev.date || '-') + '</td><td><span class="status ' + (ev.lane === 'attention' ? 'error' : (ev.lane === 'approval' ? 'warn' : '')) + '">' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</span></td><td>' + escapeHTML(ev.kind || '-') + '</td><td><a href="' + escapeAttr(ev.href || '#/k8s-actions') + '">' + escapeHTML(ev.title || '-') + '</a><div class="muted" style="font-size:11px">' + escapeHTML(ev.description || '') + '</div></td><td>' + escapeHTML(ev.cluster_id || '-') + '<div class="muted">' + escapeHTML(ev.namespace || '-') + '</div></td><td>' + (actorText(ev) ? '<strong style="font-size:11px">' + escapeHTML(actorText(ev)) + '</strong>' : '<span class="muted">담당자 미지정</span>') + '</td><td>' + escapeHTML(ev.status || '-') + '</td><td>' + escapeHTML(ev.sla_status || '-') + '</td></tr>').join('') || '<tr><td colspan="8" class="muted">조건에 맞는 업무가 없습니다.</td></tr>';
 	  const summary = data.summary || {}, prev = new Date(cursor.year, cursor.month - 1, 1), next = new Date(cursor.year, cursor.month + 1, 1);
-	  const filterBar = '<div class="toolbar" style="gap:6px;flex-wrap:wrap"><select id="ac-cluster">' + optionHTML(options.clusters, filters.cluster_id, '전체 클러스터') + '</select><select id="ac-namespace">' + optionHTML(options.namespaces, filters.namespace, '전체 namespace') + '</select><select id="ac-kind">' + optionHTML(options.kinds, filters.kind, '전체 유형') + '</select><select id="ac-lane">' + optionHTML(['attention','approval','ready','verify','prepare','done'], filters.lane, '전체 단계') + '</select><select id="ac-actor">' + optionHTML(options.actors, filters.actor, '전체 담당자') + '</select><input id="ac-q" value="' + escapeAttr(filters.q) + '" placeholder="업무·대상·상태 검색" onkeydown="if(event.key===\'Enter\')applyAdminCalendarFilters()"><button type="button" onclick="applyAdminCalendarFilters()">조회</button><a class="button secondary" href="#/work-calendar">초기화</a></div>';
+	  const filterBar = '<div class="toolbar" style="gap:6px;flex-wrap:wrap"><select id="ac-cluster">' + optionHTML(options.clusters, filters.cluster_id, '전체 클러스터') + '</select><select id="ac-namespace">' + optionHTML(options.namespaces, filters.namespace, '전체 namespace') + '</select><select id="ac-kind">' + optionHTML(options.kinds, filters.kind, '전체 유형') + '</select><select id="ac-lane">' + optionHTML(['attention','approval','ready','verify','prepare','done'], filters.lane, '전체 단계') + '</select><select id="ac-actor">' + actorOptionHTML + '</select><input id="ac-q" value="' + escapeAttr(filters.q) + '" placeholder="업무·대상·상태 검색" onkeydown="if(event.key===\'Enter\')applyAdminCalendarFilters()"><button type="button" onclick="applyAdminCalendarFilters()">조회</button><a class="button secondary" href="#/work-calendar">초기화</a></div>';
 	  view.innerHTML = section('전체 업무 캘린더', '<div class="card-body">' + filterBar + '<div class="toolbar" style="padding:10px 0;border:0"><a class="button secondary" href="' + adminCalendarHref({year:prev.getFullYear(),month:prev.getMonth()}, filters) + '">이전</a><strong>' + cursor.year + '년 ' + (cursor.month + 1) + '월</strong><a class="button secondary" href="' + adminCalendarHref({year:next.getFullYear(),month:next.getMonth()}, filters) + '">다음</a><span class="muted">전체 운영 업무 · 최근 ' + fmt(data.window_days || 0) + '일</span></div><div class="kpis">' + kpi('전체', fmt(summary.total || 0)) + kpi('확인 필요', fmt(summary.attention || 0)) + kpi('승인 대기', fmt(summary.approval || 0)) + kpi('실행/검증', fmt((summary.ready || 0) + (summary.verify || 0))) + kpi('SLA 주의', fmt(summary.sla || 0)) + '</div><div class="personal-calendar" style="margin-top:12px">' + cells.join('') + '</div></div>') + card('전체 업무 목록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">최대 500건 표시 · 업무명을 선택하면 원본 승인/변경/실행 화면으로 이동합니다.</div><div style="overflow:auto"><table><thead><tr><th>날짜</th><th>단계</th><th>유형</th><th>업무</th><th>클러스터/NS</th><th>담당자 이력</th><th>상태</th><th>SLA</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>');
 	}
 
