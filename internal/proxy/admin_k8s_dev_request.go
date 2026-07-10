@@ -215,7 +215,10 @@ func (s *Server) effectiveAdminRole(r *http.Request) string {
 		return strings.ToLower(strings.TrimSpace(claims.Role))
 	}
 	if !s.cfg.Auth.Enabled {
-		return "super_admin"
+		if role, _, ok := s.legacyTokenIdentity(r); ok {
+			return role
+		}
+		return ""
 	}
 	return "admin"
 }

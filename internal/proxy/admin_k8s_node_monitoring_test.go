@@ -73,9 +73,56 @@ func TestK8sNodeAndGPUOperationsEndpoints(t *testing.T) {
 }
 
 func TestAdminUIIncludesNodeAndGPUOperationsControls(t *testing.T) {
-	for _, marker := range []string{"/admin/k8s/nodes/monitoring", "장애 위험 레이더", "GPU Operations · DCGM", "GPU 워크로드 매핑", "VRAM 부족 예측", "MIG 인스턴스", "GPU 알림 정책", "k8sGPUSavePolicy"} {
+	for _, marker := range []string{"/admin/k8s/nodes/monitoring", "장애 위험 레이더", "GPU Operations · DCGM", "GPU 워크로드 매핑", "VRAM 부족 예측", "MIG 인스턴스", "GPU 알림 정책", "k8sGPUSavePolicy", "입력값으로 GPU/DCGM 검증", "openDCGMConfigPreview", "showK8sMonitoringTest"} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Errorf("admin UI missing %q", marker)
 		}
+	}
+}
+
+func TestDCGMCountersValidationAndDerivedPromQL(t *testing.T) {
+	validation := parseDCGMCountersCSV(defaultDCGMCountersCSV)
+	if !validation.Valid || len(validation.Metrics) < 20 {
+		t.Fatalf("default DCGM CSV should be valid: %+v", validation)
+	}
+	query := dcgmPromQLFromCSV(defaultDCGMCountersCSV)
+	if !strings.Contains(query, "DCGM_FI_DEV_GPU_UTIL") || !strings.Contains(query, "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE") {
+		t.Fatalf("derived PromQL missing counters: %s", query)
+	}
+	invalid := parseDCGMCountersCSV("DCGM_FI_DEV_GPU_UTIL,unknown,help")
+	if invalid.Valid || len(invalid.Errors) == 0 || len(invalid.MissingRequired) == 0 {
+		t.Fatalf("invalid CSV was not rejected: %+v", invalid)
+	}
+}
+
+func TestK8sMonitoringTestUsesUnsavedScreenValues(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 16, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Query().Get("query"), "DCGM_FI_DEV_GPU_UTIL") {
+			t.Errorf("derived query missing GPU util: %s", r.URL.Query().Get("query"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"DCGM_FI_DEV_GPU_UTIL","Hostname":"gpu-1"},"value":[1,"42"]}]}}`))
+	}))
+	defer prom.Close()
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+	payload, _ := json.Marshal(map[string]string{
+		"prometheus_url": prom.URL, "dcgm_node_label": "Hostname", "dcgm_counters_csv": defaultDCGMCountersCSV, "dcgm_metrics_promql": "",
+	})
+	resp, out := req(t, http.MethodPost, proxy.URL+"/admin/settings/test/k8s-monitoring", string(payload))
+	if resp.StatusCode != http.StatusOK || out["ok"] != true || out["sample_count"].(float64) != 1 || out["node_count"].(float64) != 1 {
+		t.Fatalf("unexpected monitoring test response status=%d body=%+v", resp.StatusCode, out)
+	}
+	if got := server.runtimeSettingValue(context.Background(), "k8s.monitoring.prometheus_url"); got != "" {
+		t.Fatalf("screen-value test must not persist URL, got %q", got)
 	}
 }

@@ -110,3 +110,27 @@ func (s *SQLStore) ListK8sGPUSamples(ctx context.Context, f K8sGPUSampleFilter) 
 	}
 	return out, rows.Err()
 }
+
+// PruneK8sMonitoringSamples applies one retention boundary to the node aggregate and GPU device
+// histories. A transaction avoids a half-pruned state when either table is temporarily locked.
+func (s *SQLStore) PruneK8sMonitoringSamples(ctx context.Context, olderThan string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var deleted int64
+	for _, table := range []string{"k8s_metrics_samples", "k8s_gpu_samples"} {
+		result, execErr := tx.ExecContext(ctx, s.bind(`DELETE FROM `+table+` WHERE observed_at < ?`), strings.TrimSpace(olderThan))
+		if execErr != nil {
+			return 0, execErr
+		}
+		if count, countErr := result.RowsAffected(); countErr == nil {
+			deleted += count
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}

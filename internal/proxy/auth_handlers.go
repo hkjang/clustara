@@ -94,7 +94,16 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.cfg.Auth.Enabled {
-		writeJSON(w, http.StatusOK, map[string]any{"auth_enabled": false, "version": AppVersion})
+		role, scopes, authenticated := s.legacyTokenIdentity(r)
+		out := map[string]any{
+			"auth_enabled": false, "version": AppVersion, "authenticated": authenticated,
+			"legacy_token_required": s.cfg.Auth.AdminToken != "" || s.cfg.Auth.AdminReadonlyToken != "",
+			"menu_version":          menuVersion,
+		}
+		if authenticated {
+			out["user"] = map[string]any{"id": "legacy-token", "email": "", "role": role, "roles": []string{role}, "scopes": scopes, "features": s.featureFlags(), "default_home": resolveHome(role, scopes)}
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	claims, ok := s.verifyAccessToken(r.Context(), bearerToken(r.Header.Get("Authorization")))

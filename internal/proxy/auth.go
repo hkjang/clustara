@@ -28,9 +28,9 @@ var allScopes = []string{
 }
 
 var roleScopes = map[string][]string{
-	"super_admin":     allScopes,
-	"admin":           allScopes,
-	"team_admin":      {"chat:completion", "embeddings:create", "models:read", "admin:read", "routing:read", "observability:read", "costs:read", "security:read", "mcp:use", "team:read"},
+	"super_admin": allScopes,
+	"admin":       allScopes,
+	"team_admin":  {"chat:completion", "embeddings:create", "models:read", "admin:read", "routing:read", "observability:read", "costs:read", "security:read", "mcp:use", "team:read"},
 	// team_manager sees only their team's surface (team:read) — NOT the full operator
 	// dashboard (no admin:read), so they land on /team rather than /admin.
 	"team_manager":    {"chat:completion", "embeddings:create", "models:read", "observability:read", "costs:read", "mcp:use", "team:read"},
@@ -41,7 +41,7 @@ var roleScopes = map[string][]string{
 	// only their slice of runtime settings (enforced per-category in the settings handlers,
 	// not via a broad admin:write grant).
 	"ops_admin":      {"admin:read", "observability:read", "costs:read", "models:read"},
-	"ai_admin":       {"admin:read", "models:read", "routing:read", "observability:read"},
+	"ai_admin":       {"admin:read", "models:read", "routing:read", "routing:write", "observability:read"},
 	"security_admin": {"admin:read", "security:read"},
 	"billing_admin":  {"admin:read", "costs:read", "observability:read", "models:read"},
 	"readonly_admin": {"admin:read", "observability:read", "costs:read", "security:read"},

@@ -117,8 +117,8 @@ func TestReadonlyAdminTokenAllowsOnlyGET(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("readonly POST should be 401, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("authenticated readonly POST should be 403, got %d", resp.StatusCode)
 	}
 }
 

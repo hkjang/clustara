@@ -57,8 +57,8 @@ var roleDescriptions = map[string]string{
 	"service_account": "서비스 계정 — 채팅/임베딩/MCP",
 	"ops_admin":       "운영 설정 관리자 — 관측/비용 + 일부 설정 쓰기",
 	"ai_admin":        "AI 설정 관리자 — 모델/라우팅 + 일부 설정 쓰기",
-	"security_admin":  "보안 관리자 — 보안 대시보드(정책위반·Secret·위험MCP·승인대기)",
-	"billing_admin":   "비용 관리자 — 비용 대시보드(비용센터·예산소진·모델전환)",
+	"security_admin":  "보안 관리자 — 보안 조회와 정책·예외·승인 변경, 일반 운영 변경 불가",
+	"billing_admin":   "비용 관리자 — 비용 조회와 예산·단가·비용 정책 변경, 일반 운영 변경 불가",
 	"readonly_admin":  "읽기전용 관리자 — 운영 조회, 변경 불가",
 }
 
@@ -225,7 +225,12 @@ func (s *Server) handlePermissionsEffective(w http.ResponseWriter, r *http.Reque
 	var role string
 	var scopes []string
 	if !s.cfg.Auth.Enabled {
-		role, scopes = "admin", append([]string{}, allScopes...)
+		var ok bool
+		role, scopes, ok = s.legacyTokenIdentity(r)
+		if !ok {
+			writeOpenAIError(w, http.StatusUnauthorized, "admin token is required", "permission_error", "authentication_required")
+			return
+		}
 	} else {
 		claims, ok := s.currentAccessClaims(r)
 		if !ok {

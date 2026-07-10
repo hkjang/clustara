@@ -190,11 +190,13 @@ GitLab, Bitbucket Server, Harbor Registry/Robot, Mattermost 같은 외부 연동
 
 - Node CPU/Memory 실사용은 `metrics.k8s.io`를 전체 인벤토리와 분리해 기본 60초마다 수집합니다. 화면은 1h/6h/24h/7d 추세, peak, 시간당 증가율, 메트릭 신선도와 90% 임계치 도달 예상을 표시합니다. 이 예상은 선형 선행 경보이며 실제 장애 시점을 보장하지 않습니다.
 - Ready/Pressure, Node Warning Event, CPU/Memory/GPU 사용률·증가율·피크, 수집 지연을 설명 가능한 위험 점수로 합성합니다. 중대한 조치는 기존처럼 `Drain 영향 분석 → cordon 승인 요청 → 실행` 흐름을 사용합니다.
-- GPU가 있는 노드는 인벤토리만으로 모델/개수/Pod 요청·잔여량을 표시합니다. `PROMETHEUS_URL`과 NVIDIA DCGM Exporter가 있으면 장치/MIG별 Util, SM/Tensor/DRAM Active, VRAM, 온도, 전력, clock, XID, ECC, PCIe replay, NVLink, thermal throttle을 추가합니다.
-- DCGM Exporter에 `-k`(`DCGM_EXPORTER_KUBERNETES=true`)를 적용하면 Namespace/Pod/Container와 GPU 장치를 매핑합니다. 권장 counter 목록은 `deploy/k8s/dcgm-exporter-counters.csv`입니다.
+- GPU가 있는 노드는 인벤토리만으로 모델/개수/Pod 요청·잔여량을 표시합니다. **설정 → 런타임 설정 → `k8s.monitoring`**에서 Prometheus URL/token을 저장하면 NVIDIA DCGM Exporter의 장치/MIG별 Util, SM/Tensor/DRAM Active, VRAM, 온도, 전력, clock, XID, ECC, PCIe replay, NVLink, thermal throttle을 추가합니다. 기존 `PROMETHEUS_URL`/`PROMETHEUS_TOKEN` 환경변수는 초기 기본값으로 계속 사용할 수 있습니다.
+- 같은 설정 그룹에서 수집 on/off·주기·보존기간, Node label, alert 임계치, GPU-hour 단가, latency PromQL을 재시작 없이 바꿀 수 있습니다. 보존기간이 지난 Node/GPU 원시 표본은 6시간마다 함께 정리됩니다.
+- `k8s.monitoring.dcgm_counters_csv`는 DCGM Exporter collector CSV 원본입니다. 저장할 때 형식·중복·필수 counter를 검증하고, 고급 PromQL override가 비어 있으면 이 CSV에서 수집 selector를 자동 생성합니다. **입력값으로 GPU/DCGM 검증**은 저장 전 화면 값을 사용해 CSV, Prometheus 인증/쿼리, 표본·노드·관측 metric을 확인합니다. **DCGM ConfigMap 미리보기**에서는 적용 가능한 YAML을 검토·다운로드할 수 있으며 Clustara가 자동 배포하지는 않습니다.
+- DCGM Exporter에 `-k`(`DCGM_EXPORTER_KUBERNETES=true`)를 적용하면 Namespace/Pod/Container와 GPU 장치를 매핑합니다. 파일 기반 기본 예시는 `deploy/k8s/dcgm-exporter-counters.csv`입니다.
 - GPU 운영 섹션은 장시간 저사용(request 대비 util), VRAM 90% 도달 추세, 하드웨어 오류, MIG 할당, Namespace/서비스/모델 서버별 GPU-hour 비용을 제공합니다. vLLM Prometheus 지표가 있으면 req/s, token/s, running request, TTFT p95, E2E p95를 GPU 소비량과 연결합니다.
 - 임계치는 화면의 **GPU 알림 정책**에서 온도, VRAM, 저사용률/지속시간, GPU-hour 단가를 저장합니다. XID, DBE ECC, NVLink 오류는 항상 중대 격리 후보이며 자동 cordon/drain하지 않습니다.
-- API: `GET /admin/k8s/nodes/monitoring`, `POST /admin/k8s/node-metrics/collect`, `GET /admin/k8s/gpu/operations`, `GET/POST /admin/k8s/gpu/policy`.
+- API: `GET /admin/k8s/nodes/monitoring`, `POST /admin/k8s/node-metrics/collect`, `GET /admin/k8s/gpu/operations`, `GET/POST /admin/k8s/gpu/policy`, `GET /admin/k8s/gpu/dcgm-config`, `POST /admin/settings/test/k8s-monitoring`.
 
 ## 11. 용량·자동확장 (`#/k8s-capacity`)
 

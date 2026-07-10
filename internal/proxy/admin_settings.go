@@ -47,6 +47,7 @@ const (
 	stFloat    settingType = "float"
 	stDuration settingType = "duration"
 	stCSV      settingType = "csv"
+	stText     settingType = "text"
 )
 
 // settingDef is a registry entry: the env/default source, type, category, and whether the
@@ -95,6 +96,41 @@ func buildSettingRegistry() []settingDef {
 			return fmt.Errorf("must be a positive number")
 		}
 		return nil
+	}
+	boundedInt := func(min, max int) func(string) error {
+		return func(v string) error {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < min || n > max {
+				return fmt.Errorf("must be between %d and %d", min, max)
+			}
+			return nil
+		}
+	}
+	boundedFloat := func(min, max float64) func(string) error {
+		return func(v string) error {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || f < min || f > max {
+				return fmt.Errorf("must be between %.0f and %.0f", min, max)
+			}
+			return nil
+		}
+	}
+	httpURL := func(v string) error {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return nil
+		}
+		u, err := url.Parse(v)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("must be an http(s) URL")
+		}
+		return nil
+	}
+	envOr := func(key, fallback string) string {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+		return fallback
 	}
 	dur := func(v string) error {
 		if _, err := time.ParseDuration(v); err != nil {
@@ -213,6 +249,28 @@ func buildSettingRegistry() []settingDef {
 		{Key: "logging.raw_prompts", Category: "logging", Type: stBool, envValue: func(c config.Config) string { return strconv.FormatBool(c.Logging.RawPrompts) }},
 		{Key: "logging.raw_bodies", Category: "logging", Type: stBool, envValue: func(c config.Config) string { return strconv.FormatBool(c.Logging.RawBodies) }},
 		{Key: "logging.response_max_bytes", Category: "logging", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Logging.ResponseMaxBytes) }},
+
+		// ---- Kubernetes node / GPU monitoring ----
+		{Key: "k8s.monitoring.enabled", Category: "k8s.monitoring", Type: stBool, envValue: func(config.Config) string { return envOr("K8S_NODE_METRICS_ENABLED", "true") }},
+		{Key: "k8s.monitoring.interval_seconds", Category: "k8s.monitoring", Type: stInt, validate: boundedInt(20, 3600), envValue: func(config.Config) string { return envOr("K8S_NODE_METRICS_INTERVAL_SECONDS", "60") }},
+		{Key: "k8s.monitoring.retention_days", Category: "k8s.monitoring", Type: stInt, validate: boundedInt(1, 3650), envValue: func(config.Config) string { return envOr("K8S_MONITORING_RETENTION_DAYS", "30") }},
+		{Key: "k8s.monitoring.prometheus_url", Category: "k8s.monitoring", Type: stString, validate: httpURL, envValue: func(config.Config) string {
+			return strings.TrimRight(strings.TrimSpace(os.Getenv("PROMETHEUS_URL")), "/")
+		}},
+		{Key: "k8s.monitoring.prometheus_token", Category: "k8s.monitoring", Type: stString, Secret: true, envValue: func(config.Config) string { return os.Getenv("PROMETHEUS_TOKEN") }},
+		{Key: "k8s.monitoring.dcgm_node_label", Category: "k8s.monitoring", Type: stString, envValue: func(config.Config) string { return envOr("DCGM_NODE_LABEL", "Hostname") }},
+		{Key: "k8s.monitoring.dcgm_metrics_promql", Category: "k8s.monitoring", Type: stText, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("DCGM_METRICS_PROMQL")) }},
+		{Key: "k8s.monitoring.dcgm_counters_csv", Category: "k8s.monitoring", Type: stText, validate: validateDCGMCountersCSVSetting, envValue: func(config.Config) string { return envOr("DCGM_COUNTERS_CSV", defaultDCGMCountersCSV) }},
+		{Key: "k8s.monitoring.dcgm_configmap_namespace", Category: "k8s.monitoring", Type: stString, validate: validateK8sDNSLabelSetting, envValue: func(config.Config) string { return envOr("DCGM_CONFIGMAP_NAMESPACE", "gpu-operator") }},
+		{Key: "k8s.monitoring.dcgm_configmap_name", Category: "k8s.monitoring", Type: stString, validate: validateK8sDNSLabelSetting, envValue: func(config.Config) string { return envOr("DCGM_CONFIGMAP_NAME", "clustara-dcgm-counters") }},
+		{Key: "k8s.monitoring.gpu_temperature_c", Category: "k8s.monitoring", Type: stFloat, validate: boundedFloat(40, 120), envValue: func(config.Config) string { return envOr("GPU_ALERT_TEMPERATURE_C", "85") }},
+		{Key: "k8s.monitoring.gpu_vram_threshold_pct", Category: "k8s.monitoring", Type: stFloat, validate: boundedFloat(1, 100), envValue: func(config.Config) string { return envOr("GPU_ALERT_VRAM_PCT", "90") }},
+		{Key: "k8s.monitoring.gpu_low_util_pct", Category: "k8s.monitoring", Type: stFloat, validate: boundedFloat(0, 100), envValue: func(config.Config) string { return envOr("GPU_ALERT_LOW_UTIL_PCT", "10") }},
+		{Key: "k8s.monitoring.gpu_low_util_minutes", Category: "k8s.monitoring", Type: stInt, validate: boundedInt(5, 10080), envValue: func(config.Config) string { return envOr("GPU_ALERT_LOW_UTIL_MINUTES", "30") }},
+		{Key: "k8s.monitoring.gpu_hourly_cost_krw", Category: "k8s.monitoring", Type: stFloat, validate: boundedFloat(0, 10000000), envValue: func(config.Config) string { return envOr("GPU_HOURLY_COST_KRW", "1200") }},
+		{Key: "k8s.monitoring.latency_promql", Category: "k8s.monitoring", Type: stText, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("K8S_LATENCY_PROMQL")) }},
+		{Key: "k8s.monitoring.latency_namespace_label", Category: "k8s.monitoring", Type: stString, envValue: func(config.Config) string { return envOr("K8S_LATENCY_NAMESPACE_LABEL", "namespace") }},
+		{Key: "k8s.monitoring.latency_name_label", Category: "k8s.monitoring", Type: stString, envValue: func(config.Config) string { return envOr("K8S_LATENCY_NAME_LABEL", "workload") }},
 
 		// ---- Env (read-only view of startup environment variables) ----
 		{Key: "env.upstream_base_url", Category: "env", Type: stString, ReadOnly: true, envValue: func(c config.Config) string { return c.Upstream.BaseURL }},
@@ -345,6 +403,25 @@ var settingDescriptions = map[string]string{
 	"logging.raw_prompts":        "프롬프트 원문 캡처 여부(LOG_RAW_PROMPTS). true면 content_text(원문)도 별도 저장. false면 redacted_text(리덕션)만 보관.",
 	"logging.raw_bodies":         "요청·응답 원시 바디 캡처 여부(LOG_RAW_BODIES). true면 raw_request/raw_response 컬럼에 전체 바이트 저장. 디버그 목적. 저장 공간 주의.",
 	"logging.response_max_bytes": "응답 캡처 최대 바이트(LOG_RESPONSE_MAX_BYTES). 초과 분 잘림. 기본 1MB.",
+	// Kubernetes node/GPU monitoring
+	"k8s.monitoring.enabled":                  "경량 metrics.k8s.io Node 수집 on/off. 저장 즉시 모든 파드의 다음 scheduler tick에 반영.",
+	"k8s.monitoring.interval_seconds":         "Node CPU/Memory와 DCGM GPU 수집 주기(20~3600초). 전체 인벤토리 reconcile 주기와 독립.",
+	"k8s.monitoring.retention_days":           "Node/GPU 원시 시계열 보존 일수. 6시간마다 오래된 metric/device sample을 정리.",
+	"k8s.monitoring.prometheus_url":           "DCGM, workload latency, vLLM 품질 지표를 조회할 Prometheus URL. PROMETHEUS_URL 런타임 오버레이.",
+	"k8s.monitoring.prometheus_token":         "Prometheus Bearer token. 암호화 저장·마스킹. PROMETHEUS_TOKEN 런타임 오버레이.",
+	"k8s.monitoring.dcgm_node_label":          "DCGM 시계열에서 Kubernetes Node 이름을 찾을 우선 label(기본 Hostname).",
+	"k8s.monitoring.dcgm_metrics_promql":      "고급 override PromQL. 비우면 counter CSV의 metric 목록으로 안전한 selector를 자동 생성.",
+	"k8s.monitoring.dcgm_counters_csv":        "DCGM Exporter collector CSV. 형식·필수 counter를 검증하며 PromQL과 ConfigMap preview의 단일 원본으로 사용.",
+	"k8s.monitoring.dcgm_configmap_namespace": "DCGM counter ConfigMap manifest를 생성할 namespace.",
+	"k8s.monitoring.dcgm_configmap_name":      "DCGM counter ConfigMap manifest 이름.",
+	"k8s.monitoring.gpu_temperature_c":        "GPU 과열 critical 임계치(°C).",
+	"k8s.monitoring.gpu_vram_threshold_pct":   "VRAM 부족 추세의 예상 도달 임계치(%).",
+	"k8s.monitoring.gpu_low_util_pct":         "GPU request 대비 낭비 후보로 볼 평균 사용률 상한(%).",
+	"k8s.monitoring.gpu_low_util_minutes":     "저사용 상태가 지속되어야 낭비 후보로 확정되는 시간(분).",
+	"k8s.monitoring.gpu_hourly_cost_krw":      "비용 배분에 사용할 관측 GPU 1개당 시간 단가(KRW).",
+	"k8s.monitoring.latency_promql":           "배포 후 workload latency 회귀 분석용 PromQL.",
+	"k8s.monitoring.latency_namespace_label":  "latency 시계열의 Namespace label 이름.",
+	"k8s.monitoring.latency_name_label":       "latency 시계열의 workload 이름 label.",
 	// Env (read-only)
 	"env.upstream_base_url": "업스트림 엔드포인트 URL(UPSTREAM_BASE_URL). 변경하려면 컨테이너 환경변수를 수정 후 재시작.",
 	"env.upstream_provider": "업스트림 프로바이더 이름(UPSTREAM_PROVIDER). 변경하려면 환경변수 수정 후 재시작.",
@@ -778,8 +855,10 @@ func settingPermissionGroup(d settingDef) string {
 		return "security" // Skill policy enforcement is a governance gate
 	}
 	switch {
-	case strings.HasPrefix(d.Category, "clickhouse"), strings.HasPrefix(d.Category, "retention"), strings.HasPrefix(d.Category, "cache"), strings.HasPrefix(d.Category, "limits"):
+	case strings.HasPrefix(d.Category, "clickhouse"), strings.HasPrefix(d.Category, "retention"), strings.HasPrefix(d.Category, "cache"), strings.HasPrefix(d.Category, "limits"), strings.HasPrefix(d.Category, "k8s.monitoring"):
 		return "ops"
+	case strings.HasPrefix(d.Category, "pricing"), strings.HasPrefix(d.Category, "carbon"), strings.HasPrefix(d.Category, "insurance"):
+		return "billing"
 	case strings.HasPrefix(d.Category, "text2sql"), strings.HasPrefix(d.Category, "mcp"):
 		return "ai"
 	case strings.HasPrefix(d.Category, "logging"):
@@ -792,7 +871,7 @@ func settingPermissionGroup(d settingDef) string {
 // settingsSubAdminRole reports whether a role is one of the settings-scoped sub-admins.
 func settingsSubAdminRole(role string) bool {
 	switch role {
-	case "ops_admin", "ai_admin", "security_admin":
+	case "ops_admin", "ai_admin", "security_admin", "billing_admin":
 		return true
 	}
 	return false
@@ -809,6 +888,8 @@ func roleCanWriteGroup(role, group string) bool {
 		return group == "ai"
 	case "security_admin":
 		return group == "security"
+	case "billing_admin":
+		return group == "billing"
 	default:
 		return false
 	}
@@ -819,6 +900,11 @@ func roleCanWriteGroup(role, group string) bool {
 func (s *Server) callerSettingsRole(r *http.Request) string {
 	if claims, ok := s.currentAccessClaims(r); ok {
 		return claims.Role
+	}
+	if !s.cfg.Auth.Enabled {
+		if role, _, ok := s.legacyTokenIdentity(r); ok {
+			return role
+		}
 	}
 	return ""
 }
@@ -1173,7 +1259,7 @@ func (s *Server) applySettingWrite(r *http.Request, d settingDef, value, reason 
 // reloading the runtime snapshot (callers reload once after a batch).
 func (s *Server) persistSettingValue(r *http.Request, d settingDef, value, reason string) error {
 	value = strings.TrimSpace(value)
-	if !d.Secret && value == "" && d.Type != stString && d.Type != stCSV {
+	if !d.Secret && value == "" && d.Type != stString && d.Type != stCSV && d.Type != stText {
 		return fmt.Errorf("value is required")
 	}
 	if !d.Secret || value != "" {

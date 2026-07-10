@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.120"
+const AppVersion = "v0.9.121"
 
 type Server struct {
 	cfg            config.Config
@@ -308,6 +308,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/node-metrics/collect", s.handleK8sNodeMetricCollect)
 	mux.HandleFunc("/admin/k8s/gpu/operations", s.handleK8sGPUOperations)
 	mux.HandleFunc("/admin/k8s/gpu/policy", s.handleK8sGPUAlertPolicy)
+	mux.HandleFunc("/admin/k8s/gpu/dcgm-config", s.handleK8sDCGMConfig)
 	mux.HandleFunc("/admin/k8s/dev-requests", s.handleK8sDevRequest)
 	mux.HandleFunc("/admin/k8s/security-exceptions", s.handleK8sSecurityExceptions)
 	mux.HandleFunc("/admin/k8s/security-exceptions/", s.handleK8sSecurityExceptionStatus)
@@ -617,6 +618,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/settings/test/clickhouse", s.handleSettingsTestClickHouse)
 	mux.HandleFunc("/admin/settings/test/text2sql-exec", s.handleSettingsTestText2SQLExec)
 	mux.HandleFunc("/admin/settings/test/text2sql-twin", s.handleSettingsTestText2SQLTwin)
+	mux.HandleFunc("/admin/settings/test/k8s-monitoring", s.handleSettingsTestK8sMonitoring)
 	mux.HandleFunc("/admin/external-integrations/credentials/", s.handleExternalCredentialByID)
 	mux.HandleFunc("/admin/external-integrations/credentials", s.handleExternalCredentials)
 	mux.HandleFunc("/admin/policies/decisions", s.handlePolicyDecisions)
@@ -751,7 +753,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1", s.handleOpenAI)
 	mux.HandleFunc("/v1/skills", s.handlePublicSkills)
 	mux.HandleFunc("/v1/skills/", s.handlePublicSkills)
-	return withTrace(s.withEnterpriseEnforcement(mux))
+	return withTrace(s.withAdminAccessUX(s.withEnterpriseEnforcement(mux)))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -1863,46 +1865,127 @@ func providerAuditJSON(provider store.ProviderConfig) string {
 	})
 }
 
-func (s *Server) authorizeAdmin(r *http.Request) bool {
+type adminAccessDecision struct {
+	Authenticated bool
+	Allowed       bool
+	Role          string
+	RequiredScope string
+	Reason        string
+}
+
+// evaluateAdminAccess distinguishes invalid identity (401) from a valid identity that lacks the
+// required permission (403). Historically authorizeAdmin collapsed both cases to false, causing
+// handlers and the SPA to show an "invalid token" JSON blob for ordinary role denials.
+func (s *Server) evaluateAdminAccess(r *http.Request) adminAccessDecision {
+	required := adminRequiredScope(r)
 	if s.cfg.Auth.Enabled {
 		claims, ok := s.verifyAccessToken(r.Context(), bearerToken(r.Header.Get("Authorization")))
 		if !ok {
-			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "login_failed", IP: clientIP(r), UserAgent: r.UserAgent(), Detail: "admin jwt invalid", CreatedAt: time.Now().UTC()})
-			return false
+			return adminAccessDecision{RequiredScope: required, Reason: "invalid or expired access token"}
 		}
-		required := adminRequiredScope(r)
 		if !hasScope(claims.Scopes, required) {
 			if required == "admin:write" && claims.Role == "team_admin" &&
 				(strings.HasPrefix(r.URL.Path, "/admin/users") || strings.HasPrefix(r.URL.Path, "/admin/teams") || strings.HasPrefix(r.URL.Path, "/admin/api-keys")) {
-				return true
+				return adminAccessDecision{Authenticated: true, Allowed: true, Role: claims.Role, RequiredScope: required}
 			}
 			// Settings sub-admins (ops/ai/security) may write under /admin/settings even
 			// without admin:write; the settings handlers enforce per-category restrictions.
 			if required == "admin:write" && strings.HasPrefix(r.URL.Path, "/admin/settings") && settingsSubAdminRole(claims.Role) {
-				return true
+				return adminAccessDecision{Authenticated: true, Allowed: true, Role: claims.Role, RequiredScope: required}
 			}
-			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "scope_denied", ActorUserID: claims.Subject, TeamID: claims.TeamID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: required, CreatedAt: time.Now().UTC()})
-			return false
+			if adminRoleWriteException(claims.Role, r.URL.Path, required) {
+				return adminAccessDecision{Authenticated: true, Allowed: true, Role: claims.Role, RequiredScope: required}
+			}
+			return adminAccessDecision{Authenticated: true, Role: claims.Role, RequiredScope: required, Reason: "missing scope " + required}
 		}
-		return true
+		return adminAccessDecision{Authenticated: true, Allowed: true, Role: claims.Role, RequiredScope: required}
 	}
 	if s.cfg.Auth.AdminToken == "" && s.cfg.Auth.AdminReadonlyToken == "" {
-		return true
+		return adminAccessDecision{Authenticated: true, Allowed: true, Role: "admin", RequiredScope: required}
 	}
 	token := bearerToken(r.Header.Get("Authorization"))
 	if token == "" {
-		slog.Warn("admin auth failed: missing or invalid bearer token header")
-		return false
+		return adminAccessDecision{RequiredScope: required, Reason: "admin token is required"}
 	}
 	if s.cfg.Auth.AdminToken != "" && token == s.cfg.Auth.AdminToken {
-		return true
+		return adminAccessDecision{Authenticated: true, Allowed: true, Role: "admin", RequiredScope: required}
 	}
 	if s.cfg.Auth.AdminReadonlyToken != "" && token == s.cfg.Auth.AdminReadonlyToken {
-		// readonly: only allow safe methods on /admin
-		return r.Method == http.MethodGet || r.Method == http.MethodHead
+		allowed := r.Method == http.MethodGet || r.Method == http.MethodHead
+		return adminAccessDecision{Authenticated: true, Allowed: allowed, Role: "readonly_admin", RequiredScope: required, Reason: "read-only token cannot perform changes"}
 	}
-	slog.Warn("admin auth failed: token mismatch", "received_token", token, "expected_token", s.cfg.Auth.AdminToken)
-	return false
+	return adminAccessDecision{RequiredScope: required, Reason: "admin token does not match"}
+}
+
+// adminRoleWriteException is the narrow mutation surface for domain administrators. It avoids a
+// broad admin:write grant while making the role name match its actual duties.
+func adminRoleWriteException(role, path, required string) bool {
+	if required != "admin:write" {
+		return false
+	}
+	prefix := func(values ...string) bool {
+		for _, value := range values {
+			if strings.HasPrefix(path, value) {
+				return true
+			}
+		}
+		return false
+	}
+	switch role {
+	case "security_admin":
+		return prefix("/admin/security", "/admin/policies", "/admin/approvals", "/admin/k8s/security", "/admin/k8s/policy")
+	case "billing_admin":
+		return prefix("/admin/budgets", "/admin/cost", "/admin/pricing", "/admin/k8s/cost")
+	default:
+		return false
+	}
+}
+
+func (s *Server) recordAdminAccessDenied(r *http.Request, decision adminAccessDecision) {
+	if decision.Authenticated {
+		claims, _ := s.currentAccessClaims(r)
+		_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "scope_denied", ActorUserID: claims.Subject, TeamID: claims.TeamID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: decision.RequiredScope + " path=" + r.URL.Path, CreatedAt: time.Now().UTC()})
+		return
+	}
+	_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "login_failed", IP: clientIP(r), UserAgent: r.UserAgent(), Detail: "admin credential invalid", CreatedAt: time.Now().UTC()})
+}
+
+func (s *Server) authorizeAdmin(r *http.Request) bool {
+	decision := s.evaluateAdminAccess(r)
+	if !decision.Allowed {
+		s.recordAdminAccessDenied(r, decision)
+	}
+	return decision.Allowed
+}
+
+// withAdminAccessUX performs the common admin authorization before individual handlers. Besides
+// removing 401/403 ambiguity, a direct browser visit to an API path is redirected back into the
+// SPA's access-denied screen instead of rendering raw JSON as a document.
+func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/admin/") || r.URL.Path == "/admin/" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		decision := s.evaluateAdminAccess(r)
+		if decision.Allowed {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.recordAdminAccessDenied(r, decision)
+		status := http.StatusUnauthorized
+		code, message := "authentication_required", "관리자 인증이 필요합니다."
+		if decision.Authenticated {
+			status = http.StatusForbidden
+			code, message = "permission_denied", "현재 역할에는 이 작업을 수행할 권한이 없습니다."
+		}
+		if r.Method == http.MethodGet && strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+			target := "/admin#/access-denied?status=" + strconv.Itoa(status) + "&path=" + url.QueryEscape(r.URL.Path) + "&required=" + url.QueryEscape(decision.RequiredScope)
+			http.Redirect(w, r, target, http.StatusSeeOther)
+			return
+		}
+		writeOpenAIError(w, status, message, "permission_error", code)
+	})
 }
 
 func (s *Server) currentAccessClaims(r *http.Request) (accessClaims, bool) {

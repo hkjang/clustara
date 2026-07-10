@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 40
+const menuVersion = 42
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -72,7 +72,7 @@ var menuRegistry = []menuItem{
 	// 비용 영역.
 	{ID: "bill.finops", Label: "FinOps", Path: "#/finops", Tab: "finops", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "bill.k8s_cost", Label: "비용", Path: "#/k8s-cost", Tab: "k8s-cost", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
-	{ID: "ai.gateway_governance", Label: "AI Governance", Path: "#/ai-governance", Tab: "ai-governance", Group: "billing", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ai.gateway_governance", Label: "AI Governance", Path: "#/ai-governance", Tab: "ai-governance", Group: "ai", Scopes: []string{"admin:read"}, DataScope: "all"},
 	// 보안 영역.
 	{ID: "sec.k8s_security", Label: "보안", Path: "#/k8s-security", Tab: "k8s-security", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
 	{ID: "sec.k8s_security_vulnerabilities", Label: "이미지 취약점", Path: "#/k8s-security-vulnerabilities", Tab: "k8s-security-vulnerabilities", Group: "security", Scopes: []string{"security:read"}, DataScope: "all"},
@@ -111,6 +111,9 @@ func (s *Server) featureFlags() map[string]bool {
 
 // menuAccessible reports whether a caller with the given scopes/features may see an item.
 func menuAccessible(item menuItem, scopes []string, features map[string]bool) bool {
+	if !menuGroupScopeAccessible(item, scopes) {
+		return false
+	}
 	for _, f := range item.Features {
 		if !features[f] {
 			return false
@@ -130,6 +133,9 @@ func menuAccessible(item menuItem, scopes []string, features map[string]bool) bo
 // menuDecision returns whether a menu is allowed for the caller and a human reason — the
 // data behind /permissions/effective so an operator can see exactly why a menu is hidden.
 func menuDecision(item menuItem, scopes []string, features map[string]bool) (bool, string) {
+	if !menuGroupScopeAccessible(item, scopes) {
+		return false, "missing scope combination required by group '" + item.Group + "'"
+	}
 	for _, f := range item.Features {
 		if !features[f] {
 			return false, "feature '" + f + "' disabled"
@@ -144,6 +150,23 @@ func menuDecision(item menuItem, scopes []string, features map[string]bool) (boo
 		}
 	}
 	return false, "missing any of scopes: " + strings.Join(item.Scopes, ", ")
+}
+
+// menuGroupScopeAccessible prevents a broad admin:read grant from exposing unrelated domains.
+// Domain pages require both the admin surface and their functional read scope.
+func menuGroupScopeAccessible(item menuItem, scopes []string) bool {
+	switch item.Group {
+	case "ops":
+		return hasScope(scopes, "admin:read") && hasScope(scopes, "observability:read")
+	case "billing":
+		return hasScope(scopes, "admin:read") && hasScope(scopes, "costs:read")
+	case "ai":
+		return hasScope(scopes, "admin:read") && hasScope(scopes, "routing:read")
+	case "settings":
+		return hasScope(scopes, "admin:read")
+	default:
+		return true
+	}
 }
 
 // accessibleMenus returns the registry filtered to what the caller may see.
@@ -208,15 +231,45 @@ func resolveHome(role string, scopes []string) string {
 // navigationFor builds the full navigation payload for a caller's scopes/features.
 func (s *Server) navigationFor(scopes []string, role string) map[string]any {
 	features := s.featureFlags()
-	return map[string]any{
-		"menus":        accessibleMenus(scopes, features),
-		"allowed_tabs": allowedTabs(scopes, features),
-		"default_home": resolveHome(role, scopes),
-		"role":         role,
-		"scopes":       scopes,
-		"features":     features,
-		"menu_version": menuVersion,
+	mode := "personal"
+	canWrite := false
+	switch {
+	case hasScope(scopes, "admin:write"):
+		mode, canWrite = "full", true
+	case settingsSubAdminRole(role):
+		mode, canWrite = "limited", true
+	case hasScope(scopes, "admin:read"):
+		mode = "readonly"
 	}
+	return map[string]any{
+		"menus":            accessibleMenus(scopes, features),
+		"allowed_tabs":     allowedTabs(scopes, features),
+		"default_home":     resolveHome(role, scopes),
+		"role":             role,
+		"scopes":           scopes,
+		"features":         features,
+		"menu_version":     menuVersion,
+		"role_description": roleDescriptions[role],
+		"access": map[string]any{
+			"mode": mode, "can_write": canWrite, "is_readonly": mode == "readonly",
+		},
+	}
+}
+
+// legacyTokenIdentity gives legacy ADMIN_TOKEN mode the same role-aware navigation contract as
+// JWT mode. In particular, a read-only token must never receive admin:write menus/state.
+func (s *Server) legacyTokenIdentity(r *http.Request) (string, []string, bool) {
+	if s.cfg.Auth.AdminToken == "" && s.cfg.Auth.AdminReadonlyToken == "" {
+		return "super_admin", append([]string{}, allScopes...), true
+	}
+	token := bearerToken(r.Header.Get("Authorization"))
+	if token != "" && s.cfg.Auth.AdminToken != "" && token == s.cfg.Auth.AdminToken {
+		return "admin", append([]string{}, allScopes...), true
+	}
+	if token != "" && s.cfg.Auth.AdminReadonlyToken != "" && token == s.cfg.Auth.AdminReadonlyToken {
+		return "readonly_admin", scopesForRole("readonly_admin"), true
+	}
+	return "", nil, false
 }
 
 // handleMeNavigation returns the caller's accessible menu set, computed server-side. The
@@ -229,7 +282,12 @@ func (s *Server) handleMeNavigation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.cfg.Auth.Enabled {
-		writeJSON(w, http.StatusOK, s.navigationFor(append([]string{}, allScopes...), "admin"))
+		role, scopes, ok := s.legacyTokenIdentity(r)
+		if !ok {
+			writeOpenAIError(w, http.StatusUnauthorized, "admin token is required", "permission_error", "authentication_required")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.navigationFor(scopes, role))
 		return
 	}
 	claims, ok := s.currentAccessClaims(r)

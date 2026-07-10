@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"clustara/internal/store"
@@ -58,13 +59,16 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// ai_admin: admin:read but NOT security:read → ops tabs + settings, but no security.
 	aiTabs := tabSet(roleScopes["ai_admin"], features)
-	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "finops", "ai-governance", "enterprise", "settings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "ai-governance", "enterprise", "settings"} {
 		if !aiTabs[want] {
 			t.Errorf("ai_admin should see %q", want)
 		}
 	}
 	if aiTabs["k8s-security"] {
 		t.Error("ai_admin lacks security:read → must NOT see k8s-security")
+	}
+	if aiTabs["finops"] || aiTabs["k8s-cost"] {
+		t.Error("ai_admin lacks costs:read → must NOT see billing menus")
 	}
 
 	// admin: every K8s area incl. security + nested settings children.
@@ -119,6 +123,111 @@ func TestMeNavigationLegacyModeReturnsFullMenu(t *testing.T) {
 	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "gitops", "problems", "finops", "ai-governance", "enterprise", "settings", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-nodes", "service-catalog", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "runtimesettings"} {
 		if !tabs[want] {
 			t.Errorf("legacy allowed_tabs missing %q", want)
+		}
+	}
+}
+
+func TestLegacyTokenNavigationIsAuthenticatedAndRoleAware(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 8, filepath.Join(t.TempDir(), "legacy-nav.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	cfg.Auth.AdminToken = "write-token"
+	cfg.Auth.AdminReadonlyToken = "read-token"
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.Routes())
+	defer srv.Close()
+
+	requestNav := func(token string) (*http.Response, map[string]any) {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/me/navigation", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp, out
+	}
+	if resp, _ := requestNav(""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("navigation without configured legacy token = %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := requestNav("wrong"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("navigation with wrong legacy token = %d, want 401", resp.StatusCode)
+	}
+	resp, readonly := requestNav("read-token")
+	if resp.StatusCode != http.StatusOK || readonly["role"] != "readonly_admin" {
+		t.Fatalf("readonly navigation status=%d payload=%+v", resp.StatusCode, readonly)
+	}
+	access, _ := readonly["access"].(map[string]any)
+	if access["mode"] != "readonly" || access["can_write"] != false {
+		t.Fatalf("readonly access summary=%+v", access)
+	}
+	resp, admin := requestNav("write-token")
+	if resp.StatusCode != http.StatusOK || admin["role"] != "admin" {
+		t.Fatalf("admin navigation status=%d payload=%+v", resp.StatusCode, admin)
+	}
+}
+
+func TestAdminAccessUXStatusAndBrowserRedirect(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 8, filepath.Join(t.TempDir(), "access-ux.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	cfg := testConfig("http://upstream.invalid", "secret")
+	cfg.Auth.AdminToken = "write-token"
+	cfg.Auth.AdminReadonlyToken = "read-token"
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.Routes())
+	defer srv.Close()
+
+	post, _ := http.NewRequest(http.MethodPost, srv.URL+"/admin/api-keys", strings.NewReader(`{}`))
+	post.Header.Set("Authorization", "Bearer read-token")
+	post.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(post)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("readonly mutation = %d, want 403", resp.StatusCode)
+	}
+	var denied map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&denied)
+	errorBody, _ := denied["error"].(map[string]any)
+	if errorBody["code"] != "permission_denied" {
+		t.Fatalf("permission response=%+v", denied)
+	}
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	direct, _ := http.NewRequest(http.MethodGet, srv.URL+"/admin/stats", nil)
+	direct.Header.Set("Accept", "text/html")
+	redirect, err := client.Do(direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer redirect.Body.Close()
+	if redirect.StatusCode != http.StatusSeeOther || !strings.Contains(redirect.Header.Get("Location"), "/admin#/access-denied?status=401") {
+		t.Fatalf("direct browser denial status=%d location=%q", redirect.StatusCode, redirect.Header.Get("Location"))
+	}
+}
+
+func TestAdminUIHasFriendlyPermissionStates(t *testing.T) {
+	for _, marker := range []string{"renderAccessFailure", "renderRouteFailure", "403 · 권한 부족", "관리자 인증이 필요합니다", "permission-banner", "ClustaraAPIError", "조회만 가능", "역할 제한"} {
+		if !strings.Contains(adminHTML, marker) {
+			t.Errorf("admin UI missing permission UX marker %q", marker)
 		}
 	}
 }
@@ -218,6 +327,9 @@ func TestRoleHomeOverrides(t *testing.T) {
 	}
 	if !tabSet(roleScopes["security_admin"], features)["k8s-security-vulnerabilities"] {
 		t.Error("security_admin should see vulnerability security center")
+	}
+	if tabSet(roleScopes["security_admin"], features)["k8s-home"] {
+		t.Error("security_admin lacks observability:read → must NOT see general ops menus")
 	}
 	if tabSet(roleScopes["billing_admin"], features)["k8s-security"] {
 		t.Error("billing_admin should not see k8s-security")

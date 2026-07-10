@@ -98,6 +98,13 @@ const adminHTML = `<!doctype html>
     .nav-group.open > .nav-group-menu { display: block; }
     .nav-group-menu a { display: block; white-space: nowrap; }
     #subtabs:empty { display: none; }
+	.permission-banner { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin:8px 0 10px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel-alt); font-size:12px; }
+	.permission-banner.readonly { border-color:var(--warn); background:var(--warn-bg); }
+	.permission-banner.limited { border-color:var(--accent); }
+	.permission-banner strong { display:block; margin-bottom:2px; }
+	.access-state { max-width:760px; margin:36px auto; padding:24px; border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:0 8px 28px rgba(0,0,0,.08); }
+	.access-state h2 { margin:0 0 8px; }
+	.access-state-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
     .subtabs {
       display: flex; gap: 4px; flex-wrap: wrap;
       margin: 4px 0 2px; padding-bottom: 8px;
@@ -933,6 +940,7 @@ const adminHTML = `<!doctype html>
   </header>
   <main>
     <div id="subtabs"></div>
+	<div id="permission-banner"></div>
     <div id="ux-context" class="ux-context"></div>
     <div id="view"></div>
   </main>
@@ -1004,9 +1012,11 @@ const adminHTML = `<!doctype html>
     // ---------- token (legacy ADMIN_TOKEN mode) ----------
     const tokenInput = document.getElementById('token');
     tokenInput.value = sessionStorage.getItem('adminToken') || '';
-    tokenInput.addEventListener('change', () => {
+    tokenInput.addEventListener('change', async () => {
       sessionStorage.setItem('adminToken', tokenInput.value);
-      route();
+	authState.user = null;
+	authState.nav = null;
+	await bootAfterAuth(null);
     });
 
     // ---------- auth (AUTH_ENABLED: email/password → JWT) ----------
@@ -1015,6 +1025,9 @@ const adminHTML = `<!doctype html>
       access: sessionStorage.getItem('authAccess') || '',
       refresh: sessionStorage.getItem('authRefresh') || '',
       user: JSON.parse(sessionStorage.getItem('authUser') || 'null'),
+	  nav: null,
+	  navError: null,
+	  legacyTokenRequired: false,
     };
     function saveAuth(tokens) {
       authState.access = tokens.access_token || '';
@@ -1052,8 +1065,9 @@ const adminHTML = `<!doctype html>
         // Token mode has no user, but the chip stays as the menu trigger so theme /
         // refresh / help / 개인화 / 내 키 remain reachable.
         chip.style.display = 'inline-flex';
-        chip.textContent = '☰ 메뉴';
-        chip.title = '개인 메뉴 열기';
+		const legacyRole = authState.user && authState.user.role;
+        chip.textContent = legacyRole ? ('☰ ' + legacyRole) : '☰ 메뉴';
+        chip.title = legacyRole ? ('현재 역할: ' + legacyRole + ' · 개인 메뉴 열기') : '개인 메뉴 열기';
         logoutBtn.style.display = 'none';
       }
     }
@@ -1167,10 +1181,18 @@ const adminHTML = `<!doctype html>
     async function loadNavigation() {
       try {
         authState.nav = await api('/me/navigation');
-      } catch {
-        authState.nav = null; // fall back to showing everything (legacy/no policy)
+		authState.navError = null;
+		if (!authState.enabled && authState.nav && authState.nav.role) {
+		  authState.user = { role: authState.nav.role, scopes: authState.nav.scopes || [] };
+		  renderAuthHeader();
+		}
+      } catch (e) {
+		authState.navError = e;
+		// Fail closed: a navigation-policy error must never reveal every menu.
+		authState.nav = { menus: [], allowed_tabs: ['access-denied'], scopes: [], role: '', access: { mode: 'none', can_write: false } };
       }
       applyNavPermissions();
+	  return !authState.navError;
     }
 
     // applyNavPermissions hides nav anchors whose tab is not in the caller's allowed_tabs.
@@ -1194,13 +1216,33 @@ const adminHTML = `<!doctype html>
         const readonly = !!scopes && scopes.indexOf('admin:read') >= 0 && scopes.indexOf('admin:write') < 0;
         ro.style.display = readonly ? '' : 'none';
       }
+	  renderPermissionBanner();
     }
+
+	function renderPermissionBanner() {
+	  const el = document.getElementById('permission-banner');
+	  if (!el) return;
+	  const nav = authState.nav || {};
+	  const access = nav.access || {};
+	  const role = nav.role || ((authState.user || {}).role) || '';
+	  if (authState.navError || !role || access.mode === 'full' || access.mode === 'personal') { el.innerHTML = ''; return; }
+	  const readonly = access.mode === 'readonly';
+	  const title = readonly ? '조회 전용 역할' : '제한된 변경 권한';
+	  const detail = readonly
+		? '조회는 가능하지만 저장·삭제·실행 요청은 서버에서 차단됩니다.'
+		: '역할에 허용된 설정 범위만 변경할 수 있으며 나머지 작업은 차단됩니다.';
+	  el.innerHTML = '<div class="permission-banner ' + (readonly ? 'readonly' : 'limited') + '"><div><strong>' + escapeHTML(title) + ' · ' + escapeHTML(role) + '</strong><span>' + escapeHTML(detail) + '</span></div><span class="pill">' + escapeHTML(nav.role_description || ((nav.scopes || []).join(', '))) + '</span></div>';
+	}
 
     // bootAfterAuth wires navigation + default-home routing once the session is known.
     async function bootAfterAuth(me) {
       renderAuthHeader();
       if (me) updateMenuMeta(me);
-      await loadNavigation();
+	  const navigationReady = await loadNavigation();
+	  if (!navigationReady) {
+		renderAccessFailure(authState.navError);
+		return;
+	  }
       // Default home: send the user to their role-appropriate landing if they arrived at
       // the app root (no explicit deep link).
       const atRoot = !location.hash || location.hash === '#' || location.hash === '#/';
@@ -1236,12 +1278,15 @@ const adminHTML = `<!doctype html>
       const sso = captureSSOFragment();
       if (sso.error) { authState.enabled = true; renderAuthHeader(); showLogin('SSO 로그인 실패: ' + sso.error); return; }
       try {
-        const h = authState.access ? { Authorization: 'Bearer ' + authState.access } : {};
+		const initialToken = authState.access || tokenInput.value.trim();
+        const h = initialToken ? { Authorization: 'Bearer ' + initialToken } : {};
         const res = await fetch('/auth/me', { headers: h });
         if (res.ok) {
           const me = await res.json();
           authState.enabled = !!me.auth_enabled;
+		  authState.legacyTokenRequired = !!me.legacy_token_required;
           if (me.user) { authState.user = me.user; sessionStorage.setItem('authUser', JSON.stringify(me.user)); }
+		  else if (!me.auth_enabled) { authState.user = null; sessionStorage.removeItem('authUser'); }
           await bootAfterAuth(me);
           return;
         }
@@ -1421,6 +1466,26 @@ const adminHTML = `<!doctype html>
       if (token) h.Authorization = 'Bearer ' + token;
       return h;
     }
+	class ClustaraAPIError extends Error {
+	  constructor(message, status, code, type, detail) {
+		super(message || '요청을 처리하지 못했습니다.');
+		this.name = 'ClustaraAPIError'; this.status = Number(status || 0); this.code = code || ''; this.type = type || ''; this.detail = detail || '';
+	  }
+	}
+	async function apiErrorFromResponse(res) {
+	  let payload = null, raw = '';
+	  try { raw = await res.text(); payload = raw ? JSON.parse(raw) : null; } catch (_) {}
+	  const e = payload && payload.error ? payload.error : payload;
+	  const code = (e && e.code) || '';
+	  const type = (e && e.type) || '';
+	  let message = (e && e.message) || '';
+	  if (res.status === 401) message = authState.enabled ? '로그인이 만료되었거나 인증 정보가 유효하지 않습니다.' : '관리자 토큰을 확인해주세요.';
+	  else if (res.status === 403) message = '현재 역할에는 이 화면 또는 작업에 필요한 권한이 없습니다.';
+	  else if (!message) message = '요청 처리 중 오류가 발생했습니다. (' + res.status + ')';
+	  return new ClustaraAPIError(message, res.status, code, type, raw && !payload ? raw.slice(0, 300) : '');
+	}
+	function isAuthenticationError(err) { return Number((err && err.status) || 0) === 401 || (err && err.code) === 'authentication_required'; }
+	function isPermissionError(err) { return Number((err && err.status) || 0) === 403 || (err && err.code) === 'permission_denied'; }
     async function api(path, options = {}) {
       const doFetch = () => {
         const requestHeaders = headers();
@@ -1435,12 +1500,11 @@ const adminHTML = `<!doctype html>
         } else {
           clearAuth();
           showLogin('세션이 만료되었습니다. 다시 로그인해주세요.');
-          throw new Error('세션 만료');
+		  throw new ClustaraAPIError('세션이 만료되었습니다. 다시 로그인해주세요.', 401, 'session_expired', 'authentication_error');
         }
       }
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
+		throw await apiErrorFromResponse(res);
       }
       if (res.status === 204) return null;
       return res.json();
@@ -2657,7 +2721,8 @@ const adminHTML = `<!doctype html>
     }
     // subNav renders a secondary tab bar (used for tabs that nest sub-views).
     function subNav(items) {
-      return '<nav class="subtabs">' + items.map(it =>
+	  const visible = items.filter(it => uxAllowed(uxTabFromHref(it.href)));
+      return '<nav class="subtabs">' + visible.map(it =>
         '<a href="' + it.href + '"' + (it.active ? ' class="active"' : '') + '>' + escapeHTML(it.label) + '</a>'
       ).join('') + '</nav>';
     }
@@ -2753,6 +2818,12 @@ const adminHTML = `<!doctype html>
     async function route() {
       const { parts, params } = parseHash();
       const [tab, ...rest] = parts;
+	  if (tab === 'access-denied') {
+		clearK8sHomeRefreshTimer();
+		document.getElementById('subtabs').innerHTML = '';
+		renderAccessDeniedRoute(params);
+		return;
+	  }
       if ((tab || 'k8s-home') !== 'k8s-home') clearK8sHomeRefreshTimer();
       // Nested sub-views keep their parent's top-level nav tab highlighted.
       const navParent = {
@@ -2904,7 +2975,7 @@ const adminHTML = `<!doctype html>
           default: await renderK8sHome();
         }
       } catch (err) {
-        document.getElementById('view').innerHTML = '<div class="error-line">' + escapeHTML(err.message) + '</div>';
+		renderRouteFailure(tab || 'k8s-home', err);
       }
       updateK8sActionNavBadge();
       uxOnRoute(navTab || 'k8s-home', params);
@@ -20265,25 +20336,69 @@ const adminHTML = `<!doctype html>
     }
 
     // ---------- my keys (self-service) ----------
-    // renderForbidden is shown when a user routes (or deep-links) to a tab outside their
-    // permissions — never a blank screen. Surfaces role, path, and how to get access.
-    function renderForbidden(tab) {
-      // Report the blocked attempt so operators can see it in the auth audit log.
-      try { api('/me/access-denied', { method: 'POST', body: JSON.stringify({ tab, path: location.hash }) }).catch(() => {}); } catch {}
-      const u = authState.user || {};
-      const role = u.role || (authState.enabled ? '(알 수 없음)' : '레거시 토큰');
-      document.getElementById('view').innerHTML = section('접근 권한이 필요합니다',
-        '<div class="card-body" style="padding:16px">' +
-          '<p style="font-size:15px">이 메뉴(<code>#/' + escapeHTML(tab) + '</code>)에 접근할 권한이 없습니다.</p>' +
-          '<div class="kv" style="margin-top:10px">' +
-            row('내 역할', escapeHTML(role)) +
-            row('요청 경로', '<code>#/' + escapeHTML(tab) + '</code>') +
-            row('보유 권한', escapeHTML(((authState.nav && authState.nav.scopes) || []).join(', ') || '(없음)')) +
-          '</div>' +
-          '<p class="muted" style="margin-top:12px">접근이 필요하면 관리자에게 역할 변경을 요청하세요. ' +
-          '<a href="#/me">내 홈으로 이동</a></p>' +
-        '</div>');
-    }
+	function focusLegacyToken() {
+	  tokenInput.focus(); tokenInput.select();
+	  showToast('warn', '관리자 토큰 필요', '상단 입력란에 유효한 관리자 토큰을 입력한 뒤 Enter 또는 화면의 다른 곳을 클릭하세요.');
+	}
+
+	function renderAccessFailure(err) {
+	  const view = document.getElementById('view');
+	  const legacy = !authState.enabled;
+	  const title = legacy ? '관리자 인증이 필요합니다' : '로그인이 필요합니다';
+	  const detail = legacy
+		? '이 Clustara는 관리자 토큰으로 보호되어 있습니다. 유효한 토큰을 입력하기 전에는 운영 메뉴와 데이터가 표시되지 않습니다.'
+		: '세션이 만료되었거나 로그인 정보가 유효하지 않습니다. 다시 로그인해주세요.';
+	  document.getElementById('subtabs').innerHTML = '';
+	  document.getElementById('permission-banner').innerHTML = '';
+	  view.innerHTML = '<div class="access-state"><span class="status warn">401 · 인증 필요</span><h2>' + escapeHTML(title) + '</h2><p>' + escapeHTML(detail) + '</p>' +
+		'<div class="kv">' + row('현재 경로', '<code>' + escapeHTML(location.hash || '#/') + '</code>') + row('안전 상태', '인증 전 메뉴·데이터 비공개') + '</div>' +
+		'<div class="access-state-actions">' + (legacy
+		  ? '<button type="button" onclick="focusLegacyToken()">토큰 입력란으로 이동</button>'
+		  : '<button type="button" onclick="clearAuth();showLogin()">다시 로그인</button>') +
+		  '<a class="button secondary" href="/swagger" target="_blank" rel="noopener">API 문서</a></div>' +
+		(err && err.code ? '<p class="muted" style="font-size:11px;margin-top:12px">오류 코드: <code>' + escapeHTML(err.code) + '</code></p>' : '') + '</div>';
+	}
+
+	function requestedMenuLabel(tab) {
+	  const anchor = Array.from(document.querySelectorAll('[data-tab]')).find(a => a.getAttribute('data-tab') === tab);
+	  return anchor ? (anchor.textContent || '').trim() : tab;
+	}
+
+	// renderForbidden is shown when a user routes (or deep-links) to a tab outside their
+	// permissions. It exposes actionable role context without leaking an API JSON response.
+    function renderForbidden(tab, err, meta) {
+	  if (isAuthenticationError(err)) { renderAccessFailure(err); return; }
+	  meta = meta || {};
+      try { api('/me/access-denied', { method: 'POST', body: JSON.stringify({ tab, path: meta.path || location.hash }) }).catch(() => {}); } catch {}
+	  const nav = authState.nav || {}, u = authState.user || {};
+	  const role = nav.role || u.role || (authState.enabled ? '(알 수 없음)' : '레거시 토큰');
+	  const scopes = (nav.scopes || []).join(', ') || '(없음)';
+	  const required = meta.required || (err && err.code === 'permission_denied' ? '추가 역할 권한' : '메뉴 접근 권한');
+	  const home = nav.default_home || '#/me';
+	  const suggestions = (nav.menus || []).slice(0, 4).map(m => '<a class="button secondary" href="' + escapeAttr(m.path || '#/me') + '">' + escapeHTML(m.label || m.tab) + '</a>').join('');
+	  document.getElementById('permission-banner').innerHTML = '';
+      document.getElementById('view').innerHTML = '<div class="access-state"><span class="status error">403 · 권한 부족</span><h2>접근 권한이 필요합니다</h2>' +
+		'<p><strong>' + escapeHTML(requestedMenuLabel(tab)) + '</strong> 화면 또는 작업은 현재 역할에 허용되지 않습니다.</p>' +
+		'<div class="kv">' + row('내 역할', escapeHTML(role)) + row('요청 경로', '<code>' + escapeHTML(meta.path || ('#/' + tab)) + '</code>') + row('필요 권한', '<code>' + escapeHTML(required) + '</code>') + row('보유 권한', escapeHTML(scopes)) + '</div>' +
+		'<p class="muted" style="margin-top:12px">업무상 필요하면 관리자에게 역할 또는 사용자·팀 범위 권한을 요청하세요. 권한을 우회해 작업을 실행하지 않습니다.</p>' +
+		'<div class="access-state-actions"><a class="button" href="' + escapeAttr(home) + '">내 기본 화면</a><a class="button secondary" href="#/me">내 홈</a>' + suggestions + '</div></div>';
+	}
+
+	function renderAccessDeniedRoute(params) {
+	  const status = Number((params && params.get('status')) || 403);
+	  const path = (params && params.get('path')) || location.hash;
+	  const required = (params && params.get('required')) || '';
+	  if (status === 401) { renderAccessFailure(new ClustaraAPIError('', 401, 'authentication_required')); return; }
+	  renderForbidden('access-denied', new ClustaraAPIError('', 403, 'permission_denied'), { path, required });
+	}
+
+	function renderRouteFailure(tab, err) {
+	  if (isAuthenticationError(err)) { renderAccessFailure(err); return; }
+	  if (isPermissionError(err)) { renderForbidden(tab, err); return; }
+	  const code = (err && err.code) || 'request_failed';
+	  const message = (err && err.message) || '화면을 불러오지 못했습니다.';
+	  document.getElementById('view').innerHTML = '<div class="access-state"><span class="status error">오류</span><h2>화면을 불러오지 못했습니다</h2><p>' + escapeHTML(message) + '</p><div class="kv">' + row('오류 코드', '<code>' + escapeHTML(code) + '</code>') + row('화면', '<code>#/' + escapeHTML(tab) + '</code>') + '</div><div class="access-state-actions"><button type="button" onclick="route()">다시 시도</button><a class="button secondary" href="#/me">내 홈</a></div></div>';
+	}
 
     // renderSecurityHome is the security_admin landing: policy violations, Secret Firewall,
     // risky MCP tools, and pending approvals — no cost detail, no prompt originals.
@@ -23351,6 +23466,8 @@ const adminHTML = `<!doctype html>
           '<button class="secondary" type="button" onclick="testSettingConn(\'clickhouse\')">ClickHouse 연결 테스트</button>' +
           '<button class="secondary" type="button" onclick="testSettingConn(\'text2sql-exec\')">Text2SQL 실행 DB 테스트</button>' +
           '<button class="secondary" type="button" onclick="testSettingConn(\'text2sql-twin\')">Twin DB 테스트</button>' +
+          '<button class="secondary" type="button" onclick="testSettingConn(\'k8s-monitoring\')">입력값으로 GPU/DCGM 검증</button>' +
+          '<button class="secondary" type="button" onclick="openDCGMConfigPreview()">DCGM ConfigMap 미리보기</button>' +
           '<span id="conn-test-result" class="muted"></span>' +
         '</div></div>';
       Object.keys(groups).sort().forEach(cat => {
@@ -23358,6 +23475,8 @@ const adminHTML = `<!doctype html>
           '<th>키</th><th>값</th><th>출처</th><th>비고</th><th>동작</th></tr></thead><tbody>';
         groups[cat].forEach(s => {
           const id = settingInputId(s.key);
+		  const canWrite = s.can_write !== false;
+		  const disabled = canWrite ? '' : ' disabled aria-disabled="true"';
           const desc = s.description ? '<div class="muted" style="font-size:11px;margin-top:2px;max-width:320px;white-space:normal;line-height:1.4">' + escapeHTML(s.description) + '</div>' : '';
           if (s.read_only) {
             // Read-only env vars: show value as plain text, no editor/save/revert
@@ -23370,24 +23489,27 @@ const adminHTML = `<!doctype html>
           }
           let editor;
           if (s.type === 'bool') {
-            editor = '<select id="' + id + '"><option value="true"' + (String(s.value) === 'true' ? ' selected' : '') + '>true</option>' +
+			editor = '<select id="' + id + '"' + disabled + '><option value="true"' + (String(s.value) === 'true' ? ' selected' : '') + '>true</option>' +
               '<option value="false"' + (String(s.value) === 'false' ? ' selected' : '') + '>false</option></select>';
           } else if (s.is_secret) {
-            editor = '<input id="' + id + '" type="password" placeholder="' + (s.is_set ? '******** (변경 시에만 입력)' : '(미설정)') + '">';
+			editor = '<input id="' + id + '" type="password" placeholder="' + (s.is_set ? '******** (변경 시에만 입력)' : '(미설정)') + '"' + disabled + '>';
+          } else if (s.type === 'text') {
+            const rows = s.key === 'k8s.monitoring.dcgm_counters_csv' ? 18 : 5;
+			editor = '<textarea id="' + id + '" rows="' + rows + '"' + disabled + ' style="width:100%;min-width:360px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px">' + escapeHTML(String(s.value == null ? '' : s.value)) + '</textarea>';
           } else {
-            editor = '<input id="' + id + '" value="' + escapeHTML(String(s.value == null ? '' : s.value)) + '">';
+			editor = '<input id="' + id + '" value="' + escapeHTML(String(s.value == null ? '' : s.value)) + '"' + disabled + '>';
           }
           const ver = s.version ? '<div class="muted">v' + s.version + ' · ' + escapeHTML(s.updated_by || '') + '</div>' : '';
           const restart = s.restart_required ? '<span class="pill">재연결/재시작</span>' : '';
           const activeSource = s.effective_source || (s.source === 'admin' ? 'db_setting' : 'bootstrap_env');
-          const revertBtns = s.source === 'admin'
+		  const revertBtns = canWrite && s.source === 'admin'
             ? '<button class="secondary" type="button" onclick="revertSetting(\'' + s.key + '\')">기본값</button> ' +
               (s.is_secret ? '' : '<button class="secondary" type="button" onclick="rollbackSetting(\'' + s.key + '\')">롤백</button> ')
             : '';
           html += '<tr><td><code>' + escapeHTML(s.key) + '</code>' + desc + '</td><td>' + editor + '</td>' +
             '<td><span class="status">' + escapeHTML(activeSource) + '</span>' + ver + settingLayerBadges(s) + '</td>' +
-            '<td>' + restart + '</td><td>' +
-              '<button type="button" onclick="saveSetting(\'' + s.key + '\',\'' + id + '\',' + (s.is_secret ? 'true' : 'false') + ')">저장</button> ' +
+			'<td>' + restart + (canWrite ? '' : '<span class="pill" title="현재 역할에 이 설정 그룹의 쓰기 권한이 없습니다">역할 제한</span>') + '</td><td>' +
+			  (canWrite ? '<button type="button" onclick="saveSetting(\'' + s.key + '\',\'' + id + '\',' + (s.is_secret ? 'true' : 'false') + ')">저장</button> ' : '<span class="muted" style="font-size:11px">조회만 가능</span> ') +
               revertBtns +
               '<button class="secondary" type="button" onclick="settingHistory(\'' + s.key + '\')">이력</button>' +
             '</td></tr>';
@@ -23437,13 +23559,81 @@ const adminHTML = `<!doctype html>
       const el = document.getElementById('conn-test-result');
       el.textContent = '테스트 중...';
       try {
-        const d = await api('/admin/settings/test/' + kind, { method: 'POST', body: '{}' });
+        let payload = {};
+        if (kind === 'k8s-monitoring') {
+          const read = key => {
+            const input = document.getElementById(settingInputId(key));
+            return input ? String(input.value || '') : null;
+          };
+          payload = {
+            prometheus_url: read('k8s.monitoring.prometheus_url'),
+            dcgm_node_label: read('k8s.monitoring.dcgm_node_label'),
+            dcgm_metrics_promql: read('k8s.monitoring.dcgm_metrics_promql'),
+            dcgm_counters_csv: read('k8s.monitoring.dcgm_counters_csv')
+          };
+          const token = read('k8s.monitoring.prometheus_token');
+          if (token) payload.prometheus_token = token;
+        }
+        const d = await api('/admin/settings/test/' + kind, { method: 'POST', body: JSON.stringify(payload) });
         el.textContent = (d.ok ? '✅ 성공' : '❌ 실패') +
           (d.message ? ' — ' + d.message : '') +
           (d.latency_ms != null ? ' (' + d.latency_ms + 'ms)' : '') +
           (d.table_ok != null ? ' · table_ok=' + d.table_ok : '') +
           (d.warning ? ' ⚠ ' + d.warning : '');
+        if (kind === 'k8s-monitoring') showK8sMonitoringTest(d);
       } catch (e) { el.textContent = '오류: ' + e.message; }
+    }
+
+    function showK8sMonitoringTest(d) {
+      const v = d.validation || {};
+      const errors = (v.errors || []).map(x => '<div class="error-line">' + escapeHTML(x) + '</div>').join('');
+      const warnings = (v.warnings || []).map(x => '<div class="muted" style="color:var(--warn)">⚠ ' + escapeHTML(x) + '</div>').join('');
+      const observed = d.observed_metrics || [];
+      const missing = d.missing_required_metrics || [];
+      openModal('K8s GPU/DCGM 설정 검증', '<div class="card-body">' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+          '<span class="status ' + (d.ok ? '' : 'error') + '">' + (d.ok ? '연결 성공' : '검증 실패') + '</span>' +
+          '<span class="status ' + (v.valid ? '' : 'error') + '">CSV ' + (v.valid ? '정상' : '오류') + '</span>' +
+          '<span class="pill">표본 ' + fmt(d.sample_count || 0) + '</span><span class="pill">노드 ' + fmt(d.node_count || 0) + '</span>' +
+          '<span class="pill">' + escapeHTML(d.query_source || '-') + '</span><span class="pill">' + fmt(d.latency_ms || 0) + 'ms</span>' +
+        '</div><div style="font-weight:600;margin-bottom:8px">' + escapeHTML(d.message || '') + '</div>' +
+        errors + warnings + (d.warning ? '<div class="muted" style="color:var(--warn);margin-top:6px">⚠ ' + escapeHTML(d.warning) + '</div>' : '') +
+        (missing.length ? '<h3 style="margin-top:14px">현재 누락된 필수 지표</h3><div class="error-line"><code>' + escapeHTML(missing.join(', ')) + '</code></div>' : '') +
+        '<h3 style="margin-top:14px">관측된 DCGM 지표</h3>' +
+        (observed.length ? '<div style="display:flex;gap:5px;flex-wrap:wrap">' + observed.map(x => '<span class="pill"><code>' + escapeHTML(x) + '</code></span>').join('') + '</div>' : '<div class="muted">관측된 지표가 없습니다.</div>') +
+        '<p class="muted" style="font-size:11px;margin-top:14px">이 테스트는 화면에 입력된 값을 사용하며 저장하지 않습니다. 검증 후 각 행의 저장 버튼으로 적용하세요.</p></div>', null, { wide: true });
+    }
+
+    async function openDCGMConfigPreview() {
+      try {
+        const d = await api('/admin/k8s/gpu/dcgm-config');
+        const v = d.validation || {};
+        const diag = d.diagnostics || {};
+        window.currentDCGMConfigManifest = d.configmap_manifest || '';
+        const messages = (v.errors || []).map(x => '<div class="error-line">' + escapeHTML(x) + '</div>').join('') +
+          (v.warnings || []).map(x => '<div class="muted" style="color:var(--warn)">⚠ ' + escapeHTML(x) + '</div>').join('');
+        openModal('DCGM Exporter ConfigMap 미리보기',
+          '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' +
+            '<span class="status ' + (v.valid ? '' : 'error') + '">' + (v.valid ? 'CSV 검증 통과' : 'CSV 검증 실패') + '</span>' +
+            '<span class="pill">counter ' + fmt((v.metrics || []).length) + '개</span>' +
+            '<span class="pill">Prometheus ' + (diag.prometheus_configured ? '연결 설정됨' : '미설정') + '</span>' +
+            '<span class="pill">PromQL ' + escapeHTML(d.query_source || '-') + '</span>' +
+            '<button type="button" onclick="downloadDCGMConfig()">YAML 다운로드</button>' +
+          '</div>' + messages +
+          '<div class="muted" style="font-size:11px;margin:10px 0">CSV SHA-256 <code>' + escapeHTML(d.sha256 || '') + '</code> · 이 미리보기는 클러스터에 자동 적용하지 않습니다.</div>' +
+          '<pre style="white-space:pre;max-height:65vh;overflow:auto">' + escapeHTML(d.configmap_manifest || '') + '</pre></div>', null, { wide: true });
+      } catch (e) { openModal('DCGM ConfigMap 오류', '<div class="error-line">' + escapeHTML(e.message) + '</div>'); }
+    }
+
+    function downloadDCGMConfig() {
+      const manifest = window.currentDCGMConfigManifest || '';
+      if (!manifest) return;
+      const blob = new Blob([manifest], { type: 'application/yaml;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'clustara-dcgm-counters-configmap.yaml';
+      a.click();
+      URL.revokeObjectURL(a.href);
     }
 
     // ---------- settings ----------

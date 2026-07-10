@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,12 +19,7 @@ import (
 
 const (
 	k8sNodeMetricTickInterval = 20 * time.Second
-	k8sNodeMetricsEnabledFlag = "k8s_node_metrics_enabled"
-	k8sNodeMetricsSecsFlag    = "k8s_node_metrics_interval_secs"
 	k8sNodeMetricsDefaultSecs = 60
-
-	k8sGPUNodeLabelFlag = "k8s_gpu_node_label"
-	k8sGPUMetricsPromQL = "k8s_gpu_metrics_promql"
 )
 
 type k8sNodeMetricCollectResult struct {
@@ -42,20 +36,29 @@ type k8sNodeMetricCollectResult struct {
 // usage only at the 30-minute reconcile interval.
 func (s *Server) k8sNodeMetricScheduler() {
 	lastAttempt := map[string]time.Time{}
+	lastPrune := time.Time{}
 	ticker := time.NewTicker(k8sNodeMetricTickInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		s.runK8sNodeMetricTick(ctx, lastAttempt, time.Now().UTC())
+		now := time.Now().UTC()
+		s.runK8sNodeMetricTick(ctx, lastAttempt, now)
+		if lastPrune.IsZero() || now.Sub(lastPrune) >= 6*time.Hour {
+			lastPrune = now // rate-limit retries too; a DB outage must not cause a 20-second delete loop.
+			retentionDays := s.monitoringInt(ctx, "k8s.monitoring.retention_days", 30)
+			if _, err := s.db.PruneK8sMonitoringSamples(ctx, now.Add(-time.Duration(retentionDays)*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+				slog.Warn("k8s monitoring retention prune failed", "error", err)
+			}
+		}
 		cancel()
 	}
 }
 
 func (s *Server) runK8sNodeMetricTick(ctx context.Context, lastAttempt map[string]time.Time, now time.Time) {
-	if !s.k8sPollFlagBool(ctx, k8sNodeMetricsEnabledFlag, true) {
+	if !s.monitoringBool(ctx, "k8s.monitoring.enabled", true) {
 		return
 	}
-	intervalSecs := s.k8sPollFlagInt(ctx, k8sNodeMetricsSecsFlag, k8sNodeMetricsDefaultSecs)
+	intervalSecs := s.monitoringInt(ctx, "k8s.monitoring.interval_seconds", k8sNodeMetricsDefaultSecs)
 	if intervalSecs < int(k8sNodeMetricTickInterval.Seconds()) {
 		intervalSecs = int(k8sNodeMetricTickInterval.Seconds())
 	}
@@ -139,6 +142,7 @@ func (s *Server) collectNodeMetricsForCluster(ctx context.Context, cluster store
 	result.GPUCollectNote = gpuNote
 	previous, _ := s.db.ListK8sGPUSamples(ctx, store.K8sGPUSampleFilter{ClusterID: cluster.ID, Limit: 10000})
 	previousByDevice := latestStoredGPUSamples(previous)
+	temperatureThreshold := s.monitoringFloat(ctx, "k8s.monitoring.gpu_temperature_c", 85)
 	for _, sample := range deviceSamples {
 		sample.ID = newID("k8sgpu")
 		sample.ClusterID = cluster.ID
@@ -146,7 +150,7 @@ func (s *Server) collectNodeMetricsForCluster(ctx context.Context, cluster store
 			result.GPUCollectNote = "error: " + insertErr.Error()
 			break
 		}
-		s.emitGPUHardwareEvents(ctx, sample, previousByDevice[gpuStoreIdentity(sample)], now)
+		s.emitGPUHardwareEvents(ctx, sample, previousByDevice[gpuStoreIdentity(sample)], now, temperatureThreshold)
 		result.GPUMetrics++
 	}
 	for _, metric := range aggregateDCGMNodeMetrics(deviceSamples, now) {
@@ -177,14 +181,16 @@ func (s *Server) recordNodeMetricCollectorStatus(ctx context.Context, clusterID,
 }
 
 func (s *Server) collectDCGMDeviceSamples(ctx context.Context, cluster store.K8sCluster, now time.Time) ([]store.K8sGPUSample, string) {
-	promURL := strings.TrimSpace(os.Getenv("PROMETHEUS_URL"))
+	promURL, promToken := s.monitoringPrometheusConfig(ctx)
 	if promURL == "" {
 		return nil, "Prometheus/DCGM 미구성 — GPU 할당량만 제공"
 	}
-	defaultQuery := `{__name__=~"DCGM_FI_DEV_GPU_UTIL|DCGM_FI_PROF_SM_ACTIVE|DCGM_FI_PROF_PIPE_TENSOR_ACTIVE|DCGM_FI_DEV_MEM_COPY_UTIL|DCGM_FI_PROF_DRAM_ACTIVE|DCGM_FI_DEV_FB_USED|DCGM_FI_DEV_FB_FREE|DCGM_FI_DEV_GPU_TEMP|DCGM_FI_DEV_POWER_USAGE|DCGM_FI_DEV_SM_CLOCK|DCGM_FI_DEV_XID_ERRORS|DCGM_FI_DEV_ECC_SBE_VOL_TOTAL|DCGM_FI_DEV_ECC_DBE_VOL_TOTAL|DCGM_FI_DEV_PCIE_REPLAY_COUNTER|DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL|DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL|DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL|DCGM_FI_DEV_NVLINK_RECOVERY_ERROR_COUNT_TOTAL|DCGM_FI_DEV_THERMAL_VIOLATION"}`
-	query := firstNonEmpty(strings.TrimSpace(s.flagValue(ctx, k8sGPUMetricsPromQL)), defaultQuery)
-	nodeLabel := firstNonEmpty(strings.TrimSpace(s.flagValue(ctx, k8sGPUNodeLabelFlag)), "Hostname")
-	client := prometheus.NewClient(promURL, os.Getenv("PROMETHEUS_TOKEN"))
+	_, query, _, validation := s.effectiveDCGMConfig(ctx)
+	if !validation.Valid && s.runtimeSettingValue(ctx, "k8s.monitoring.dcgm_metrics_promql") == "" {
+		return nil, "error: DCGM counters CSV 검증 실패: " + strings.Join(validation.Errors, "; ")
+	}
+	nodeLabel := firstNonEmpty(s.runtimeSettingValue(ctx, "k8s.monitoring.dcgm_node_label"), "Hostname")
+	client := prometheus.NewClient(promURL, promToken)
 	knownNodes := s.knownGPUNodeAliases(ctx, cluster.ID)
 	promSamples, err := client.Query(ctx, query)
 	if err != nil {
@@ -318,7 +324,7 @@ func latestStoredGPUSamples(samples []store.K8sGPUSample) map[string]store.K8sGP
 	return out
 }
 
-func (s *Server) emitGPUHardwareEvents(ctx context.Context, current, previous store.K8sGPUSample, now time.Time) {
+func (s *Server) emitGPUHardwareEvents(ctx context.Context, current, previous store.K8sGPUSample, now time.Time, temperatureThreshold float64) {
 	type signal struct {
 		triggered       bool
 		reason, message string
@@ -327,7 +333,7 @@ func (s *Server) emitGPUHardwareEvents(ctx context.Context, current, previous st
 		{current.XIDErrors > 0 && current.XIDErrors != previous.XIDErrors, "GPUXID", fmt.Sprintf("GPU %s XID %.0f 오류", current.GPUUUID, current.XIDErrors)},
 		{current.ECCDBE > previous.ECCDBE, "GPUECCDBE", fmt.Sprintf("GPU %s 복구 불가 ECC 오류 증가", current.GPUUUID)},
 		{current.NVLinkErrors > previous.NVLinkErrors, "GPUNVLinkError", fmt.Sprintf("GPU %s NVLink 오류 증가", current.GPUUUID)},
-		{current.TemperatureC >= 85 && previous.TemperatureC < 85, "GPUOverTemperature", fmt.Sprintf("GPU %s 온도 %.1f°C", current.GPUUUID, current.TemperatureC)},
+		{current.TemperatureC >= temperatureThreshold && previous.TemperatureC < temperatureThreshold, "GPUOverTemperature", fmt.Sprintf("GPU %s 온도 %.1f°C", current.GPUUUID, current.TemperatureC)},
 	}
 	for _, signal := range signals {
 		if !signal.triggered {
@@ -404,12 +410,14 @@ func (s *Server) handleK8sNodeMonitoring(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	report := analyzer.AnalyzeNodeMonitoring(items, metrics, events, now, bucket)
+	promURL, _ := s.monitoringPrometheusConfig(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report": report, "window": windowName, "bucket_seconds": int(bucket.Seconds()),
 		"collection": map[string]any{
-			"enabled":          s.k8sPollFlagBool(r.Context(), k8sNodeMetricsEnabledFlag, true),
-			"interval_seconds": s.k8sPollFlagInt(r.Context(), k8sNodeMetricsSecsFlag, k8sNodeMetricsDefaultSecs),
-			"metrics_source":   "metrics.k8s.io", "gpu_source_configured": strings.TrimSpace(os.Getenv("PROMETHEUS_URL")) != "",
+			"enabled":          s.monitoringBool(r.Context(), "k8s.monitoring.enabled", true),
+			"interval_seconds": s.monitoringInt(r.Context(), "k8s.monitoring.interval_seconds", k8sNodeMetricsDefaultSecs),
+			"retention_days":   s.monitoringInt(r.Context(), "k8s.monitoring.retention_days", 30),
+			"metrics_source":   "metrics.k8s.io", "gpu_source_configured": promURL != "",
 		},
 		"note": "임계치 도달 예상은 저장된 추세를 선형 연장한 운영 선행 경보이며 실제 장애 시점을 보장하지 않습니다. GPU 실사용률/온도는 Prometheus DCGM Exporter가 있을 때만 제공됩니다.",
 	})
@@ -439,7 +447,7 @@ func (s *Server) handleK8sGPUOperations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	policy := s.k8sGPUAlertPolicy(r.Context())
-	hourlyCost := s.floatFlag(r.Context(), "k8s_gpu_hourly_cost_krw", 1200)
+	hourlyCost := s.monitoringFloat(r.Context(), "k8s.monitoring.gpu_hourly_cost_krw", 1200)
 	report := analyzer.AnalyzeGPUOperations(items, samples, now, hourlyCost, policy)
 	s.enrichVLLMModelMetrics(r.Context(), &report)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -450,10 +458,11 @@ func (s *Server) handleK8sGPUOperations(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) enrichVLLMModelMetrics(ctx context.Context, report *analyzer.GPUOperationsReport) {
-	if report == nil || strings.TrimSpace(os.Getenv("PROMETHEUS_URL")) == "" {
+	promURL, promToken := s.monitoringPrometheusConfig(ctx)
+	if report == nil || promURL == "" {
 		return
 	}
-	client := prometheus.NewClient(os.Getenv("PROMETHEUS_URL"), os.Getenv("PROMETHEUS_TOKEN"))
+	client := prometheus.NewClient(promURL, promToken)
 	queries := []struct {
 		kind  string
 		query string
@@ -513,20 +522,11 @@ func containsText(values []string, wanted string) bool {
 
 func (s *Server) k8sGPUAlertPolicy(ctx context.Context) analyzer.GPUAlertPolicy {
 	policy := analyzer.DefaultGPUAlertPolicy()
-	policy.TemperatureC = s.floatFlag(ctx, "k8s_gpu_alert_temperature_c", policy.TemperatureC)
-	policy.VRAMUtilPct = s.floatFlag(ctx, "k8s_gpu_alert_vram_pct", policy.VRAMUtilPct)
-	policy.LowUtilPct = s.floatFlag(ctx, "k8s_gpu_alert_low_util_pct", policy.LowUtilPct)
-	policy.LowUtilForMinutes = s.k8sPollFlagInt(ctx, "k8s_gpu_alert_low_util_minutes", policy.LowUtilForMinutes)
+	policy.TemperatureC = s.monitoringFloat(ctx, "k8s.monitoring.gpu_temperature_c", policy.TemperatureC)
+	policy.VRAMUtilPct = s.monitoringFloat(ctx, "k8s.monitoring.gpu_vram_threshold_pct", policy.VRAMUtilPct)
+	policy.LowUtilPct = s.monitoringFloat(ctx, "k8s.monitoring.gpu_low_util_pct", policy.LowUtilPct)
+	policy.LowUtilForMinutes = s.monitoringInt(ctx, "k8s.monitoring.gpu_low_util_minutes", policy.LowUtilForMinutes)
 	return policy
-}
-
-func (s *Server) floatFlag(ctx context.Context, key string, fallback float64) float64 {
-	if raw := strings.TrimSpace(s.flagValue(ctx, key)); raw != "" {
-		if value, err := strconv.ParseFloat(raw, 64); err == nil && value >= 0 {
-			return value
-		}
-	}
-	return fallback
 }
 
 // GET/POST /admin/k8s/gpu/policy configures alert thresholds and the blended GPU-hour price.
@@ -536,7 +536,7 @@ func (s *Server) handleK8sGPUAlertPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, map[string]any{"policy": s.k8sGPUAlertPolicy(r.Context()), "hourly_cost_krw": s.floatFlag(r.Context(), "k8s_gpu_hourly_cost_krw", 1200)})
+		writeJSON(w, http.StatusOK, map[string]any{"policy": s.k8sGPUAlertPolicy(r.Context()), "hourly_cost_krw": s.monitoringFloat(r.Context(), "k8s.monitoring.gpu_hourly_cost_krw", 1200)})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -561,9 +561,13 @@ func (s *Server) handleK8sGPUAlertPolicy(w http.ResponseWriter, r *http.Request)
 		if *value < min || *value > max {
 			return fmt.Errorf("%s must be between %.0f and %.0f", key, min, max)
 		}
-		return s.db.SetFlag(r.Context(), store.RuntimeFlag{Key: key, Value: strconv.FormatFloat(*value, 'f', -1, 64), UpdatedBy: adminID(r)})
+		d, ok := settingDefByKey(key)
+		if !ok {
+			return fmt.Errorf("unknown setting %s", key)
+		}
+		return s.persistSettingValue(r, d, strconv.FormatFloat(*value, 'f', -1, 64), "GPU alert policy")
 	}
-	if err := setFloat("k8s_gpu_alert_temperature_c", payload.TemperatureC, 40, 120); err != nil {
+	if err := setFloat("k8s.monitoring.gpu_temperature_c", payload.TemperatureC, 40, 120); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_gpu_policy")
 		return
 	}
@@ -571,7 +575,7 @@ func (s *Server) handleK8sGPUAlertPolicy(w http.ResponseWriter, r *http.Request)
 		key string
 		val *float64
 		max float64
-	}{{"k8s_gpu_alert_vram_pct", payload.VRAMUtilPct, 100}, {"k8s_gpu_alert_low_util_pct", payload.LowUtilPct, 100}, {"k8s_gpu_hourly_cost_krw", payload.HourlyCostKRW, 10000000}} {
+	}{{"k8s.monitoring.gpu_vram_threshold_pct", payload.VRAMUtilPct, 100}, {"k8s.monitoring.gpu_low_util_pct", payload.LowUtilPct, 100}, {"k8s.monitoring.gpu_hourly_cost_krw", payload.HourlyCostKRW, 10000000}} {
 		if err := setFloat(entry.key, entry.val, 0, entry.max); err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_gpu_policy")
 			return
@@ -582,13 +586,15 @@ func (s *Server) handleK8sGPUAlertPolicy(w http.ResponseWriter, r *http.Request)
 			writeOpenAIError(w, http.StatusBadRequest, "low_utilization_for_minutes must be between 5 and 10080", "invalid_request_error", "invalid_gpu_policy")
 			return
 		}
-		if err := s.db.SetFlag(r.Context(), store.RuntimeFlag{Key: "k8s_gpu_alert_low_util_minutes", Value: strconv.Itoa(*payload.LowUtilForMinutes), UpdatedBy: adminID(r)}); err != nil {
+		d, _ := settingDefByKey("k8s.monitoring.gpu_low_util_minutes")
+		if err := s.persistSettingValue(r, d, strconv.Itoa(*payload.LowUtilForMinutes), "GPU alert policy"); err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
 			return
 		}
 	}
+	s.reloadRuntimeConfig(r.Context())
 	s.auditAdmin(r, "k8s.gpu.policy.update", "", auditJSON(payload))
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "policy": s.k8sGPUAlertPolicy(r.Context()), "hourly_cost_krw": s.floatFlag(r.Context(), "k8s_gpu_hourly_cost_krw", 1200)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "policy": s.k8sGPUAlertPolicy(r.Context()), "hourly_cost_krw": s.monitoringFloat(r.Context(), "k8s.monitoring.gpu_hourly_cost_krw", 1200)})
 }
 
 // POST /admin/k8s/node-metrics/collect?cluster_id= triggers one lightweight operator refresh.

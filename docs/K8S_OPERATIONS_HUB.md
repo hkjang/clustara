@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.120** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.121** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.120)
+## 기능 상태 (v0.9.121)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -27,6 +27,7 @@
 | Reasoning Agent Stream & Calendar Names — Ollama 등 추론형 모델의 생각 과정(thinking) 스트리밍 토글 렌더링을 보강하고, 전체 업무 캘린더의 담당자 ID(UUID/Email)를 실시간 사용자 디렉토리(User Directory)와 결합해 인체공학적인 담당자 실명으로 매핑 표시 | ✅ (v0.9.118) |
 | Manifest Studio Secret Guard & Policy UX — Manifest 생성/변경 화면에 data/stringData 페이로드 탐지 및 저장 차단(Secret 안전 경로 유도 모달)을 추가하고, 정책 센터에 각 규칙 유형(Rule Type)의 해설 카탈로그(Help UI) 및 정책 토글 스위치 제공 | ✅ (v0.9.119) |
 | Node & GPU Operations Monitoring — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.120) |
+| Admin Access UX Redirect & Mutation Exceptions — 관리자 API 인가(Authorization)를 고도화하여 401/403 응답을 정합하고 브라우저 직접 접근 시 SPA의 Access Denied 화면으로 리다이렉트 지원, 보안(security_admin) 및 비용(billing_admin) 관리 역할에 대해 각각 쓰기(admin:write) 권한 예외 세분화 및 모니터링 테스트 연동 | ✅ (v0.9.121) |
 | Cluster Group Membership CRUD — 추가한 클러스터를 그룹에 배정·변경·해제하고, 그룹 수정/삭제·오너십 수정/삭제까지 `#/k8s-meta`에서 처리 | ✅ (v0.9.112) |
 | External Integration Credential Vault — 설정 그룹의 외부연동 설정 메뉴에서 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 사용자별 암호화 저장하고 GitOps/Harbor 화면에서 `credential_id`로 재사용 | ✅ (v0.9.111) |
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |
@@ -315,7 +316,7 @@
 | GET | `/admin/k8s/rca` | Pending, CrashLoop, ImagePull, OOM, unavailable + Readiness/Liveness probe, DNS, NodePressure, 직전 config 변경·배포 후 오류·배포 후 latency 회귀 연계 원인 후보 |
 | GET | `/admin/k8s/remediation/advice` | RCA별 권장 조치 Advisor — 권장 액션·근거·위험도·승인 필요·롤백 가능성·우선순위 |
 | GET | `/admin/k8s/action-flow` | Action/Config/YAML/Exec/Debug 요청을 사용자 다음 행동 기준으로 집계. `?cluster_id=&limit=`. 응답은 `lanes`, `items`, `summary`와 원래 처리 화면 href를 포함 |
-| POST | `/admin/k8s/latency/collect` | Prometheus에서 워크로드 latency 수집·적재 (RCA-10 latency, `PROMETHEUS_URL` 필요) |
+| POST | `/admin/k8s/latency/collect` | 런타임 설정의 Prometheus에서 워크로드 latency 수집·적재 (RCA-10 latency) |
 | GET/POST | `/admin/k8s/latency/config` | latency PromQL + 라벨 매핑(namespace/workload) 설정 |
 | GET | `/admin/k8s/connectivity` | Service selector↔Pod endpoint, Ingress backend/host/TLS, PVC Pending 점검 |
 | GET/POST | `/admin/k8s/actions` | 액션 요청 목록/생성. 생성 시 `idempotency_key`, `target_uid`, `target_resource_version`, `command_hash` 저장 |
@@ -403,18 +404,20 @@ kubectl create clusterrolebinding clustara-reader `
 
 ### Node/GPU 실사용 모니터링
 
-`metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 런타임 flag `k8s_node_metrics_enabled`, `k8s_node_metrics_interval_secs`로 켜기/주기를 조정할 수 있습니다. Metrics Server 미설치 또는 RBAC 거부는 사용률 0%로 처리하지 않고 `미수집`으로 표시합니다.
+`metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 관리자 **설정 → 런타임 설정 → `k8s.monitoring`**에서 `enabled`, `interval_seconds`, `retention_days`를 재시작 없이 조정할 수 있습니다. Metrics Server 미설치 또는 RBAC 거부는 사용률 0%로 처리하지 않고 `미수집`으로 표시합니다. 보존기간을 지난 Node/GPU 표본은 6시간마다 정리됩니다.
 
 GPU 할당 현황은 Node의 `nvidia.com/gpu`·`amd.com/gpu`·`intel.com/gpu` allocatable과 Pod request로 항상 계산합니다. 실제 H100/H200/L40S 장치 관측에는 Prometheus와 NVIDIA DCGM Exporter가 필요합니다.
 
 1. DCGM Exporter를 GPU 노드 DaemonSet으로 설치합니다.
-2. `deploy/k8s/dcgm-exporter-counters.csv`를 collector 파일로 마운트합니다.
+2. 런타임 설정의 `dcgm_counters_csv` 또는 `deploy/k8s/dcgm-exporter-counters.csv`를 collector 파일로 마운트합니다.
 3. `-k` 또는 `DCGM_EXPORTER_KUBERNETES=true`로 Kubernetes Pod 매핑을 활성화합니다.
-4. Clustara에 `PROMETHEUS_URL`(선택: `PROMETHEUS_TOKEN`)을 설정합니다.
+4. `k8s.monitoring.prometheus_url`(선택: `prometheus_token`)을 저장합니다. 기존 `PROMETHEUS_URL`/`PROMETHEUS_TOKEN`은 DB 설정이 없을 때의 환경변수 기본값입니다.
+
+설정 화면의 **입력값으로 GPU/DCGM 검증**은 저장하지 않은 입력값으로도 CSV 형식·필수 counter, Prometheus 인증/PromQL, instant vector 표본 수, Node 수와 실제 관측 metric을 점검합니다. CSV가 유효하고 고급 `dcgm_metrics_promql`이 비어 있으면 Clustara가 CSV metric 목록으로 PromQL selector를 생성합니다. **DCGM ConfigMap 미리보기**는 유효성·SHA-256과 apply-ready YAML을 제공하지만 실제 클러스터 반영은 운영자가 검토 후 수행합니다.
 
 MIG는 DCGM의 `GPU_I_PROFILE`, `GPU_I_ID` 라벨을 그대로 보존합니다. XID/ECC/NVLink/과열 신호는 Kubernetes Warning Event로 변환되어 기존 알림·타임라인·RCA 흐름으로 들어갑니다. 중대한 오류의 UI는 cordon 승인 요청과 drain 영향 분석만 연결하며 자동 격리는 수행하지 않습니다.
 
-GPU Operations API는 `GET /admin/k8s/gpu/operations?cluster_id=&window=6h`, 정책 API는 `GET/POST /admin/k8s/gpu/policy`입니다. 장치 시계열은 `k8s_gpu_samples`에 보존되고 Collection Cost Guard의 metric 행 수에 포함됩니다.
+GPU Operations API는 `GET /admin/k8s/gpu/operations?cluster_id=&window=6h`, 정책 API는 `GET/POST /admin/k8s/gpu/policy`입니다. DCGM 진단/ConfigMap API는 `GET /admin/k8s/gpu/dcgm-config`, 화면 입력값 연결 테스트는 `POST /admin/settings/test/k8s-monitoring`입니다. 장치 시계열은 `k8s_gpu_samples`에 보존되고 Collection Cost Guard의 metric 행 수에 포함됩니다.
 
 사설 CA를 쓰는 운영 클러스터까지 고려하면 token만 붙이는 것보다 CA와 token이 함께 들어간 전용 kubeconfig를 만드는 편이 안전합니다.
 
