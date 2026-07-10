@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.119** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.120** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.119)
+## 기능 상태 (v0.9.120)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -26,6 +26,7 @@
 | Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하는 통합 운영 캘린더 제공 | ✅ (v0.9.116) |
 | Reasoning Agent Stream & Calendar Names — Ollama 등 추론형 모델의 생각 과정(thinking) 스트리밍 토글 렌더링을 보강하고, 전체 업무 캘린더의 담당자 ID(UUID/Email)를 실시간 사용자 디렉토리(User Directory)와 결합해 인체공학적인 담당자 실명으로 매핑 표시 | ✅ (v0.9.118) |
 | Manifest Studio Secret Guard & Policy UX — Manifest 생성/변경 화면에 data/stringData 페이로드 탐지 및 저장 차단(Secret 안전 경로 유도 모달)을 추가하고, 정책 센터에 각 규칙 유형(Rule Type)의 해설 카탈로그(Help UI) 및 정책 토글 스위치 제공 | ✅ (v0.9.119) |
+| Node & GPU Operations Monitoring — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.120) |
 | Cluster Group Membership CRUD — 추가한 클러스터를 그룹에 배정·변경·해제하고, 그룹 수정/삭제·오너십 수정/삭제까지 `#/k8s-meta`에서 처리 | ✅ (v0.9.112) |
 | External Integration Credential Vault — 설정 그룹의 외부연동 설정 메뉴에서 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 사용자별 암호화 저장하고 GitOps/Harbor 화면에서 `credential_id`로 재사용 | ✅ (v0.9.111) |
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |
@@ -105,7 +106,7 @@
 | Manifest Change Studio — live YAML 편집 요청, before/after diff·impact, schema/policy/server dry-run 검증, 승인 게이트, Server-Side Apply, burst 수집, 사후 검증, 롤백 요청, evidence/git patch export | ✅ (v0.9.41) |
 | Manifest Change Drift Guard + Approval Brief — 적용 직전 live manifest hash/UID drift 차단, force_drift 감사, 승인자 브리핑(`/brief`) | ✅ (v0.9.42) |
 | Action Flow Navigator — Action/Config/YAML/Exec/Debug 요청을 다음 행동 레인(확인 필요·승인 대기·실행 가능·검증 필요·준비/검증·완료)으로 집계해 액션 승인함 상단에 표시 | ✅ (v0.9.43) |
-| Node Management — 노드 Ready/Pressure/cordon 상태·Pod 수·CPU 요청률·Drain 영향 분석·Cordon/Uncordon Action Center 연결·YAML/타임라인/그래프 딥링크 | ✅ (v0.9.44) |
+| Node & GPU Operations — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.48) |
 | Manifest Change Studio 대상 확장 — ConfigMap, Secret, ServiceAccount 지원 및 UI 자동완성/정렬 보강 | ✅ (v0.9.45) |
 | Enterprise Operations Hubs — Enterprise Foundation, FleetOps, SecOps, AIOps, FinOps, AI Gateway Governance, GitOps overview API/UI + 전역 빠른 이동·최근/자주 쓰는 메뉴·상황별 액션 바 | ✅ (v0.9.46) |
 | Enterprise Enforcement Plus — Access Binding 전역 enforcement middleware, tenant/scope envelope, enterprise evidence ledger, Governance Hub, FleetOps/SecOps/AIOps/FinOps/GitOps 상세 API 확장. AI Gateway 신규 확장은 제외하고 기존 overview만 유지 | ✅ (v0.9.47) |
@@ -399,6 +400,21 @@ kubectl create clusterrolebinding clustara-reader `
   --clusterrole=clustara-readonly `
   --serviceaccount=clustara-system:clustara-reader
 ```
+
+### Node/GPU 실사용 모니터링
+
+`metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 런타임 flag `k8s_node_metrics_enabled`, `k8s_node_metrics_interval_secs`로 켜기/주기를 조정할 수 있습니다. Metrics Server 미설치 또는 RBAC 거부는 사용률 0%로 처리하지 않고 `미수집`으로 표시합니다.
+
+GPU 할당 현황은 Node의 `nvidia.com/gpu`·`amd.com/gpu`·`intel.com/gpu` allocatable과 Pod request로 항상 계산합니다. 실제 H100/H200/L40S 장치 관측에는 Prometheus와 NVIDIA DCGM Exporter가 필요합니다.
+
+1. DCGM Exporter를 GPU 노드 DaemonSet으로 설치합니다.
+2. `deploy/k8s/dcgm-exporter-counters.csv`를 collector 파일로 마운트합니다.
+3. `-k` 또는 `DCGM_EXPORTER_KUBERNETES=true`로 Kubernetes Pod 매핑을 활성화합니다.
+4. Clustara에 `PROMETHEUS_URL`(선택: `PROMETHEUS_TOKEN`)을 설정합니다.
+
+MIG는 DCGM의 `GPU_I_PROFILE`, `GPU_I_ID` 라벨을 그대로 보존합니다. XID/ECC/NVLink/과열 신호는 Kubernetes Warning Event로 변환되어 기존 알림·타임라인·RCA 흐름으로 들어갑니다. 중대한 오류의 UI는 cordon 승인 요청과 drain 영향 분석만 연결하며 자동 격리는 수행하지 않습니다.
+
+GPU Operations API는 `GET /admin/k8s/gpu/operations?cluster_id=&window=6h`, 정책 API는 `GET/POST /admin/k8s/gpu/policy`입니다. 장치 시계열은 `k8s_gpu_samples`에 보존되고 Collection Cost Guard의 metric 행 수에 포함됩니다.
 
 사설 CA를 쓰는 운영 클러스터까지 고려하면 token만 붙이는 것보다 CA와 token이 함께 들어간 전용 kubeconfig를 만드는 편이 안전합니다.
 

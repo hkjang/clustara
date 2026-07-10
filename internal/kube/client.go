@@ -25,6 +25,7 @@ import (
 type Client interface {
 	Probe(ctx context.Context) (ProbeResult, error)
 	Collect(ctx context.Context) (CollectResult, error)
+	CollectNodeMetrics(ctx context.Context) ([]store.K8sMetricSample, error)
 }
 
 type ProbeResult struct {
@@ -150,10 +151,23 @@ func (c *HTTPClient) Collect(ctx context.Context) (CollectResult, error) {
 			out.Metrics = append(out.Metrics, podMetricFromObject(obj))
 		}
 	}
-	if nodeMetrics, err := c.list(ctx, "/apis/metrics.k8s.io/v1beta1/nodes"); err == nil {
-		for _, obj := range nodeMetrics {
-			out.Metrics = append(out.Metrics, nodeMetricFromObject(obj))
-		}
+	if nodeMetrics, err := c.CollectNodeMetrics(ctx); err == nil {
+		out.Metrics = append(out.Metrics, nodeMetrics...)
+	}
+	return out, nil
+}
+
+// CollectNodeMetrics is the lightweight polling path used by the node monitoring scheduler. It
+// avoids a full inventory walk and surfaces metrics-server/RBAC failures instead of silently
+// treating unavailable metrics as zero usage.
+func (c *HTTPClient) CollectNodeMetrics(ctx context.Context) ([]store.K8sMetricSample, error) {
+	objects, err := c.list(ctx, "/apis/metrics.k8s.io/v1beta1/nodes")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.K8sMetricSample, 0, len(objects))
+	for _, obj := range objects {
+		out = append(out, nodeMetricFromObject(obj))
 	}
 	return out, nil
 }

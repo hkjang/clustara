@@ -31,6 +31,7 @@ func (s *SQLStore) K8sCollectionCountsByCluster(ctx context.Context) (map[string
 		{"k8s_resource_revisions", func(c *K8sCollectionCounts, n int) { c.Revisions = n }},
 		{"k8s_watch_events", func(c *K8sCollectionCounts, n int) { c.WatchEvents = n }},
 		{"k8s_metrics_samples", func(c *K8sCollectionCounts, n int) { c.Metrics = n }},
+		{"k8s_gpu_samples", func(c *K8sCollectionCounts, n int) { c.Metrics += n }},
 		{"k8s_collect_runs", func(c *K8sCollectionCounts, n int) { c.CollectRuns = n }},
 	}
 	for _, t := range tables {

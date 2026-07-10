@@ -411,6 +411,23 @@ const adminHTML = `<!doctype html>
     }
     .status.error { color: var(--bad); background: var(--bad-bg); }
     .status.warn  { color: var(--warn); background: var(--warn-bg); }
+    .node-risk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+    .node-risk-card { border:1px solid var(--line); border-left:4px solid var(--good-ink); border-radius:8px; padding:11px; background:var(--panel-alt); }
+    .node-risk-card.warning { border-left-color:var(--warn); }
+    .node-risk-card.high, .node-risk-card.critical { border-left-color:var(--bad); }
+    .node-risk-card.unknown { border-left-color:var(--muted); }
+    .node-risk-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .node-meter { height:6px; border-radius:999px; background:var(--pill-bg); overflow:hidden; margin:4px 0; }
+    .node-meter > span { display:block; height:100%; border-radius:inherit; background:var(--accent); }
+    .node-meter > span.warn { background:var(--warn); }
+    .node-meter > span.error { background:var(--bad); }
+    .node-usage-line { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:11px; }
+    .node-spark { display:block; width:180px; max-width:100%; height:50px; margin-top:4px; }
+    .node-monitor-table { overflow:auto; }
+    .node-monitor-table table { min-width:1280px; }
+    .node-monitor-table.gpu-monitor-table table { min-width:1050px; }
+    .kpis.node-kpis { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+    .node-monitor-note { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel-alt); }
     .muted { color: var(--muted); }
     .empty, .error-line { padding: 18px; color: var(--muted); }
     .error-line { color: var(--bad); }
@@ -10296,18 +10313,149 @@ const adminHTML = `<!doctype html>
       if (pressure.length) bits.push(pressure.join('/'));
       return '<span class="status ' + cls + '">' + escapeHTML(bits.join(' · ')) + '</span>';
     }
+    function k8sNodeMonitorKey(clusterId, name) { return String(clusterId || '') + '\u0000' + String(name || ''); }
+    function k8sNodeRiskBadge(risk) {
+      risk = risk || { level: 'unknown', score: 0 };
+      const labels = { healthy: '정상', warning: '주의', high: '높음', critical: '심각', unknown: '미확인' };
+      const cls = risk.level === 'critical' || risk.level === 'high' ? 'error' : (risk.level === 'warning' || risk.level === 'unknown' ? 'warn' : '');
+      return '<span class="status ' + cls + '">' + escapeHTML(labels[risk.level] || risk.level || '미확인') + ' · ' + fmt(risk.score || 0) + '</span>';
+    }
+    function k8sNodeMeter(pct) {
+      pct = Number(pct || 0);
+      const cls = pct >= 90 ? 'error' : (pct >= 70 ? 'warn' : '');
+      return '<div class="node-meter"><span class="' + cls + '" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></span></div>';
+    }
+    function k8sNodeUsageHTML(usage, kind) {
+      usage = usage || {};
+      if (!usage.available) return '<span class="muted">미수집</span><div class="muted" style="font-size:10px">metrics-server/RBAC 확인</div>';
+      const used = kind === 'cpu' ? fmt(Math.round(usage.used || 0)) + 'm' : opsBytes(usage.used || 0);
+      const cap = kind === 'cpu' ? fmt(Math.round(usage.capacity || 0)) + 'm' : opsBytes(usage.capacity || 0);
+      const trend = Number(usage.trend_per_hour || 0);
+      const trendText = Math.abs(trend) < 0.1 ? '→ 안정' : ((trend > 0 ? '↗ +' : '↘ ') + trend.toFixed(1) + '%p/h');
+      return '<div class="node-usage-line"><strong>' + Number(usage.percent || 0).toFixed(1) + '%</strong><span class="muted">' + escapeHTML(used + ' / ' + cap) + '</span></div>' +
+        k8sNodeMeter(usage.percent || 0) + '<div class="muted" style="font-size:10px">peak ' + Number(usage.peak_percent || 0).toFixed(1) + '% · ' + escapeHTML(trendText) + '</div>';
+    }
+    function k8sNodeSparkline(series) {
+      series = series || [];
+      if (series.length < 2) return '<div class="muted" style="font-size:10px;margin-top:6px">추세 데이터 수집 중</div>';
+      const w = 180, h = 50, pad = 3;
+      const path = (key) => {
+        const points = [];
+        series.forEach((p, i) => {
+          const v = p[key]; if (v === null || v === undefined || !Number.isFinite(Number(v))) return;
+          const x = pad + (i * (w - pad * 2) / Math.max(1, series.length - 1));
+          const y = h - pad - (Math.max(0, Math.min(100, Number(v))) * (h - pad * 2) / 100);
+          points.push((points.length ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1));
+        });
+        return points.join(' ');
+      };
+      const cpu = path('cpu_pct'), mem = path('memory_pct'), gpu = path('gpu_pct');
+      return '<svg class="node-spark" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="CPU Memory GPU usage trend">' +
+        '<line x1="3" y1="8" x2="177" y2="8" stroke="var(--bad)" stroke-dasharray="3 3" opacity=".45" />' +
+        (cpu ? '<path d="' + cpu + '" fill="none" stroke="var(--accent)" stroke-width="2" />' : '') +
+        (mem ? '<path d="' + mem + '" fill="none" stroke="var(--warn)" stroke-width="2" />' : '') +
+        (gpu ? '<path d="' + gpu + '" fill="none" stroke="#16a34a" stroke-width="2" />' : '') + '</svg>' +
+        '<div class="muted" style="font-size:9px"><span style="color:var(--accent)">● CPU</span> <span style="color:var(--warn)">● MEM</span>' + (gpu ? ' <span style="color:#16a34a">● GPU</span>' : '') + '</div>';
+    }
+    function k8sNodeGPUHTML(gpu) {
+      gpu = gpu || {};
+      if (!(gpu.allocatable > 0)) return '<span class="muted">GPU 없음</span>';
+      const allocation = Number(gpu.allocation_pct || 0);
+      const actual = gpu.utilization_pct === null || gpu.utilization_pct === undefined ? null : Number(gpu.utilization_pct);
+      let html = '<div class="node-usage-line"><strong>' + fmt(gpu.requested || 0) + ' / ' + fmt(gpu.allocatable || 0) + '</strong><span class="muted">할당 ' + allocation.toFixed(1) + '%</span></div>' + k8sNodeMeter(allocation);
+      if (actual === null) {
+        html += '<div class="muted" style="font-size:10px">실사용 미수집 · DCGM 필요</div>';
+      } else {
+        html += '<div style="font-size:10px">실사용 <strong>' + actual.toFixed(1) + '%</strong>' + (gpu.temperature_c !== null && gpu.temperature_c !== undefined ? ' · ' + Number(gpu.temperature_c).toFixed(0) + '°C' : '') + '</div>';
+      }
+      return html;
+    }
+    function k8sNodePredictionHTML(prediction) {
+      if (!prediction) return '<span class="muted">7일 내 임계치 도달 추세 없음</span>';
+      const resource = String(prediction.resource || '').toUpperCase();
+      const confidence = { high: '높음', medium: '보통', low: '낮음' }[prediction.confidence] || prediction.confidence;
+      if (Number(prediction.hours_to_threshold || 0) <= 0) return '<span class="status error">' + escapeHTML(resource) + ' 90% 초과</span>';
+      return '<strong>' + escapeHTML(resource) + ' 약 ' + Number(prediction.hours_to_threshold || 0).toFixed(1) + '시간</strong>' +
+        '<div class="muted" style="font-size:10px">90% 예상 · 신뢰도 ' + escapeHTML(confidence || '낮음') + '</div>';
+    }
+    function k8sNodeRiskCards(nodes) {
+      const risky = (nodes || []).filter(n => ((n.risk || {}).level || '') !== 'healthy').slice(0, 8);
+      if (!risky.length) return '<div class="banner">현재 수집 데이터에서 뚜렷한 장애 선행 신호가 없습니다.</div>';
+      return '<div class="node-risk-grid">' + risky.map(n => {
+        const risk = n.risk || {};
+        const signals = (risk.signals || []).slice(0, 3).map(s => s.message).join(' · ');
+        return '<div class="node-risk-card ' + escapeAttr(risk.level || 'unknown') + '"><div class="node-risk-head"><strong>' + escapeHTML(n.name || '-') + '</strong>' + k8sNodeRiskBadge(risk) + '</div>' +
+          '<div class="muted" style="font-size:10px;margin-top:3px">' + escapeHTML(n.cluster_id || '-') + ' · ' + escapeHTML(n.role || 'worker') + '</div>' +
+          '<div style="font-size:11px;margin-top:8px">' + escapeHTML(risk.summary || '판정 근거 없음') + '</div>' +
+          (signals ? '<div class="muted" style="font-size:10px;margin-top:5px" title="' + escapeAttr(signals) + '">' + escapeHTML(signals) + '</div>' : '') +
+          '<div style="font-size:11px;margin-top:8px">' + k8sNodePredictionHTML(n.prediction) + '</div></div>';
+      }).join('') + '</div>';
+    }
+    function k8sGPUOperationsHTML(response, selectedCluster) {
+      const r = (response || {}).report || {};
+      const s = r.summary || {};
+      const policy = r.alert_policy || {};
+      if (!(s.devices > 0)) {
+        return card('GPU Operations', '<div class="card-body"><div class="banner warn"><strong>GPU 장치 실사용 지표가 없습니다.</strong><br>GPU 할당량은 위 노드 표에서 계속 확인할 수 있습니다. 장치·MIG·워크로드·XID/ECC 관측을 사용하려면 Prometheus에 DCGM Exporter를 연결하고 Kubernetes 매핑을 활성화하세요.</div></div>');
+      }
+      const nodeRows = (r.nodes || []).map(n => '<tr><td><strong>' + escapeHTML(n.node || '-') + '</strong><div class="muted" style="font-size:10px">' + escapeHTML(n.cluster_id || '-') + '</div></td>' +
+        '<td>' + escapeHTML((n.models || []).join(', ') || 'model label 없음') + '<div class="muted" style="font-size:10px">GPU ' + fmt(n.devices || 0) + ' · MIG ' + fmt(n.mig_instances || 0) + '</div></td>' +
+        '<td>' + Number(n.utilization_pct || 0).toFixed(1) + '%' + k8sNodeMeter(n.utilization_pct || 0) + '<div class="muted" style="font-size:9px">SM ' + Number(n.sm_active_pct || 0).toFixed(1) + ' · Tensor ' + Number(n.tensor_active_pct || 0).toFixed(1) + ' · DRAM ' + Number(n.dram_active_pct || 0).toFixed(1) + '</div></td>' +
+        '<td>' + opsBytes(n.vram_used_bytes || 0) + ' / ' + opsBytes(n.vram_total_bytes || 0) + '</td><td>' + Number(n.temperature_c || 0).toFixed(0) + '°C<div class="muted" style="font-size:10px">' + Number(n.power_watts || 0).toFixed(0) + ' W</div></td>' +
+        '<td><span class="status ' + (n.health === 'critical' ? 'error' : '') + '">' + escapeHTML(n.health || 'unknown') + '</span></td></tr>').join('');
+      const workloadRows = (r.workloads || []).slice(0, 100).map(w => '<tr><td>' + escapeHTML((w.namespace || '-') + '/' + (w.pod || '-')) + '<div class="muted" style="font-size:10px">' + escapeHTML(w.container || '-') + '</div></td>' +
+        '<td>' + escapeHTML(w.service || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(w.model_server || 'generic') + '</div></td><td>' + fmt(w.gpu_devices || 0) + ' / req ' + fmt(w.gpu_request || 0) + '</td>' +
+        '<td>' + Number(w.current_utilization_pct || 0).toFixed(1) + '%' + k8sNodeMeter(w.current_utilization_pct || 0) + '<div class="muted" style="font-size:9px">avg ' + Number(w.average_utilization_pct || 0).toFixed(1) + '%</div></td>' +
+        '<td>' + opsBytes(w.vram_used_bytes || 0) + ' / ' + opsBytes(w.vram_total_bytes || 0) + '</td><td class="muted" style="font-size:10px">SM ' + Number(w.sm_active_pct || 0).toFixed(1) + '% · Tensor ' + Number(w.tensor_active_pct || 0).toFixed(1) + '% · DRAM ' + Number(w.dram_active_pct || 0).toFixed(1) + '%</td></tr>').join('') || '<tr><td colspan="6" class="muted">Pod 매핑 없음 — DCGM_EXPORTER_KUBERNETES=true 설정을 확인하세요.</td></tr>';
+      const hardwareRows = (r.hardware_findings || []).map(f => '<tr><td><span class="status ' + (f.severity === 'critical' ? 'error' : 'warn') + '">' + escapeHTML(f.severity || '-') + '</span></td><td>' + escapeHTML(f.node || '-') + '<div class="muted" style="font-size:9px">' + escapeHTML(f.gpu_uuid || '-') + '</div></td><td><strong>' + escapeHTML(f.code || '-') + '</strong><div class="muted" style="font-size:10px">' + escapeHTML(f.message || '') + '</div></td><td>' +
+        (f.cordon_eligible ? '<button type="button" class="secondary" style="font-size:10px;padding:3px 6px" onclick="k8sNodeAction(\'' + escapeAttr(f.cluster_id || '') + '\',\'' + escapeAttr(f.node || '') + '\',\'cordon\',this)">격리 승인 요청</button> <button type="button" class="secondary" style="font-size:10px;padding:3px 6px" onclick="k8sNodeDrainPreview(\'' + escapeAttr(f.cluster_id || '') + '\',\'' + escapeAttr(f.node || '') + '\')">Drain 영향</button>' : '<span class="muted">관찰</span>') + '</td></tr>').join('') || '<tr><td colspan="4" class="muted">XID/ECC/NVLink/과열 장애 신호 없음</td></tr>';
+      const wasteRows = (r.waste_findings || []).map(f => '<tr><td><span class="status ' + (f.severity === 'high' ? 'error' : 'warn') + '">' + escapeHTML(f.severity || '-') + '</span></td><td>' + escapeHTML((f.namespace || '-') + '/' + (f.pod || '-')) + '</td><td>req ' + fmt(f.gpu_request || 0) + '</td><td>' + Number(f.average_utilization_pct || 0).toFixed(1) + '% / ' + Number(f.duration_hours || 0).toFixed(1) + 'h</td><td class="muted" style="font-size:10px">' + escapeHTML(f.message || '') + '</td></tr>').join('') || '<tr><td colspan="5" class="muted">장시간 GPU 저사용 워크로드 없음</td></tr>';
+      const vramRows = (r.vram_risks || []).map(v => '<tr><td><span class="status ' + (v.level === 'critical' || v.level === 'high' ? 'error' : 'warn') + '">' + escapeHTML(v.level || '-') + '</span></td><td>' + escapeHTML(v.node || '-') + '<div class="muted" style="font-size:9px">' + escapeHTML(v.gpu_uuid || '-') + '</div></td><td>' + escapeHTML((v.namespace || '-') + '/' + (v.pod || '-')) + '</td><td>' + Number(v.current_pct || 0).toFixed(1) + '%</td><td>' + (Number(v.hours_to_90_pct) >= 0 ? Number(v.hours_to_90_pct).toFixed(1) + 'h' : '-') + '<div class="muted" style="font-size:9px">' + Number(v.trend_pct_per_hour || 0).toFixed(1) + '%p/h</div></td><td class="muted" style="font-size:10px">' + escapeHTML(v.message || '') + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">VRAM OOM 선행 위험 없음</td></tr>';
+      const migRows = (r.mig_instances || []).map(m => '<tr><td>' + escapeHTML(m.node || '-') + '</td><td>' + escapeHTML(m.profile || '-') + ' / ' + escapeHTML(m.instance_id || '-') + '</td><td>' + escapeHTML((m.namespace || '-') + '/' + (m.pod || '-')) + '</td><td>' + Number(m.utilization_pct || 0).toFixed(1) + '%</td><td>' + opsBytes(m.vram_used_bytes || 0) + ' / ' + opsBytes(m.vram_total_bytes || 0) + '</td></tr>').join('');
+      const costRows = (r.cost_allocation || []).map(c => '<tr><td>' + escapeHTML(c.namespace || '-') + '</td><td>' + escapeHTML(c.service || '-') + '</td><td>' + escapeHTML(c.model_server || '-') + '</td><td>' + Number(c.gpu_hours || 0).toFixed(1) + '</td><td>' + Number(c.utilized_gpu_hours || 0).toFixed(1) + '</td><td>' + won(c.estimated_krw || 0) + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">비용 배분을 위한 연속 시계열 수집 중</td></tr>';
+      const modelRows = (r.model_observability || []).map(m => '<tr><td>' + escapeHTML(m.model_server || '-') + '<div class="muted" style="font-size:9px">' + escapeHTML((m.served_models || []).join(', ')) + '</div></td><td>' + escapeHTML(m.namespace || '-') + '</td><td>' + fmt(m.pods || 0) + '</td><td>' + fmt(m.gpu_devices || 0) + '</td><td>' + Number(m.average_utilization_pct || 0).toFixed(1) + '%</td><td>' + opsBytes(m.vram_used_bytes || 0) + '</td><td style="font-size:10px">' + (m.quality_metrics_available ? '<strong>' + Number(m.requests_per_second || 0).toFixed(2) + ' req/s · ' + Number(m.tokens_per_second || 0).toFixed(1) + ' tok/s</strong><div class="muted">running ' + Number(m.running_requests || 0).toFixed(0) + ' · TTFT p95 ' + Number(m.ttft_p95_seconds || 0).toFixed(3) + 's · E2E p95 ' + Number(m.e2e_p95_seconds || 0).toFixed(3) + 's</div>' : '<span class="muted">' + escapeHTML(m.quality_note || '') + '</span>') + '</td></tr>').join('') || '<tr><td colspan="7" class="muted">vLLM·Ollama·JupyterHub 등 모델 서버 매핑 없음</td></tr>';
+      return card('GPU Operations · DCGM', '<div class="card-body"><div class="kpis node-kpis">' +
+        kpi('GPU / MIG', fmt(s.devices || 0) + ' / ' + fmt(s.mig_instances || 0)) + kpi('평균 GPU Util', Number(s.average_utilization_pct || 0).toFixed(1) + '%') +
+        kpi('VRAM', opsBytes(s.used_vram_bytes || 0) + ' / ' + opsBytes(s.total_vram_bytes || 0)) + kpi('전력', Number(s.power_watts || 0).toFixed(0) + ' W') +
+        kpi('낭비 후보', fmt(s.waste_candidates || 0)) + kpi('중대 장애', fmt(s.critical_findings || 0)) + '</div></div>') +
+        card('GPU 노드 · 연산/메모리/열', '<div class="card-body node-monitor-table gpu-monitor-table"><table><thead><tr><th>노드</th><th>모델 / 장치</th><th>GPU·SM·Tensor·DRAM</th><th>VRAM</th><th>온도 / 전력</th><th>상태</th></tr></thead><tbody>' + nodeRows + '</tbody></table></div>') +
+        card('GPU 워크로드 매핑', '<div class="card-body node-monitor-table gpu-monitor-table"><table><thead><tr><th>Namespace / Pod / Container</th><th>서비스 / 런타임</th><th>GPU</th><th>Util</th><th>VRAM</th><th>병목 지표</th></tr></thead><tbody>' + workloadRows + '</tbody></table></div>') +
+        '<div class="grid2">' + card('GPU 장애 탐지 · 격리 연계', '<div class="card-body"><table><thead><tr><th>심각도</th><th>노드/GPU</th><th>오류</th><th>조치</th></tr></thead><tbody>' + hardwareRows + '</tbody></table></div>') +
+        card('VRAM 부족 예측', '<div class="card-body"><table><thead><tr><th>위험</th><th>장치</th><th>워크로드</th><th>현재</th><th>90%까지</th><th>판정</th></tr></thead><tbody>' + vramRows + '</tbody></table></div>') + '</div>' +
+        card('GPU 자원 낭비 탐지', '<div class="card-body"><table><thead><tr><th>심각도</th><th>워크로드</th><th>요청</th><th>평균 / 기간</th><th>판정</th></tr></thead><tbody>' + wasteRows + '</tbody></table></div>') +
+        (migRows ? card('MIG 인스턴스', '<div class="card-body"><table><thead><tr><th>노드</th><th>Profile / ID</th><th>워크로드</th><th>Util</th><th>VRAM</th></tr></thead><tbody>' + migRows + '</tbody></table></div>') : '') +
+        card('GPU 비용 배분', '<div class="card-body"><table><thead><tr><th>Namespace</th><th>서비스</th><th>모델 서버</th><th>GPU-hour</th><th>Utilized GPU-hour</th><th>추정 비용</th></tr></thead><tbody>' + costRows + '</tbody></table></div>') +
+        card('모델별 관측성', '<div class="card-body"><table><thead><tr><th>런타임</th><th>Namespace</th><th>Pod</th><th>GPU</th><th>Util</th><th>VRAM</th><th>품질 지표</th></tr></thead><tbody>' + modelRows + '</tbody></table></div>') +
+        card('GPU 알림 정책', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end"><label class="muted" style="font-size:10px">온도 °C<input id="gpu-policy-temp" type="number" value="' + escapeAttr(policy.temperature_c || 85) + '" style="display:block;width:100px"></label><label class="muted" style="font-size:10px">VRAM %<input id="gpu-policy-vram" type="number" value="' + escapeAttr(policy.vram_utilization_pct || 90) + '" style="display:block;width:100px"></label><label class="muted" style="font-size:10px">저사용 %<input id="gpu-policy-low" type="number" value="' + escapeAttr(policy.low_utilization_pct || 10) + '" style="display:block;width:100px"></label><label class="muted" style="font-size:10px">지속 분<input id="gpu-policy-min" type="number" value="' + escapeAttr(policy.low_utilization_for_minutes || 30) + '" style="display:block;width:100px"></label><label class="muted" style="font-size:10px">GPU-hour KRW<input id="gpu-policy-cost" type="number" value="' + escapeAttr((response || {}).hourly_cost_krw || 1200) + '" style="display:block;width:130px"></label><button type="button" onclick="k8sGPUSavePolicy(this)">정책 저장</button><span class="muted" style="font-size:10px">XID·DBE ECC·NVLink 오류는 항상 알림 및 승인형 격리 후보로 처리됩니다.</span></div></div>');
+    }
+    window.k8sGPUSavePolicy = async (btn) => {
+      if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
+      try {
+        await api('/admin/k8s/gpu/policy', { method: 'POST', body: JSON.stringify({
+          temperature_c: Number(safeInputValue('gpu-policy-temp')), vram_utilization_pct: Number(safeInputValue('gpu-policy-vram')),
+          low_utilization_pct: Number(safeInputValue('gpu-policy-low')), low_utilization_for_minutes: Number(safeInputValue('gpu-policy-min')),
+          hourly_cost_krw: Number(safeInputValue('gpu-policy-cost')) }) });
+        showToast('ok', 'GPU 정책 저장', '다음 분석부터 새 임계치를 적용합니다.');
+        await renderK8sNodes(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) { showToast('error', 'GPU 정책 저장 실패', e.message); if (btn) { btn.disabled = false; btn.textContent = '정책 저장'; } }
+    };
     async function renderK8sNodes(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       const qText = (params && params.get('q')) || '';
+      const windowName = (params && params.get('window')) || '6h';
+      const autoRefresh = !params || params.get('refresh') !== '0';
+      if (window.__k8sNodeRefreshTimer) clearTimeout(window.__k8sNodeRefreshTimer);
       view.innerHTML = section('노드 관리', '<div class="empty">불러오는 중...</div>');
-      let clusters, nodesResp, podsResp, capResp;
+      let clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp;
       try {
-        [clusters, nodesResp, podsResp, capResp] = await Promise.all([
+        [clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/inventory?kind=Node&limit=500' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/inventory?kind=Pod&limit=5000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/capacity' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ report: {} })),
+          api('/admin/k8s/nodes/monitoring?window=' + encodeURIComponent(windowName) + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
+          api('/admin/k8s/gpu/operations?window=' + encodeURIComponent(windowName) + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ report: {} })),
         ]);
       } catch (e) {
         view.innerHTML = section('노드 관리', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -10317,61 +10465,100 @@ const adminHTML = `<!doctype html>
         '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
       let nodes = nodesResp.items || [];
       const pods = podsResp.items || [];
+      const report = (monitorResp || {}).report || {};
+      const monitorNodes = report.nodes || [];
+      const monitorByNode = {};
+      monitorNodes.forEach(n => { monitorByNode[k8sNodeMonitorKey(n.cluster_id, n.name)] = n; });
       if (qText) {
         const q = qText.toLowerCase();
         nodes = nodes.filter(n => [n.name, n.status, n.risk_level, k8sNodeRole(n), k8sNodeInfo(n, 'kubeletVersion'), JSON.stringify(n.labels || {})].join(' ').toLowerCase().includes(q));
       }
       nodes.sort((a, b) => {
-        const score = (n) => (k8sNodeReady(n) !== 'Ready' ? 0 : 10) + (k8sNodePressure(n).length ? 0 : 5) + (k8sNodeUnschedulable(n) ? 1 : 3);
-        return score(a) - score(b) || String(a.name || '').localeCompare(String(b.name || ''));
+        const risk = (n) => (((monitorByNode[k8sNodeMonitorKey(n.cluster_id, n.name)] || {}).risk || {}).score || 0);
+        return risk(b) - risk(a) || String(a.name || '').localeCompare(String(b.name || ''));
       });
       const total = nodes.length;
       const notReady = nodes.filter(n => k8sNodeReady(n) !== 'Ready').length;
       const cordoned = nodes.filter(k8sNodeUnschedulable).length;
       const pressured = nodes.filter(n => k8sNodePressure(n).length).length;
       const podTotal = pods.length;
+      const summary = report.summary || {};
+      const attention = Number(summary.warning || 0) + Number(summary.high || 0) + Number(summary.critical || 0);
       const rows = nodes.length ? nodes.map(n => {
+        const mon = monitorByNode[k8sNodeMonitorKey(n.cluster_id, n.name)] || {};
         const nodePods = k8sNodePods(pods, n.name, n.cluster_id);
         const pack = k8sNodePacking(capResp, n.name);
-        const cpuPct = pack.cpu_request_pct || 0;
         const yaml = k8sYamlChangeLink(n.cluster_id, 'Node', '', n.name, 'YAML');
         const podHref = '#/k8s-pods?' + new URLSearchParams({ cluster_id: n.cluster_id || '', node: n.name || '' }).toString();
         const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '' }).toString();
         const readyCond = k8sNodeCondition(n, 'Ready');
-        return '<tr><td>' + k8sNodeStatusBadge(n) + '<div class="muted" style="font-size:10px">' + ago(n.observed_at || n.updated_at) + '</div></td>' +
+        const riskSignals = (((mon || {}).risk || {}).signals || []).map(s => s.message).join('\n');
+        return '<tr><td>' + k8sNodeStatusBadge(n) + '<div style="margin-top:5px" title="' + escapeAttr(riskSignals) + '">' + k8sNodeRiskBadge(mon.risk) + '</div><div class="muted" style="font-size:10px">metric ' + (mon.metrics_present ? ago((mon.cpu || {}).observed_at) : '미수집') + '</div></td>' +
           '<td><strong>' + escapeHTML(n.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(n.cluster_id || '-') + ' · ' + escapeHTML(k8sNodeRole(n)) + '</div></td>' +
-          '<td>' + escapeHTML(k8sNodeInfo(n, 'kubeletVersion') || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(k8sNodeInfo(n, 'containerRuntimeVersion') || '') + '</div></td>' +
-          '<td>' + fmt(nodePods.length) + '<div class="muted" style="font-size:10px">req CPU ' + fmt(pack.requested_cpu_m || 0) + 'm</div></td>' +
-          '<td><span class="status ' + (cpuPct >= 90 ? 'error' : (cpuPct >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(cpuPct) + '%</span><div class="muted" style="font-size:10px">' + escapeHTML(k8sNodeAlloc(n, 'cpu')) + ' CPU · ' + escapeHTML(k8sNodeAlloc(n, 'memory')) + ' mem</div></td>' +
-          '<td class="muted" style="font-size:11px">' + escapeHTML(readyCond.reason || '-') + '<div>' + escapeHTML(readyCond.message || '') + '</div></td>' +
+          '<td>' + k8sNodeUsageHTML(mon.cpu, 'cpu') + '<div class="muted" style="font-size:9px;margin-top:4px">request ' + fmt(pack.cpu_request_pct || 0) + '%</div></td>' +
+          '<td>' + k8sNodeUsageHTML(mon.memory, 'memory') + '</td>' +
+          '<td>' + k8sNodeGPUHTML(mon.gpu) + '</td>' +
+          '<td>' + k8sNodeSparkline(mon.series) + '</td>' +
+          '<td style="font-size:11px">' + k8sNodePredictionHTML(mon.prediction) + '<div class="muted" style="font-size:10px;margin-top:5px">Warning event ' + fmt(mon.warning_events_24h || 0) + '</div></td>' +
           '<td><a href="' + escapeAttr(podHref) + '">Pod</a> · <a href="' + escapeAttr(tlHref) + '">타임라인</a> · ' + yaml +
+          '<div class="muted" style="font-size:10px;margin-top:4px">' + escapeHTML(k8sNodeInfo(n, 'kubeletVersion') || '-') + ' · Pod ' + fmt(nodePods.length) + '</div>' +
+          (readyCond.message ? '<div class="muted" style="font-size:9px;margin-top:3px" title="' + escapeAttr(readyCond.message) + '">' + escapeHTML(readyCond.reason || 'Ready') + '</div>' : '') +
           '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">' +
           '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeDrainPreview(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\')">Drain 분석</button>' +
           (k8sNodeUnschedulable(n)
             ? '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeAction(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\',\'uncordon\',this)">Uncordon 요청</button>'
             : '<button type="button" class="secondary" style="font-size:10px;padding:2px 6px" onclick="k8sNodeAction(\'' + escapeAttr(n.cluster_id || '') + '\',\'' + escapeAttr(n.name || '') + '\',\'cordon\',this)">Cordon 요청</button>') +
           '</div></td></tr>';
-      }).join('') : '<tr><td colspan="7" class="muted">노드가 없습니다. 클러스터 수집 또는 agent 상태를 확인하세요.</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">노드가 없습니다. 클러스터 수집 또는 agent 상태를 확인하세요.</td></tr>';
       const packRows = (((capResp || {}).report || {}).node_packing || []).slice(0, 20).map(p =>
         '<tr><td>' + escapeHTML(p.node || '-') + '</td><td>' + fmt(p.pods || 0) + '</td><td>' + fmt(p.requested_cpu_m || 0) + 'm / ' + fmt(p.allocatable_cpu_m || 0) + 'm</td><td><span class="status ' + ((p.cpu_request_pct || 0) >= 90 ? 'error' : ((p.cpu_request_pct || 0) >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(p.cpu_request_pct || 0) + '%</span></td></tr>'
       ).join('') || '<tr><td colspan="4" class="muted">노드 packing 데이터 없음.</td></tr>';
       view.innerHTML =
-        section('노드 관리', '<div class="kpis">' +
-          kpi('노드', fmt(total)) + kpi('NotReady', fmt(notReady)) + kpi('Cordoned', fmt(cordoned)) + kpi('Pressure', fmt(pressured)) + kpi('Pod', fmt(podTotal)) + '</div>') +
+        section('노드 관리', '<div class="kpis node-kpis">' +
+          kpi('노드', fmt(total)) + kpi('관심 필요', fmt(attention)) + kpi('NotReady / Pressure', fmt(notReady) + ' / ' + fmt(pressured)) +
+          kpi('메트릭 커버리지', Number(summary.metric_coverage_pct || 0).toFixed(1) + '%') +
+          kpi('GPU 노드', fmt(summary.gpu_node_count || 0) + ' · 실사용 ' + fmt(summary.gpu_observed_count || 0)) + kpi('Pod', fmt(podTotal)) + '</div>') +
         card('필터', '<div class="card-body" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="node-cluster">' + clusterOpts + '</select><input id="node-q" placeholder="node / role / version / label 검색" value="' + escapeAttr(qText) + '" style="min-width:260px">' +
-          '<button type="button" onclick="k8sNodeFilter()">적용</button><button type="button" class="secondary" onclick="k8sNodeCapacityGo()">용량 화면</button>' +
-          '<span class="muted" style="font-size:11px">cordon/uncordon은 액션 승인함에 요청으로 등록됩니다. drain은 먼저 영향 분석만 제공합니다.</span></div>') +
-        card('노드 목록', '<div class="card-body"><table><thead><tr><th>상태</th><th>노드</th><th>버전</th><th>Pod</th><th>CPU 요청률</th><th>Ready 메시지</th><th>작업</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+          '<select id="node-window"><option value="1h"' + (windowName === '1h' ? ' selected' : '') + '>최근 1시간</option><option value="6h"' + (windowName === '6h' ? ' selected' : '') + '>최근 6시간</option><option value="24h"' + (windowName === '24h' ? ' selected' : '') + '>최근 24시간</option><option value="7d"' + (windowName === '7d' ? ' selected' : '') + '>최근 7일</option></select>' +
+          '<label class="muted" style="font-size:11px"><input id="node-auto-refresh" type="checkbox"' + (autoRefresh ? ' checked' : '') + '>60초 자동 갱신</label>' +
+          '<button type="button" onclick="k8sNodeFilter()">적용</button><button type="button" class="secondary" onclick="k8sNodeCollectNow(this)"' + (!clusterId ? ' disabled title="클러스터를 먼저 선택하세요"' : '') + '>지금 수집</button><button type="button" class="secondary" onclick="k8sNodeCapacityGo()">용량 화면</button></div>' +
+          '<div class="node-monitor-note" style="margin-top:10px"><span class="status">실사용: metrics.k8s.io</span><span class="pill">GPU 할당: Node/Pod spec</span><span class="pill">GPU 실사용: DCGM Exporter</span><span class="muted" style="font-size:11px">마지막 분석 ' + ago(report.generated_at) + ' · 장애 시점 단정이 아닌 90% 임계치 도달 선행 경보입니다.</span></div>') +
+        card('장애 위험 레이더', '<div class="card-body">' + k8sNodeRiskCards(monitorNodes) + '</div>') +
+        card('노드 실사용 · 추세', '<div class="card-body node-monitor-table"><table><thead><tr><th>상태 / 위험</th><th>노드</th><th>CPU 실사용</th><th>Memory 실사용</th><th>GPU</th><th>추세</th><th>임계치 예상</th><th>운영 작업</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+        k8sGPUOperationsHTML(gpuOpsResp, clusterId) +
         card('노드 Bin Packing', '<div class="card-body"><table><thead><tr><th>노드</th><th>Pod</th><th>요청/가용 CPU</th><th>요청률</th></tr></thead><tbody>' + packRows + '</tbody></table></div>');
+      if (autoRefresh) {
+        window.__k8sNodeRefreshTimer = setTimeout(() => {
+          if (location.hash.indexOf('#/k8s-nodes') === 0) renderK8sNodes(new URLSearchParams(location.hash.split('?')[1] || ''));
+        }, 60000);
+      }
     }
     window.k8sNodeFilter = () => {
       const q = new URLSearchParams();
       const cl = safeInputValue('node-cluster').trim();
       const text = safeInputValue('node-q').trim();
+      const win = safeInputValue('node-window').trim();
       if (cl) q.set('cluster_id', cl);
       if (text) q.set('q', text);
+      if (win) q.set('window', win);
+      const auto = document.getElementById('node-auto-refresh');
+      if (auto && !auto.checked) q.set('refresh', '0');
       location.hash = '#/k8s-nodes' + (q.toString() ? '?' + q.toString() : '');
+    };
+    window.k8sNodeCollectNow = async (btn) => {
+      const clusterId = safeInputValue('node-cluster').trim();
+      if (!clusterId) { showToast('warn', '클러스터 선택 필요', '경량 메트릭 수집은 한 클러스터씩 실행합니다.'); return; }
+      if (btn) { btn.disabled = true; btn.textContent = '수집 중...'; }
+      try {
+        const d = await api('/admin/k8s/node-metrics/collect?cluster_id=' + encodeURIComponent(clusterId), { method: 'POST' });
+        const result = d.result || {};
+        showToast('ok', '노드 메트릭 수집 완료', 'CPU/Memory ' + fmt(result.metrics || 0) + '건 · GPU ' + fmt(result.gpu_metrics || 0) + '건');
+        await renderK8sNodes(new URLSearchParams(location.hash.split('?')[1] || ''));
+      } catch (e) {
+        showToast('error', '노드 메트릭 수집 실패', e.message);
+        if (btn) { btn.disabled = false; btn.textContent = '지금 수집'; }
+      }
     };
     window.k8sNodeCapacityGo = () => {
       const cl = safeInputValue('node-cluster').trim();

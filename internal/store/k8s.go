@@ -82,16 +82,30 @@ type K8sEvent struct {
 }
 
 type K8sMetricSample struct {
-	ID            string  `json:"id"`
-	ClusterID     string  `json:"cluster_id"`
-	Namespace     string  `json:"namespace"`
-	ResourceKind  string  `json:"resource_kind"`
-	ResourceName  string  `json:"resource_name"`
-	CPUMillicores float64 `json:"cpu_millicores"`
-	MemoryBytes   float64 `json:"memory_bytes"`
-	StorageBytes  float64 `json:"storage_bytes"`
-	LatencyMS     float64 `json:"latency_ms"` // request latency from an external source (Prometheus); 0 = unset
-	ObservedAt    string  `json:"observed_at"`
+	ID                 string  `json:"id"`
+	ClusterID          string  `json:"cluster_id"`
+	Namespace          string  `json:"namespace"`
+	ResourceKind       string  `json:"resource_kind"`
+	ResourceName       string  `json:"resource_name"`
+	CPUMillicores      float64 `json:"cpu_millicores"`
+	MemoryBytes        float64 `json:"memory_bytes"`
+	StorageBytes       float64 `json:"storage_bytes"`
+	LatencyMS          float64 `json:"latency_ms"` // request latency from an external source (Prometheus); 0 = unset
+	GPUUtilizationPct  float64 `json:"gpu_utilization_pct"`
+	GPUMemoryUsedBytes float64 `json:"gpu_memory_used_bytes"`
+	GPUTemperatureC    float64 `json:"gpu_temperature_c"`
+	GPUObserved        bool    `json:"gpu_observed"` // false distinguishes missing DCGM data from a real 0% reading
+	ObservedAt         string  `json:"observed_at"`
+}
+
+// K8sMetricSampleFilter supports focused time-series reads without loading unrelated Pod and
+// workload samples. Since is an RFC3339 timestamp; results are returned newest first.
+type K8sMetricSampleFilter struct {
+	ClusterID    string
+	ResourceKind string
+	ResourceName string
+	Since        string
+	Limit        int
 }
 
 type K8sSecurityFinding struct {
@@ -484,23 +498,45 @@ func (s *SQLStore) InsertK8sMetricSample(ctx context.Context, m K8sMetricSample)
 		m.ObservedAt = nowString()
 	}
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_metrics_samples
-		(id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, latency_ms, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		m.ID, m.ClusterID, m.Namespace, m.ResourceKind, m.ResourceName, m.CPUMillicores, m.MemoryBytes, m.StorageBytes, m.LatencyMS, m.ObservedAt)
+		(id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, latency_ms,
+		 gpu_utilization_pct, gpu_memory_used_bytes, gpu_temperature_c, gpu_observed, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		m.ID, m.ClusterID, m.Namespace, m.ResourceKind, m.ResourceName, m.CPUMillicores, m.MemoryBytes, m.StorageBytes, m.LatencyMS,
+		m.GPUUtilizationPct, m.GPUMemoryUsedBytes, m.GPUTemperatureC, boolInt(m.GPUObserved), m.ObservedAt)
 	return err
 }
 
 // ListK8sMetricSamples returns recent metric samples (newest first) for capacity analysis.
 func (s *SQLStore) ListK8sMetricSamples(ctx context.Context, clusterID string, limit int) ([]K8sMetricSample, error) {
-	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, COALESCE(latency_ms, 0), observed_at
+	return s.ListK8sMetricSamplesFiltered(ctx, K8sMetricSampleFilter{ClusterID: clusterID, Limit: boundedLimit(limit, 1000, 5000)})
+}
+
+// ListK8sMetricSamplesFiltered returns a focused metric history for monitoring and forecasting.
+// The larger cap is intentional: 24 hours of one-minute samples across a moderate node fleet can
+// exceed the legacy 5,000-row capacity-analysis limit.
+func (s *SQLStore) ListK8sMetricSamplesFiltered(ctx context.Context, f K8sMetricSampleFilter) ([]K8sMetricSample, error) {
+	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, COALESCE(latency_ms, 0),
+		COALESCE(gpu_utilization_pct, 0), COALESCE(gpu_memory_used_bytes, 0), COALESCE(gpu_temperature_c, 0), COALESCE(gpu_observed, 0), observed_at
 		FROM k8s_metrics_samples WHERE 1=1`
 	args := []any{}
-	if clusterID != "" {
+	if strings.TrimSpace(f.ClusterID) != "" {
 		query += ` AND cluster_id = ?`
-		args = append(args, clusterID)
+		args = append(args, strings.TrimSpace(f.ClusterID))
+	}
+	if strings.TrimSpace(f.ResourceKind) != "" {
+		query += ` AND lower(resource_kind) = lower(?)`
+		args = append(args, strings.TrimSpace(f.ResourceKind))
+	}
+	if strings.TrimSpace(f.ResourceName) != "" {
+		query += ` AND resource_name = ?`
+		args = append(args, strings.TrimSpace(f.ResourceName))
+	}
+	if strings.TrimSpace(f.Since) != "" {
+		query += ` AND observed_at >= ?`
+		args = append(args, strings.TrimSpace(f.Since))
 	}
 	query += ` ORDER BY observed_at DESC LIMIT ?`
-	args = append(args, boundedLimit(limit, 1000, 5000))
+	args = append(args, boundedLimit(f.Limit, 5000, 100000))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
 		return nil, err
@@ -510,7 +546,8 @@ func (s *SQLStore) ListK8sMetricSamples(ctx context.Context, clusterID string, l
 	for rows.Next() {
 		var m K8sMetricSample
 		if err := rows.Scan(&m.ID, &m.ClusterID, &m.Namespace, &m.ResourceKind, &m.ResourceName,
-			&m.CPUMillicores, &m.MemoryBytes, &m.StorageBytes, &m.LatencyMS, &m.ObservedAt); err != nil {
+			&m.CPUMillicores, &m.MemoryBytes, &m.StorageBytes, &m.LatencyMS, &m.GPUUtilizationPct,
+			&m.GPUMemoryUsedBytes, &m.GPUTemperatureC, &m.GPUObserved, &m.ObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

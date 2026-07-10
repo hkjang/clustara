@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.119"
+const AppVersion = "v0.9.120"
 
 type Server struct {
 	cfg            config.Config
@@ -162,6 +162,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 	// Background scheduler for due K8s operations report deliveries (Mattermost).
 	go server.k8sReportScheduler()
 	go server.k8sCollectScheduler()
+	go server.k8sNodeMetricScheduler()
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)
@@ -303,6 +304,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/build-definitions", s.handleK8sBuildDefinitions)
 	mux.HandleFunc("/admin/k8s/build-runs", s.handleK8sBuildRuns)
 	mux.HandleFunc("/admin/k8s/node-drain", s.handleK8sNodeDrain)
+	mux.HandleFunc("/admin/k8s/nodes/monitoring", s.handleK8sNodeMonitoring)
+	mux.HandleFunc("/admin/k8s/node-metrics/collect", s.handleK8sNodeMetricCollect)
+	mux.HandleFunc("/admin/k8s/gpu/operations", s.handleK8sGPUOperations)
+	mux.HandleFunc("/admin/k8s/gpu/policy", s.handleK8sGPUAlertPolicy)
 	mux.HandleFunc("/admin/k8s/dev-requests", s.handleK8sDevRequest)
 	mux.HandleFunc("/admin/k8s/security-exceptions", s.handleK8sSecurityExceptions)
 	mux.HandleFunc("/admin/k8s/security-exceptions/", s.handleK8sSecurityExceptionStatus)

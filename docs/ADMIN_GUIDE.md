@@ -186,6 +186,16 @@ GitLab, Bitbucket Server, Harbor Registry/Robot, Mattermost 같은 외부 연동
 - 과거 개발자 뷰에서 생성된 `pending_approval` 액션도 호환 상태로 남아 있어 승인/반려할 수 있습니다.
 - API: `GET /admin/k8s/action-flow`, `GET/POST /admin/k8s/actions`, `POST /admin/k8s/actions/{id}/approve|reject|execute`
 
+## 10.5 노드·GPU 운영 (`#/k8s-nodes`)
+
+- Node CPU/Memory 실사용은 `metrics.k8s.io`를 전체 인벤토리와 분리해 기본 60초마다 수집합니다. 화면은 1h/6h/24h/7d 추세, peak, 시간당 증가율, 메트릭 신선도와 90% 임계치 도달 예상을 표시합니다. 이 예상은 선형 선행 경보이며 실제 장애 시점을 보장하지 않습니다.
+- Ready/Pressure, Node Warning Event, CPU/Memory/GPU 사용률·증가율·피크, 수집 지연을 설명 가능한 위험 점수로 합성합니다. 중대한 조치는 기존처럼 `Drain 영향 분석 → cordon 승인 요청 → 실행` 흐름을 사용합니다.
+- GPU가 있는 노드는 인벤토리만으로 모델/개수/Pod 요청·잔여량을 표시합니다. `PROMETHEUS_URL`과 NVIDIA DCGM Exporter가 있으면 장치/MIG별 Util, SM/Tensor/DRAM Active, VRAM, 온도, 전력, clock, XID, ECC, PCIe replay, NVLink, thermal throttle을 추가합니다.
+- DCGM Exporter에 `-k`(`DCGM_EXPORTER_KUBERNETES=true`)를 적용하면 Namespace/Pod/Container와 GPU 장치를 매핑합니다. 권장 counter 목록은 `deploy/k8s/dcgm-exporter-counters.csv`입니다.
+- GPU 운영 섹션은 장시간 저사용(request 대비 util), VRAM 90% 도달 추세, 하드웨어 오류, MIG 할당, Namespace/서비스/모델 서버별 GPU-hour 비용을 제공합니다. vLLM Prometheus 지표가 있으면 req/s, token/s, running request, TTFT p95, E2E p95를 GPU 소비량과 연결합니다.
+- 임계치는 화면의 **GPU 알림 정책**에서 온도, VRAM, 저사용률/지속시간, GPU-hour 단가를 저장합니다. XID, DBE ECC, NVLink 오류는 항상 중대 격리 후보이며 자동 cordon/drain하지 않습니다.
+- API: `GET /admin/k8s/nodes/monitoring`, `POST /admin/k8s/node-metrics/collect`, `GET /admin/k8s/gpu/operations`, `GET/POST /admin/k8s/gpu/policy`.
+
 ## 11. 용량·자동확장 (`#/k8s-capacity`)
 
 - **HPA 현황/확장 한계**(desired=max 경고), **과소/과다 할당**(사용량 vs request), **노드 bin packing**(요청률), **GPU**(가용/요청/유휴), **노드 용량 예측**(증가율→소진 예상일), **Replica 시뮬레이션**(목표 replica의 request 합계).

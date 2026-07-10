@@ -11,6 +11,28 @@ import (
 	"testing"
 )
 
+func TestHTTPClientCollectNodeMetrics(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/apis/metrics.k8s.io/v1beta1/nodes" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"metadata":{"name":"worker-1"},"timestamp":"2026-07-10T01:02:03Z","usage":{"cpu":"1250m","memory":"2Gi"}}]}`))
+	}))
+	defer api.Close()
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := client.CollectNodeMetrics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 || metrics[0].ResourceName != "worker-1" || metrics[0].CPUMillicores != 1250 || metrics[0].MemoryBytes != 2*(1<<30) {
+		t.Fatalf("unexpected node metrics: %+v", metrics)
+	}
+}
+
 func TestParseKubeconfigReadsFileBackedCertificates(t *testing.T) {
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "ca.crt")
