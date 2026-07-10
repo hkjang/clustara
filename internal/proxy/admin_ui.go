@@ -1205,6 +1205,99 @@ const adminHTML = `<!doctype html>
     function closeModal() {
       document.getElementById('modal-backdrop').classList.remove('open');
     }
+    // Risk-level guidance shared by the action-request and manifest change-request ledgers.
+    // Explains WHY a given 위험도 badge is risky and what to confirm before approving.
+    function uxRiskLevelInfo(level) {
+      const l = String(level || '').toLowerCase().trim();
+      const map = {
+        critical: {
+          label: 'critical · 매우 위험', cls: 'error',
+          summary: '클러스터의 보안 경계나 가용성에 광범위한 영향을 줄 수 있는 변경입니다.',
+          examples: 'Secret, RBAC(ClusterRole/Role/Binding), NetworkPolicy, 권한 상승(privileged · hostPath · hostNetwork) 등',
+          checks: ['변경 사유와 영향 범위(대상 워크로드·네임스페이스)를 명확히 확인', '권한이 필요 이상으로 넓어지지 않는지 확인', '롤백 YAML과 복구 절차를 미리 준비', '가능하면 2인 검토(4-eyes)로 승인', '관련 오픈 인시던트가 없는지 확인']
+        },
+        high: {
+          label: 'high · 높음', cls: 'error',
+          summary: '서비스 노출·트래픽 경로·복제 수 등 가용성에 직접 영향을 줄 수 있는 변경입니다.',
+          examples: 'Service.type, Ingress/TLS, replicas, selector, PodDisruptionBudget, PVC 등',
+          checks: ['트래픽 경로와 외부 노출 변화를 확인', 'replicas·selector 변경이 롤아웃/헬스에 미치는 영향 확인', '적용 후 사후 검증(검증확인)까지 완료', '롤백 방법 확인']
+        },
+        medium: {
+          label: 'medium · 보통', cls: 'warn',
+          summary: '워크로드 재시작이나 일시적 중단이 발생할 수 있는 변경입니다.',
+          examples: 'image, env, resources(requests/limits), probe(liveness/readiness) 등',
+          checks: ['롤아웃 진행 상태를 확인', '리소스 요청/제한이 노드 여유를 넘지 않는지 확인', 'dry-run diff로 실제 변경 내용을 확인']
+        },
+        low: {
+          label: 'low · 낮음', cls: '',
+          summary: '메타데이터/라벨 등 영향 범위가 제한적인 변경입니다.',
+          examples: 'labels, annotations, 설명성 필드 등',
+          checks: ['그래도 dry-run diff로 의도한 변경만 포함됐는지 확인']
+        },
+        blocked: {
+          label: 'blocked · 정책 차단', cls: 'error',
+          summary: '정책 위반으로 적용이 차단된 요청입니다. 위반 사항을 해소하기 전에는 적용할 수 없습니다.',
+          examples: '조직 정책(policy) 위반, 금지된 리소스/필드 변경 등',
+          checks: ['아래 정책 위반 목록을 확인하고 원인 해소', '예외가 필요하면 정식 예외 승인 절차를 진행', '위반을 해소한 뒤 다시 검증/요청']
+        }
+      };
+      return map[l] || { label: (l || '알 수 없음'), cls: '', summary: '위험도 정보가 없습니다.', examples: '', checks: [] };
+    }
+    // Humanize a manifest approval_reason token into readable Korean.
+    function uxRiskReasonLabel(reason) {
+      const r = String(reason || '');
+      if (r === 'policy_violations') return '정책 위반 존재 (아래 정책 위반 목록 확인)';
+      if (r === 'low-risk metadata/spec change') return '낮은 위험의 메타데이터/스펙 변경';
+      if (r === 'create_resource') return '신규 리소스 생성';
+      const eq = r.lastIndexOf('=');
+      if (eq > 0) {
+        const path = r.slice(0, eq), risk = r.slice(eq + 1);
+        return path + ' — 필드 위험도 ' + risk;
+      }
+      return r;
+    }
+    // Open the risk-explanation modal. ctx (optional) carries request-specific reasons:
+    //   { kind, level, reasons:[], policy:[], fields:[{path,risk}], action, target, dryRun }
+    function uxOpenRiskExplain(level, ctx) {
+      ctx = ctx || {};
+      const info = uxRiskLevelInfo(level);
+      let html = '<div style="line-height:1.6">';
+      html += '<div style="margin-bottom:10px"><span class="status ' + info.cls + '" style="font-size:12px">' + escapeHTML(info.label) + '</span></div>';
+      html += '<p style="margin:0 0 10px">' + escapeHTML(info.summary) + '</p>';
+      if (info.examples) html += '<p class="muted" style="font-size:12px;margin:0 0 12px">대표 예시: ' + escapeHTML(info.examples) + '</p>';
+      if ((info.checks || []).length) {
+        html += '<div style="font-weight:600;margin-bottom:4px">승인 전 확인할 점</div><ul style="margin:0 0 12px;padding-left:18px">' +
+          info.checks.map(c => '<li>' + escapeHTML(c) + '</li>').join('') + '</ul>';
+      }
+      // Request-specific reasons (why THIS item got this level).
+      const reasons = (ctx.reasons || []).filter(Boolean);
+      const policy = (ctx.policy || []).filter(Boolean);
+      const fields = (ctx.fields || []).filter(f => f && f.path);
+      if (reasons.length || policy.length || fields.length || ctx.action || ctx.target) {
+        html += '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0">';
+        html += '<div style="font-weight:600;margin-bottom:6px">이 요청이 이 위험도로 평가된 이유</div>';
+        if (ctx.action) html += '<div class="muted" style="font-size:12px;margin-bottom:2px">액션: ' + escapeHTML(ctx.action) + '</div>';
+        if (ctx.target) html += '<div class="muted" style="font-size:12px;margin-bottom:2px">대상: ' + escapeHTML(ctx.target) + '</div>';
+        if (typeof ctx.dryRun !== 'undefined') html += '<div class="muted" style="font-size:12px;margin-bottom:6px">dry-run diff: ' + (ctx.dryRun ? '있음 (적용 전 영향 미리보기 확인 가능)' : '없음') + '</div>';
+        if (reasons.length) html += '<ul style="margin:4px 0 8px;padding-left:18px">' + reasons.map(r => '<li>' + escapeHTML(uxRiskReasonLabel(r)) + '</li>').join('') + '</ul>';
+        if (fields.length) {
+          html += '<div style="font-weight:600;font-size:12px;margin:6px 0 2px">변경 필드별 위험도</div><ul style="margin:0 0 8px;padding-left:18px">' +
+            fields.map(f => '<li>' + escapeHTML(f.path) + ' <span class="status ' + uxRiskLevelInfo(f.risk).cls + '" style="font-size:9px">' + escapeHTML(f.risk || 'low') + '</span></li>').join('') + '</ul>';
+        }
+        if (policy.length) {
+          html += '<div style="font-weight:600;font-size:12px;margin:6px 0 2px;color:var(--danger,#c0392b)">정책 위반</div><ul style="margin:0;padding-left:18px">' +
+            policy.map(p => '<li>' + escapeHTML(typeof p === 'string' ? p : JSON.stringify(p)) + '</li>').join('') + '</ul>';
+        }
+      }
+      html += '</div>';
+      openModal('위험도 설명 · ' + info.label, html);
+    }
+    // Render a clickable 위험도 badge. ctxExpr is a JS expression string evaluated at click time.
+    function uxRiskBadge(level, ctxExpr) {
+      const info = uxRiskLevelInfo(level);
+      const onclick = 'uxOpenRiskExplain(' + JSON.stringify(level || '') + ',' + (ctxExpr || '{}') + ');return false';
+      return '<button type="button" class="status ' + info.cls + '" style="font-size:10px;cursor:pointer;border:none" title="클릭하면 왜 이 위험도인지, 승인 전 무엇을 확인해야 하는지 설명을 봅니다." onclick="' + escapeAttr(onclick) + '">' + escapeHTML(level || '') + ' ⓘ</button>';
+    }
     async function runAIAnalysis(id) {
       const areaId = 'ai-analysis-result';
       let area = document.getElementById(areaId);
@@ -11364,7 +11457,7 @@ const adminHTML = `<!doctype html>
             : '<span class="muted" style="font-size:11px">' + escapeHTML(a.approved_by || a.executed_by || '-') + '</span>');
         return '<tr id="' + escapeAttr('k8s-action-row-' + a.id) + '"><td>' + escapeHTML(a.action) + '</td>' +
           '<td>' + escapeHTML((a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id, a.resource_kind, a.namespace, a.resource_name, 'YAML') + '</div></td>' +
-          '<td><span class="status ' + riskClass(a.risk_level) + '" style="font-size:10px">' + escapeHTML(a.risk_level) + '</span></td>' +
+          '<td>' + uxRiskBadge(a.risk_level, JSON.stringify({ action: a.action, target: (a.namespace || '-') + '/' + a.resource_kind + '/' + a.resource_name, dryRun: !!a.dry_run_diff })) + '</td>' +
           '<td><span class="status ' + (a.status === 'approved' ? '' : (a.status === 'rejected' ? 'error' : 'warn')) + '" style="font-size:10px">' + escapeHTML(a.status) + '</span></td>' +
           '<td>' + flowCell + '</td>' +
           '<td class="muted" style="font-size:11px;white-space:pre-wrap;max-width:340px">' + escapeHTML(a.dry_run_diff || a.result || '') + '</td>' +
@@ -14863,7 +14956,7 @@ const adminHTML = `<!doctype html>
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sManifestChangePatch(\'' + escapeAttr(cr.id) + '\')">Patch</button>';
         return '<tr id="' + escapeAttr('mchg-row-' + cr.id) + '"><td><span class="status ' + statusClass(cr.status) + '" style="font-size:10px">' + escapeHTML(cr.status || '') + '</span></td>' +
           '<td><span class="status ' + (op === 'create' ? 'warn' : '') + '" style="font-size:9px">' + escapeHTML(op === 'create' ? '생성' : '변경') + '</span> ' + escapeHTML((cr.namespace || '-') + '/' + cr.kind + '/' + cr.name) + '<div class="muted" style="font-size:11px">' + escapeHTML(cr.cluster_id || '') + '</div></td>' +
-          '<td><span class="status ' + riskClass(cr.risk_level) + '" style="font-size:10px">' + escapeHTML(cr.risk_level || '') + '</span></td>' +
+          '<td>' + uxRiskBadge(cr.risk_level, JSON.stringify({ kind: cr.kind, reasons: ((cr.impact || {}).approval_reasons) || [], policy: ((cr.impact || {}).policy_violations) || [], fields: (cr.diffs || []).map(function (d) { return { path: d.path, risk: d.risk }; }) })) + '</td>' +
           '<td>' + fmt((cr.diffs || []).length) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(cr.reason || cr.result || '') + '</td>' +
           '<td class="muted" style="font-size:11px">' + ago(cr.updated_at || cr.created_at) + '</td><td>' + btns + '</td></tr>';
       }).join('') : '<tr><td colspan="7" class="muted">YAML 변경 요청이 없습니다.</td></tr>';

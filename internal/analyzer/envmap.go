@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -37,8 +38,8 @@ type EnvRisk struct {
 
 // EnvSourceMap is the full per-Pod result.
 type EnvSourceMap struct {
-	Vars  []EnvVarSource `json:"vars"`
-	Risks []EnvRisk      `json:"risks"`
+	Vars   []EnvVarSource `json:"vars"`
+	Risks  []EnvRisk      `json:"risks"`
 	Counts struct {
 		Literal   int `json:"literal"`
 		ConfigMap int `json:"configmap"`
@@ -47,7 +48,29 @@ type EnvSourceMap struct {
 	} `json:"counts"`
 }
 
-var sensitiveEnvHints = []string{"password", "passwd", "pwd", "secret", "token", "apikey", "api_key", "access_key", "accesskey", "private", "credential"}
+// sensitiveEnvHints: 이름에 이 문자열이 포함되면 항상 민감 값으로 간주(부분 문자열 매칭).
+var sensitiveEnvHints = []string{
+	"password", "passwd", "pwd", "secret", "token",
+	"apikey", "api_key", "access_key", "accesskey",
+	"private", "credential",
+	// DB/연결 문자열: DSN·connection string 은 값 자체가 자격증명을 포함.
+	"dsn", "connectionstring", "connection_string", "connstr", "conn_str",
+}
+
+// sensitiveEnvSuffixes: 이름이 이 접미사로 끝나면 DB 접속정보/연결 문자열일 가능성이 높음.
+// (예: MAIN_DB, USER_DB). 접미사 매칭이라 DEBUG·DB_HOST 같은 오탐은 걸리지 않음.
+var sensitiveEnvSuffixes = []string{"_db", "_dburl", "_dburi"}
+
+// sensitiveEnvCombos: 이름에 이 문자열들이 모두 포함되면 DB 연결 문자열(자격증명 포함 가능)로 간주.
+// (예: DB_URL, DATABASE_URI, PG_DB_CONNECTION). "db"+연결류를 함께 요구해 오탐을 줄임.
+var sensitiveEnvCombos = [][]string{
+	{"db", "url"}, {"db", "uri"}, {"db", "conn"},
+	{"database", "url"}, {"database", "uri"}, {"database", "conn"},
+}
+
+// credentialURIRe: scheme://user:password@host 형태의 연결 문자열(자격증명 내장)을 값에서 탐지.
+// postgres://·mysql://·mongodb://·redis://·amqp:// 등 스킴 무관하게 userinfo 의 password 를 잡음.
+var credentialURIRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*://[^:@/?#\s]*:[^@/?#\s]+@`)
 
 func looksSensitiveEnv(name string) bool {
 	l := strings.ToLower(name)
@@ -56,7 +79,29 @@ func looksSensitiveEnv(name string) bool {
 			return true
 		}
 	}
+	for _, s := range sensitiveEnvSuffixes {
+		if strings.HasSuffix(l, s) {
+			return true
+		}
+	}
+	for _, combo := range sensitiveEnvCombos {
+		all := true
+		for _, part := range combo {
+			if !strings.Contains(l, part) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
 	return false
+}
+
+// looksSensitiveEnvValue: 키 이름과 무관하게 값이 자격증명을 내장한 연결 문자열이면 true.
+func looksSensitiveEnvValue(value string) bool {
+	return credentialURIRe.MatchString(strings.TrimSpace(value))
 }
 
 // BuildEnvSourceMap parses a workload/Pod spec's containers (env + envFrom) into a source map plus
@@ -100,7 +145,7 @@ func BuildEnvSourceMap(it store.K8sInventoryItem) EnvSourceMap {
 					v.SourceType = "literal"
 					out.Counts.Literal++
 					val := str(e["value"])
-					if looksSensitiveEnv(v.Name) {
+					if looksSensitiveEnv(v.Name) || looksSensitiveEnvValue(val) {
 						v.Value, v.Masked = "***", true
 						out.Risks = append(out.Risks, EnvRisk{Container: cname, Name: v.Name, Severity: "high", Issue: "민감해 보이는 이름의 평문 env — Secret 참조로 이전 권장"})
 					} else {

@@ -717,14 +717,27 @@ func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request,
 			openIncidents++
 		}
 	}
+	// Decide the verification outcome.
+	//
+	// `found`/`unhealthy` are only trustworthy once the inventory collector has re-observed
+	// the resource after apply (`refreshed`); before that they still reflect pre-apply state,
+	// so a freshly created/changed resource would otherwise be misjudged. `warnings` (already
+	// filtered to events at/after apply) and open `openIncidents` are post-apply signals and
+	// apply regardless of the refresh timing.
+	//
+	// The apply step itself already confirmed the API server accepted the change (status moved
+	// to `applied`). So when no real problem is detected we mark the change `verified` even if
+	// the background collector has not re-scanned yet — a scan-timing gap must not strand an
+	// operator's completed change in "확인 필요" forever. We still record that live
+	// re-observation was pending so the evidence stays honest.
 	verifyStatus := "verified"
 	resultStatus := "passed"
-	if !found || unhealthy || warnings > 0 || openIncidents > 0 {
+	switch {
+	case (refreshed && (!found || unhealthy)) || warnings > 0 || openIncidents > 0:
 		verifyStatus = "verify_failed"
 		resultStatus = "attention_required"
-	} else if !refreshed {
-		verifyStatus = "verify_failed"
-		resultStatus = "pending_observation"
+	case !refreshed:
+		resultStatus = "passed_pending_observation"
 	}
 	result := map[string]any{
 		"status": resultStatus, "resource_found": found, "refreshed_after_apply": refreshed,
