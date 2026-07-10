@@ -1,3 +1,6 @@
+v0.9.117:
+- **Resource Category Maps (v0.9.117)**: 리소스 카테고리 센터의 네트워크 및 스토리지 화면에 '네트워크 경로 맵' 및 '스토리지 생명주기 맵' 시각화 패널을 추가했습니다. 네트워크 카테고리에서는 Ingress -> Service -> Pod 간의 라우팅 매핑과 NetworkPolicy, HPA, ServiceAccount 매핑 상태를 시각화하고, 스토리지 카테고리에서는 StorageClass -> PVC -> PV -> VolumeSnapshot 간의 바인딩 생명주기와 보호 상태(데이터 보호 비율, 바인딩 주의 리소스 건수 등)를 도메인 칼럼 구조로 렌더링하도록 UI를 대폭 보강했습니다. 각 카테고리 허브 카드에는 리소스 건강도 스트립(Health Strip)과 고유 이모지 아이콘을 연동하여 시인성을 높였습니다.
+
 v0.9.116:
 - **Admin Work Calendar (v0.9.116)**: 전체 클러스터 및 전체 네임스페이스 대상의 운영 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링할 수 있는 '전체 업무 캘린더'를 신설했습니다. 개인 영역의 업무 캘린더와 구조적으로 연계하여 Action, Config 변경, YAML 변경, Exec, Debug 등의 모든 운영 이벤트를 필터링(클러스터, 네임스페이스, 리소스 유형, 라이프사이클 단계, 담당자 이력, 검색어 등) 및 정렬하여 추적할 수 있으며, `/admin/work-calendar` API 엔드포인트와 라우트 및 `ops.work_calendar` 메뉴 내비게이션(menuVersion 40)을 추가했습니다. Gateway 신규 기능은 계속 제외했습니다.
 

@@ -154,6 +154,39 @@ const adminHTML = `<!doctype html>
     }
     .personal-quick-grid a strong { display: block; font-size: 13px; margin-bottom: 4px; }
     .personal-quick-grid a span { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; }
+	.resource-visual-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; align-items:stretch; }
+	.resource-flow-column { border:1px solid var(--line); border-radius:10px; background:var(--panel-alt); padding:10px; min-width:0; position:relative; }
+	.resource-flow-column:not(:last-child)::after { content:'→'; position:absolute; right:-10px; top:50%; transform:translate(50%,-50%); width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:var(--panel); border:1px solid var(--line); color:var(--muted); font-weight:900; z-index:2; }
+	.resource-flow-title { display:flex; justify-content:space-between; gap:6px; align-items:center; font-size:11px; font-weight:900; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; }
+	.resource-node { display:block; border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:6px; background:var(--panel); color:var(--ink); text-decoration:none; min-width:0; }
+	.resource-node:hover { border-color:var(--accent); box-shadow:0 2px 8px rgba(0,0,0,.08); transform:translateY(-1px); }
+	.resource-node strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+	.resource-node-meta { display:flex; justify-content:space-between; gap:5px; margin-top:4px; font-size:10px; color:var(--muted); }
+	.resource-health-strip { height:7px; display:flex; border-radius:999px; overflow:hidden; background:var(--line); margin-top:8px; }
+	.resource-health-strip span { min-width:2px; }
+	.resource-health-good { background:var(--good-ink); } .resource-health-warn { background:var(--warn); } .resource-health-bad { background:var(--bad); }
+	.resource-insight-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
+	.resource-insight { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel-alt); }
+	.resource-insight strong { display:block; font-size:12px; margin-bottom:4px; }
+	.resource-insight p { margin:0; font-size:11px; color:var(--muted); line-height:1.4; }
+	.resource-kind-bars { display:grid; gap:7px; }
+	.resource-kind-bar { display:grid; grid-template-columns:minmax(110px,1fr) 3fr 42px; gap:8px; align-items:center; font-size:11px; }
+	.resource-kind-track { height:7px; border-radius:999px; background:var(--line); overflow:hidden; }
+	.resource-kind-fill { height:100%; border-radius:999px; background:var(--accent); }
+	.resource-subnav-wrap { position:relative; margin:12px 0 2px; }
+	.resource-subnav { display:grid; grid-template-columns:repeat(7,minmax(118px,1fr)); gap:7px; overflow-x:auto; padding:2px 2px 8px; scrollbar-width:thin; }
+	.resource-subnav-item { display:flex; align-items:center; gap:8px; min-width:118px; padding:9px 10px; border:1px solid var(--line); border-radius:9px; background:var(--panel-alt); color:var(--ink); text-decoration:none; transition:border-color .15s ease,background .15s ease,transform .15s ease; }
+	.resource-subnav-item:hover { border-color:var(--accent); transform:translateY(-1px); }
+	.resource-subnav-item.active { background:var(--ink); color:var(--bg); border-color:var(--ink); box-shadow:0 3px 10px rgba(0,0,0,.12); }
+	.resource-subnav-icon { flex:0 0 28px; width:28px; height:28px; display:grid; place-items:center; border-radius:8px; background:var(--good-bg); color:var(--good-ink); font-weight:900; font-size:14px; }
+	.resource-subnav-item.active .resource-subnav-icon { background:rgba(255,255,255,.14); color:inherit; }
+	.resource-subnav-copy { min-width:0; flex:1; }
+	.resource-subnav-copy strong { display:block; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+	.resource-subnav-copy span { display:block; margin-top:2px; font-size:9px; color:var(--muted); white-space:nowrap; }
+	.resource-subnav-item.active .resource-subnav-copy span { color:inherit; opacity:.72; }
+	.resource-subnav-signal { flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:var(--good-ink); }
+	.resource-subnav-signal.warn { background:var(--warn); box-shadow:0 0 0 3px var(--warn-bg); }
+	.resource-subnav-item.active .resource-subnav-signal { box-shadow:none; }
     .header-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 18px 28px 60px; }
     section {
@@ -673,6 +706,10 @@ const adminHTML = `<!doctype html>
       .external-form-wide { grid-column: auto; }
       .personal-calendar { grid-template-columns: 1fr; }
       .personal-quick-grid { grid-template-columns: 1fr; }
+	  .resource-visual-grid, .resource-insight-grid { grid-template-columns:1fr; }
+	  .resource-flow-column:not(:last-child)::after { content:'↓'; right:50%; top:auto; bottom:-12px; transform:translate(50%,50%); }
+	  .resource-subnav { display:flex; scroll-snap-type:x proximity; }
+	  .resource-subnav-item { flex:0 0 142px; scroll-snap-align:start; }
       .chat-pop { grid-template-columns: 1fr; }
       .chat-pop > .chat-stream { border-right: none; border-bottom: 1px solid var(--line); }
       .chat-pop > .chat-debug { padding: 14px 0 0; }
@@ -8539,6 +8576,7 @@ const adminHTML = `<!doctype html>
     const K8S_RESOURCE_CATEGORIES = {
       workloads: {
         tab: 'k8s-workloads',
+		icon: '◫',
         title: '워크로드',
         desc: 'Deployment, StatefulSet, DaemonSet, Job, CronJob, ReplicaSet, Pod를 서비스 실행 단위로 봅니다.',
         kinds: ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'ReplicationController', 'Job', 'CronJob', 'Pod'],
@@ -8546,6 +8584,7 @@ const adminHTML = `<!doctype html>
       },
       network: {
         tab: 'k8s-network',
+		icon: '⌁',
         title: '네트워크',
         desc: 'Service, Ingress, Endpoint, NetworkPolicy, Gateway API 계열을 연결 경로 중심으로 봅니다.',
         kinds: ['Service', 'Ingress', 'NetworkPolicy', 'Endpoints', 'EndpointSlice', 'IngressClass', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute'],
@@ -8553,6 +8592,7 @@ const adminHTML = `<!doctype html>
       },
       storage: {
         tab: 'k8s-storage',
+		icon: '▣',
         title: '스토리지',
         desc: 'PV, PVC, StorageClass, Snapshot 계열을 데이터 보존·용량·바인딩 상태 중심으로 봅니다.',
         kinds: ['PersistentVolume', 'PersistentVolumeClaim', 'StorageClass', 'VolumeSnapshot', 'VolumeSnapshotClass', 'CSIStorageCapacity'],
@@ -8560,6 +8600,7 @@ const adminHTML = `<!doctype html>
       },
       components: {
         tab: 'k8s-components',
+		icon: '◇',
         title: '구성요소',
         desc: 'Namespace, ConfigMap, Secret, HPA, PDB, Quota처럼 워크로드를 둘러싼 운영 구성요소를 봅니다.',
         kinds: ['Namespace', 'ConfigMap', 'Secret', 'ResourceQuota', 'LimitRange', 'PodDisruptionBudget', 'HorizontalPodAutoscaler', 'PriorityClass'],
@@ -8567,6 +8608,7 @@ const adminHTML = `<!doctype html>
       },
       devtools: {
         tab: 'k8s-devtools',
+		icon: '⌘',
         title: '개발자 도구',
         desc: 'Prometheus Operator, GitOps, 인증서, Tekton 같은 플랫폼 확장 리소스를 개발자 경험 관점으로 봅니다.',
         kinds: ['ServiceMonitor', 'PodMonitor', 'PrometheusRule', 'Application', 'ApplicationSet', 'HelmRelease', 'Kustomization', 'Certificate', 'Issuer', 'ClusterIssuer', 'Pipeline', 'Task', 'PipelineRun', 'TaskRun'],
@@ -8574,6 +8616,7 @@ const adminHTML = `<!doctype html>
       },
       auth: {
         tab: 'k8s-auth',
+		icon: '◆',
         title: '인증·권한',
         desc: 'ServiceAccount, Role, Binding, ClusterRole, CSR 등 실행 주체와 권한 경계를 봅니다.',
         kinds: ['ServiceAccount', 'Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding', 'CertificateSigningRequest', 'SecurityContextConstraints', 'PodSecurityPolicy'],
@@ -8741,31 +8784,46 @@ const adminHTML = `<!doctype html>
         return true;
       });
     }
-    function k8sResourceCategoryNav(activeKey, clusterId) {
+	function k8sResourceCategoryNav(activeKey, clusterId, items) {
       const q = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
-      return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">' +
-        '<a class="button secondary" href="#/k8s-resources' + q + '">전체</a>' +
-        K8S_RESOURCE_CATEGORY_ORDER.map(key => {
-          const cat = K8S_RESOURCE_CATEGORIES[key];
-          return '<a class="button ' + (key === activeKey ? '' : 'secondary') + '" href="#/' + cat.tab + q + '">' + escapeHTML(cat.title) + '</a>';
-        }).join('') + '</div>';
+	  const all = items || [];
+	  const navItem = (key, title, icon, href, subset) => {
+		const active = key === activeKey;
+		const risky = subset.filter(x => ['critical','high'].includes(String(x.risk_level || '').toLowerCase()) || k8sResourceHealthClass(x) === 'bad').length;
+		const meta = fmt(subset.length) + '개' + (risky ? ' · 위험 ' + fmt(risky) : ' · 정상');
+		return '<a class="resource-subnav-item' + (active ? ' active' : '') + '" href="' + escapeAttr(href) + '"' + (active ? ' aria-current="page"' : '') + ' title="' + escapeAttr(title + ' — ' + meta) + '"><span class="resource-subnav-icon">' + escapeHTML(icon) + '</span><span class="resource-subnav-copy"><strong>' + escapeHTML(title) + '</strong><span>' + escapeHTML(meta) + '</span></span><span class="resource-subnav-signal' + (risky ? ' warn' : '') + '" aria-label="' + (risky ? '위험 리소스 있음' : '정상') + '"></span></a>';
+	  };
+	  const links = [navItem('', '전체', '▦', '#/k8s-resources' + q, all)].concat(K8S_RESOURCE_CATEGORY_ORDER.map(key => {
+		const cat = K8S_RESOURCE_CATEGORIES[key], set = k8sResourceCategoryKindSet(cat);
+		return navItem(key, cat.title, cat.icon || '•', '#/' + cat.tab + q, all.filter(it => set.has(k8sResourceKindKey(it.kind))));
+	  }));
+	  return '<nav class="resource-subnav-wrap" aria-label="리소스 관리 분류"><div class="resource-subnav">' + links.join('') + '</div></nav>';
     }
+	function k8sResourceFocusActiveNav() {
+	  requestAnimationFrame(() => {
+		const active = document.querySelector('.resource-subnav-item.active');
+		if (active && active.scrollIntoView) active.scrollIntoView({ block:'nearest', inline:'center', behavior:'smooth' });
+	  });
+	}
     function k8sResourceCreateButtons(cat, clusterId, namespace) {
       return (cat.createKinds || []).map(kind =>
         '<a class="button secondary" href="' + escapeAttr(k8sResourceCreateHref(clusterId, kind, namespace)) + '">+ ' + escapeHTML(kind) + '</a>'
       ).join('');
     }
-    function k8sResourceFilterHTML(cat, params) {
+    function k8sResourceFilterHTML(cat, params, clusters, items) {
       const clusterId = (params && params.get('cluster_id')) || '';
       const ns = (params && params.get('namespace')) || '';
       const kind = (params && params.get('kind')) || '';
       const risk = (params && params.get('risk')) || '';
       const q = (params && params.get('q')) || '';
+	  const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters || []).map(c => '<option value="' + escapeAttr(c.id) + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+	  const namespaces = [...new Set((items || []).map(x => x.namespace).filter(Boolean))].sort();
+	  const nsOpts = '<option value="">전체 namespace</option>' + namespaces.map(v => '<option value="' + escapeAttr(v) + '"' + (v === ns ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
       const kindOpts = '<option value="">전체 Kind</option>' + (cat.kinds || []).map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k) + '</option>').join('');
       const riskOpts = ['critical', 'high', 'medium', 'low'].map(r => '<option value="' + r + '"' + (r === risk ? ' selected' : '') + '>' + r + '</option>').join('');
       return '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(170px,1fr) minmax(150px,1fr) minmax(150px,1fr) minmax(120px,1fr) minmax(220px,2fr) auto auto">' +
-        '<input id="res-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
-        '<input id="res-ns" value="' + escapeAttr(ns) + '" placeholder="namespace">' +
+		'<select id="res-cluster">' + clusterOpts + '</select>' +
+		'<select id="res-ns">' + nsOpts + '</select>' +
         '<select id="res-kind">' + kindOpts + '</select>' +
         '<select id="res-risk"><option value="">전체 위험도</option>' + riskOpts + '</select>' +
         '<input id="res-q" value="' + escapeAttr(q) + '" placeholder="이름, label, image, apiVersion 검색" onkeydown="if(event.key===\'Enter\')k8sResourceCategoryGo(\'' + escapeAttr(cat.tab) + '\')">' +
@@ -8826,6 +8884,61 @@ const adminHTML = `<!doctype html>
         '<tr><td>' + escapeHTML(k) + '</td><td>' + fmt(n) + '</td></tr>').join('');
       return rows || '<tr><td colspan="2" class="muted">종류 없음</td></tr>';
     }
+	function k8sResourceHealthClass(it) {
+	  const risk = String(it.risk_level || '').toLowerCase(), status = String(it.status || '').toLowerCase();
+	  if (['critical','high'].includes(risk) || /(fail|error|unavail|backoff|pending|lost)/.test(status)) return 'bad';
+	  if (risk === 'medium' || (it.health_score > 0 && it.health_score < 80)) return 'warn';
+	  return 'good';
+	}
+	function k8sResourceHealthOverview(items) {
+	  const health = { good:0, warn:0, bad:0 };
+	  (items || []).forEach(it => health[k8sResourceHealthClass(it)]++);
+	  const total = Math.max(1, items.length), pctOf = n => Math.round(n * 100 / total);
+	  const counts = {};
+	  (items || []).forEach(it => counts[it.kind || '-'] = (counts[it.kind || '-'] || 0) + 1);
+	  const bars = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,8).map(([kind,n]) => '<div class="resource-kind-bar"><span title="' + escapeAttr(kind) + '">' + escapeHTML(kind) + '</span><div class="resource-kind-track"><div class="resource-kind-fill" style="width:' + Math.max(3,pctOf(n)) + '%"></div></div><strong>' + fmt(n) + '</strong></div>').join('') || '<span class="muted">데이터 없음</span>';
+	  const stale = (items || []).filter(it => { const d = new Date(it.observed_at || it.updated_at || 0); return !isNaN(d.getTime()) && Date.now()-d.getTime() > 15*60*1000; }).length;
+	  return '<div class="grid2"><div><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><strong>건강 분포</strong><span class="muted" style="font-size:11px">정상 ' + fmt(health.good) + ' · 주의 ' + fmt(health.warn) + ' · 위험 ' + fmt(health.bad) + '</span></div><div class="resource-health-strip"><span class="resource-health-good" style="width:' + pctOf(health.good) + '%"></span><span class="resource-health-warn" style="width:' + pctOf(health.warn) + '%"></span><span class="resource-health-bad" style="width:' + pctOf(health.bad) + '%"></span></div><div class="resource-insight-grid" style="margin-top:10px"><div class="resource-insight"><strong>즉시 확인</strong><p>High+ 또는 실패 상태 ' + fmt(health.bad) + '개</p></div><div class="resource-insight"><strong>관측 신선도</strong><p>15분 이상 미관측 ' + fmt(stale) + '개</p></div><div class="resource-insight"><strong>범위</strong><p>' + fmt(new Set(items.map(x=>x.cluster_id).filter(Boolean)).size) + '개 클러스터</p></div></div></div><div><strong style="display:block;margin-bottom:8px">Kind 구성</strong><div class="resource-kind-bars">' + bars + '</div></div></div>';
+	}
+	function k8sResourceNode(it, detail) {
+	  const href = k8sResourceGraphHref(it), cls = k8sResourceHealthClass(it);
+	  return '<a class="resource-node" href="' + escapeAttr(href) + '" onclick="openK8sGraphModal(\'' + escapeAttr(it.cluster_id || '') + '\',\'' + escapeAttr(it.kind || '') + '\',\'' + escapeAttr(it.namespace || '') + '\',\'' + escapeAttr(it.name || '') + '\',\'2\');return false"><strong>' + escapeHTML(it.name || '-') + '</strong><div class="resource-node-meta"><span>' + escapeHTML(detail || it.kind || '-') + '</span><span class="status ' + (cls === 'bad' ? 'error' : (cls === 'warn' ? 'warn' : '')) + '" style="font-size:9px">' + escapeHTML(it.status || cls) + '</span></div></a>';
+	}
+	function k8sNetworkVisual(items) {
+	  const groups = [
+		{ title:'외부 진입·라우팅', kinds:['ingress','gateway','httproute','grpcroute','tcproute','tlsroute','udproute'] },
+		{ title:'서비스', kinds:['service'] },
+		{ title:'백엔드 발견', kinds:['endpoints','endpointslice'] },
+		{ title:'접근 제어', kinds:['networkpolicy','ingressclass'] }
+	  ];
+	  const columns = groups.map(g => { const rows = items.filter(it => g.kinds.includes(k8sResourceKindKey(it.kind))); return '<div class="resource-flow-column"><div class="resource-flow-title"><span>' + g.title + '</span><span>' + fmt(rows.length) + '</span></div>' + rows.slice(0,7).map(it => k8sResourceNode(it, it.kind + ' · ' + (it.namespace || 'cluster'))).join('') + (rows.length > 7 ? '<div class="muted" style="font-size:10px;margin-top:7px">외 ' + fmt(rows.length-7) + '개</div>' : '') + (!rows.length ? '<div class="empty" style="padding:18px 4px;font-size:11px">리소스 없음</div>' : '') + '</div>'; }).join('');
+	  const services = items.filter(x => k8sResourceKindKey(x.kind)==='service'), endpoints = items.filter(x => ['endpoints','endpointslice'].includes(k8sResourceKindKey(x.kind))), policies = items.filter(x => k8sResourceKindKey(x.kind)==='networkpolicy');
+	  const endpointNames = new Set();
+	  endpoints.forEach(x => {
+		endpointNames.add((x.namespace||'')+'\x00'+x.name);
+		const serviceName = (x.labels || {})['kubernetes.io/service-name'];
+		if (serviceName) endpointNames.add((x.namespace||'')+'\x00'+serviceName);
+	  });
+	  const missing = services.filter(s => String((s.spec||{}).type||'').toLowerCase() !== 'externalname' && !endpointNames.has((s.namespace||'')+'\x00'+s.name)).length;
+	  return '<div class="resource-visual-grid">' + columns + '</div><div class="resource-insight-grid" style="margin-top:10px"><div class="resource-insight"><strong>Endpoint 공백 후보</strong><p>동일 이름 Endpoint가 없는 Service ' + fmt(missing) + '개 — 연결성 점검에서 실제 selector와 backend를 확인하세요.</p></div><div class="resource-insight"><strong>정책 적용 범위</strong><p>NetworkPolicy ' + fmt(policies.length) + '개 / namespace ' + fmt(new Set(policies.map(x=>x.namespace).filter(Boolean)).size) + '개</p></div><div class="resource-insight"><strong>운영 동선</strong><p>노드를 선택하면 영향도 그래프, 목록의 연결성 링크에서는 DNS·backend 진단으로 이어집니다.</p></div></div>';
+	}
+	function k8sStorageVisual(items) {
+	  const groups = [
+		{ title:'프로비저닝 정책', kinds:['storageclass','csistoragecapacity'] },
+		{ title:'볼륨 요청', kinds:['persistentvolumeclaim'] },
+		{ title:'영구 볼륨', kinds:['persistentvolume'] },
+		{ title:'백업·스냅샷', kinds:['volumesnapshot','volumesnapshotclass'] }
+	  ];
+	  const columns = groups.map(g => { const rows=items.filter(it=>g.kinds.includes(k8sResourceKindKey(it.kind))); return '<div class="resource-flow-column"><div class="resource-flow-title"><span>' + g.title + '</span><span>' + fmt(rows.length) + '</span></div>' + rows.slice(0,7).map(it => k8sResourceNode(it, k8sResourceSpecSummary(it))).join('') + (rows.length>7?'<div class="muted" style="font-size:10px;margin-top:7px">외 '+fmt(rows.length-7)+'개</div>':'') + (!rows.length?'<div class="empty" style="padding:18px 4px;font-size:11px">리소스 없음</div>':'') + '</div>'; }).join('');
+	  const pvcs=items.filter(x=>k8sResourceKindKey(x.kind)==='persistentvolumeclaim'), pvs=items.filter(x=>k8sResourceKindKey(x.kind)==='persistentvolume'), snaps=items.filter(x=>k8sResourceKindKey(x.kind)==='volumesnapshot');
+	  const pending=pvcs.filter(x=>String(x.status||'').toLowerCase()!=='bound').length, released=pvs.filter(x=>['released','failed'].includes(String(x.status||'').toLowerCase())).length;
+	  return '<div class="resource-visual-grid">'+columns+'</div><div class="resource-insight-grid" style="margin-top:10px"><div class="resource-insight"><strong>바인딩 주의</strong><p>Bound가 아닌 PVC ' + fmt(pending) + '개 · Released/Failed PV ' + fmt(released) + '개</p></div><div class="resource-insight"><strong>데이터 보호</strong><p>VolumeSnapshot ' + fmt(snaps.length) + '개 · PVC 대비 ' + (pvcs.length ? Math.round(snaps.length*100/pvcs.length) : 0) + '%</p></div><div class="resource-insight"><strong>변경 안전성</strong><p>삭제·축소 전 reclaimPolicy, finalizer, 참조 Pod와 Snapshot을 함께 확인하세요.</p></div></div>';
+	}
+	function k8sResourceSpecialVisual(key, items) {
+	  if (key === 'network') return card('네트워크 경로 맵', '<div class="card-body">' + k8sNetworkVisual(items) + '</div>');
+	  if (key === 'storage') return card('스토리지 생명주기 맵', '<div class="card-body">' + k8sStorageVisual(items) + '</div>');
+	  return '';
+	}
     async function renderK8sResourceHub(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -8842,11 +8955,13 @@ const adminHTML = `<!doctype html>
         const risky = filtered.filter(x => ['critical', 'high'].includes(String(x.risk_level || '').toLowerCase())).length;
         const kinds = [...new Set(filtered.map(x => x.kind).filter(Boolean))].slice(0, 5).join(', ') || '-';
         const q = clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '';
-        return '<div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel-alt);min-height:150px">' +
-          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><h3 style="margin:0;font-size:15px">' + escapeHTML(cat.title) + '</h3>' +
+		const healthy = filtered.length - risky;
+		return '<div style="border:1px solid var(--line);border-radius:10px;padding:13px;background:var(--panel-alt);min-height:170px">' +
+		  '<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><h3 style="margin:0;font-size:15px"><span style="display:inline-grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--good-bg);color:var(--good-ink);margin-right:7px">' + escapeHTML(cat.icon || '•') + '</span>' + escapeHTML(cat.title) + '</h3>' +
           '<span class="status ' + (risky ? 'warn' : '') + '" style="font-size:10px">' + fmt(filtered.length) + '개</span></div>' +
           '<p class="muted" style="font-size:12px;min-height:36px">' + escapeHTML(cat.desc) + '</p>' +
-          '<div class="muted" style="font-size:11px;margin-bottom:10px">Kind: ' + escapeHTML(kinds) + (risky ? ' · high+ ' + fmt(risky) : '') + '</div>' +
+		  '<div class="muted" style="font-size:11px;margin-bottom:5px">Kind: ' + escapeHTML(kinds) + (risky ? ' · high+ ' + fmt(risky) : '') + '</div>' +
+		  '<div class="resource-health-strip" title="정상/주의"><span class="resource-health-good" style="width:' + (filtered.length ? Math.round(healthy*100/filtered.length) : 0) + '%"></span><span class="resource-health-bad" style="width:' + (filtered.length ? Math.round(risky*100/filtered.length) : 0) + '%"></span></div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap"><a class="button" href="#/' + cat.tab + q + '">열기</a>' +
           k8sResourceCreateButtons(cat, clusterId, '') + '</div></div>';
       }).join('');
@@ -8860,7 +8975,7 @@ const adminHTML = `<!doctype html>
           kpi('네임스페이스', fmt(new Set(data.items.map(x => x.namespace).filter(Boolean)).size)) +
           kpi('Kind', fmt(new Set(data.items.map(x => x.kind).filter(Boolean)).size)) +
           kpi('High+', fmt(high.length)) + '</div>' +
-          k8sResourceCategoryNav('', clusterId)) +
+		  k8sResourceCategoryNav('', clusterId, data.items)) +
         card('필터', filter) +
         card('카테고리', '<div class="card-body"><div class="grid3">' + cards + '</div></div>') +
         card('위험 리소스 빠른 점검',
@@ -8868,6 +8983,7 @@ const adminHTML = `<!doctype html>
           k8sResourceRows(high, clusterNames) + '</tbody></table></div>') +
         card('Kind 분포', '<div class="card-body"><table><thead><tr><th>Kind</th><th>수</th></tr></thead><tbody>' + k8sResourceKindBreakdown(data.items) + '</tbody></table></div>');
       makeSortable('#view', 'k8s-resources');
+	  k8sResourceFocusActiveNav();
     }
     async function renderK8sResourceCategory(params, key) {
       const cat = K8S_RESOURCE_CATEGORIES[key];
@@ -8897,14 +9013,17 @@ const adminHTML = `<!doctype html>
           kpi('네임스페이스', fmt(namespaces)) +
           kpi('Kind', fmt(kinds)) +
           kpi('표시', fmt(Math.min(filtered.length, 500)) + '/500') + '</div>' +
-          k8sResourceCategoryNav(key, clusterId) + createBar) +
-        card('필터', k8sResourceFilterHTML(cat, params || new URLSearchParams())) +
+		  k8sResourceCategoryNav(key, clusterId, data.items) + createBar) +
+		card('필터', k8sResourceFilterHTML(cat, params || new URLSearchParams(), data.clusters, data.items.filter(it => k8sResourceCategoryKindSet(cat).has(k8sResourceKindKey(it.kind))))) +
+		k8sResourceSpecialVisual(key, filtered) +
+		card('운영 상태 한눈에 보기', '<div class="card-body">' + k8sResourceHealthOverview(filtered) + '</div>') +
         card(cat.title + ' 목록',
           '<div class="card-body"><table id="k8s-resource-table"><thead><tr><th data-sort="num">상태</th><th data-sort="str">리소스</th><th data-sort="str">API</th><th data-sort="str">분류</th><th>요약</th><th data-sort="str">관측</th><th data-sort="str">수정</th><th></th></tr></thead><tbody>' +
           k8sResourceRows(filtered, clusterNames) + '</tbody></table>' +
           (filtered.length > 500 ? '<p class="muted" style="font-size:11px">상위 500개만 표시합니다. cluster_id, namespace, kind, 검색어로 좁혀보세요.</p>' : '') + '</div>') +
         card('Kind 분포', '<div class="card-body"><table><thead><tr><th>Kind</th><th>수</th></tr></thead><tbody>' + k8sResourceKindBreakdown(filtered) + '</tbody></table></div>');
       makeSortable('#view', 'k8s-resource-' + key);
+	  k8sResourceFocusActiveNav();
     }
 
     // ---------- FleetOps: multi-cluster health + global search ----------

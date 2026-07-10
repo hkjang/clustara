@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.116** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.117** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.116)
+## 기능 상태 (v0.9.117)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -29,7 +29,7 @@
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |
 | GitOps Change Manager UX Guide — GitOps 개념 가이드 모달, Stack→Git Source→Drift→PR Draft→Rollout/Evidence 흐름 카드, 빠른 등록 폼, 전용 운영 가이드 문서 | ✅ (v0.9.108) |
 | Resource Graph Topology UX — 리소스 관계를 SVG 토폴로지 맵으로 표시, YAML 링크 옆 토폴로지 모달 진입, 기본 2-hop 포커스, 고립 RBAC 노이즈 억제 | ✅ (v0.9.107) |
-| 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.98) |
+| 리소스 카테고리 센터 — 워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한별 인벤토리, 위험 리소스, Kind 분포, YAML/타임라인/그래프 딥링크, 네트워크 경로 맵 및 스토리지 생명주기 맵 시각화 연동 | ✅ (v0.9.117) |
 | Harbor Management UX — Harbor registry·Robot Account·Project mapping 개별 조회/수정/삭제, registry force delete 안전장치, Harbor catalog 기반 project/repository/tag·digest select picker | ✅ (v0.9.106) |
 | Harbor Launch Draft Set — Harbor registry 등록·연결 테스트, Robot Account token hash 원장·pull 검증, project→namespace imagePullSecret 매핑, redacted pull secret preview, digest 기반 Deployment/Service 런칭 요청 원장, Manifest Change Studio Deployment/Service 초안 전환, 이미지 런칭 보안 판정 제공 | ✅ (v0.9.105) |
 | Security User Guide Modal — 보안 하위 화면 공통 사용자 상세 가이드 모달, 화면별 운영 순서·업로드 예시·판단 기준 제공 | ✅ (v0.9.103) |
