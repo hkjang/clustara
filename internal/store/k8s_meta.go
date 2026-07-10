@@ -89,8 +89,17 @@ func (s *SQLStore) ListK8sClusterGroups(ctx context.Context) ([]K8sClusterGroup,
 }
 
 func (s *SQLStore) DeleteK8sClusterGroup(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM k8s_cluster_groups WHERE id = ?`), id)
-	return err
+	if _, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_clusters SET group_id = '', updated_at = ? WHERE group_id = ?`), nowString(), id); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM k8s_cluster_groups WHERE id = ?`), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *SQLStore) UpsertK8sNamespaceOwnership(ctx context.Context, o K8sNamespaceOwnership) error {
@@ -137,6 +146,17 @@ func (s *SQLStore) ListK8sNamespaceOwnership(ctx context.Context, clusterID, tea
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+func (s *SQLStore) DeleteK8sNamespaceOwnership(ctx context.Context, clusterID, namespace string) error {
+	res, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM k8s_namespace_ownership WHERE cluster_id = ? AND namespace = ?`), clusterID, namespace)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // K8sCostSnapshot is one daily cost data point per dimension key, enabling cost-trend/increase

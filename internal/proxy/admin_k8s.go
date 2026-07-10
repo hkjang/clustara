@@ -149,6 +149,8 @@ func (s *Server) handleK8sClusterByID(w http.ResponseWriter, r *http.Request) {
 			s.handleK8sClusterCollect(w, r, cluster)
 		case "discover":
 			s.handleK8sClusterDiscover(w, r, cluster)
+		case "group":
+			s.handleK8sClusterGroupUpdate(w, r, cluster)
 		default:
 			writeOpenAIError(w, http.StatusNotFound, "unknown cluster command: "+parts[1], "invalid_request_error", "unknown_cluster_command")
 		}
@@ -159,6 +161,52 @@ func (s *Server) handleK8sClusterByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cluster": cluster})
+}
+
+func (s *Server) handleK8sClusterGroupUpdate(w http.ResponseWriter, r *http.Request, cluster store.K8sCluster) {
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in struct {
+		GroupID string `json:"group_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	groupID := strings.TrimSpace(in.GroupID)
+	if groupID != "" {
+		groups, err := s.db.ListK8sClusterGroups(r.Context())
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_groups_failed")
+			return
+		}
+		found := false
+		for _, g := range groups {
+			if g.ID == groupID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeOpenAIError(w, http.StatusNotFound, "cluster group not found: "+groupID, "invalid_request_error", "k8s_group_not_found")
+			return
+		}
+	}
+	if err := s.db.SetK8sClusterGroup(r.Context(), cluster.ID, groupID); err != nil {
+		status := http.StatusInternalServerError
+		code := "k8s_cluster_group_update_failed"
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+			code = "cluster_not_found"
+		}
+		writeOpenAIError(w, status, err.Error(), "server_error", code)
+		return
+	}
+	cluster.GroupID = groupID
+	s.auditAdmin(r, "k8s.cluster.group.update", cluster.ID, auditJSON(map[string]any{"cluster_id": cluster.ID, "group_id": groupID}))
+	writeJSON(w, http.StatusOK, map[string]any{"cluster": cluster, "group_id": groupID})
 }
 
 func (s *Server) handleK8sClusterTest(w http.ResponseWriter, r *http.Request, cluster store.K8sCluster) {

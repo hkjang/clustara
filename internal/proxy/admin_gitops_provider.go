@@ -13,6 +13,7 @@ import (
 
 type gitOpsProviderRequest struct {
 	ProviderID   string `json:"provider_id"`
+	CredentialID string `json:"credential_id"`
 	Provider     string `json:"provider"`
 	BaseURL      string `json:"base_url"`
 	Username     string `json:"username"`
@@ -177,6 +178,7 @@ func (s *Server) handleGitOpsProviderTestWithID(w http.ResponseWriter, r *http.R
 	result := gitprovider.Test(r.Context(), gitProviderHTTPClient(), cfg)
 	s.auditAdmin(r, "gitops.provider.test", firstNonEmptyStr(in.ProviderID, cfg.BaseURL), auditJSON(map[string]any{
 		"provider_id": rec.ID, "provider": cfg.Provider, "base_url": cfg.BaseURL, "ok": result.OK, "status_code": result.StatusCode, "token_supplied": in.Token != "",
+		"credential_id": in.CredentialID,
 	}))
 	writeJSON(w, http.StatusOK, enterpriseEnvelope(r, "gitops_provider", firstNonEmptyStr(rec.ID, cfg.BaseURL), map[string]any{"result": result, "provider": scrubGitOpsProviderRecord(rec)}))
 }
@@ -215,6 +217,7 @@ func (s *Server) handleGitOpsProviderCatalogWithID(w http.ResponseWriter, r *htt
 	result := gitprovider.QueryCatalog(r.Context(), gitProviderHTTPClient(), q)
 	s.auditAdmin(r, "gitops.provider.catalog", firstNonEmptyStr(in.ProviderID, cfg.BaseURL), auditJSON(map[string]any{
 		"provider_id": rec.ID, "provider": cfg.Provider, "target": q.Target, "ok": result.OK, "items": len(result.Items), "token_supplied": in.Token != "",
+		"credential_id": in.CredentialID,
 	}))
 	writeJSON(w, http.StatusOK, enterpriseEnvelope(r, "gitops_provider", firstNonEmptyStr(rec.ID, cfg.BaseURL), map[string]any{"result": result, "provider": scrubGitOpsProviderRecord(rec)}))
 }
@@ -251,6 +254,7 @@ func (s *Server) handleGitOpsProviderPRTemplateWithID(w http.ResponseWriter, r *
 	})
 	s.auditAdmin(r, "gitops.provider.pr_template", firstNonEmptyStr(in.ProviderID, cfg.BaseURL), auditJSON(map[string]any{
 		"provider_id": rec.ID, "provider": cfg.Provider, "ok": result.OK, "template_only": true,
+		"credential_id": in.CredentialID,
 	}))
 	writeJSON(w, http.StatusOK, enterpriseEnvelope(r, "gitops_provider", firstNonEmptyStr(rec.ID, cfg.BaseURL), map[string]any{"result": result, "provider": scrubGitOpsProviderRecord(rec)}))
 }
@@ -343,6 +347,32 @@ func (s *Server) resolveGitOpsProvider(w http.ResponseWriter, r *http.Request, i
 		Username: firstNonEmptyStr(in.Username, toString(rec.Payload["username"])),
 		Token:    strings.TrimSpace(in.Token),
 	}
+	credentialID := firstNonEmptyStr(in.CredentialID, toString(rec.Payload["default_credential_id"]))
+	if cfg.Token == "" && credentialID != "" {
+		cred, found, err := s.resolveExternalCredential(r, credentialID, "")
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "gitops_credential_decrypt_failed")
+			return gitprovider.Config{}, store.EnterpriseRecord{}, false
+		}
+		if !found {
+			writeOpenAIError(w, http.StatusNotFound, "external credential not found", "invalid_request_error", "gitops_credential_not_found")
+			return gitprovider.Config{}, store.EnterpriseRecord{}, false
+		}
+		if cred.Provider != "gitlab" && cred.Provider != "bitbucket_server" {
+			writeOpenAIError(w, http.StatusBadRequest, "credential provider must be gitlab or bitbucket_server", "invalid_request_error", "gitops_credential_provider_mismatch")
+			return gitprovider.Config{}, store.EnterpriseRecord{}, false
+		}
+		if cfg.Provider != "" && cfg.Provider != normalizeGitOpsProvider(cred.Provider) {
+			writeOpenAIError(w, http.StatusBadRequest, "credential provider does not match selected git provider", "invalid_request_error", "gitops_credential_provider_mismatch")
+			return gitprovider.Config{}, store.EnterpriseRecord{}, false
+		}
+		if cred.Provider != "" {
+			cfg.Provider = normalizeGitOpsProvider(firstNonEmptyStr(cfg.Provider, cred.Provider))
+		}
+		cfg.BaseURL = strings.TrimRight(firstNonEmptyStr(cfg.BaseURL, cred.BaseURL), "/")
+		cfg.Username = firstNonEmptyStr(cfg.Username, cred.Username)
+		cfg.Token = cred.Secret
+	}
 	if cfg.Provider == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "provider is required", "invalid_request_error", "gitops_provider_required")
 		return gitprovider.Config{}, store.EnterpriseRecord{}, false
@@ -382,6 +412,7 @@ func sanitizeGitOpsProviderPayload(payload map[string]any, provider, baseURL str
 	payload["provider"] = provider
 	payload["base_url"] = baseURL
 	payload["username"] = strings.TrimSpace(toString(payload["username"]))
+	payload["default_credential_id"] = strings.TrimSpace(toString(payload["default_credential_id"]))
 	if payload["default_branch"] == nil || strings.TrimSpace(toString(payload["default_branch"])) == "" {
 		payload["default_branch"] = "main"
 	}

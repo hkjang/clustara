@@ -195,6 +195,9 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/settings/test/clickhouse", []string{"post"}, "settings", "Test ClickHouse connectivity", false},
 	{"/admin/settings/test/text2sql-exec", []string{"post"}, "settings", "Test Text2SQL execute DB", false},
 	{"/admin/settings/test/text2sql-twin", []string{"post"}, "settings", "Test Text2SQL twin DB", false},
+	{"/admin/external-integrations/credentials", []string{"get", "post"}, "settings", "User-scoped encrypted external credentials for GitLab, Bitbucket, Harbor and other integrations", false},
+	{"/admin/external-integrations/credentials/{id}", []string{"get", "post", "put", "delete"}, "settings", "Read/update/archive one external integration credential", false},
+	{"/admin/external-integrations/credentials/{id}/test", []string{"post"}, "settings", "Test one external integration credential without returning its secret", false},
 
 	// ---- admin: pricing / cost ----
 	{"/admin/pricing", []string{"get", "post"}, "cost", "Effective pricing + version history / add version", false},
@@ -431,6 +434,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/freshness", []string{"get"}, "k8s", "Kubernetes inventory and event freshness analysis", false},
 	{"/admin/k8s/groups", []string{"get", "post"}, "k8s", "List/create Kubernetes cluster groups", false},
 	{"/admin/k8s/groups/{id}", []string{"get", "post", "delete"}, "k8s", "Get/update/delete a Kubernetes cluster group", false},
+	{"/admin/k8s/clusters/{id}/group", []string{"post"}, "k8s", "Assign, change, or clear one cluster's group membership", false},
 	{"/admin/k8s/image-ledger", []string{"get"}, "k8s", "Running image ledger by digest, workload, and owner", false},
 	{"/admin/k8s/image-promotions", []string{"get", "post"}, "k8s", "List/create image promotion records", false},
 	{"/admin/k8s/image-promotions/{id}", []string{"get", "post"}, "k8s", "Operate one image promotion record", false},
@@ -450,6 +454,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/notify/scan", []string{"post"}, "k8s", "Scan Kubernetes findings and send configured notifications", false},
 	{"/admin/k8s/observability", []string{"get"}, "k8s", "Kubernetes observability and collector status summary", false},
 	{"/admin/k8s/ownership", []string{"get", "post"}, "k8s", "Namespace ownership and cost-center mappings", false},
+	{"/admin/k8s/ownership/{cluster_id}/{namespace}", []string{"delete"}, "k8s", "Delete one namespace ownership mapping", false},
 	{"/admin/k8s/pod-watches", []string{"get", "post"}, "k8s", "List/create Pod watch rules", false},
 	{"/admin/k8s/pod-watches/{id}", []string{"get", "post", "delete"}, "k8s", "Get/update/delete one Pod watch rule", false},
 	{"/admin/k8s/policies", []string{"get", "post"}, "k8s", "List/create Kubernetes policy packs and rules", false},

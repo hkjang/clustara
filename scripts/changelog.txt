@@ -1,3 +1,12 @@
+v0.9.112:
+- **Cluster Group Membership CRUD (v0.9.112)**: `#/k8s-meta` 그룹·오너십 화면을 생성 중심에서 운영 관리 중심으로 확장했습니다. 클러스터 그룹은 목록에서 바로 수정·삭제할 수 있고, 삭제 시 기존 멤버 클러스터의 `group_id`를 자동으로 비워 orphan 참조가 남지 않도록 했습니다. 추가된 클러스터는 별도 멤버십 카드에서 그룹에 배정·변경·해제할 수 있으며, API로는 `POST /admin/k8s/clusters/{id}/group`를 제공합니다. 네임스페이스 오너십도 같은 화면에서 수정 모드로 재사용하고 `DELETE /admin/k8s/ownership/{cluster_id}/{namespace}`로 삭제할 수 있게 했습니다. OpenAPI, 관리자/K8s 문서, 회귀 테스트에 그룹 수정·삭제, 멤버십 변경, 오너십 갱신·삭제 흐름을 반영했습니다.
+
+v0.9.111:
+- **External Integration Menu UX (v0.9.111)**: 외부연동 설정을 `설정` 하위 탭에서 `설정 롤백 센터` 바로 위의 독립 메뉴(`#/external-integrations`)로 승격해 설정 탭과 선택 상태가 겹쳐 보이지 않도록 정리했습니다. Credential 등록/수정 폼은 Provider별 탭(전체, GitLab, Bitbucket, Harbor, Mattermost), 기본 정보, Secret, 기본 선택값, 사용 힌트 영역으로 재구성해 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 더 쉽게 저장·수정·검증할 수 있게 했습니다. 기존 `#/settings/external` 링크는 새 메뉴로 이동하는 호환 경로로 유지합니다.
+
+v0.9.110:
+- **External Integration Credential Vault (v0.9.110)**: 설정 > 외부연동 설정에 사용자별 Credential Vault를 추가했습니다. GitLab, Bitbucket Server, Harbor Registry/Robot, Mattermost 같은 외부 연동 Token/Password를 AES-GCM으로 암호화 저장하고, 응답에는 원문·암호문·hash를 반환하지 않습니다. GitOps provider/catalog/PR template 요청과 Harbor catalog/Robot 검증/imagePullSecret/앱 런처 동선은 `credential_id`만 선택해 저장 Credential을 재사용할 수 있으며, 필요한 경우 기존처럼 일회성 token 입력도 가능합니다. GitOps와 Harbor UI에는 저장 Credential selectbox와 Credential 관리 진입점을 추가했고, OpenAPI와 감사 로그에도 반영했습니다. Gateway 신규 기능은 제외했습니다.
+
 v0.9.109:
 - **Internal Git Provider Integration for GitOps (v0.9.109)**: 사내 오프라인망에서 GitLab과 Bitbucket Server 6.x 계열을 GitOps Change Manager에 쉽게 연결할 수 있도록 Git provider 원장과 catalog 탐색 API/UI를 추가했습니다. `/admin/gitops/providers`는 provider metadata만 저장하고 token/password 원문은 저장·응답하지 않으며, `/admin/gitops/providers/test`, `/catalog`, `/pr-template`은 일회성 token으로 GitLab projects/branches/tree/file 또는 Bitbucket Server projects/repos/branches/browse/raw를 조회합니다. UI에는 provider 등록/수정/비활성화, 연결 확인, 프로젝트·저장소·브랜치·경로 picker, Git Source 폼 자동 채우기, GitLab Merge Request·Bitbucket Pull Request payload preview를 추가했습니다. mock/offline URL도 지원해 폐쇄망 도입 전 화면과 workflow를 검증할 수 있습니다.
 

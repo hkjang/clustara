@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -85,14 +86,10 @@ func (s *Server) handleK8sGroups(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleK8sGroupByID deletes a group. DELETE /admin/k8s/groups/{id}
+// handleK8sGroupByID reads/updates/deletes a group. GET/POST/DELETE /admin/k8s/groups/{id}
 func (s *Server) handleK8sGroupByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
-		return
-	}
-	if r.Method != http.MethodDelete {
-		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/groups/"), "/")
@@ -100,12 +97,55 @@ func (s *Server) handleK8sGroupByID(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "group id required", "invalid_request_error", "missing_group_id")
 		return
 	}
-	if err := s.db.DeleteK8sClusterGroup(r.Context(), id); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_group_delete_failed")
-		return
+	switch r.Method {
+	case http.MethodGet:
+		groups, err := s.db.ListK8sClusterGroups(r.Context())
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_groups_failed")
+			return
+		}
+		for _, g := range groups {
+			if g.ID == id {
+				writeJSON(w, http.StatusOK, map[string]any{"group": g})
+				return
+			}
+		}
+		writeOpenAIError(w, http.StatusNotFound, "group not found: "+id, "invalid_request_error", "k8s_group_not_found")
+	case http.MethodPost:
+		var g store.K8sClusterGroup
+		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+			return
+		}
+		g.ID = id
+		if strings.TrimSpace(g.Name) == "" {
+			writeOpenAIError(w, http.StatusBadRequest, "name is required", "invalid_request_error", "missing_fields")
+			return
+		}
+		if err := s.db.UpsertK8sClusterGroup(r.Context(), g); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_group_save_failed")
+			return
+		}
+		s.auditAdmin(r, "k8s.group.update", id, auditJSON(g))
+		writeJSON(w, http.StatusOK, map[string]any{"group": g})
+	case http.MethodDelete:
+		if err := s.db.DeleteK8sClusterGroup(r.Context(), id); err != nil {
+			status := http.StatusInternalServerError
+			code := "k8s_group_delete_failed"
+			errType := "server_error"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "k8s_group_not_found"
+				errType = "invalid_request_error"
+			}
+			writeOpenAIError(w, status, err.Error(), errType, code)
+			return
+		}
+		s.auditAdmin(r, "k8s.group.delete", "", auditJSON(map[string]string{"id": id}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
-	s.auditAdmin(r, "k8s.group.delete", "", auditJSON(map[string]string{"id": id}))
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
 // handleK8sOwnership lists/sets namespace ownership (K8S-17). GET/POST /admin/k8s/ownership
@@ -142,6 +182,39 @@ func (s *Server) handleK8sOwnership(w http.ResponseWriter, r *http.Request) {
 		}
 		s.auditAdmin(r, "k8s.ownership.upsert", "", auditJSON(o))
 		writeJSON(w, http.StatusCreated, map[string]any{"ownership": o})
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+	}
+}
+
+func (s *Server) handleK8sOwnershipByID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/ownership/"), "/"), "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster id and namespace are required", "invalid_request_error", "missing_ownership_target")
+		return
+	}
+	clusterID := strings.TrimSpace(parts[0])
+	namespace := strings.TrimSpace(parts[1])
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.db.DeleteK8sNamespaceOwnership(r.Context(), clusterID, namespace); err != nil {
+			status := http.StatusInternalServerError
+			code := "k8s_ownership_delete_failed"
+			errType := "server_error"
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+				code = "k8s_ownership_not_found"
+				errType = "invalid_request_error"
+			}
+			writeOpenAIError(w, status, err.Error(), errType, code)
+			return
+		}
+		s.auditAdmin(r, "k8s.ownership.delete", "", auditJSON(map[string]string{"cluster_id": clusterID, "namespace": namespace}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "cluster_id": clusterID, "namespace": namespace})
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}

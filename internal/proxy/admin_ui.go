@@ -109,6 +109,28 @@ const adminHTML = `<!doctype html>
     }
     .subtabs a:hover { background: var(--line); }
     .subtabs a.active { background: var(--ink); color: var(--bg); }
+    .external-tabs {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px;
+    }
+    .external-tabs a {
+      display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
+      padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px;
+      color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 800;
+      background: var(--panel-alt);
+    }
+    .external-tabs a.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .external-layout { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(420px, 1.25fr); gap: 14px; align-items: start; }
+    .external-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .external-form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 800; color: var(--muted); }
+    .external-form-grid input, .external-form-grid select { width: 100%; min-width: 0; box-sizing: border-box; }
+    .external-form-wide { grid-column: 1 / -1; }
+    .external-form-block { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line); }
+    .external-form-title { margin: 0 0 8px; font-size: 12px; font-weight: 900; color: var(--ink); }
+    .external-hint-list { display: grid; gap: 8px; margin-top: 10px; }
+    .external-hint {
+      padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--panel-alt); font-size: 12px; color: var(--muted); line-height: 1.45;
+    }
     .header-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 18px 28px 60px; }
     section {
@@ -624,6 +646,8 @@ const adminHTML = `<!doctype html>
       header { flex-direction: column; align-items: flex-start; gap: 8px; }
       main { padding: 14px; }
       .kpis, .grid3, .grid2 { grid-template-columns: 1fr; }
+      .external-layout, .external-form-grid { grid-template-columns: 1fr; }
+      .external-form-wide { grid-column: auto; }
       .chat-pop { grid-template-columns: 1fr; }
       .chat-pop > .chat-stream { border-right: none; border-bottom: 1px solid var(--line); }
       .chat-pop > .chat-debug { padding: 14px 0 0; }
@@ -711,6 +735,7 @@ const adminHTML = `<!doctype html>
           <a href="#/governance" data-tab="governance">Governance Hub</a>
           <a href="#/k8s-settings" data-tab="k8s-settings">운영 설정</a>
           <a href="#/settings" data-tab="settings">설정</a>
+          <a href="#/external-integrations" data-tab="external-integrations">외부연동 설정</a>
           <a href="#/k8s-configrollback" data-tab="k8s-configrollback">설정 롤백 센터</a>
         </div>
       </div>
@@ -1292,6 +1317,7 @@ const adminHTML = `<!doctype html>
       { tab: 'enterprise', href: '#/enterprise', label: '엔터프라이즈', group: '설정', tags: 'org workspace project catalog access binding' },
       { tab: 'governance', href: '#/governance', label: 'Governance Hub', group: '설정', tags: 'audit evidence ticket cmdb risk executive report' },
       { tab: 'k8s-settings', href: '#/k8s-settings', label: '운영 설정', group: '설정', tags: 'terminal policy masking mattermost cost' },
+      { tab: 'external-integrations', href: '#/external-integrations', label: '외부연동 설정', group: '설정', tags: 'external integration credential gitlab bitbucket harbor mattermost token password' },
       { tab: 'settings', href: '#/settings', label: '시스템 설정', group: '설정', tags: 'settings runtime sso secret' },
     ];
     const UX_RECENT_KEY = 'clustara.ux.recent';
@@ -2352,7 +2378,7 @@ const adminHTML = `<!doctype html>
           { label: 'ClickHouse', href: '#/dwdashboard/clickhouse', active: onCH },
           { label: '지표 사전', href: '#/dwmetrics', active: onMetrics },
         ]);
-      } else if (tab === 'settings' || tab === 'runtimesettings' || tab === 'changesets' || rest[0] === 'errors' || rest[0] === 'sso' || rest[0] === 'changesets') {
+      } else if (tab === 'settings' || tab === 'runtimesettings' || tab === 'changesets' || rest[0] === 'errors' || rest[0] === 'sso' || rest[0] === 'changesets' || rest[0] === 'external') {
         const onRT = tab === 'runtimesettings' || rest[0] === 'runtime';
         const onErr = rest[0] === 'errors';
         const onSSO = rest[0] === 'sso';
@@ -2554,6 +2580,7 @@ const adminHTML = `<!doctype html>
           case 'clickhouse': await renderClickHouse(); break; // legacy alias for #/dwdashboard/clickhouse
           case 'dwmetrics': await renderDWMetrics(); break;
           case 'runtimesettings': await renderRuntimeSettings(); break; // legacy alias for #/settings/runtime
+          case 'external-integrations': await renderExternalIntegrations(); break;
           case 'settings':
             if (rest[0] === 'runtime') {
               await renderRuntimeSettings();
@@ -2561,6 +2588,8 @@ const adminHTML = `<!doctype html>
               await renderSystemErrors();
             } else if (rest[0] === 'sso') {
               await renderSSOSettings();
+            } else if (rest[0] === 'external') {
+              location.hash = '#/external-integrations';
             } else {
               await renderSettings();
             }
@@ -12360,11 +12389,14 @@ const adminHTML = `<!doctype html>
         if (digest) digest.value = row.digest || '';
       } catch (e) {}
     }
+    function harborCredentialIDForTokenField(tokenId) {
+      return safeInputValue(String(tokenId || '') + '-cred', '').trim();
+    }
     async function harborLoadProjects(registryId, robotId, tokenId, selectId, inputId) {
       const registryID = safeInputValue(registryId, '');
       const robotID = safeInputValue(robotId, '');
       const token = safeInputValue(tokenId, '');
-      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'projects', robot_name: harborRobotNameById(robotID), token }) });
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'projects', robot_name: harborRobotNameById(robotID), token, credential_id: harborCredentialIDForTokenField(tokenId) }) });
       const projects = harborCatalogItems(res.result || res).map(harborProjectName);
       harborSetOptions(selectId, projects, 'project 선택');
       if (projects.length === 1 && inputId) {
@@ -12378,7 +12410,7 @@ const adminHTML = `<!doctype html>
       const project = safeInputValue(projectId, '');
       const robotID = safeInputValue(robotId, '');
       const token = safeInputValue(tokenId, '');
-      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'repositories', project_name: project, robot_name: harborRobotNameById(robotID), token }) });
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'repositories', project_name: project, robot_name: harborRobotNameById(robotID), token, credential_id: harborCredentialIDForTokenField(tokenId) }) });
       const repos = harborCatalogItems(res.result || res).map(harborRepositoryName);
       harborSetOptions(selectId, repos, 'repository 선택');
       if (repos.length === 1 && inputId) {
@@ -12393,7 +12425,7 @@ const adminHTML = `<!doctype html>
       const repo = safeInputValue(repoId, '');
       const robotID = safeInputValue(robotId, '');
       const token = safeInputValue(tokenId, '');
-      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'artifacts', project_name: project, repository: repo, robot_name: harborRobotNameById(robotID), token }) });
+      const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: registryID, target: 'artifacts', project_name: project, repository: repo, robot_name: harborRobotNameById(robotID), token, credential_id: harborCredentialIDForTokenField(tokenId) }) });
       const rows = harborArtifactRows(harborCatalogItems(res.result || res));
       const el = document.getElementById(selectId);
       if (el) {
@@ -12415,13 +12447,14 @@ const adminHTML = `<!doctype html>
     async function renderHarborRegistry(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('Harbor 레지스트리', '<div class="empty">불러오는 중...</div>');
-      let regs, maps, clusters, robots;
+      let regs, maps, clusters, robots, credentials;
       try {
-        [regs, maps, clusters, robots] = await Promise.all([
+        [regs, maps, clusters, robots, credentials] = await Promise.all([
           api('/admin/harbor/registries').catch(() => ({ registries: [] })),
           api('/admin/harbor/mappings').catch(() => ({ mappings: [] })),
           api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
-          api('/admin/harbor/robots').catch(() => ({ robots: [] }))
+          api('/admin/harbor/robots').catch(() => ({ robots: [] })),
+          api('/admin/external-integrations/credentials?providers=harbor,harbor_robot').catch(() => ({ data: { credentials: [] } }))
         ]);
       } catch (e) {
         view.innerHTML = section('Harbor 레지스트리', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -12433,6 +12466,8 @@ const adminHTML = `<!doctype html>
       (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
       (maps.mappings || []).forEach(m => { window.harborMappingsCache[m.id || ''] = m; });
       (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
+      const harborCredentials = ((credentials && credentials.data && credentials.data.credentials) || credentials.credentials || []);
+      const harborCredOpts = externalCredentialOptions(harborCredentials, ['harbor', 'harbor_robot'], '');
       const registryRows = (regs.registries || []).map(r =>
         '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td>' +
         '<td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(r.url || '') + '</td><td>' + harborStatusBadge(r.status) + '</td>' +
@@ -12447,17 +12482,18 @@ const adminHTML = `<!doctype html>
         section('Harbor 레지스트리', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Connected', fmt((regs.registries || []).filter(r => r.status === 'connected').length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
         card('Registry 등록/수정', '<div class="card-body"><input id="hb-reg-id" type="hidden"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><input id="hb-reg-name" placeholder="name"><input id="hb-reg-url" placeholder="https://harbor.example.com" style="grid-column:span 2"><label style="font-size:12px;display:flex;align-items:center;gap:6px"><input id="hb-reg-insecure" type="checkbox"> insecure TLS</label><input id="hb-reg-ca" placeholder="CA ref(선택)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRegistry()">저장</button> <button type="button" class="secondary" onclick="harborResetRegistryForm()">새로 입력</button> <span id="hb-reg-out" class="muted" style="font-size:12px"></span></div></div>') +
         card('Registry 목록', '<div class="card-body"><table><thead><tr><th>Registry</th><th>URL</th><th>상태</th><th>Version</th><th>마지막 점검</th><th></th></tr></thead><tbody>' + registryRows + '</tbody></table></div>') +
-        card('Harbor Catalog 조회', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Projects, repositories, artifacts(tags·digest 포함)를 조회합니다. private project는 robot name/token을 일회성으로 입력하세요. token은 저장·응답하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-cat-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-cat-target"><option value="projects">projects</option><option value="repositories">repositories</option><option value="artifacts">artifacts</option></select><input id="hb-cat-project" placeholder="project"><input id="hb-cat-repo" placeholder="repository(artifact 조회시)"><input id="hb-cat-robot" placeholder="robot name"><input id="hb-cat-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"><button type="button" onclick="harborQueryCatalog()">조회</button></div><pre id="hb-cat-out" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px"></pre></div>') +
-        card('Harbor Project → Namespace 매핑', '<div class="card-body"><input id="hb-map-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Harbor에서 project 목록을 불러온 뒤 선택할 수 있습니다. private project는 robot/token을 일회성으로 입력하세요.</div><div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px"><select id="hb-map-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-map-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-map-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadMapProjects()">Projects 불러오기</button><select id="hb-map-project-select" onchange="harborSelectToInput(\'hb-map-project-select\',\'hb-map-project\')"><option value="">project 선택</option></select><input id="hb-map-project" placeholder="Harbor project"><select id="hb-map-cluster">' + clusterOpts + '</select><input id="hb-map-ns" placeholder="namespace"><input id="hb-map-secret" placeholder="secret name(자동 가능)"><input id="hb-map-owner" placeholder="owner team"></div><button type="button" onclick="harborCreateMapping()">매핑 저장</button> <button type="button" class="secondary" onclick="harborResetMappingForm()">새로 입력</button> <span id="hb-map-out" class="muted" style="font-size:12px"></span><table style="margin-top:10px"><thead><tr><th>Project</th><th>Cluster</th><th>Namespace</th><th>Secret</th><th>Owner</th><th></th></tr></thead><tbody>' + mappingRows + '</tbody></table></div>');
+        card('Harbor Catalog 조회', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Projects, repositories, artifacts(tags·digest 포함)를 조회합니다. private project는 저장 Credential을 선택하거나 robot name/token을 일회성으로 입력하세요. token은 응답하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-cat-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-cat-target"><option value="projects">projects</option><option value="repositories">repositories</option><option value="artifacts">artifacts</option></select><select id="hb-cat-cred">' + harborCredOpts + '</select><input id="hb-cat-project" placeholder="project"><input id="hb-cat-repo" placeholder="repository(artifact 조회시)"><input id="hb-cat-robot" placeholder="robot name"><input id="hb-cat-token" type="password" placeholder="token(일회성)" style="grid-column:span 2"><button type="button" onclick="harborQueryCatalog()">조회</button></div><pre id="hb-cat-out" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin-top:8px"></pre></div>') +
+        card('Harbor Project → Namespace 매핑', '<div class="card-body"><input id="hb-map-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Harbor에서 project 목록을 불러온 뒤 선택할 수 있습니다. private project는 저장 Credential 또는 일회성 robot/token을 사용하세요.</div><div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:8px"><select id="hb-map-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-map-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><select id="hb-map-token-cred">' + harborCredOpts + '</select><input id="hb-map-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadMapProjects()">Projects 불러오기</button><select id="hb-map-project-select" onchange="harborSelectToInput(\'hb-map-project-select\',\'hb-map-project\')"><option value="">project 선택</option></select><input id="hb-map-project" placeholder="Harbor project"><select id="hb-map-cluster">' + clusterOpts + '</select><input id="hb-map-ns" placeholder="namespace"><input id="hb-map-secret" placeholder="secret name(자동 가능)"><input id="hb-map-owner" placeholder="owner team"></div><button type="button" onclick="harborCreateMapping()">매핑 저장</button> <button type="button" class="secondary" onclick="harborResetMappingForm()">새로 입력</button> <span id="hb-map-out" class="muted" style="font-size:12px"></span><table style="margin-top:10px"><thead><tr><th>Project</th><th>Cluster</th><th>Namespace</th><th>Secret</th><th>Owner</th><th></th></tr></thead><tbody>' + mappingRows + '</tbody></table></div>');
     }
     async function renderHarborRobots(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('Harbor Robot Account', '<div class="empty">불러오는 중...</div>');
-      let regs, robots;
+      let regs, robots, credentials;
       try {
-        [regs, robots] = await Promise.all([
+        [regs, robots, credentials] = await Promise.all([
           api('/admin/harbor/registries').catch(() => ({ registries: [] })),
-          api('/admin/harbor/robots').catch(() => ({ robots: [] }))
+          api('/admin/harbor/robots').catch(() => ({ robots: [] })),
+          api('/admin/external-integrations/credentials?providers=harbor,harbor_robot').catch(() => ({ data: { credentials: [] } }))
         ]);
       } catch (e) {
         view.innerHTML = section('Harbor Robot Account', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -12467,25 +12503,28 @@ const adminHTML = `<!doctype html>
       window.harborRobotsCache = {};
       (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
       (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
+      const harborCredentials = ((credentials && credentials.data && credentials.data.credentials) || credentials.credentials || []);
+      const harborCredOpts = externalCredentialOptions(harborCredentials, ['harbor', 'harbor_robot'], '');
       const rows = (robots.robots || []).map(r =>
         '<tr><td><strong>' + escapeHTML(r.name || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(r.id || '') + '</div></td><td>' + escapeHTML(r.project_name || '-') + '</td><td>' + harborStatusBadge(r.status) + '</td><td>' + (r.has_token_hash ? '<span class="status">hash 저장</span>' : '<span class="status warn">hash 없음</span>') + '</td><td>' + escapeHTML(r.expires_at || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(r.last_error || '') + '<div>' + (r.last_verified_at ? ago(r.last_verified_at) : '-') + '</div></td><td><button type="button" class="secondary" onclick="harborEditRobot(\'' + escapeAttr(r.id || '') + '\')">수정</button> <button type="button" class="danger" onclick="harborDeleteRobot(\'' + escapeAttr(r.id || '') + '\')">삭제</button></td></tr>'
       ).join('') || '<tr><td colspan="7" class="muted">등록된 Robot Account가 없습니다.</td></tr>';
       view.innerHTML =
         section('Harbor Robot Account', harborSubnav() + '<div class="kpis">' + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Verified', fmt((robots.robots || []).filter(r => r.status === 'verified').length)) + kpi('Token Hash', fmt((robots.robots || []).filter(r => r.has_token_hash).length)) + '</div>') +
-        card('Robot 등록/수정', '<div class="card-body"><input id="hb-robot-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Robot token은 일회성 입력이며 DB와 API 응답에 저장되지 않습니다. token hash만 회전·증적 용도로 보관됩니다. Project는 Harbor에서 불러와 선택할 수 있습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-robot-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><button type="button" class="secondary" onclick="harborLoadRobotProjects()">Projects 불러오기</button><select id="hb-robot-project-select" onchange="harborSelectToInput(\'hb-robot-project-select\',\'hb-robot-project\')"><option value="">project 선택</option></select><input id="hb-robot-project" placeholder="project"><input id="hb-robot-name" placeholder="robot$project+name"><input id="hb-robot-exp" placeholder="expires_at RFC3339"><input id="hb-robot-token" type="password" placeholder="token(입력 시 회전)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRobot()">저장</button> <button type="button" class="secondary" onclick="harborResetRobotForm()">새로 입력</button> <span id="hb-robot-out" class="muted" style="font-size:12px"></span></div></div>') +
-        card('Robot Pull 검증', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px"><select id="hb-verify-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-verify-token" type="password" placeholder="token(검증 후 폐기)"><button type="button" onclick="harborVerifyRobot()">pull 권한 검증</button></div><div id="hb-verify-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
+        card('Robot 등록/수정', '<div class="card-body"><input id="hb-robot-id" type="hidden"><div class="muted" style="font-size:11px;margin-bottom:8px">Robot token은 외부연동 메뉴에 저장한 Credential을 선택하거나, 일회성 token 입력으로 hash만 회전할 수 있습니다. Project는 Harbor에서 불러와 선택할 수 있습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-robot-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-robot-cred">' + harborCredOpts + '</select><button type="button" class="secondary" onclick="harborLoadRobotProjects()">Projects 불러오기</button><select id="hb-robot-project-select" onchange="harborSelectToInput(\'hb-robot-project-select\',\'hb-robot-project\')"><option value="">project 선택</option></select><input id="hb-robot-project" placeholder="project"><input id="hb-robot-name" placeholder="robot$project+name"><input id="hb-robot-exp" placeholder="expires_at RFC3339"><input id="hb-robot-token" type="password" placeholder="token(입력 시 회전)" style="grid-column:span 2"></div><div style="margin-top:8px"><button type="button" onclick="harborCreateRobot()">저장</button> <button type="button" class="secondary" onclick="harborResetRobotForm()">새로 입력</button> <a class="button secondary" href="#/external-integrations?provider=harbor">Credential 관리</a> <span id="hb-robot-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Robot Pull 검증', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-verify-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><select id="hb-verify-cred">' + harborCredOpts + '</select><input id="hb-verify-token" type="password" placeholder="token(검증 후 폐기)"><button type="button" onclick="harborVerifyRobot()">pull 권한 검증</button></div><div id="hb-verify-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
         card('Robot 목록', '<div class="card-body"><table><thead><tr><th>Robot</th><th>Project</th><th>상태</th><th>Token</th><th>만료</th><th>검증</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     async function renderAppLauncher(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('앱 런처', '<div class="empty">불러오는 중...</div>');
-      let regs, robots, maps, clusters;
+      let regs, robots, maps, clusters, credentials;
       try {
-        [regs, robots, maps, clusters] = await Promise.all([
+        [regs, robots, maps, clusters, credentials] = await Promise.all([
           api('/admin/harbor/registries').catch(() => ({ registries: [] })),
           api('/admin/harbor/robots').catch(() => ({ robots: [] })),
           api('/admin/harbor/mappings').catch(() => ({ mappings: [] })),
-          api('/admin/k8s/clusters').catch(() => ({ clusters: [] }))
+          api('/admin/k8s/clusters').catch(() => ({ clusters: [] })),
+          api('/admin/external-integrations/credentials?providers=harbor,harbor_robot').catch(() => ({ data: { credentials: [] } }))
         ]);
       } catch (e) {
         view.innerHTML = section('앱 런처', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -12495,12 +12534,14 @@ const adminHTML = `<!doctype html>
       window.harborRobotsCache = {};
       (regs.registries || []).forEach(r => { window.harborRegistriesCache[r.id || ''] = r; });
       (robots.robots || []).forEach(r => { window.harborRobotsCache[r.id || ''] = r; });
+      const harborCredentials = ((credentials && credentials.data && credentials.data.credentials) || credentials.credentials || []);
+      const harborCredOpts = externalCredentialOptions(harborCredentials, ['harbor', 'harbor_robot'], '');
       const mapHint = (maps.mappings || []).slice(0, 5).map(m => escapeHTML(m.project_name + ' → ' + m.cluster_id + '/' + m.namespace + ' · ' + (m.secret_name || ''))).join('<br>') || '<span class="muted">매핑 없음</span>';
       const clusterOpts = '<option value="">cluster 선택</option>' + (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '">' + escapeHTML(c.name || c.id || '') + '</option>').join('');
       view.innerHTML =
         section('앱 런처', harborSubnav() + '<div class="kpis">' + kpi('Registries', fmt((regs.registries || []).length)) + kpi('Robots', fmt((robots.robots || []).length)) + kpi('Mappings', fmt((maps.mappings || []).length)) + '</div>') +
-        card('imagePullSecret Preview', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">응답은 항상 redacted manifest입니다. 실제 dockerconfigjson token은 반환하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-ps-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><input id="hb-ps-project" placeholder="project"><input id="hb-ps-ns" placeholder="namespace" value="default"><input id="hb-ps-secret" placeholder="secret name"><input id="hb-ps-robot" placeholder="robot name"><input id="hb-ps-token" type="password" placeholder="token(선택, hash 확인용)" style="grid-column:span 2"><button type="button" onclick="harborPreviewPullSecret()">Secret Preview</button></div><textarea id="hb-ps-out" rows="9" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>') +
-        card('Deployment/Service 런칭 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">digest 우선 이미지 참조와 imagePullSecret을 포함한 Deployment/Service YAML을 생성합니다. Harbor에서 project/repository/tag·digest를 불러와 선택할 수 있고, 실제 적용은 YAML 변경/생성 승인 흐름을 사용합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-launch-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-launch-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><input id="hb-launch-catalog-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadLaunchProjects()">Projects 불러오기</button><select id="hb-launch-project-select" onchange="harborSelectToInput(\'hb-launch-project-select\',\'hb-launch-project\')"><option value="">project 선택</option></select><input id="hb-launch-project" placeholder="project"><button type="button" class="secondary" onclick="harborLoadLaunchRepositories()">Repositories 불러오기</button><select id="hb-launch-repo-select" onchange="harborSelectToInput(\'hb-launch-repo-select\',\'hb-launch-repo\')"><option value="">repository 선택</option></select><input id="hb-launch-repo" placeholder="repository 예: team/app"><button type="button" class="secondary" onclick="harborLoadLaunchArtifacts()">Tags/Digest 불러오기</button><select id="hb-launch-artifact-select" onchange="harborUseArtifactSelect(\'hb-launch-artifact-select\',\'hb-launch-tag\',\'hb-launch-digest\')"><option value="">tag/digest 선택</option></select><input id="hb-launch-tag" placeholder="tag"><input id="hb-launch-digest" placeholder="sha256:digest"><select id="hb-launch-cluster">' + clusterOpts + '</select><input id="hb-launch-ns" placeholder="namespace" value="default"><input id="hb-launch-app" placeholder="app name"><input id="hb-launch-replicas" type="number" value="1" min="1"><input id="hb-launch-port" type="number" value="8080" min="1"><input id="hb-launch-secret" placeholder="imagePullSecret"></div><div style="margin-top:8px"><button type="button" onclick="harborPreviewLaunch(false)">Manifest Preview</button> <button type="button" onclick="harborPreviewLaunch(true)">런칭 요청 저장</button> <button type="button" class="secondary" onclick="harborCopyLaunchManifest()">YAML 복사</button> <span id="hb-launch-status" class="muted" style="font-size:12px"></span></div><div class="grid2" style="margin-top:10px"><div><h3>Project 매핑 힌트</h3><div class="muted" style="font-size:12px">' + mapHint + '</div></div><div><h3>정책 판정</h3><div id="hb-launch-policy" class="muted" style="font-size:12px">Preview 후 표시됩니다.</div></div></div><textarea id="hb-launch-out" rows="18" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>');
+        card('imagePullSecret Preview', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">응답은 항상 redacted manifest입니다. 실제 dockerconfigjson token은 반환하지 않습니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-ps-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-ps-cred">' + harborCredOpts + '</select><input id="hb-ps-project" placeholder="project"><input id="hb-ps-ns" placeholder="namespace" value="default"><input id="hb-ps-secret" placeholder="secret name"><input id="hb-ps-robot" placeholder="robot name"><input id="hb-ps-token" type="password" placeholder="token(선택, hash 확인용)" style="grid-column:span 2"><button type="button" onclick="harborPreviewPullSecret()">Secret Preview</button></div><textarea id="hb-ps-out" rows="9" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>') +
+        card('Deployment/Service 런칭 요청', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">digest 우선 이미지 참조와 imagePullSecret을 포함한 Deployment/Service YAML을 생성합니다. Harbor에서 project/repository/tag·digest를 불러와 선택할 수 있고, 실제 적용은 YAML 변경/생성 승인 흐름을 사용합니다.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><select id="hb-launch-reg">' + harborRegistryOptions(regs.registries || [], '') + '</select><select id="hb-launch-robot">' + harborRobotOptions(robots.robots || [], '') + '</select><select id="hb-launch-catalog-token-cred">' + harborCredOpts + '</select><input id="hb-launch-catalog-token" type="password" placeholder="catalog token(일회성)"><button type="button" class="secondary" onclick="harborLoadLaunchProjects()">Projects 불러오기</button><select id="hb-launch-project-select" onchange="harborSelectToInput(\'hb-launch-project-select\',\'hb-launch-project\')"><option value="">project 선택</option></select><input id="hb-launch-project" placeholder="project"><button type="button" class="secondary" onclick="harborLoadLaunchRepositories()">Repositories 불러오기</button><select id="hb-launch-repo-select" onchange="harborSelectToInput(\'hb-launch-repo-select\',\'hb-launch-repo\')"><option value="">repository 선택</option></select><input id="hb-launch-repo" placeholder="repository 예: team/app"><button type="button" class="secondary" onclick="harborLoadLaunchArtifacts()">Tags/Digest 불러오기</button><select id="hb-launch-artifact-select" onchange="harborUseArtifactSelect(\'hb-launch-artifact-select\',\'hb-launch-tag\',\'hb-launch-digest\')"><option value="">tag/digest 선택</option></select><input id="hb-launch-tag" placeholder="tag"><input id="hb-launch-digest" placeholder="sha256:digest"><select id="hb-launch-cluster">' + clusterOpts + '</select><input id="hb-launch-ns" placeholder="namespace" value="default"><input id="hb-launch-app" placeholder="app name"><input id="hb-launch-replicas" type="number" value="1" min="1"><input id="hb-launch-port" type="number" value="8080" min="1"><input id="hb-launch-secret" placeholder="imagePullSecret"></div><div style="margin-top:8px"><button type="button" onclick="harborPreviewLaunch(false)">Manifest Preview</button> <button type="button" onclick="harborPreviewLaunch(true)">런칭 요청 저장</button> <button type="button" class="secondary" onclick="harborCopyLaunchManifest()">YAML 복사</button> <a class="button secondary" href="#/external-integrations?provider=harbor">Credential 관리</a> <span id="hb-launch-status" class="muted" style="font-size:12px"></span></div><div class="grid2" style="margin-top:10px"><div><h3>Project 매핑 힌트</h3><div class="muted" style="font-size:12px">' + mapHint + '</div></div><div><h3>정책 판정</h3><div id="hb-launch-policy" class="muted" style="font-size:12px">Preview 후 표시됩니다.</div></div></div><textarea id="hb-launch-out" rows="18" readonly style="width:100%;font-family:ui-monospace,Consolas,monospace;margin-top:8px"></textarea></div>');
     }
     async function renderAppLaunchHistory(params) {
       const view = document.getElementById('view');
@@ -12609,7 +12650,7 @@ const adminHTML = `<!doctype html>
       if (out) out.textContent = '수정 모드: ' + (m.id || '');
     };
     window.harborResetMappingForm = () => {
-      ['hb-map-id','hb-map-project','hb-map-ns','hb-map-secret','hb-map-owner','hb-map-token'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['hb-map-id','hb-map-project','hb-map-ns','hb-map-secret','hb-map-owner','hb-map-token','hb-map-token-cred'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       harborSetOptions('hb-map-project-select', [], 'project 선택');
       const out = document.getElementById('hb-map-out');
       if (out) out.textContent = '';
@@ -12631,7 +12672,7 @@ const adminHTML = `<!doctype html>
     window.harborQueryCatalog = async () => {
       const out = document.getElementById('hb-cat-out');
       try {
-        const body = { registry_id: document.getElementById('hb-cat-reg').value, target: document.getElementById('hb-cat-target').value, project_name: document.getElementById('hb-cat-project').value, repository: document.getElementById('hb-cat-repo').value, robot_name: document.getElementById('hb-cat-robot').value, token: document.getElementById('hb-cat-token').value };
+        const body = { registry_id: document.getElementById('hb-cat-reg').value, target: document.getElementById('hb-cat-target').value, credential_id: safeInputValue('hb-cat-cred', ''), project_name: document.getElementById('hb-cat-project').value, repository: document.getElementById('hb-cat-repo').value, robot_name: document.getElementById('hb-cat-robot').value, token: document.getElementById('hb-cat-token').value };
         const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify(body) });
         document.getElementById('hb-cat-token').value = '';
         out.textContent = JSON.stringify(res.result || res, null, 2);
@@ -12643,7 +12684,7 @@ const adminHTML = `<!doctype html>
       const out = document.getElementById('hb-robot-out');
       try {
         const id = safeInputValue('hb-robot-id', '').trim();
-        const body = { registry_id: safeInputValue('hb-robot-reg', ''), project_name: safeInputValue('hb-robot-project', ''), name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', ''), expires_at: safeInputValue('hb-robot-exp', '') };
+        const body = { registry_id: safeInputValue('hb-robot-reg', ''), credential_id: safeInputValue('hb-robot-cred', ''), project_name: safeInputValue('hb-robot-project', ''), name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', ''), expires_at: safeInputValue('hb-robot-exp', '') };
         const res = await api(id ? '/admin/harbor/robots/' + encodeURIComponent(id) : '/admin/harbor/robots', { method: 'POST', body: JSON.stringify(body) });
         document.getElementById('hb-robot-token').value = '';
         out.textContent = (id ? '수정됨: ' : '등록됨: ') + ((res.robot || {}).id || '');
@@ -12666,7 +12707,7 @@ const adminHTML = `<!doctype html>
       if (out) out.textContent = '수정 모드: ' + (r.id || '') + ' · token 입력 시 회전';
     };
     window.harborResetRobotForm = () => {
-      ['hb-robot-id','hb-robot-project','hb-robot-name','hb-robot-exp','hb-robot-token'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['hb-robot-id','hb-robot-project','hb-robot-name','hb-robot-exp','hb-robot-token','hb-robot-cred'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       harborSetOptions('hb-robot-project-select', [], 'project 선택');
       const out = document.getElementById('hb-robot-out');
       if (out) out.textContent = '';
@@ -12681,7 +12722,7 @@ const adminHTML = `<!doctype html>
     };
     window.harborLoadRobotProjects = async () => {
       try {
-        const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: safeInputValue('hb-robot-reg', ''), target: 'projects', robot_name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', '') }) });
+        const res = await api('/admin/harbor/catalog/query', { method: 'POST', body: JSON.stringify({ registry_id: safeInputValue('hb-robot-reg', ''), target: 'projects', credential_id: safeInputValue('hb-robot-cred', ''), robot_name: safeInputValue('hb-robot-name', ''), token: safeInputValue('hb-robot-token', '') }) });
         const projects = harborCatalogItems(res.result || res).map(harborProjectName);
         harborSetOptions('hb-robot-project-select', projects, 'project 선택');
         if (projects.length === 1) {
@@ -12694,7 +12735,7 @@ const adminHTML = `<!doctype html>
     window.harborVerifyRobot = async () => {
       const out = document.getElementById('hb-verify-out');
       try {
-        const body = { robot_id: document.getElementById('hb-verify-robot').value, token: document.getElementById('hb-verify-token').value };
+        const body = { robot_id: document.getElementById('hb-verify-robot').value, credential_id: safeInputValue('hb-verify-cred', ''), token: document.getElementById('hb-verify-token').value };
         const res = await api('/admin/harbor/robots/verify', { method: 'POST', body: JSON.stringify(body) });
         document.getElementById('hb-verify-token').value = '';
         out.textContent = '검증 상태: ' + res.status + (((res.result || {}).error) ? ' · ' + (res.result || {}).error : '');
@@ -12704,7 +12745,7 @@ const adminHTML = `<!doctype html>
     window.harborPreviewPullSecret = async () => {
       const out = document.getElementById('hb-ps-out');
       try {
-        const body = { registry_id: document.getElementById('hb-ps-reg').value, project_name: document.getElementById('hb-ps-project').value, namespace: document.getElementById('hb-ps-ns').value, secret_name: document.getElementById('hb-ps-secret').value, robot_name: document.getElementById('hb-ps-robot').value, token: document.getElementById('hb-ps-token').value };
+        const body = { registry_id: document.getElementById('hb-ps-reg').value, credential_id: safeInputValue('hb-ps-cred', ''), project_name: document.getElementById('hb-ps-project').value, namespace: document.getElementById('hb-ps-ns').value, secret_name: document.getElementById('hb-ps-secret').value, robot_name: document.getElementById('hb-ps-robot').value, token: document.getElementById('hb-ps-token').value };
         const res = await api('/admin/harbor/pull-secret/preview', { method: 'POST', body: JSON.stringify(body) });
         document.getElementById('hb-ps-token').value = '';
         out.value = (res.manifest || '') + (res.dockerconfig_hash ? '\n# dockerconfig_hash: ' + res.dockerconfig_hash : '');
@@ -13747,6 +13788,36 @@ const adminHTML = `<!doctype html>
         gitOpsStepHTML('Rollout/Evidence', (rolloutCount || evidenceCount) ? 'rollout ' + fmt(rolloutCount) + ' · evidence ' + fmt(evidenceCount) : '단계적 배포와 증적을 남기면 운영 인계가 쉬워집니다.', (rolloutCount + evidenceCount) > 0) +
       '</div>';
     }
+    function externalProviderNormalized(provider) {
+      const v = String(provider || '').trim().toLowerCase();
+      if (v === 'bitbucket' || v === 'bitbucket-server' || v === 'stash') return 'bitbucket_server';
+      if (v === 'harbor-robot' || v === 'robot') return 'harbor_robot';
+      if (v === 'harbor_registry') return 'harbor';
+      if (v === 'mattermost_webhook') return 'mattermost';
+      return v;
+    }
+    function externalCredentialProviderLabel(provider) {
+      switch (externalProviderNormalized(provider)) {
+      case 'gitlab': return 'GitLab';
+      case 'bitbucket_server': return 'Bitbucket Server';
+      case 'harbor': return 'Harbor Registry';
+      case 'harbor_robot': return 'Harbor Robot';
+      case 'mattermost': return 'Mattermost';
+      default: return provider || '-';
+      }
+    }
+    function externalCredentialOptions(credentials, providers, selected) {
+      const allow = (providers || []).map(externalProviderNormalized).filter(Boolean);
+      const opts = ['<option value="">저장 Credential 선택 안 함</option>'];
+      (credentials || []).forEach(c => {
+        const pay = c.payload || {};
+        const provider = externalProviderNormalized(pay.provider || c.provider);
+        if (allow.length && allow.indexOf(provider) < 0) return;
+        const label = (c.name || c.id || '-') + ' · ' + externalCredentialProviderLabel(provider) + ' · ' + (pay.username || '-') + ' · ' + (pay.base_url || c.source_ref || '-');
+        opts.push('<option value="' + escapeAttr(c.id || '') + '"' + ((c.id || '') === (selected || '') ? ' selected' : '') + '>' + escapeHTML(label) + '</option>');
+      });
+      return opts.join('');
+    }
     function gitOpsProviderOptions(providers, selected) {
       const opts = ['<option value="">직접 입력 / 선택 안 함</option>'];
       (providers || []).forEach(p => {
@@ -13756,10 +13827,11 @@ const adminHTML = `<!doctype html>
       });
       return opts.join('');
     }
-    function gitOpsProviderCardHTML(providers) {
+    function gitOpsProviderCardHTML(providers, credentials) {
       const opts = gitOpsProviderOptions(providers, '');
+      const credOpts = externalCredentialOptions(credentials || [], ['gitlab', 'bitbucket_server'], '');
       return '<div class="card-body">' +
-        '<p class="muted" style="font-size:12px;margin-top:0">사내 GitLab과 Bitbucket Server 6.x 계열을 GitOps 원장에 연결합니다. 토큰은 저장하지 않고 연결 확인과 탐색 요청에만 일회성으로 사용합니다.</p>' +
+        '<p class="muted" style="font-size:12px;margin-top:0">사내 GitLab과 Bitbucket Server 6.x 계열을 GitOps 원장에 연결합니다. Token/Password는 <a href="#/external-integrations?provider=gitlab">외부연동</a> 메뉴의 사용자별 Credential Vault에 암호화 저장해 계속 재사용할 수 있고, 필요할 때만 일회성 입력을 사용할 수 있습니다.</p>' +
         '<div class="gitops-quick-form">' +
           '<div class="mini-panel"><h3>Provider 등록</h3>' +
             '<label>기존 Provider<select id="gitops-provider-existing" onchange="gitOpsFillProviderDefaults()">' + opts + '</select></label>' +
@@ -13767,12 +13839,14 @@ const adminHTML = `<!doctype html>
             '<label>이름<input id="gitops-provider-name" placeholder="prod gitlab"></label>' +
             '<label>Base URL<input id="gitops-provider-url" placeholder="https://gitlab.internal 또는 https://bitbucket.local"></label>' +
             '<label>Username <span class="muted">(Bitbucket Basic Auth 선택)</span><input id="gitops-provider-user" placeholder="svc-clustara"></label>' +
+            '<label>기본 Credential<select id="gitops-provider-credential">' + credOpts + '</select></label>' +
             '<label>일회성 Token/Password<input id="gitops-provider-token" type="password" autocomplete="new-password" placeholder="저장되지 않음"></label>' +
             '<div class="gitops-provider-actions"><button type="button" onclick="gitOpsSaveProvider()">저장/수정</button><button type="button" class="secondary" onclick="gitOpsTestProvider()">연결 확인</button><button type="button" class="secondary" onclick="gitOpsArchiveProvider()">비활성화</button></div>' +
             '<div id="gitops-provider-result" class="gitops-provider-note" style="margin-top:8px">mock://gitlab 또는 mock://bitbucket_server 를 넣으면 폐쇄망 UI 테스트용 샘플 데이터를 볼 수 있습니다.</div>' +
           '</div>' +
           '<div class="mini-panel"><h3>Catalog 불러오기</h3>' +
             '<label>Provider<select id="gitops-cat-provider" onchange="gitOpsFillProviderDefaults()">' + opts + '</select></label>' +
+            '<label>저장 Credential<select id="gitops-cat-credential">' + credOpts + '</select></label>' +
             '<label>대상<select id="gitops-cat-target"><option value="projects">Projects</option><option value="repositories">Repositories</option><option value="branches">Branches</option><option value="tree">Repository Tree</option><option value="file">Raw File Preview</option></select></label>' +
             '<label>검색어<input id="gitops-cat-search" placeholder="repo, branch, project 검색어"></label>' +
             '<label>GitLab Project ID/Path<input id="gitops-cat-project-id" placeholder="123 또는 group/project"></label>' +
@@ -13785,6 +13859,7 @@ const adminHTML = `<!doctype html>
           '</div>' +
           '<div class="mini-panel"><h3>PR API Template</h3>' +
             '<label>Provider<select id="gitops-pr-provider">' + opts + '</select></label>' +
+            '<label>저장 Credential<select id="gitops-pr-credential">' + credOpts + '</select></label>' +
             '<label>Source Branch<input id="gitops-pr-source-branch" placeholder="clustara/change-123"></label>' +
             '<label>Target Branch<input id="gitops-pr-target-branch" value="main"></label>' +
             '<label>제목<input id="gitops-pr-provider-title" placeholder="Clustara GitOps change"></label>' +
@@ -13814,7 +13889,7 @@ const adminHTML = `<!doctype html>
         scope_type: 'git_provider',
         scope_id: kind + ':' + url,
         source_ref: url,
-        payload: { provider: kind, base_url: url, username, token }
+        payload: { provider: kind, base_url: url, username, token, default_credential_id: safeInputValue('gitops-provider-credential', '').trim() }
       };
     }
     window.gitOpsFillProviderDefaults = () => {
@@ -13830,6 +13905,9 @@ const adminHTML = `<!doctype html>
       set('gitops-provider-name', p.name || '');
       set('gitops-provider-url', pay.base_url || p.source_ref || '');
       set('gitops-provider-user', pay.username || '');
+      set('gitops-provider-credential', pay.default_credential_id || '');
+      set('gitops-cat-credential', pay.default_credential_id || '');
+      set('gitops-pr-credential', pay.default_credential_id || '');
       set('gitops-cat-project-id', pay.default_project_id || '');
       set('gitops-cat-project-key', pay.default_project_key || '');
       set('gitops-cat-repo-slug', pay.default_repo_slug || '');
@@ -13858,12 +13936,18 @@ const adminHTML = `<!doctype html>
         showToast('error', 'Git Provider 비활성화 실패', e.message);
       }
     };
+    function gitOpsCredentialIDFor(providerField) {
+      if (providerField === 'gitops-provider-existing') return safeInputValue('gitops-provider-credential', '').trim();
+      if (providerField === 'gitops-pr-provider') return safeInputValue('gitops-pr-credential', '').trim();
+      return safeInputValue('gitops-cat-credential', '').trim();
+    }
     function gitOpsCatalogRequest(providerField, tokenField) {
       const providerID = gitOpsActiveProviderID(providerField || 'gitops-cat-provider');
       const p = gitOpsProviderByID(providerID);
       const pay = (p && p.payload) || {};
       return {
         provider_id: providerID,
+        credential_id: gitOpsCredentialIDFor(providerField || 'gitops-cat-provider') || pay.default_credential_id || '',
         provider: pay.provider || safeInputValue('gitops-provider-kind', 'gitlab'),
         base_url: pay.base_url || safeInputValue('gitops-provider-url', ''),
         username: pay.username || safeInputValue('gitops-provider-user', ''),
@@ -14072,9 +14156,9 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       view.innerHTML = section('GitOps Change Manager', '<div class="empty">불러오는 중...</div>');
-      let clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers;
+      let clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers, credentials;
       try {
-        [clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers] = await Promise.all([
+        [clusters, data, drift, sources, rollbacks, calendar, evidence, prDrafts, rollouts, providers, credentials] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/gitops/overview' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/gitops/drift' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ data: { drift: [] } })),
@@ -14085,6 +14169,7 @@ const adminHTML = `<!doctype html>
           api('/admin/gitops/pr-drafts').catch(() => ({ data: { drafts: [] } })),
           api('/admin/gitops/progressive-rollouts').catch(() => ({ data: { rollouts: [] } })),
           api('/admin/gitops/providers').catch(() => ({ data: { providers: [] } })),
+          api('/admin/external-integrations/credentials?providers=gitlab,bitbucket_server').catch(() => ({ data: { credentials: [] } })),
         ]);
       } catch (e) {
         view.innerHTML = section('GitOps Change Manager', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -14133,7 +14218,9 @@ const adminHTML = `<!doctype html>
       const rolloutList = ((rollouts && rollouts.data && rollouts.data.rollouts) || rollouts.rollouts || []);
       const evidenceList = ((evidence && evidence.data && evidence.data.evidence) || evidence.evidence || []);
       const providerList = ((providers && providers.data && providers.data.providers) || providers.providers || []);
+      const credentialList = ((credentials && credentials.data && credentials.data.credentials) || credentials.credentials || []);
       window.gitOpsProviderCache = providerList;
+      window.externalCredentialCache = credentialList;
       const stackOptions = '<option value="">Stack 선택 안 함</option>' + (data.stacks || []).map(x => {
         const st = x.stack || {};
         const value = [st.id || '', st.cluster_id || '', st.namespace || '', st.name || ''].join('|');
@@ -14158,7 +14245,7 @@ const adminHTML = `<!doctype html>
           '</div><div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div>' +
           gitOpsWorkflowHTML(sum, sourceList.length, actionableDriftCount, prList.length, rolloutList.length, evidenceList.length) +
           '</div>') +
-        card('사내 Git Provider 연동', gitOpsProviderCardHTML(providerList)) +
+        card('사내 Git Provider 연동', gitOpsProviderCardHTML(providerList, credentialList)) +
         card('GitOps 빠른 등록', '<div class="card-body"><p class="muted" style="font-size:12px;margin-top:0">이 카드의 항목은 실제 Git provider에 바로 쓰지 않고 GitOps 원장에 초안·계획·증적으로 저장합니다. 이후 Stack Apply, YAML 변경, 외부 PR 자동화와 연결하세요.</p>' + gitOpsQuickFormHTML(clusterId, stackOptions) + '</div>') +
         card('Drift and Change Readiness', '<div class="card-body"><table><thead><tr><th>위험</th><th>Stack</th><th>Git Source</th><th>Sync</th><th>Drift</th><th>Last Op</th><th>Rollback</th><th>사유</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
         '<div class="grid2">' +
@@ -15786,29 +15873,48 @@ const adminHTML = `<!doctype html>
         '<tr><td><strong>' + escapeHTML(g.group.name) + '</strong>' + (g.group.kind ? ' <span class="status" style="font-size:9px">' + escapeHTML(g.group.kind) + '</span>' : '') + '</td>' +
         '<td>' + fmt(g.total) + '</td><td>' + fmt(g.ready) + '</td><td>' + fmt(g.risky) + '</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML((g.members || []).join(', ')) + '</td>' +
-        '<td>' + (g.group.id ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sGroupDelete(\'' + escapeAttr(g.group.id) + '\')">삭제</button>' : '') + '</td></tr>'
+        '<td>' + (g.group.id ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sGroupEdit(\'' + escapeAttr(g.group.id) + '\')">수정</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sGroupDelete(\'' + escapeAttr(g.group.id) + '\')">삭제</button>' : '') + '</td></tr>'
       ).join('') : '<tr><td colspan="6" class="muted">그룹이 없습니다.</td></tr>';
 
+      window.k8sMetaGroupsCache = {};
+      (groups.groups || []).forEach(g => { if (g.group && g.group.id) window.k8sMetaGroupsCache[g.group.id] = g.group; });
+      window.k8sMetaOwnershipCache = {};
       const ownRows = (ownership.ownership || []).length ? (ownership.ownership || []).map(o =>
         '<tr><td>' + escapeHTML(o.cluster_id) + '</td><td>' + escapeHTML(o.namespace) + '</td><td>' + escapeHTML(o.team || '-') + '</td>' +
         '<td>' + escapeHTML(o.owner || '-') + '</td><td>' + escapeHTML(o.service_name || '-') + '</td>' +
-        '<td>' + escapeHTML(o.criticality || '-') + '</td><td>' + escapeHTML(o.cost_center || '-') + '</td></tr>'
-      ).join('') : '<tr><td colspan="7" class="muted">오너십 정보가 없습니다.</td></tr>';
+        '<td>' + escapeHTML(o.criticality || '-') + '</td><td>' + escapeHTML(o.cost_center || '-') + '</td>' +
+        '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sOwnEdit(\'' + escapeAttr(o.cluster_id) + '\',\'' + escapeAttr(o.namespace) + '\')">수정</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sOwnDelete(\'' + escapeAttr(o.cluster_id) + '\',\'' + escapeAttr(o.namespace) + '\')">삭제</button></td></tr>'
+      ).join('') : '<tr><td colspan="8" class="muted">오너십 정보가 없습니다.</td></tr>';
+      (ownership.ownership || []).forEach(o => { window.k8sMetaOwnershipCache[(o.cluster_id || '') + '/' + (o.namespace || '')] = o; });
 
       const clusterOpts = (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id) + '">' + escapeHTML(c.name) + '</option>').join('');
+      const groupOpts = '<option value="">(미분류)</option>' + (groups.groups || []).filter(g => g.group && g.group.id).map(g => '<option value="' + escapeAttr(g.group.id) + '">' + escapeHTML(g.group.name || g.group.id) + '</option>').join('');
+      const groupNameByID = {};
+      (groups.groups || []).forEach(g => { if (g.group && g.group.id) groupNameByID[g.group.id] = g.group.name || g.group.id; });
+      const membershipRows = (clusters.clusters || []).length ? (clusters.clusters || []).map(c =>
+        '<tr><td><strong>' + escapeHTML(c.name || c.id) + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(c.id || '') + '</div></td>' +
+        '<td>' + (c.group_id ? '<span class="status">' + escapeHTML(groupNameByID[c.group_id] || c.group_id) + '</span>' : '<span class="status warn">미분류</span>') + '</td>' +
+        '<td>' + escapeHTML(c.status || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(c.kubernetes_version || '-') + '</td>' +
+        '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sGroupPrepareMembership(\'' + escapeAttr(c.id || '') + '\',\'' + escapeAttr(c.group_id || '') + '\')">그룹 변경</button> ' +
+        (c.group_id ? '<button type="button" class="secondary" style="font-size:11px" onclick="k8sGroupRemoveCluster(\'' + escapeAttr(c.id || '') + '\')">미분류</button>' : '') + '</td></tr>'
+      ).join('') : '<tr><td colspan="5" class="muted">등록된 클러스터가 없습니다.</td></tr>';
 
       view.innerHTML =
         section('K8s 그룹·오너십', '') +
-        card('클러스터 그룹 추가 (업무망/개발망/운영망/인터넷망/DMZ)',
-          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        card('클러스터 그룹 추가/수정 (업무망/개발망/운영망/인터넷망/DMZ)',
+          '<div class="card-body"><input id="grp-id" type="hidden"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<input id="grp-name" placeholder="그룹 이름" style="min-width:160px">' +
           '<input id="grp-kind" placeholder="망 구분(예: 운영망)" style="min-width:140px">' +
           '<input id="grp-desc" placeholder="설명" style="min-width:200px">' +
-          '<button type="button" onclick="k8sGroupAdd()">추가</button></div><div id="grp-msg" class="muted" style="font-size:11px;margin-top:4px"></div></div>') +
+          '<button id="grp-save" type="button" onclick="k8sGroupAdd()">저장</button><button type="button" class="secondary" onclick="k8sGroupReset()">새로 입력</button></div><div id="grp-msg" class="muted" style="font-size:11px;margin-top:4px"></div></div>') +
         card('그룹 현황',
           '<div class="card-body"><table><thead><tr><th>그룹</th><th>클러스터</th><th>정상</th><th>위험</th><th>멤버</th><th></th></tr></thead><tbody>' + grpRows + '</tbody></table></div>') +
-        card('네임스페이스 오너십 추가',
-          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        card('클러스터 그룹 멤버십 변경',
+          '<div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:8px">이미 등록된 클러스터를 그룹에 추가하거나 다른 그룹으로 이동할 수 있습니다. 그룹을 비우면 미분류로 제거됩니다.</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><select id="grp-member-cluster"><option value="">클러스터 선택</option>' + clusterOpts + '</select><select id="grp-member-group">' + groupOpts + '</select><button type="button" onclick="k8sGroupAssignCluster()">그룹 저장</button><button type="button" class="secondary" onclick="k8sGroupAssignCluster(\'\')">미분류로 제거</button><span id="grp-member-msg" class="muted" style="font-size:11px"></span></div>' +
+          '<table><thead><tr><th>클러스터</th><th>그룹</th><th>상태</th><th>버전</th><th></th></tr></thead><tbody>' + membershipRows + '</tbody></table></div>') +
+        card('네임스페이스 오너십 추가/수정',
+          '<div class="card-body"><input id="own-id" type="hidden"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<select id="own-cluster">' + clusterOpts + '</select>' +
           '<input id="own-ns" placeholder="namespace" style="min-width:120px">' +
           '<input id="own-team" placeholder="담당팀" style="min-width:100px">' +
@@ -15816,33 +15922,101 @@ const adminHTML = `<!doctype html>
           '<input id="own-svc" placeholder="서비스명" style="min-width:120px">' +
           '<input id="own-crit" placeholder="중요도" style="min-width:80px">' +
           '<input id="own-cc" placeholder="비용센터" style="min-width:100px">' +
-          '<button type="button" onclick="k8sOwnAdd()">저장</button></div><div id="own-msg" class="muted" style="font-size:11px;margin-top:4px"></div></div>') +
+          '<button id="own-save" type="button" onclick="k8sOwnAdd()">저장</button><button type="button" class="secondary" onclick="k8sOwnReset()">새로 입력</button></div><div id="own-msg" class="muted" style="font-size:11px;margin-top:4px"></div></div>') +
         card('오너십 목록',
-          '<div class="card-body"><table><thead><tr><th>Cluster</th><th>Namespace</th><th>팀</th><th>담당자</th><th>서비스</th><th>중요도</th><th>비용센터</th></tr></thead><tbody>' + ownRows + '</tbody></table></div>');
+          '<div class="card-body"><table><thead><tr><th>Cluster</th><th>Namespace</th><th>팀</th><th>담당자</th><th>서비스</th><th>중요도</th><th>비용센터</th><th></th></tr></thead><tbody>' + ownRows + '</tbody></table></div>');
     }
     window.k8sGroupAdd = async () => {
       const msg = document.getElementById('grp-msg');
       try {
         await api('/admin/k8s/groups', { method: 'POST', body: JSON.stringify({
-          name: document.getElementById('grp-name').value, kind: document.getElementById('grp-kind').value, description: document.getElementById('grp-desc').value }) });
+          id: safeInputValue('grp-id', '').trim(), name: document.getElementById('grp-name').value, kind: document.getElementById('grp-kind').value, description: document.getElementById('grp-desc').value }) });
         await renderK8sMeta();
       } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sGroupEdit = (id) => {
+      const g = (window.k8sMetaGroupsCache || {})[id];
+      if (!g) return;
+      const set = (key, value) => { const el = document.getElementById(key); if (el) el.value = value || ''; };
+      set('grp-id', g.id);
+      set('grp-name', g.name);
+      set('grp-kind', g.kind);
+      set('grp-desc', g.description);
+      const btn = document.getElementById('grp-save'); if (btn) btn.textContent = '수정 저장';
+      const msg = document.getElementById('grp-msg'); if (msg) msg.textContent = '수정 모드: ' + (g.id || '');
+      const nameEl = document.getElementById('grp-name'); if (nameEl) nameEl.focus();
+    };
+    window.k8sGroupReset = () => {
+      ['grp-id','grp-name','grp-kind','grp-desc'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      const btn = document.getElementById('grp-save'); if (btn) btn.textContent = '저장';
+      const msg = document.getElementById('grp-msg'); if (msg) msg.textContent = '';
     };
     window.k8sGroupDelete = async (id) => {
       if (!confirm('그룹을 삭제할까요? (클러스터는 미분류로 남습니다)')) return;
       try { await api('/admin/k8s/groups/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
       await renderK8sMeta();
     };
+    window.k8sGroupPrepareMembership = (clusterID, groupID) => {
+      const c = document.getElementById('grp-member-cluster'); if (c) c.value = clusterID || '';
+      const g = document.getElementById('grp-member-group'); if (g) g.value = groupID || '';
+      const msg = document.getElementById('grp-member-msg'); if (msg) msg.textContent = '선택됨: ' + (clusterID || '-');
+    };
+    window.k8sGroupAssignCluster = async (forcedGroupID) => {
+      const msg = document.getElementById('grp-member-msg');
+      const clusterID = safeInputValue('grp-member-cluster', '').trim();
+      const groupID = forcedGroupID === '' ? '' : safeInputValue('grp-member-group', '').trim();
+      if (!clusterID) { if (msg) msg.innerHTML = '<span class="status error">클러스터를 선택하세요.</span>'; return; }
+      try {
+        await api('/admin/k8s/clusters/' + encodeURIComponent(clusterID) + '/group', { method: 'POST', body: JSON.stringify({ group_id: groupID }) });
+        await renderK8sMeta();
+      } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sGroupRemoveCluster = async (clusterID) => {
+      if (!confirm('이 클러스터를 그룹에서 제거하고 미분류로 둘까요?')) return;
+      try {
+        await api('/admin/k8s/clusters/' + encodeURIComponent(clusterID) + '/group', { method: 'POST', body: JSON.stringify({ group_id: '' }) });
+        await renderK8sMeta();
+      } catch (e) { alert(e.message); }
+    };
     window.k8sOwnAdd = async () => {
       const msg = document.getElementById('own-msg');
       try {
         await api('/admin/k8s/ownership', { method: 'POST', body: JSON.stringify({
+          id: safeInputValue('own-id', '').trim(),
           cluster_id: document.getElementById('own-cluster').value, namespace: document.getElementById('own-ns').value,
           team: document.getElementById('own-team').value, owner: document.getElementById('own-owner').value,
           service_name: document.getElementById('own-svc').value, criticality: document.getElementById('own-crit').value,
           cost_center: document.getElementById('own-cc').value }) });
         await renderK8sMeta();
       } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sOwnEdit = (clusterID, namespace) => {
+      const o = (window.k8sMetaOwnershipCache || {})[(clusterID || '') + '/' + (namespace || '')];
+      if (!o) return;
+      const set = (key, value) => { const el = document.getElementById(key); if (el) el.value = value || ''; };
+      set('own-id', o.id);
+      set('own-cluster', o.cluster_id);
+      set('own-ns', o.namespace);
+      set('own-team', o.team);
+      set('own-owner', o.owner);
+      set('own-svc', o.service_name);
+      set('own-crit', o.criticality);
+      set('own-cc', o.cost_center);
+      const btn = document.getElementById('own-save'); if (btn) btn.textContent = '수정 저장';
+      const msg = document.getElementById('own-msg'); if (msg) msg.textContent = '수정 모드: ' + (o.cluster_id || '') + '/' + (o.namespace || '');
+      const nsEl = document.getElementById('own-ns'); if (nsEl) nsEl.focus();
+    };
+    window.k8sOwnReset = () => {
+      ['own-id','own-ns','own-team','own-owner','own-svc','own-crit','own-cc'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      const btn = document.getElementById('own-save'); if (btn) btn.textContent = '저장';
+      const msg = document.getElementById('own-msg'); if (msg) msg.textContent = '';
+    };
+    window.k8sOwnDelete = async (clusterID, namespace) => {
+      if (!confirm(clusterID + '/' + namespace + ' 오너십 정보를 삭제할까요?')) return;
+      try {
+        await api('/admin/k8s/ownership/' + encodeURIComponent(clusterID) + '/' + encodeURIComponent(namespace), { method: 'DELETE' });
+        await renderK8sMeta();
+      } catch (e) { alert(e.message); }
     };
 
     // ---------- DW Metric Catalog: 표준 지표 사전 ----------
@@ -23158,6 +23332,228 @@ const adminHTML = `<!doctype html>
         });
       }
     }
+
+    function externalCredentialProviderGroup(provider) {
+      provider = externalProviderNormalized(provider || '');
+      if (provider === 'bitbucket_server') return 'bitbucket';
+      if (provider === 'harbor' || provider === 'harbor_robot') return 'harbor';
+      if (provider === 'mattermost') return 'mattermost';
+      if (provider === 'gitlab') return 'gitlab';
+      return 'all';
+    }
+    function externalCredentialDefaultProviderForGroup(group) {
+      if (group === 'bitbucket') return 'bitbucket_server';
+      if (group === 'harbor') return 'harbor_robot';
+      if (group === 'mattermost') return 'mattermost';
+      return 'gitlab';
+    }
+    function externalCredentialProviderSelect(selected) {
+      selected = externalProviderNormalized(selected || 'gitlab');
+      return [
+        ['gitlab', 'GitLab'],
+        ['bitbucket_server', 'Bitbucket Server 6.x'],
+        ['harbor_robot', 'Harbor Robot'],
+        ['harbor', 'Harbor Registry'],
+        ['mattermost', 'Mattermost Webhook']
+      ].map(([value, label]) => '<option value="' + value + '"' + (value === selected ? ' selected' : '') + '>' + label + '</option>').join('');
+    }
+    function externalCredentialFilterCredentials(credentials, group) {
+      if (!group || group === 'all') return credentials || [];
+      return (credentials || []).filter(c => externalCredentialProviderGroup((c.payload || {}).provider || '') === group);
+    }
+    function externalCredentialTabs(credentials, active) {
+      const count = (group) => externalCredentialFilterCredentials(credentials, group).length;
+      const tabs = [
+        ['all', '전체', (credentials || []).length],
+        ['gitlab', 'GitLab', count('gitlab')],
+        ['bitbucket', 'Bitbucket', count('bitbucket')],
+        ['harbor', 'Harbor', count('harbor')],
+        ['mattermost', 'Mattermost', count('mattermost')]
+      ];
+      return '<div class="external-tabs">' + tabs.map(([key, label, n]) =>
+        '<a href="#/external-integrations' + (key === 'all' ? '' : '?provider=' + key) + '"' + (active === key ? ' class="active"' : '') + '>' + escapeHTML(label) + ' <span>(' + fmt(n) + ')</span></a>'
+      ).join('') + '</div>';
+    }
+    function externalCredentialProviderGuide(group) {
+      if (group === 'bitbucket') {
+        return [
+          'Bitbucket Server 6.x의 project/repository/branch picker에서 재사용됩니다.',
+          'Base URL은 사내 Bitbucket 서버 루트 URL을 넣고, Project Key와 Repo Slug를 기본값으로 저장할 수 있습니다.'
+        ];
+      }
+      if (group === 'harbor') {
+        return [
+          'Harbor catalog 조회, Robot 검증, imagePullSecret preview에서 Credential selectbox로 재사용됩니다.',
+          'Robot 계정은 username에 robot$project+name 형식을 저장하면 입력을 줄일 수 있습니다.'
+        ];
+      }
+      if (group === 'mattermost') {
+        return [
+          'Mattermost webhook이나 bot token을 보관하는 영역입니다.',
+          '알림 채널별 webhook을 이름으로 구분해 두면 장애/보안/비용 알림 연결이 쉬워집니다.'
+        ];
+      }
+      return [
+        'GitLab project/branch/tree/file picker와 GitOps provider 연결 확인에 재사용됩니다.',
+        'GitLab Project ID/Path와 기본 branch를 저장해두면 Git Source 연결 입력을 빠르게 채울 수 있습니다.'
+      ];
+    }
+    function externalCredentialRows(credentials, activeGroup) {
+      const visible = externalCredentialFilterCredentials(credentials, activeGroup);
+      const rows = (visible || []).map(c => {
+        const pay = c.payload || {};
+        const provider = externalProviderNormalized(pay.provider || '');
+        return '<tr>' +
+          '<td><span class="status ' + (c.status === 'active' ? '' : 'warn') + '">' + escapeHTML(c.status || '-') + '</span></td>' +
+          '<td><strong>' + escapeHTML(c.name || c.id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(c.id || '') + '</div></td>' +
+          '<td>' + escapeHTML(externalCredentialProviderLabel(provider)) + '</td>' +
+          '<td class="muted" style="font-size:11px;word-break:break-all">' + escapeHTML(pay.base_url || c.source_ref || '-') + '</td>' +
+          '<td>' + escapeHTML(pay.username || '-') + '</td>' +
+          '<td>' + (pay.secret_configured ? '<span class="status">암호화 저장</span>' : '<span class="status warn">secret 없음</span>') + '</td>' +
+          '<td class="muted" style="font-size:11px">' + escapeHTML(pay.description || '') + '<div>' + (c.updated_at ? ago(c.updated_at) : '-') + '</div></td>' +
+          '<td><button type="button" class="secondary" onclick="externalCredentialEdit(\'' + escapeAttr(c.id || '') + '\')">수정</button> <button type="button" class="secondary" onclick="externalCredentialTest(\'' + escapeAttr(c.id || '') + '\')">연결 확인</button> <button type="button" class="danger" onclick="externalCredentialDelete(\'' + escapeAttr(c.id || '') + '\')">삭제</button></td>' +
+        '</tr>';
+      }).join('');
+      return rows || '<tr><td colspan="8" class="muted">저장된 외부 연동 Credential이 없습니다.</td></tr>';
+    }
+    async function renderExternalIntegrations() {
+      const view = document.getElementById('view');
+      view.innerHTML = section('외부연동 설정', '<div class="empty">불러오는 중...</div>');
+      const activeGroupRaw = (parseHash().params.get('provider') || 'all').toLowerCase();
+      const activeGroup = ['all', 'gitlab', 'bitbucket', 'harbor', 'mattermost'].indexOf(activeGroupRaw) >= 0 ? activeGroupRaw : 'all';
+      let data;
+      try {
+        data = await api('/admin/external-integrations/credentials').catch(() => ({ data: { credentials: [] } }));
+      } catch (e) {
+        view.innerHTML = section('외부연동 설정', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
+        return;
+      }
+      const credentials = ((data && data.data && data.data.credentials) || data.credentials || []);
+      window.externalCredentialCache = credentials;
+      window.externalCredentialActiveGroup = activeGroup;
+      const visibleCredentials = externalCredentialFilterCredentials(credentials, activeGroup);
+      const defaultProvider = externalCredentialDefaultProviderForGroup(activeGroup);
+      const guide = externalCredentialProviderGuide(activeGroup === 'all' ? 'gitlab' : activeGroup).map(x => '<div class="external-hint">' + escapeHTML(x) + '</div>').join('');
+      view.innerHTML =
+        section('외부연동 설정', '<div class="card-body">' +
+          '<div class="kpis">' +
+            kpi('Credentials', fmt(credentials.length)) +
+            kpi('Git', fmt(credentials.filter(c => ['gitlab','bitbucket_server'].indexOf(externalProviderNormalized((c.payload || {}).provider)) >= 0).length)) +
+            kpi('Harbor', fmt(credentials.filter(c => ['harbor','harbor_robot'].indexOf(externalProviderNormalized((c.payload || {}).provider)) >= 0).length)) +
+            kpi('Mattermost', fmt(credentials.filter(c => externalProviderNormalized((c.payload || {}).provider) === 'mattermost').length)) +
+          '</div>' +
+          '<p class="muted" style="font-size:12px;margin:10px 0 0">GitLab, Bitbucket Server, Harbor, Mattermost 같은 외부 연동 Token/Password를 사용자별로 암호화 저장합니다. Secret 원문은 저장 후 다시 표시되지 않고, GitOps/Harbor 화면에서는 Credential ID만 선택해 재사용합니다.</p>' +
+          externalCredentialTabs(credentials, activeGroup) +
+        '</div>') +
+        '<div class="external-layout">' +
+          card('Credential 등록/수정', '<div class="card-body"><input id="ext-cred-id" type="hidden">' +
+            '<div class="external-form-grid">' +
+              '<label>Provider<select id="ext-cred-provider">' + externalCredentialProviderSelect(defaultProvider) + '</select></label>' +
+              '<label>이름<input id="ext-cred-name" placeholder="예: prod gitlab readonly"></label>' +
+              '<label class="external-form-wide">Base URL<input id="ext-cred-url" placeholder="https://gitlab.internal 또는 https://harbor.local"></label>' +
+              '<label>Username / Robot<input id="ext-cred-user" placeholder="svc-clustara 또는 robot$project+name"></label>' +
+              '<label>Auth Type<select id="ext-cred-auth"><option value="token">Token</option><option value="password">Password</option><option value="basic">Basic Auth</option><option value="webhook">Webhook Secret</option></select></label>' +
+              '<label class="external-form-wide">Token/Password<input id="ext-cred-secret" type="password" autocomplete="new-password" placeholder="새로 저장하거나 회전할 때만 입력"></label>' +
+              '<label class="external-form-wide">Description<input id="ext-cred-desc" placeholder="용도, 권한 범위, 만료일, 담당팀 메모"></label>' +
+            '</div>' +
+            '<div class="external-form-block">' +
+              '<div class="external-form-title">기본 선택값</div>' +
+              '<div class="external-form-grid">' +
+                '<label>Default Project<input id="ext-cred-default-project" placeholder="Harbor project 또는 Git group/project"></label>' +
+                '<label>Default Branch<input id="ext-cred-branch" placeholder="main"></label>' +
+                '<label>GitLab Project ID/Path<input id="ext-cred-project-id" placeholder="123 또는 group/project"></label>' +
+                '<label>Bitbucket Project Key<input id="ext-cred-project-key" placeholder="OPS"></label>' +
+                '<label>Bitbucket Repo Slug<input id="ext-cred-repo-slug" placeholder="platform"></label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="external-form-block">' +
+              '<div class="external-form-title">사용 힌트</div>' +
+              '<div class="external-hint-list">' + guide + '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px"><button type="button" onclick="externalCredentialSave()">저장</button> <button type="button" class="secondary" onclick="externalCredentialResetForm()">새로 입력</button> <a class="button secondary" href="#/gitops">GitOps에서 사용</a> <a class="button secondary" href="#/harbor">Harbor에서 사용</a> <span id="ext-cred-out" class="muted" style="font-size:12px"></span></div></div>') +
+          card('Credential 목록', '<div class="card-body"><div class="toolbar" style="padding:0 0 10px;border-bottom:0"><span class="status">' + escapeHTML(activeGroup === 'all' ? '전체' : activeGroup) + '</span><span class="muted" style="font-size:12px">현재 탭 ' + fmt(visibleCredentials.length) + '개 / 전체 ' + fmt(credentials.length) + '개</span><a class="button secondary" href="#/external-integrations">전체 보기</a></div><table><thead><tr><th>상태</th><th>이름</th><th>Provider</th><th>Base URL</th><th>Username</th><th>Secret</th><th>메모</th><th></th></tr></thead><tbody>' + externalCredentialRows(credentials, activeGroup) + '</tbody></table><div id="ext-cred-test-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>') +
+        '</div>';
+      makeSortable('#view', 'external-integrations');
+    }
+    window.externalCredentialEdit = (id) => {
+      const c = (window.externalCredentialCache || []).find(x => (x.id || '') === (id || ''));
+      if (!c) return;
+      const pay = c.payload || {};
+      const set = (k, v) => { const el = document.getElementById(k); if (el) el.value = v || ''; };
+      set('ext-cred-id', c.id);
+      set('ext-cred-provider', pay.provider || 'gitlab');
+      set('ext-cred-name', c.name);
+      set('ext-cred-url', pay.base_url || c.source_ref);
+      set('ext-cred-user', pay.username);
+      set('ext-cred-auth', pay.auth_type || 'token');
+      set('ext-cred-secret', '');
+      set('ext-cred-desc', pay.description);
+      set('ext-cred-default-project', pay.default_project);
+      set('ext-cred-project-id', pay.default_project_id);
+      set('ext-cred-project-key', pay.default_project_key);
+      set('ext-cred-repo-slug', pay.default_repo_slug);
+      set('ext-cred-branch', pay.default_branch);
+      const out = document.getElementById('ext-cred-out');
+      if (out) out.textContent = '수정 모드: ' + (c.id || '') + ' · secret 입력 시 회전됩니다.';
+    };
+    window.externalCredentialResetForm = () => {
+      ['ext-cred-id','ext-cred-name','ext-cred-url','ext-cred-user','ext-cred-secret','ext-cred-desc','ext-cred-default-project','ext-cred-project-id','ext-cred-project-key','ext-cred-repo-slug','ext-cred-branch'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      const provider = document.getElementById('ext-cred-provider'); if (provider) provider.value = externalCredentialDefaultProviderForGroup(window.externalCredentialActiveGroup || 'all');
+      const auth = document.getElementById('ext-cred-auth'); if (auth) auth.value = 'token';
+      const out = document.getElementById('ext-cred-out'); if (out) out.textContent = '';
+    };
+    window.externalCredentialSave = async () => {
+      const out = document.getElementById('ext-cred-out');
+      const id = safeInputValue('ext-cred-id', '').trim();
+      const metadata = {
+        default_project: safeInputValue('ext-cred-default-project', '').trim(),
+        default_project_id: safeInputValue('ext-cred-project-id', '').trim(),
+        default_project_key: safeInputValue('ext-cred-project-key', '').trim(),
+        default_repo_slug: safeInputValue('ext-cred-repo-slug', '').trim(),
+        default_branch: safeInputValue('ext-cred-branch', '').trim()
+      };
+      const body = {
+        name: safeInputValue('ext-cred-name', '').trim(),
+        provider: safeInputValue('ext-cred-provider', 'gitlab'),
+        base_url: safeInputValue('ext-cred-url', '').trim(),
+        username: safeInputValue('ext-cred-user', '').trim(),
+        auth_type: safeInputValue('ext-cred-auth', 'token'),
+        secret: safeInputValue('ext-cred-secret', '').trim(),
+        description: safeInputValue('ext-cred-desc', '').trim(),
+        metadata
+      };
+      try {
+        const res = await api(id ? '/admin/external-integrations/credentials/' + encodeURIComponent(id) : '/admin/external-integrations/credentials', { method: 'POST', body: JSON.stringify(body) });
+        if (out) out.textContent = (id ? '수정됨: ' : '저장됨: ') + (((res.data || {}).credential || res.credential || {}).id || id);
+        showToast('ok', '외부연동 Credential 저장', body.name);
+        await renderExternalIntegrations();
+      } catch (e) {
+        if (out) out.textContent = e.message;
+        showToast('error', 'Credential 저장 실패', e.message);
+      }
+    };
+    window.externalCredentialDelete = async (id) => {
+      if (!confirm('이 Credential을 삭제(archive)할까요? 기존 GitOps/Harbor 메타데이터는 남지만 secret 재사용은 중단됩니다.')) return;
+      try {
+        await api('/admin/external-integrations/credentials/' + encodeURIComponent(id), { method: 'DELETE' });
+        showToast('ok', 'Credential 삭제', id);
+        await renderExternalIntegrations();
+      } catch (e) {
+        showToast('error', 'Credential 삭제 실패', e.message);
+      }
+    };
+    window.externalCredentialTest = async (id) => {
+      const out = document.getElementById('ext-cred-test-out');
+      try {
+        const res = await api('/admin/external-integrations/credentials/' + encodeURIComponent(id) + '/test', { method: 'POST' });
+        const result = ((res.data || {}).result || res.result || {});
+        if (out) out.textContent = (result.ok ? 'OK' : 'FAILED') + ' · ' + (result.request_path || result.version || result.error || '-');
+        showToast(result.ok ? 'ok' : 'warn', 'Credential 연결 확인', result.ok ? '응답 확인' : (result.error || '실패'));
+      } catch (e) {
+        if (out) out.textContent = e.message;
+        showToast('error', 'Credential 연결 확인 실패', e.message);
+      }
+    };
 
     async function renderSettings() {
       const [keys, providers, retention, fallback, audit, routes, learning, knowledge, usersResp, teamsResp, authEvents] = await Promise.all([

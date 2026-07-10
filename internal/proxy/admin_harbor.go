@@ -179,11 +179,12 @@ func (s *Server) handleHarborRobotByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"robot": robot})
 	case http.MethodPost:
 		var in struct {
-			RegistryID  string `json:"registry_id"`
-			ProjectName string `json:"project_name"`
-			Name        string `json:"name"`
-			Token       string `json:"token"`
-			ExpiresAt   string `json:"expires_at"`
+			RegistryID   string `json:"registry_id"`
+			ProjectName  string `json:"project_name"`
+			Name         string `json:"name"`
+			Token        string `json:"token"`
+			CredentialID string `json:"credential_id"`
+			ExpiresAt    string `json:"expires_at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -203,12 +204,23 @@ func (s *Server) handleHarborRobotByID(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, status, err.Error(), "server_error", code)
 			return
 		}
+		token := strings.TrimSpace(in.Token)
+		if token == "" && strings.TrimSpace(in.CredentialID) != "" {
+			if cred, ok := s.resolveHarborCredential(w, r, in.CredentialID); ok {
+				token = cred.Secret
+				if strings.TrimSpace(robot.Name) == "" {
+					robot.Name = cred.Username
+				}
+			} else {
+				return
+			}
+		}
 		if strings.TrimSpace(robot.RegistryID) == "" || strings.TrimSpace(robot.ProjectName) == "" || strings.TrimSpace(robot.Name) == "" {
 			writeOpenAIError(w, http.StatusBadRequest, "registry_id, project_name and name are required", "invalid_request_error", "missing_fields")
 			return
 		}
-		if strings.TrimSpace(in.Token) != "" {
-			robot.TokenHash = harbor.TokenHash(in.Token)
+		if token != "" {
+			robot.TokenHash = harbor.TokenHash(token)
 			robot.HasTokenHash = true
 			robot.Status = "registered"
 			robot.LastVerifiedAt = ""
@@ -219,8 +231,8 @@ func (s *Server) handleHarborRobotByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		robot.TokenHash = ""
-		s.auditAdmin(r, "harbor.robot.update", robot.ID, auditJSON(map[string]any{"registry_id": robot.RegistryID, "project": robot.ProjectName, "name": robot.Name, "token_rotated": strings.TrimSpace(in.Token) != ""}))
-		writeJSON(w, http.StatusOK, map[string]any{"robot": robot, "token_policy": "token is one-time input and is never returned"})
+		s.auditAdmin(r, "harbor.robot.update", robot.ID, auditJSON(map[string]any{"registry_id": robot.RegistryID, "project": robot.ProjectName, "name": robot.Name, "token_rotated": token != "", "credential_id": in.CredentialID}))
+		writeJSON(w, http.StatusOK, map[string]any{"robot": robot, "token_policy": "token is encrypted in the user credential vault when credential_id is used; API responses never include it"})
 	case http.MethodDelete:
 		if err := s.db.DeleteHarborRobotAccount(r.Context(), robot.ID); err != nil {
 			status := http.StatusInternalServerError
@@ -251,19 +263,31 @@ func (s *Server) handleHarborRobots(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_robot_failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"robots": rows, "count": len(rows), "token_policy": "token is one-time input; API responses never include token or token hash"})
+		writeJSON(w, http.StatusOK, map[string]any{"robots": rows, "count": len(rows), "token_policy": "token may be supplied once or reused through a user-scoped external credential; API responses never include token or token hash"})
 	case http.MethodPost:
 		var in struct {
-			ID          string `json:"id"`
-			RegistryID  string `json:"registry_id"`
-			ProjectName string `json:"project_name"`
-			Name        string `json:"name"`
-			Token       string `json:"token"`
-			ExpiresAt   string `json:"expires_at"`
+			ID           string `json:"id"`
+			RegistryID   string `json:"registry_id"`
+			ProjectName  string `json:"project_name"`
+			Name         string `json:"name"`
+			Token        string `json:"token"`
+			CredentialID string `json:"credential_id"`
+			ExpiresAt    string `json:"expires_at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 			return
+		}
+		token := strings.TrimSpace(in.Token)
+		if token == "" && strings.TrimSpace(in.CredentialID) != "" {
+			if cred, ok := s.resolveHarborCredential(w, r, in.CredentialID); ok {
+				token = cred.Secret
+				if strings.TrimSpace(in.Name) == "" {
+					in.Name = cred.Username
+				}
+			} else {
+				return
+			}
 		}
 		if strings.TrimSpace(in.RegistryID) == "" || strings.TrimSpace(in.ProjectName) == "" || strings.TrimSpace(in.Name) == "" {
 			writeOpenAIError(w, http.StatusBadRequest, "registry_id, project_name and name are required", "invalid_request_error", "missing_fields")
@@ -280,8 +304,8 @@ func (s *Server) handleHarborRobots(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tokenHash := ""
-		if strings.TrimSpace(in.Token) != "" {
-			tokenHash = harbor.TokenHash(in.Token)
+		if token != "" {
+			tokenHash = harbor.TokenHash(token)
 		}
 		row := store.HarborRobotAccount{
 			ID: firstNonEmpty(strings.TrimSpace(in.ID), newID("hrobot")), RegistryID: strings.TrimSpace(in.RegistryID),
@@ -294,8 +318,8 @@ func (s *Server) handleHarborRobots(w http.ResponseWriter, r *http.Request) {
 		}
 		row.HasTokenHash = tokenHash != ""
 		row.TokenHash = ""
-		s.auditAdmin(r, "harbor.robot.upsert", row.ID, auditJSON(map[string]any{"registry_id": row.RegistryID, "project": row.ProjectName, "name": row.Name, "token_hash_stored": tokenHash != ""}))
-		writeJSON(w, http.StatusCreated, map[string]any{"robot": row, "note": "Robot token was hashed for drift/rotation evidence and was not stored or returned."})
+		s.auditAdmin(r, "harbor.robot.upsert", row.ID, auditJSON(map[string]any{"registry_id": row.RegistryID, "project": row.ProjectName, "name": row.Name, "token_hash_stored": tokenHash != "", "credential_id": in.CredentialID}))
+		writeJSON(w, http.StatusCreated, map[string]any{"robot": row, "note": "Robot token was hashed for drift/rotation evidence. Use external integration credentials to store the encrypted token per user."})
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}
@@ -311,8 +335,9 @@ func (s *Server) handleHarborRobotVerify(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in struct {
-		RobotID string `json:"robot_id"`
-		Token   string `json:"token"`
+		RobotID      string `json:"robot_id"`
+		Token        string `json:"token"`
+		CredentialID string `json:"credential_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -332,14 +357,24 @@ func (s *Server) handleHarborRobotVerify(w http.ResponseWriter, r *http.Request)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_registry_failed")
 		return
 	}
-	result := harbor.CheckRobotPull(r.Context(), &http.Client{Timeout: 8 * time.Second}, reg.URL, robot.Name, in.Token, robot.ProjectName)
+	token := strings.TrimSpace(in.Token)
+	robotName := robot.Name
+	if token == "" && strings.TrimSpace(in.CredentialID) != "" {
+		if cred, ok := s.resolveHarborCredential(w, r, in.CredentialID); ok {
+			token = cred.Secret
+			robotName = firstNonEmptyStr(robotName, cred.Username)
+		} else {
+			return
+		}
+	}
+	result := harbor.CheckRobotPull(r.Context(), &http.Client{Timeout: 8 * time.Second}, reg.URL, robotName, token, robot.ProjectName)
 	status := "verified"
 	if !result.OK {
 		status = "failed"
 	}
 	_ = s.db.UpdateHarborRobotVerification(r.Context(), robot.ID, status, result.CheckedAt, result.Error)
-	s.auditAdmin(r, "harbor.robot.verify", robot.ID, auditJSON(map[string]any{"registry_id": reg.ID, "project": robot.ProjectName, "ok": result.OK, "status_code": result.StatusCode}))
-	writeJSON(w, http.StatusOK, map[string]any{"result": result, "status": status, "token_policy": "verification token was used only for this request"})
+	s.auditAdmin(r, "harbor.robot.verify", robot.ID, auditJSON(map[string]any{"registry_id": reg.ID, "project": robot.ProjectName, "ok": result.OK, "status_code": result.StatusCode, "credential_id": in.CredentialID}))
+	writeJSON(w, http.StatusOK, map[string]any{"result": result, "status": status, "token_policy": "token is resolved from the encrypted user credential when credential_id is used"})
 }
 
 func (s *Server) handleHarborMappings(w http.ResponseWriter, r *http.Request) {
@@ -461,13 +496,14 @@ func (s *Server) handleHarborCatalogQuery(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var in struct {
-		RegistryID  string `json:"registry_id"`
-		RegistryURL string `json:"registry_url"`
-		Target      string `json:"target"`
-		ProjectName string `json:"project_name"`
-		Repository  string `json:"repository"`
-		RobotName   string `json:"robot_name"`
-		Token       string `json:"token"`
+		RegistryID   string `json:"registry_id"`
+		RegistryURL  string `json:"registry_url"`
+		Target       string `json:"target"`
+		ProjectName  string `json:"project_name"`
+		Repository   string `json:"repository"`
+		RobotName    string `json:"robot_name"`
+		Token        string `json:"token"`
+		CredentialID string `json:"credential_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -477,13 +513,23 @@ func (s *Server) handleHarborCatalogQuery(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return
 	}
-	result := harbor.QueryCatalog(r.Context(), &http.Client{Timeout: 10 * time.Second}, reg.URL, in.Target, in.ProjectName, in.Repository, in.RobotName, in.Token)
-	s.auditAdmin(r, "harbor.catalog.query", reg.ID, auditJSON(map[string]any{"target": result.Target, "project": in.ProjectName, "repository": in.Repository, "ok": result.OK, "status_code": result.StatusCode, "robot_supplied": in.RobotName != ""}))
+	token := strings.TrimSpace(in.Token)
+	robotName := strings.TrimSpace(in.RobotName)
+	if token == "" && strings.TrimSpace(in.CredentialID) != "" {
+		if cred, ok := s.resolveHarborCredential(w, r, in.CredentialID); ok {
+			token = cred.Secret
+			robotName = firstNonEmptyStr(robotName, cred.Username)
+		} else {
+			return
+		}
+	}
+	result := harbor.QueryCatalog(r.Context(), &http.Client{Timeout: 10 * time.Second}, reg.URL, in.Target, in.ProjectName, in.Repository, robotName, token)
+	s.auditAdmin(r, "harbor.catalog.query", reg.ID, auditJSON(map[string]any{"target": result.Target, "project": in.ProjectName, "repository": in.Repository, "ok": result.OK, "status_code": result.StatusCode, "robot_supplied": robotName != "", "credential_id": in.CredentialID}))
 	status := http.StatusOK
 	if !result.OK && result.StatusCode >= 400 {
 		status = http.StatusBadGateway
 	}
-	writeJSON(w, status, map[string]any{"result": result, "token_policy": "robot token is one-time input and is never stored or echoed"})
+	writeJSON(w, status, map[string]any{"result": result, "token_policy": "robot token is resolved from the encrypted user credential when credential_id is used; never echoed"})
 }
 
 func (s *Server) handleHarborPullSecretPreview(w http.ResponseWriter, r *http.Request) {
@@ -496,13 +542,14 @@ func (s *Server) handleHarborPullSecretPreview(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var in struct {
-		RegistryID  string `json:"registry_id"`
-		RegistryURL string `json:"registry_url"`
-		ProjectName string `json:"project_name"`
-		Namespace   string `json:"namespace"`
-		SecretName  string `json:"secret_name"`
-		RobotName   string `json:"robot_name"`
-		Token       string `json:"token"`
+		RegistryID   string `json:"registry_id"`
+		RegistryURL  string `json:"registry_url"`
+		ProjectName  string `json:"project_name"`
+		Namespace    string `json:"namespace"`
+		SecretName   string `json:"secret_name"`
+		RobotName    string `json:"robot_name"`
+		Token        string `json:"token"`
+		CredentialID string `json:"credential_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -513,18 +560,28 @@ func (s *Server) handleHarborPullSecretPreview(w http.ResponseWriter, r *http.Re
 		return
 	}
 	secret := firstNonEmpty(in.SecretName, harbor.DefaultSecretName(in.ProjectName))
-	manifest := harbor.RedactedPullSecretManifest(secret, in.Namespace, reg.URL, in.RobotName)
-	hash := ""
-	if strings.TrimSpace(in.Token) != "" && strings.TrimSpace(in.RobotName) != "" {
-		hash = harbor.DockerConfigHash(harbor.RegistryHost(reg.URL), in.RobotName, in.Token)
+	token := strings.TrimSpace(in.Token)
+	robotName := strings.TrimSpace(in.RobotName)
+	if token == "" && strings.TrimSpace(in.CredentialID) != "" {
+		if cred, ok := s.resolveHarborCredential(w, r, in.CredentialID); ok {
+			token = cred.Secret
+			robotName = firstNonEmptyStr(robotName, cred.Username)
+		} else {
+			return
+		}
 	}
-	s.auditAdmin(r, "harbor.pull_secret.preview", reg.ID, auditJSON(map[string]any{"namespace": in.Namespace, "secret_name": secret, "robot": in.RobotName, "dockerconfig_hash_present": hash != ""}))
+	manifest := harbor.RedactedPullSecretManifest(secret, in.Namespace, reg.URL, robotName)
+	hash := ""
+	if token != "" && robotName != "" {
+		hash = harbor.DockerConfigHash(harbor.RegistryHost(reg.URL), robotName, token)
+	}
+	s.auditAdmin(r, "harbor.pull_secret.preview", reg.ID, auditJSON(map[string]any{"namespace": in.Namespace, "secret_name": secret, "robot": robotName, "dockerconfig_hash_present": hash != "", "credential_id": in.CredentialID}))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"manifest":          manifest,
 		"secret_name":       secret,
 		"dockerconfig_hash": hash,
 		"redacted":          true,
-		"note":              "토큰은 응답·DB·감사 로그에 남기지 않습니다. 실제 Secret 적용은 승인된 executor나 kubectl 경로에서 일회성 토큰으로 수행하세요.",
+		"note":              "토큰은 응답·DB·감사 로그에 남기지 않습니다. 실제 Secret 적용은 Credential Vault에서 메모리 복호화한 값 또는 승인된 일회성 입력 경로로만 수행하세요.",
 	})
 }
 
@@ -829,6 +886,25 @@ func (s *Server) resolveHarborRegistry(w http.ResponseWriter, r *http.Request, r
 		return store.HarborRegistry{}, errors.New("missing registry")
 	}
 	return store.HarborRegistry{ID: "ad-hoc", Name: harbor.RegistryHost(url), URL: url, Status: "ad_hoc"}, nil
+}
+
+func (s *Server) resolveHarborCredential(w http.ResponseWriter, r *http.Request, credentialID string) (resolvedExternalCredential, bool) {
+	cred, found, err := s.resolveExternalCredential(r, credentialID, "")
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "harbor_credential_decrypt_failed")
+		return resolvedExternalCredential{}, false
+	}
+	if !found {
+		writeOpenAIError(w, http.StatusNotFound, "external credential not found", "invalid_request_error", "harbor_credential_not_found")
+		return resolvedExternalCredential{}, false
+	}
+	switch normalizeExternalProvider(cred.Provider) {
+	case "harbor", "harbor_robot":
+		return cred, true
+	default:
+		writeOpenAIError(w, http.StatusBadRequest, "credential provider must be harbor or harbor_robot", "invalid_request_error", "harbor_credential_provider_mismatch")
+		return resolvedExternalCredential{}, false
+	}
 }
 
 func harborFindingsReason(findings []harbor.PolicyFinding) string {

@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.109"
+const AppVersion = "v0.9.112"
 
 type Server struct {
 	cfg            config.Config
@@ -403,6 +403,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/terminal-policies/", s.handleK8sTerminalPolicyByID)
 	mux.HandleFunc("/admin/k8s/groups", s.handleK8sGroups)
 	mux.HandleFunc("/admin/k8s/groups/", s.handleK8sGroupByID)
+	mux.HandleFunc("/admin/k8s/ownership/", s.handleK8sOwnershipByID)
 	mux.HandleFunc("/admin/k8s/ownership", s.handleK8sOwnership)
 	mux.HandleFunc("/admin/k8s/notify/scan", s.handleK8sNotifyScan)
 	mux.HandleFunc("/admin/k8s/notify/config", s.handleK8sNotifyConfig)
@@ -609,6 +610,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/settings/test/clickhouse", s.handleSettingsTestClickHouse)
 	mux.HandleFunc("/admin/settings/test/text2sql-exec", s.handleSettingsTestText2SQLExec)
 	mux.HandleFunc("/admin/settings/test/text2sql-twin", s.handleSettingsTestText2SQLTwin)
+	mux.HandleFunc("/admin/external-integrations/credentials/", s.handleExternalCredentialByID)
+	mux.HandleFunc("/admin/external-integrations/credentials", s.handleExternalCredentials)
 	mux.HandleFunc("/admin/policies/decisions", s.handlePolicyDecisions)
 	mux.HandleFunc("/admin/policies/simulate", s.handlePolicySimulate)
 	mux.HandleFunc("/admin/policies/canary-status", s.handleCanaryStatus)

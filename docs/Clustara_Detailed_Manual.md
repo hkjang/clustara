@@ -228,12 +228,14 @@
 - **개요**: 물리적 클러스터들을 논리적인 업무망 단위(운영망, 개발망, DMZ 등)로 그룹핑하고 네임스페이스 단위의 담당 팀, 담당자, 중요도 및 비용 센터 정보를 구성하는 관리 도구입니다.
 - **주요 기능**:
   - **그룹 및 메타데이터 관리**: 알림 라우팅 정책(Mattermost) 및 네임스페이스별 비용 집계의 기초 자료로 활용됩니다.
+  - **클러스터 멤버십 관리**: 등록된 클러스터를 그룹에 배정, 변경, 해제하고 그룹 삭제 시 기존 멤버 클러스터를 자동으로 미분류 처리합니다.
+  - **오너십 수정/삭제**: 같은 cluster/namespace 오너십 매핑을 수정하거나 더 이상 쓰지 않는 매핑을 삭제할 수 있습니다.
 
 ![그룹 및 오너십](images/12_metadata.png)
 
 | 분류 | 명세 |
 | --- | --- |
-| **연동 API** | `GET/POST /admin/k8s/groups`, `GET/POST /admin/k8s/ownership` |
+| **연동 API** | `GET/POST /admin/k8s/groups`, `GET/POST/DELETE /admin/k8s/groups/{id}`, `POST /admin/k8s/clusters/{id}/group`, `GET/POST /admin/k8s/ownership`, `DELETE /admin/k8s/ownership/{cluster_id}/{namespace}` |
 | **관련 테이블** | `k8s_cluster_groups`, `k8s_namespace_ownership` |
 
 ---

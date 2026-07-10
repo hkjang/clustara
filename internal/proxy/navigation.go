@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 36
+const menuVersion = 38
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -82,6 +82,7 @@ var menuRegistry = []menuItem{
 	{ID: "set.governance_hub", Label: "Governance Hub", Path: "#/governance", Tab: "governance", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.k8s_settings", Label: "운영 설정", Path: "#/k8s-settings", Tab: "k8s-settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.settings", Label: "설정", Path: "#/settings", Tab: "settings", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "set.external_integrations", Label: "외부연동 설정", Path: "#/external-integrations", Tab: "external-integrations", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "set.k8s_configrollback", Label: "설정 롤백 센터", Path: "#/k8s-configrollback", Tab: "k8s-configrollback", Group: "settings", Scopes: []string{"admin:read"}, DataScope: "all"},
 }
 

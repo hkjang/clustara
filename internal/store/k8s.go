@@ -274,6 +274,17 @@ func (s *SQLStore) GetK8sCluster(ctx context.Context, id string) (K8sCluster, er
 	return c, err
 }
 
+func (s *SQLStore) SetK8sClusterGroup(ctx context.Context, clusterID, groupID string) error {
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_clusters SET group_id = ?, updated_at = ? WHERE id = ?`), strings.TrimSpace(groupID), nowString(), strings.TrimSpace(clusterID))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLStore) SaveK8sCredential(ctx context.Context, c K8sClusterCredential) error {
 	now := nowString()
 	if c.CreatedAt == "" {

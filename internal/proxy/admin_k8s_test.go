@@ -1059,12 +1059,30 @@ func TestK8sGroupsAndOwnership(t *testing.T) {
 		t.Fatal("group id should be set")
 	}
 
+	// Update the group metadata from its detail endpoint.
+	resp = postJSON(t, proxy.URL+"/admin/k8s/groups/"+gr.Group.ID, "", map[string]any{"name": "운영망-수정", "kind": "prod"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("update group status=%d body=%s", resp.StatusCode, body)
+	}
+
 	// Register a cluster in that group.
 	resp = postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
 		"name": "prod-a", "server_url": "https://k8s.example.test", "auth_mode": "kubeconfig",
 		"kubeconfig": "apiVersion: v1", "group_id": gr.Group.ID,
 	})
+	var createdCluster struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&createdCluster); err != nil {
+		t.Fatal(err)
+	}
 	resp.Body.Close()
+	clusterID := createdCluster.Cluster.ID
+	if clusterID == "" {
+		t.Fatal("cluster id should be generated")
+	}
 
 	// Group roll-up should count the member.
 	resp, _ = http.Get(proxy.URL + "/admin/k8s/groups")
@@ -1088,9 +1106,36 @@ func TestK8sGroupsAndOwnership(t *testing.T) {
 		t.Fatalf("group roll-up should show 1 member, got %+v", groups.Groups)
 	}
 
+	// Clear and reassign cluster group membership after registration.
+	resp = postJSON(t, proxy.URL+"/admin/k8s/clusters/"+clusterID+"/group", "", map[string]any{"group_id": ""})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear cluster group status=%d", resp.StatusCode)
+	}
+	resp, _ = http.Get(proxy.URL + "/admin/k8s/clusters/" + clusterID)
+	var clusterDetail struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&clusterDetail); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if clusterDetail.Cluster.GroupID != "" {
+		t.Fatalf("cluster group should be cleared, got %q", clusterDetail.Cluster.GroupID)
+	}
+	resp = postJSON(t, proxy.URL+"/admin/k8s/clusters/"+clusterID+"/group", "", map[string]any{"group_id": gr.Group.ID})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reassign cluster group status=%d", resp.StatusCode)
+	}
+
 	// Set + filter namespace ownership by team.
 	resp = postJSON(t, proxy.URL+"/admin/k8s/ownership", "", map[string]any{
-		"cluster_id": "prod-a", "namespace": "payments", "team": "core", "owner": "kim", "criticality": "high",
+		"cluster_id": clusterID, "namespace": "payments", "team": "core", "owner": "kim", "criticality": "high",
+	})
+	resp.Body.Close()
+	resp = postJSON(t, proxy.URL+"/admin/k8s/ownership", "", map[string]any{
+		"cluster_id": clusterID, "namespace": "payments", "team": "platform", "owner": "lee", "criticality": "critical",
 	})
 	resp.Body.Close()
 	resp, _ = http.Get(proxy.URL + "/admin/k8s/ownership?team=core")
@@ -1101,8 +1146,58 @@ func TestK8sGroupsAndOwnership(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&own); err != nil {
 		t.Fatal(err)
 	}
-	if len(own.Ownership) != 1 || own.Ownership[0].Namespace != "payments" || own.Ownership[0].Team != "core" {
-		t.Fatalf("team filter should return the payments/core row, got %+v", own.Ownership)
+	if len(own.Ownership) != 0 {
+		t.Fatalf("team filter should not return the old core row after update, got %+v", own.Ownership)
+	}
+	resp, _ = http.Get(proxy.URL + "/admin/k8s/ownership?team=platform")
+	if err := json.NewDecoder(resp.Body).Decode(&own); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(own.Ownership) != 1 || own.Ownership[0].Namespace != "payments" || own.Ownership[0].Team != "platform" {
+		t.Fatalf("team filter should return the payments/platform row, got %+v", own.Ownership)
+	}
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/admin/k8s/ownership/%s/payments", proxy.URL, clusterID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete ownership status=%d", resp.StatusCode)
+	}
+	resp, _ = http.Get(proxy.URL + "/admin/k8s/ownership?team=platform")
+	if err := json.NewDecoder(resp.Body).Decode(&own); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(own.Ownership) != 0 {
+		t.Fatalf("ownership should be deleted, got %+v", own.Ownership)
+	}
+
+	// Deleting a group also clears member cluster group references.
+	req, err = http.NewRequest(http.MethodDelete, proxy.URL+"/admin/k8s/groups/"+gr.Group.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete group status=%d", resp.StatusCode)
+	}
+	resp, _ = http.Get(proxy.URL + "/admin/k8s/clusters/" + clusterID)
+	if err := json.NewDecoder(resp.Body).Decode(&clusterDetail); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if clusterDetail.Cluster.GroupID != "" {
+		t.Fatalf("deleting group should clear cluster group id, got %q", clusterDetail.Cluster.GroupID)
 	}
 }
 
