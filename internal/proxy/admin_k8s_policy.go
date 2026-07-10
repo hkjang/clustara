@@ -53,6 +53,17 @@ func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 		if p.Action == "" {
 			p.Action = "Warn"
 		}
+		switch strings.ToLower(strings.TrimSpace(p.Action)) {
+		case "deny":
+			p.Action = "Deny"
+		case "warn":
+			p.Action = "Warn"
+		case "audit":
+			p.Action = "Audit"
+		default:
+			writeOpenAIError(w, http.StatusBadRequest, "action must be Deny, Warn, or Audit", "invalid_request_error", "invalid_policy_action")
+			return
+		}
 		if strings.TrimSpace(p.ID) == "" {
 			p.ID = newID("k8spol")
 		}
@@ -149,7 +160,7 @@ func (s *Server) handleK8sPolicyImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"matched": matched, "count": len(matched), "warnings": warnings,
 		"dry_run": p.DryRun, "created": created,
-		"note":    "가져온 정책은 비활성(enabled=false) 상태로 생성됩니다 — 검토 후 활성화하세요.",
+		"note": "가져온 정책은 비활성(enabled=false) 상태로 생성됩니다 — 검토 후 활성화하세요.",
 	})
 }
 

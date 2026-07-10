@@ -1,3 +1,6 @@
+v0.9.119:
+- **Manifest Studio Secret Guard & Policy UX (v0.9.119)**: Manifest 생성 및 변경 적용 화면의 보안성과 정책 관리의 편의성을 대폭 개선했습니다. YAML 스튜디오에서 Secret 리소스를 생성/변경할 때 `data` 혹은 `stringData` 페이로드 필드가 포함되어 있을 경우, 평문 값이 원장에 저장되거나 Kubernetes API 서버에 평문 상태로 제출되는 상황을 사전에 감지하여 저장을 원천 차단하고 `ExternalSecret`/`SealedSecret` 사용 권장, 또는 `Config Change Control` 및 `Pull Secret 생성기` 사용 가이드를 제공하는 Secret 안전 경로 유도 모달을 탑재했습니다. 아울러 정책 센터 화면의 정책 룰 종류마다 룰의 정의, 검출 기준, 우회 및 해결 방법을 알려주는 도움말 카탈로그(`k8sPolicyRuleCatalog`)를 제공하며, 개별 정책 목록에서 정책 활성/비활성을 간편하게 전환하는 토글 액션(`k8sPolicySetEnabled`)을 신설했습니다.
+
 v0.9.118:
 - **Reasoning Agent Stream & Calendar Names (v0.9.118)**: Ollama/DeepSeek 등의 추론형 모델이 답변 생성 시 출력하는 생각 과정(thinking/reasoning_content)의 토글 패널 스트리밍과 UI 렌더링 로직을 한층 더 보강했습니다. 또한, 전체 업무 캘린더에서 담당자 컬럼에 UUID나 Email(예: usr_123 등) 대신 실시간 사용자 데이터베이스(ListAuthUsers/ListUsers)를 조회하여 매핑된 담당자 실명(예: 홍길동) 및 이메일/ID 라벨을 제공하도록 `adminCalendarActorDirectory`를 연동하고 필터 셀렉트박스를 실명 기반으로 정렬 노출하도록 개선했습니다.
 

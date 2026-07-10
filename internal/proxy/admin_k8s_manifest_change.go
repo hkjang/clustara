@@ -313,7 +313,7 @@ func (s *Server) prepareK8sManifestChangeRequest(ctx context.Context, actor stri
 	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
 		requiresApproval = true
 		risk = "critical"
-		impact["secret_payload_guard"] = "Secret data/stringData 원문은 Manifest Change Studio에 저장하거나 적용하지 않습니다. Secret 값 변경은 Config Change Control 또는 외부 Secret 관리 체계를 사용하세요."
+		impact["secret_payload_guard"] = manifestSecretPayloadGuidance("update")
 	}
 	req := store.K8sManifestChangeRequest{
 		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: item.Kind, APIVersion: firstNonEmpty(apiVersion, item.APIVersion),
@@ -353,7 +353,7 @@ func (s *Server) prepareK8sManifestCreateRequest(ctx context.Context, actor, clu
 	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
 		requiresApproval = true
 		risk = "critical"
-		impact["secret_payload_guard"] = "Secret data/stringData 원문은 Manifest Change Studio에 저장하거나 적용하지 않습니다. Secret 값 생성은 외부 Secret 관리 체계를 사용하세요."
+		impact["secret_payload_guard"] = manifestSecretPayloadGuidance("create")
 	}
 	req := store.K8sManifestChangeRequest{
 		ID: newID("k8smchg"), ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion,
@@ -493,8 +493,9 @@ func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Reques
 	risk := manifestRiskMax(req.RiskLevel, "low")
 	if strings.EqualFold(req.Kind, "Secret") && manifestContainsSecretPayload(docs[0]) {
 		validation["secret_payload_guard"] = map[string]any{
-			"status": "blocked",
-			"reason": "Secret data/stringData payload is not stored or applied by Manifest Change Studio",
+			"status":   "blocked",
+			"reason":   "Secret data/stringData payload is not stored or applied by Manifest Change Studio",
+			"guidance": manifestSecretPayloadGuidance(manifestChangeOperation(req)),
 		}
 		status = "failed"
 		risk = "blocked"
@@ -544,6 +545,19 @@ func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Reques
 	s.auditAdmin(r, "k8s.manifest_change.validate", id, auditJSON(map[string]any{"status": status, "risk": risk}))
 	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "validation": validation, "plan": plan})
+}
+
+func manifestSecretPayloadGuidance(operation string) map[string]any {
+	return map[string]any{
+		"operation":    operation,
+		"why_blocked":  "Secret data/stringData 원문은 변경 원장, 감사 증적, 응답에 남길 수 없어 Manifest Change Studio에서 처리하지 않습니다.",
+		"allowed_here": []string{"metadata.name/namespace", "type", "labels", "annotations"},
+		"next_actions": []string{
+			"기존 Secret 변경은 Config Change Control에서 값 원문 없이 영향도와 승인 기록을 생성하세요.",
+			"실제 값 주입은 ExternalSecret, SealedSecret 또는 조직 Secret Manager를 사용하세요.",
+			"레지스트리 인증은 정책 센터의 Pull Secret 생성기를 사용하고 생성 결과를 안전한 경로로 적용하세요.",
+		},
+	}
 }
 
 func (s *Server) decideK8sManifestChange(w http.ResponseWriter, r *http.Request, id, command string) {

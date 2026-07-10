@@ -11608,7 +11608,7 @@ const adminHTML = `<!doctype html>
     async function renderK8sActions(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
-      const focusId = (params && params.get('focus_id')) || '';
+	  const focusId = (params && params.get('focus_id')) || '';
       const flowFilter = uxActionFlowValidFilter((params && params.get('flow')) || uxActionFlowPreferredFilter());
       uxRememberActionFlowFilter(flowFilter);
       if (params && !params.get('flow') && flowFilter !== 'all') {
@@ -12213,6 +12213,7 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
       const focusId = (params && params.get('focus_id')) || '';
+	  const focusTarget = (params && params.get('focus')) || '';
       view.innerHTML = section('K8s 보안', '<div class="empty">불러오는 중...</div>');
       let clusters, data, rbacDiff, imgs, cfgChanges, posture, secImages, cves, signing, runtimeThreats, compliance, netGraph, secExceptions;
       try {
@@ -12336,8 +12337,8 @@ const adminHTML = `<!doctype html>
           return card('이미지 사용 현황 (REG-REQ-04 · mutable ' + fmt(sm.mutable_tag || 0) + ' / pinned ' + fmt(sm.digest_pinned || 0) + ')',
             '<div class="card-body"><table><thead><tr><th>고정</th><th>이미지</th><th>워크로드 수</th><th>사용처</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
-        card('Config 변경 영향 (blast radius · CFG-REQ-04)',
-          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">ConfigMap/Secret 변경 전 참조 워크로드와 재시작 필요 여부를 확인합니다.</div>' +
+		card('Config 변경 영향 (blast radius · CFG-REQ-04)',
+		  '<div id="security-config-change" class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">ConfigMap/Secret 변경 전 참조 워크로드와 재시작 필요 여부를 확인합니다. Secret 값 원문은 입력하지 않고 변경 요약·영향도·승인 이력만 관리합니다.</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="ci-kind"><option value="ConfigMap">ConfigMap</option><option value="Secret">Secret</option></select>' +
           '<input id="ci-ns" placeholder="namespace" style="min-width:130px"><input id="ci-name" placeholder="이름" style="min-width:160px"><input id="ci-cluster" type="hidden" value="' + escapeAttr(clusterId) + '"><button type="button" onclick="k8sConfigImpact()">영향 조회</button></div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><input id="ci-summary" placeholder="변경 요약(값 원문 제외)" style="min-width:220px"><input id="ci-reason" placeholder="사유" style="min-width:180px"><button type="button" onclick="k8sConfigChangeCreate()">변경 요청 생성</button></div>' +
@@ -12376,6 +12377,7 @@ const adminHTML = `<!doctype html>
           }
         }, 80);
       }
+	  if (focusTarget === 'config-change') setTimeout(() => uxFocusElement('security-config-change', 'Secret Config Change Control'), 80);
     }
     window.k8sSecGo = () => {
       const cl = document.getElementById('k8ssec-cluster').value;
@@ -13485,9 +13487,44 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 정책 센터 (SEC-05 Admission 시뮬레이터 + SEC-10 정책 팩) ----------
+	function k8sPolicyRuleCatalog() {
+	  return {
+		disallow_privileged:['런타임 권한','특권 컨테이너 금지','Pod 계열','securityContext.privileged=true 차단','privileged=false와 필요한 capability만 허용'],
+		disallow_host_network:['런타임 권한','hostNetwork 금지','Pod 계열','호스트 네트워크 공유 차단','ClusterIP/Ingress 또는 명시적 네트워크 사용'],
+		disallow_host_path:['런타임 권한','hostPath 금지','Pod 계열','호스트 파일시스템 마운트 차단','PVC·ConfigMap·Secret 볼륨으로 대체'],
+		disallow_latest_tag:['이미지 공급망',':latest 태그 금지','Pod 계열','latest 또는 태그 없는 이미지 탐지','불변 버전 태그나 digest로 고정'],
+		require_resource_limits:['워크로드 안전','리소스 limits 필수','Pod 계열','CPU·메모리 limits 누락 탐지','모든 컨테이너에 requests/limits 설정'],
+		require_run_as_non_root:['런타임 권한','Non-root 실행 필수','Pod 계열','runAsNonRoot 미설정 탐지','Pod/Container securityContext 설정'],
+		disallow_wildcard_rbac:['접근 권한','RBAC 와일드카드 금지','Role 계열','resource 또는 verb * 권한 탐지','필요한 resource·verb만 명시'],
+		disallow_unsigned_image:['이미지 공급망','서명 없는 이미지 금지','워크로드','서명 attestation 누락 탐지','Cosign 서명 후 annotation/attestation 연결'],
+		require_image_digest:['이미지 공급망','이미지 digest 고정','Pod 계열','@sha256 미고정 이미지 탐지','검증한 digest로 image 참조'],
+		require_sbom:['이미지 공급망','SBOM 연결 필수','워크로드','SBOM 참조 annotation 누락 탐지','CycloneDX/SPDX 업로드 후 digest 연결'],
+		require_vuln_scan_attestation:['이미지 공급망','취약점 스캔 증적 필수','워크로드','scan attestation 누락 탐지','CI/Operator 스캔 결과 연결'],
+		deny_critical_vulnerability:['취약점','Critical CVE 차단','워크로드','Critical 개수 attestation 탐지','이미지 재빌드 또는 만료 있는 예외 승인'],
+		warn_high_vulnerability:['취약점','High CVE 경고','워크로드','High 개수 attestation 탐지','수정 SLA 등록 또는 이미지 갱신'],
+		deny_unfixed_exception_expired:['예외 관리','만료 예외 차단','워크로드','만료된 미해결 예외 탐지','예외 재승인보다 원인 조치 우선'],
+		deny_privileged_runtime:['런타임 탐지','특권 런타임 차단','Pod 계열','위험 런타임 annotation 탐지','런타임 finding 해소 후 재배포'],
+		enforce_pss_restricted:['워크로드 안전','PSS Restricted 강제','Pod 계열','Restricted 기준 미충족 탐지','Pod Security Standards 기준으로 수정']
+	  };
+	}
+	function k8sPolicyActionHelp(action) {
+	  return ({ Deny:'위반 리소스의 검증·Admission을 차단', Warn:'허용하되 운영자에게 경고와 승인 신호 제공', Audit:'허용하고 감사 증적만 기록' })[action] || '비활성 정책은 판정에 참여하지 않음';
+	}
+	function k8sPolicyMatrixHTML(policies, ruleTypes) {
+	  const catalog=k8sPolicyRuleCatalog(), priority={Deny:3,Warn:2,Audit:1}, byRule={};
+	  (policies||[]).forEach(p => { (byRule[p.rule_type]=byRule[p.rule_type]||[]).push(p); });
+	  const rows=(ruleTypes||[]).map(rule => {
+		const meta=catalog[rule]||['기타',rule,'리소스','규칙 위반','정책 상세 확인'];
+		const active=(byRule[rule]||[]).filter(p=>p.enabled).sort((a,b)=>(priority[b.action]||0)-(priority[a.action]||0));
+		const effective=active[0], cls=effective&&effective.action==='Deny'?'error':(effective&&effective.action==='Warn'?'warn':'');
+		return '<tr><td><strong>'+escapeHTML(meta[0])+'</strong></td><td><strong>'+escapeHTML(meta[1])+'</strong><div class="muted" style="font-size:10px"><code>'+escapeHTML(rule)+'</code></div></td><td>'+escapeHTML(meta[2])+'</td><td>'+(effective?'<span class="status '+cls+'">'+escapeHTML(effective.action)+'</span>':'<span class="status">미적용</span>')+'<div class="muted" style="font-size:10px">'+escapeHTML(effective?k8sPolicyActionHelp(effective.action):'현재 이 검사는 실행되지 않습니다.')+'</div></td><td class="muted" style="font-size:11px">'+escapeHTML(meta[3])+'</td><td class="muted" style="font-size:11px">'+escapeHTML(meta[4])+'</td></tr>';
+	  }).join('');
+	  return '<div style="overflow:auto"><table><thead><tr><th>영역</th><th>정책 검사</th><th>적용 대상</th><th>현재 효과</th><th>무엇을 막나</th><th>통과하려면</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+	}
 	async function renderK8sPolicy(params) {
       const view = document.getElementById('view');
 	  const clusterId = (params && params.get && params.get('cluster_id')) || '';
+	  const focusTarget = (params && params.get && params.get('focus')) || '';
       view.innerHTML = section('K8s 정책 센터', '<div class="empty">불러오는 중...</div>');
       let data, comp, term;
       try {
@@ -13515,12 +13552,16 @@ const adminHTML = `<!doctype html>
           '<input id="tmpl-ns-' + k + '" value="' + escapeAttr(t.namespace_pattern || '*') + '" placeholder="namespace glob" style="width:150px">' +
           '<button type="button" onclick="k8sTermTemplateApply(\'' + k + '\')">적용</button></div></div>';
       }).join('') || '<div class="muted" style="font-size:12px">사용 가능한 템플릿이 없습니다.</div>';
-      const ruleOpts = (data.available_rule_types || []).map(t => '<option value="' + escapeAttr(t) + '">' + escapeHTML(t) + '</option>').join('');
-      const polRows = (data.policies || []).length ? (data.policies || []).map(p =>
-        '<tr><td>' + escapeHTML(p.name) + '</td><td>' + escapeHTML(p.rule_type) + '</td>' +
+	  const policyCatalog=k8sPolicyRuleCatalog();
+	  const ruleOpts = (data.available_rule_types || []).map(t => '<option value="' + escapeAttr(t) + '">' + escapeHTML((policyCatalog[t]||[])[1] || t) + '</option>').join('');
+	  const denyCount=(data.policies||[]).filter(p=>p.enabled&&p.action==='Deny').length, warnCount=(data.policies||[]).filter(p=>p.enabled&&p.action==='Warn').length, auditCount=(data.policies||[]).filter(p=>p.enabled&&p.action==='Audit').length, disabledCount=(data.policies||[]).filter(p=>!p.enabled).length;
+	  const covered=new Set((data.policies||[]).filter(p=>p.enabled).map(p=>p.rule_type));
+	  const uncovered=(data.available_rule_types||[]).filter(t=>!covered.has(t)).length;
+	  const polRows = (data.policies || []).length ? (data.policies || []).map(p =>
+		'<tr><td><strong>' + escapeHTML(p.name) + '</strong></td><td>' + escapeHTML((policyCatalog[p.rule_type]||[])[1] || p.rule_type) + '<div class="muted" style="font-size:10px"><code>'+escapeHTML(p.rule_type)+'</code></div></td>' +
         '<td><span class="status ' + (p.action === 'Deny' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(p.action) + '</span></td>' +
-        '<td>' + (p.enabled ? 'on' : 'off') + '</td>' +
-        '<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sPolicyDelete(\'' + escapeAttr(p.id) + '\')">삭제</button></td></tr>').join('')
+		'<td>' + (p.enabled ? '<span class="status">적용 중</span>' : '<span class="muted">중지</span>') + '</td>' +
+		'<td><button type="button" class="secondary" style="font-size:11px" onclick="k8sPolicySetEnabled(\''+escapeAttr(p.id)+'\',\''+escapeAttr(p.name)+'\',\''+escapeAttr(p.rule_type)+'\',\''+escapeAttr(p.action)+'\','+(!p.enabled)+')">'+(p.enabled?'중지':'활성')+'</button> <button type="button" class="secondary" style="font-size:11px" onclick="k8sPolicyDelete(\'' + escapeAttr(p.id) + '\')">삭제</button></td></tr>').join('')
         : '<tr><td colspan="5" class="muted">정책이 없습니다.</td></tr>';
       const compRows = (comp.violations || []).length ? (comp.violations || []).map(v =>
         '<tr><td><span class="status ' + (v.action === 'Deny' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(v.action) + '</span></td>' +
@@ -13528,7 +13569,9 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
       view.innerHTML =
-		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + '<div class="kpis">' + kpi('정책', fmt((data.policies || []).length)) + kpi('위반 리소스', fmt((comp.violations || []).length)) + kpi('활성 터미널 정책', fmt(activeTermPolicies)) + '</div>') +
+		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + sectionLead('<strong>판정 원칙:</strong> Admission 정책은 위반한 활성 규칙 중 가장 강한 효과가 적용됩니다. <strong>Deny</strong>는 차단, <strong>Warn</strong>은 허용+경고, <strong>Audit</strong>은 허용+기록입니다. Pod exec는 별도 터미널 정책이며 매칭 정책이 없으면 기본 차단됩니다.', '⚖') + '<div class="kpis">' + kpi('Deny', fmt(denyCount)) + kpi('Warn', fmt(warnCount)) + kpi('Audit', fmt(auditCount)) + kpi('중지', fmt(disabledCount)) + kpi('미적용 검사', fmt(uncovered)) + kpi('현재 위반', fmt((comp.violations || []).length)) + '</div>') +
+		card('현재 허용·경고·차단 범위', '<div class="card-body"><div class="resource-insight-grid"><div class="resource-insight"><strong><span class="status error">Deny</span> 배포 차단</strong><p>위반 시 Manifest 검증과 Admission 요청을 통과할 수 없습니다. 원인 수정 또는 승인된 좁은 범위 예외가 필요합니다.</p></div><div class="resource-insight"><strong><span class="status warn">Warn</span> 허용 + 주의</strong><p>요청은 진행할 수 있지만 운영자가 위험을 확인하고 후속 조치나 승인 여부를 판단해야 합니다.</p></div><div class="resource-insight"><strong><span class="status">Audit</span> 허용 + 기록</strong><p>차단하지 않고 위반 증적만 남깁니다. 신규 정책을 관찰 모드로 도입할 때 적합합니다.</p></div></div>' + sectionLead('<strong>플랫폼 불변 가드:</strong> Secret <code>data/stringData</code> 원문 저장은 정책 action이나 승인으로 허용할 수 없습니다. 메타데이터만 이 화면 계열에서 관리하고 값은 Config Change Control·ExternalSecret·SealedSecret·Secret Manager 경로를 사용하세요.', '🔐', 'warn') + '</div>') +
+		card('Effective Policy Matrix', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">현재 저장된 활성 정책을 기준으로 계산합니다. 같은 검사에 정책이 여러 개면 Deny → Warn → Audit 순으로 가장 강한 효과를 표시합니다.</div>' + k8sPolicyMatrixHTML(data.policies || [], data.available_rule_types || []) + '</div>') +
         card('터미널 정책 템플릿 (Pod exec)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 터미널(exec)은 기본 거부입니다 — 매칭되는 활성 정책이 없으면 차단됩니다. 아래 템플릿을 적용하면 해당 스코프의 정책이 즉시 활성화됩니다. cluster_id·namespace는 적용 전 조정하세요. 세부 편집·삭제·평가는 <a href="#/k8s-settings">운영 설정</a>의 Terminal Policy Builder에서 합니다.</div>' +
           tmplCards + '<div id="tmpl-msg" class="muted" style="font-size:12px;margin-top:4px"></div></div>') +
@@ -13544,10 +13587,10 @@ const adminHTML = `<!doctype html>
         card('정책 추가 (SEC-10)',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<input id="pol-name" placeholder="정책 이름" style="min-width:160px">' +
-          '<select id="pol-rule">' + ruleOpts + '</select>' +
-          '<select id="pol-action"><option value="Warn">Warn</option><option value="Deny">Deny</option><option value="Audit">Audit</option></select>' +
+		  '<select id="pol-rule" onchange="k8sPolicyRuleHelp()">' + ruleOpts + '</select>' +
+		  '<select id="pol-action" onchange="k8sPolicyRuleHelp()"><option value="Warn">Warn — 허용+경고</option><option value="Deny">Deny — 차단</option><option value="Audit">Audit — 허용+기록</option></select>' +
           '<label style="font-size:12px"><input type="checkbox" id="pol-enabled" checked> 활성</label>' +
-          '<button type="button" onclick="k8sPolicyAdd()">추가</button></div></div>') +
+		  '<button type="button" onclick="k8sPolicyAdd()">추가</button></div><div id="pol-rule-help" class="section-lead compact" style="margin:8px 0 0"></div></div>') +
         card('정책 목록', '<div class="card-body"><table><thead><tr><th>이름</th><th>규칙</th><th>액션</th><th>활성</th><th></th></tr></thead><tbody>' + polRows + '</tbody></table></div>') +
         card('Admission 시뮬레이터 (SEC-05)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:4px">kind + spec(JSON)을 적용 전 정책에 검증합니다.</div>' +
@@ -13555,8 +13598,8 @@ const adminHTML = `<!doctype html>
           '<textarea id="sim-spec" rows="5" placeholder=\'{"template":{"spec":{"containers":[{"name":"c","image":"x:latest"}]}}}\' style="width:100%"></textarea>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sPolicySimulate()">검증</button></div>' +
           '<div id="sim-pol-out" style="margin-top:8px"></div></div>') +
-        card('Pull Secret 생성기 (REG-REQ-03)',
-          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">사설 레지스트리 imagePullSecret 매니페스트를 생성합니다. 자격증명은 서버에 저장되지 않으며 매니페스트에만 포함됩니다.</div>' +
+		card('Pull Secret 생성기 (REG-REQ-03)',
+		  '<div id="policy-pull-secret" class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">사설 레지스트리 imagePullSecret 매니페스트를 생성합니다. 자격증명은 서버에 저장되지 않으며 매니페스트에만 포함됩니다.</div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' +
           '<input id="ps-name" placeholder="secret 이름(예: regcred)" style="min-width:150px"><input id="ps-ns" placeholder="namespace" style="min-width:110px"><input id="ps-registry" placeholder="registry(예: harbor.corp.io)" style="min-width:180px"></div>' +
           '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px"><input id="ps-user" placeholder="username" style="min-width:140px"><input id="ps-pass" type="password" placeholder="password/token" style="min-width:160px"><input id="ps-email" placeholder="email(선택)" style="min-width:140px"><button type="button" onclick="k8sPullSecretGen()">생성</button></div>' +
@@ -13580,6 +13623,8 @@ const adminHTML = `<!doctype html>
           '<button type="button" class="secondary" onclick="k8sPolicyImport(false)">가져오기</button></div>' +
           '<div id="pol-iac-out" style="margin-top:8px"></div></div>');
       renderK8sExecInbox(false);
+	  setTimeout(() => k8sPolicyRuleHelp(), 0);
+	  if (focusTarget === 'pull-secret') setTimeout(() => uxFocusElement('policy-pull-secret', 'Pull Secret 생성기'), 80);
     }
     window.renderK8sExecInbox = async (showAll) => {
       const box = document.getElementById('exec-inbox');
@@ -13738,17 +13783,34 @@ const adminHTML = `<!doctype html>
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
     window.k8sPolicyAdd = async () => {
+	  const name=(document.getElementById('pol-name').value||'').trim();
+	  if(!name){ showToast('warn','정책 이름 필요','운영자가 식별할 수 있는 정책 이름을 입력하세요.'); return; }
       try {
         await api('/admin/k8s/policies', { method: 'POST', body: JSON.stringify({
-          name: document.getElementById('pol-name').value, rule_type: document.getElementById('pol-rule').value,
+		  name, rule_type: document.getElementById('pol-rule').value,
           action: document.getElementById('pol-action').value, enabled: document.getElementById('pol-enabled').checked }) });
-        await renderK8sPolicy();
-      } catch (e) { alert(e.message); }
+		showToast('ok','정책 저장',name); await renderK8sPolicy(new URLSearchParams(location.hash.split('?')[1]||''));
+	  } catch (e) { showToast('error','정책 저장 실패',e.message); }
     };
+	window.k8sPolicyRuleHelp = () => {
+	  const out=document.getElementById('pol-rule-help'), rule=(document.getElementById('pol-rule')||{}).value;
+	  if(!out) return;
+	  const meta=k8sPolicyRuleCatalog()[rule]||['기타',rule||'정책 검사','리소스','규칙 위반','정책 상세 확인'];
+	  const action=(document.getElementById('pol-action')||{}).value||'Warn';
+	  out.innerHTML='<span class="section-lead-icon" aria-hidden="true">ⓘ</span><span class="section-lead-text"><strong>'+escapeHTML(meta[1])+'</strong> · '+escapeHTML(meta[0])+' · 대상 '+escapeHTML(meta[2])+'<div class="muted" style="font-size:10px;margin-top:3px">탐지: '+escapeHTML(meta[3])+' · 통과 방법: '+escapeHTML(meta[4])+'</div><div style="font-size:10px;margin-top:3px"><strong>'+escapeHTML(action)+'</strong>: '+escapeHTML(k8sPolicyActionHelp(action))+'</div></span>';
+	};
+	window.k8sPolicySetEnabled = async (id,name,ruleType,action,enabled) => {
+	  const label=enabled?'활성화':'중지';
+	  if(!confirm('정책 '+name+'을(를) '+label+'할까요?')) return;
+	  try {
+		await api('/admin/k8s/policies',{method:'POST',body:JSON.stringify({id,name,rule_type:ruleType,action,enabled})});
+		showToast('ok','정책 '+label,name); await renderK8sPolicy(new URLSearchParams(location.hash.split('?')[1]||''));
+	  } catch(e) { showToast('error','정책 변경 실패',e.message); }
+	};
     window.k8sPolicyDelete = async (id) => {
       if (!confirm('정책을 삭제할까요?')) return;
       try { await api('/admin/k8s/policies/' + encodeURIComponent(id), { method: 'DELETE' }); } catch (e) { alert(e.message); }
-      await renderK8sPolicy();
+	  await renderK8sPolicy(new URLSearchParams(location.hash.split('?')[1] || ''));
     };
     window.k8sPullSecretGen = async () => {
       const out = document.getElementById('ps-out');
@@ -15526,9 +15588,20 @@ const adminHTML = `<!doctype html>
       details.push('대상: <strong>' + escapeHTML(targetText) + '</strong>');
       if (exists) details.push('같은 대상이 inventory에 있습니다. 생성 요청은 서버에서도 차단됩니다.');
       if (mismatches.length) details.push('YAML 본문과 입력 필드가 다릅니다: ' + escapeHTML(mismatches.join(', ')) + ' · YAML에서 대상 읽기 버튼으로 맞출 수 있습니다.');
-      if (target.kind === 'Secret') details.push('Secret data/stringData 원문은 저장·적용하지 않습니다.');
-      el.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' + badges.join(' ') + '<span>' + details.join(' · ') + '</span></div>';
+	  if (target.kind === 'Secret') details.push('Secret은 메타데이터 전용 YAML만 이 화면에서 처리합니다.');
+	  el.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' + badges.join(' ') + '<span>' + details.join(' · ') + '</span></div>' + (target.kind === 'Secret' ? k8sManifestSecretHelpHTML(target, k8sManifestSecretPayloadDetected((document.getElementById('mchg-yaml') || {}).value || '')) : '');
     }
+	function k8sManifestSecretPayloadDetected(yaml) {
+	  return /^\s*(?:data|stringData)\s*:/mi.test(String(yaml || ''));
+	}
+	function k8sManifestSecretHelpHTML(target, blocked) {
+	  const clusterQ = target && target.cluster_id ? '?cluster_id=' + encodeURIComponent(target.cluster_id) : '';
+	  return '<div class="section-lead ' + (blocked ? 'warn' : 'compact') + '" style="margin:9px 0 0"><span class="section-lead-icon">🔐</span><span class="section-lead-text"><strong>' + (blocked ? 'Secret 값이 포함되어 이 경로에서는 저장할 수 없습니다.' : 'Secret 안전 경로를 선택하세요.') + '</strong><div style="margin-top:5px">' +
+		'<span class="pill">메타데이터만</span> type·label·annotation만 생성 가능 · ' +
+		'<span class="pill">기존 값 변경</span> <a href="#/k8s-security' + clusterQ + (clusterQ ? '&' : '?') + 'focus=config-change">Config Change Control</a>에서 영향도·승인 기록 · ' +
+		'<span class="pill">운영 값 주입</span> ExternalSecret/SealedSecret 또는 조직 Secret Manager 사용 · ' +
+		'<span class="pill">레지스트리 인증</span> <a href="#/k8s-policy' + clusterQ + (clusterQ ? '&' : '?') + 'focus=pull-secret">Pull Secret 생성기</a> 사용</div><div class="muted" style="font-size:10px;margin-top:5px">값을 YAML에서 제거한 뒤 다시 요청하거나, 목적에 맞는 안전 경로로 이동하세요. 승인만으로 Secret 원문 저장 제한을 우회할 수는 없습니다.</div></span></div>';
+	}
     function k8sManifestFindExistingTarget(target) {
       if (!target || !target.cluster_id || !target.kind || !target.name) return null;
       const ns = k8sManifestIsClusterScoped(target.kind) ? '' : (target.namespace || 'default');
@@ -15790,6 +15863,11 @@ const adminHTML = `<!doctype html>
         showToast('warn', 'YAML 요청 불가', '클러스터, Kind, 이름, YAML 본문을 입력하세요.');
         return;
       }
+	  if (body.kind === 'Secret' && k8sManifestSecretPayloadDetected(body.after_yaml)) {
+		out.innerHTML = k8sManifestSecretHelpHTML(body, true);
+		showToast('warn', 'Secret 값 저장 차단', 'data/stringData를 제거하거나 Config Change Control·External Secret 경로를 사용하세요.');
+		return;
+	  }
       out.innerHTML = '<span class="muted">' + (body.operation === 'create' ? '생성' : '변경') + ' 요청 저장 중...</span>';
       try {
         const d = await api('/admin/k8s/manifest-changes', { method: 'POST', body: JSON.stringify(body) });
