@@ -1,3 +1,6 @@
+v0.9.116:
+- **Admin Work Calendar (v0.9.116)**: 전체 클러스터 및 전체 네임스페이스 대상의 운영 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링할 수 있는 '전체 업무 캘린더'를 신설했습니다. 개인 영역의 업무 캘린더와 구조적으로 연계하여 Action, Config 변경, YAML 변경, Exec, Debug 등의 모든 운영 이벤트를 필터링(클러스터, 네임스페이스, 리소스 유형, 라이프사이클 단계, 담당자 이력, 검색어 등) 및 정렬하여 추적할 수 있으며, `/admin/work-calendar` API 엔드포인트와 라우트 및 `ops.work_calendar` 메뉴 내비게이션(menuVersion 40)을 추가했습니다. Gateway 신규 기능은 계속 제외했습니다.
+
 v0.9.115:
 - **Manifest Change Live API Verification (v0.9.115)**: Manifest 변경 후 사후 검증 단계의 정확성을 대폭 강화했습니다. 백그라운드 수집기의 스캔 주기 차이(timing gap)로 인한 판정 오류를 우회하기 위해, Kubernetes API 서버에 직접 실시간으로 리소스를 조회하는 `ResourceGetter` 인터페이스 및 실시간 조회 흐름(`verification_source=api_server`)을 도입했습니다. 또한, Job/Pod 간의 warning 관계 매핑을 보완해 생성된 자식 Pod들의 경고도 Job의 사후 검증에 포함하도록 확장하였으며, 상세 판정 결과 코드(`execution_failed`, `verified_with_warning`, `observation_pending`, `incident_detected`)를 신설하여 UI의 변경 요청 상세 뷰에서 사후 검증 결과를 직관적으로 파악할 수 있도록 UI 카드 및 KPI 요소를 업데이트했습니다.
 

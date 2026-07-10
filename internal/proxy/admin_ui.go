@@ -728,6 +728,7 @@ const adminHTML = `<!doctype html>
           <a href="#/app-launcher" data-tab="app-launcher">앱 런처</a>
           <a href="#/app-launch-history" data-tab="app-launch-history">런칭 이력</a>
           <a href="#/gitops" data-tab="gitops">GitOps 변경관리</a>
+		  <a href="#/work-calendar" data-tab="work-calendar">전체 업무 캘린더</a>
           <a href="#/k8s-timeline" data-tab="k8s-timeline">변경 타임라인</a>
           <a href="#/k8s-graph" data-tab="k8s-graph">리소스 그래프</a>
           <a href="#/k8s-ai" data-tab="k8s-ai">AI 분석</a>
@@ -1410,6 +1411,7 @@ const adminHTML = `<!doctype html>
       { tab: 'my-integrations', href: '#/my-integrations', label: '나의 외부 연동', group: '내 영역', tags: 'my external integration credential gitlab bitbucket harbor mattermost' },
       { tab: 'my-profile', href: '#/my-profile', label: '개인화 설정', group: '내 영역', tags: 'personalization preference shortcut guide' },
       { tab: 'k8s-home', href: '#/k8s-home', label: '운영 홈', group: '운영', tags: 'home overview cluster incident cost security' },
+	  { tab: 'work-calendar', href: '#/work-calendar', label: '전체 업무 캘린더', group: '운영', tags: 'admin all work calendar approval action yaml change task actor' },
       { tab: 'k8s-actions', href: '#/k8s-actions', label: '액션 승인함', group: '대응', tags: 'approval action approve execute pending' },
       { tab: 'fleet', href: '#/fleet', label: 'FleetOps', group: '운영', tags: 'fleet global search multi cluster' },
       { tab: 'k8s', href: '#/k8s', label: '클러스터 관리', group: '리소스', tags: 'cluster register kubeconfig minikube' },
@@ -2611,6 +2613,7 @@ const adminHTML = `<!doctype html>
         switch (tab) {
           case 'me':        await renderMeHome(); break;
           case 'my-calendar': await renderMyCalendar(params); break;
+		  case 'work-calendar': await renderAdminWorkCalendar(params); break;
           case 'my-integrations': await renderMyIntegrations(params); break;
           case 'my-profile': await renderMyProfile(params); break;
           case 'team':      await renderTeamHome(); break;
@@ -20942,6 +20945,47 @@ const adminHTML = `<!doctype html>
         '</div>') +
         card('내 업무 목록', '<div class="card-body"><table><thead><tr><th>날짜</th><th>단계</th><th>업무</th><th>대상</th><th>나와의 관계</th><th>SLA</th></tr></thead><tbody>' + listRows + '</tbody></table></div>');
     }
+
+	function adminCalendarHref(cursor, filters) {
+	  const q = new URLSearchParams();
+	  q.set('month', cursor.year + '-' + String(cursor.month + 1).padStart(2, '0'));
+	  Object.keys(filters || {}).forEach(k => { if (filters[k]) q.set(k, filters[k]); });
+	  return '#/work-calendar?' + q.toString();
+	}
+	window.applyAdminCalendarFilters = () => {
+	  const current = myCalendarMonthFromParams(new URLSearchParams(location.hash.split('?')[1] || ''));
+	  const value = id => ((document.getElementById(id) || {}).value || '').trim();
+	  location.hash = adminCalendarHref(current, {
+		cluster_id: value('ac-cluster'), namespace: value('ac-namespace'), kind: value('ac-kind'),
+		lane: value('ac-lane'), actor: value('ac-actor'), q: value('ac-q')
+	  });
+	};
+	async function renderAdminWorkCalendar(params) {
+	  const view = document.getElementById('view');
+	  const cursor = myCalendarMonthFromParams(params || new URLSearchParams());
+	  const filterKeys = ['cluster_id','namespace','kind','lane','actor','q'];
+	  const filters = {}; filterKeys.forEach(k => filters[k] = (params && params.get(k)) || '');
+	  view.innerHTML = section('전체 업무 캘린더', '<div class="empty">불러오는 중...</div>');
+	  const apiQ = new URLSearchParams({ window_days: '365', limit: '3000' });
+	  filterKeys.forEach(k => { if (filters[k]) apiQ.set(k, filters[k]); });
+	  let data;
+	  try { data = await api('/admin/work-calendar?' + apiQ.toString()); }
+	  catch (e) { view.innerHTML = section('전체 업무 캘린더', '<div class="card-body"><p class="muted">전체 업무를 불러올 수 없습니다(admin:read 필요). 상세: ' + escapeHTML(e.message) + '</p></div>'); return; }
+	  const events = data.events || [], options = data.options || {}, byDate = {};
+	  events.forEach(ev => { const k = ev.date || ''; (byDate[k] = byDate[k] || []).push(ev); });
+	  const optionHTML = (values, selected, empty) => '<option value="">' + empty + '</option>' + (values || []).map(v => '<option value="' + escapeAttr(v) + '"' + (v === selected ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
+	  const first = new Date(cursor.year, cursor.month, 1), start = new Date(cursor.year, cursor.month, 1 - first.getDay()), todayKey = myCalendarDateKey(new Date()), cells = [];
+	  for (let i = 0; i < 42; i++) {
+		const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i), key = myCalendarDateKey(d), inMonth = d.getMonth() === cursor.month;
+		const dayEvents = (byDate[key] || []).slice(0, 5);
+		cells.push('<div class="personal-calendar-day' + (key === todayKey ? ' today' : '') + '" style="' + (!inMonth ? 'opacity:.48' : '') + '"><div class="personal-calendar-date"><span>' + d.getDate() + '</span><span class="muted">' + ((byDate[key] || []).length || '') + '</span></div><div class="personal-calendar-events">' + dayEvents.map(ev => '<a class="personal-calendar-event ' + myCalendarEventClass(ev) + '" href="' + escapeAttr(ev.href || '#/k8s-actions') + '" title="' + escapeAttr(ev.description || '') + '"><strong>' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</strong> ' + escapeHTML(ev.title || ev.kind || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(ev.target || '-') + '</div></a>').join('') + (((byDate[key] || []).length > 5) ? '<div class="muted" style="font-size:10px">외 ' + ((byDate[key] || []).length - 5) + '건</div>' : '') + '</div></div>');
+	  }
+	  const actorText = ev => Object.keys(ev.actors || {}).sort().map(role => role + ': ' + ev.actors[role]).join(', ');
+	  const rows = events.slice(0, 500).map(ev => '<tr><td class="muted">' + escapeHTML(ev.date || '-') + '</td><td><span class="status ' + (ev.lane === 'attention' ? 'error' : (ev.lane === 'approval' ? 'warn' : '')) + '">' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</span></td><td>' + escapeHTML(ev.kind || '-') + '</td><td><a href="' + escapeAttr(ev.href || '#/k8s-actions') + '">' + escapeHTML(ev.title || '-') + '</a><div class="muted" style="font-size:11px">' + escapeHTML(ev.description || '') + '</div></td><td>' + escapeHTML(ev.cluster_id || '-') + '<div class="muted">' + escapeHTML(ev.namespace || '-') + '</div></td><td class="muted">' + escapeHTML(actorText(ev) || ev.actor_hint || '-') + '</td><td>' + escapeHTML(ev.status || '-') + '</td><td>' + escapeHTML(ev.sla_status || '-') + '</td></tr>').join('') || '<tr><td colspan="8" class="muted">조건에 맞는 업무가 없습니다.</td></tr>';
+	  const summary = data.summary || {}, prev = new Date(cursor.year, cursor.month - 1, 1), next = new Date(cursor.year, cursor.month + 1, 1);
+	  const filterBar = '<div class="toolbar" style="gap:6px;flex-wrap:wrap"><select id="ac-cluster">' + optionHTML(options.clusters, filters.cluster_id, '전체 클러스터') + '</select><select id="ac-namespace">' + optionHTML(options.namespaces, filters.namespace, '전체 namespace') + '</select><select id="ac-kind">' + optionHTML(options.kinds, filters.kind, '전체 유형') + '</select><select id="ac-lane">' + optionHTML(['attention','approval','ready','verify','prepare','done'], filters.lane, '전체 단계') + '</select><select id="ac-actor">' + optionHTML(options.actors, filters.actor, '전체 담당자') + '</select><input id="ac-q" value="' + escapeAttr(filters.q) + '" placeholder="업무·대상·상태 검색" onkeydown="if(event.key===\'Enter\')applyAdminCalendarFilters()"><button type="button" onclick="applyAdminCalendarFilters()">조회</button><a class="button secondary" href="#/work-calendar">초기화</a></div>';
+	  view.innerHTML = section('전체 업무 캘린더', '<div class="card-body">' + filterBar + '<div class="toolbar" style="padding:10px 0;border:0"><a class="button secondary" href="' + adminCalendarHref({year:prev.getFullYear(),month:prev.getMonth()}, filters) + '">이전</a><strong>' + cursor.year + '년 ' + (cursor.month + 1) + '월</strong><a class="button secondary" href="' + adminCalendarHref({year:next.getFullYear(),month:next.getMonth()}, filters) + '">다음</a><span class="muted">전체 운영 업무 · 최근 ' + fmt(data.window_days || 0) + '일</span></div><div class="kpis">' + kpi('전체', fmt(summary.total || 0)) + kpi('확인 필요', fmt(summary.attention || 0)) + kpi('승인 대기', fmt(summary.approval || 0)) + kpi('실행/검증', fmt((summary.ready || 0) + (summary.verify || 0))) + kpi('SLA 주의', fmt(summary.sla || 0)) + '</div><div class="personal-calendar" style="margin-top:12px">' + cells.join('') + '</div></div>') + card('전체 업무 목록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">최대 500건 표시 · 업무명을 선택하면 원본 승인/변경/실행 화면으로 이동합니다.</div><div style="overflow:auto"><table><thead><tr><th>날짜</th><th>단계</th><th>유형</th><th>업무</th><th>클러스터/NS</th><th>담당자 이력</th><th>상태</th><th>SLA</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>');
+	}
 
     async function renderMyIntegrations(params) {
       await renderExternalIntegrations({ personal: true });

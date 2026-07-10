@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 39
+const menuVersion = 40
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -34,6 +34,7 @@ var menuRegistry = []menuItem{
 	{ID: "me.profile", Label: "개인화 설정", Path: "#/my-profile", Tab: "my-profile", Group: "me", DataScope: "self"},
 	// 운영 영역 — Kubernetes 운영 허브 (admin:read).
 	{ID: "ops.k8s_home", Label: "운영 홈", Path: "#/k8s-home", Tab: "k8s-home", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.work_calendar", Label: "전체 업무 캘린더", Path: "#/work-calendar", Tab: "work-calendar", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.fleet", Label: "FleetOps", Path: "#/fleet", Tab: "fleet", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s", Label: "클러스터", Path: "#/k8s", Tab: "k8s", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_collector", Label: "수집 상태", Path: "#/k8s-collector", Tab: "k8s-collector", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},

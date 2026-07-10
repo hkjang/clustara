@@ -355,6 +355,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/me/actions", []string{"get"}, "self-service", "Personal action queue (things to act on now)", false},
 	{"/me/actions/snooze", []string{"post"}, "self-service", "Snooze an action-queue item", false},
 	{"/me/work-calendar", []string{"get"}, "self-service", "Calendar view of operational work related to the caller", false},
+	{"/admin/work-calendar", []string{"get"}, "operations", "Administrative calendar view across all operational work and actors", false},
 	{"/me/navigation", []string{"get"}, "self-service", "Personalized navigation menu for the caller", false},
 	{"/me/notifications", []string{"get"}, "self-service", "Unified personal notification feed", false},
 	{"/me/recommended-models", []string{"get"}, "self-service", "Recommended models for the caller's work", false},
