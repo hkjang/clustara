@@ -9904,7 +9904,8 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + (cl.last_error ? escapeHTML(cl.last_error) : (cl.last_connected_at ? ago(cl.last_connected_at) : '<span class="muted">-</span>')) + '</td>' +
         '<td><button type="button" class="secondary" onclick="k8sTest(\'' + escapeAttr(cl.id) + '\')">연결 테스트</button> ' +
         '<button type="button" class="secondary" onclick="k8sCollect(\'' + escapeAttr(cl.id) + '\')">수집</button> ' +
-        '<button type="button" class="secondary" onclick="k8sPrepareCredentialUpdate(\'' + escapeAttr(cl.id) + '\',\'' + escapeAttr(cl.name) + '\',\'' + escapeAttr(cl.server_url) + '\',\'' + escapeAttr(cl.auth_mode) + '\')">인증 갱신</button></td></tr>'
+        '<button type="button" class="secondary" onclick="k8sPrepareCredentialUpdate(\'' + escapeAttr(cl.id) + '\',\'' + escapeAttr(cl.name) + '\',\'' + escapeAttr(cl.server_url) + '\',\'' + escapeAttr(cl.auth_mode) + '\')">인증 갱신</button> ' +
+        '<button type="button" class="secondary" style="color:var(--status-error-color,#e06c75)" onclick="k8sDelete(\'' + escapeAttr(cl.id) + '\',\'' + escapeAttr(cl.name) + '\')">삭제</button></td></tr>'
       ).join('') : '<tr><td colspan="7" class="muted">등록된 클러스터가 없습니다.</td></tr>';
       const timelineHref = (it) => '#/k8s-timeline?' + new URLSearchParams({ cluster_id: it.cluster_id || '', namespace: it.namespace || '', name: it.name || '', kind: it.kind || '' }).toString();
       const invRows = (inventory.items || []).length ? (inventory.items || []).map(it =>
@@ -10029,6 +10030,21 @@ const adminHTML = `<!doctype html>
       try { await api('/admin/k8s/clusters/' + encodeURIComponent(id) + '/collect', { method: 'POST', body: '{}' }); }
       catch (e) { alert(e.message); }
       await renderK8sOperations();
+    };
+    window.k8sDelete = async (id, name) => {
+      const confirmName = prompt('클러스터 "' + name + '"을(를) 정말로 삭제하시겠습니까?\n안전한 삭제를 위해 클러스터 이름을 그대로 입력해주세요:');
+      if (confirmName === null) return;
+      if (confirmName !== name) {
+        alert('클러스터 이름이 일치하지 않습니다. 삭제 처리가 취소되었습니다.');
+        return;
+      }
+      try {
+        await api('/admin/k8s/clusters/' + encodeURIComponent(id), { method: 'DELETE' });
+        showToast('ok', '클러스터 삭제 완료', name);
+        await renderK8sOperations();
+      } catch (e) {
+        showToast('error', '클러스터 삭제 실패', e.message);
+      }
     };
 
     // Service Impact Home (CLU-REQ-07): service-centric view of workloads + exposure + blast radius.

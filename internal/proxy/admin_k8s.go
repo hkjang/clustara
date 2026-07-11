@@ -156,6 +156,17 @@ func (s *Server) handleK8sClusterByID(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if r.Method == http.MethodDelete {
+		if err := s.db.DeleteK8sCluster(r.Context(), cluster.ID); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_delete_failed")
+			return
+		}
+		s.auditAdmin(r, "k8s.cluster.delete", "", auditJSON(map[string]any{
+			"id": cluster.ID, "name": cluster.Name,
+		}))
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": cluster.ID})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return

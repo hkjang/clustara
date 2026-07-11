@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -327,6 +328,54 @@ func (s *SQLStore) GetK8sCredential(ctx context.Context, clusterID string) (K8sC
 		return K8sClusterCredential{}, ErrNotFound
 	}
 	return c, err
+}
+
+func (s *SQLStore) DeleteK8sCluster(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	tables := []string{
+		"k8s_clusters",
+		"k8s_cluster_credentials",
+		"k8s_inventory",
+		"k8s_collector_status",
+		"k8s_events",
+		"k8s_metrics_samples",
+		"k8s_gpu_samples",
+		"k8s_security_findings",
+		"k8s_namespace_ownership",
+		"k8s_watch_events",
+		"k8s_collect_runs",
+		"k8s_collect_bursts",
+		"k8s_api_resources",
+		"k8s_api_groups",
+		"k8s_resource_revisions",
+		"k8s_incidents",
+		"k8s_action_requests",
+		"k8s_config_change_requests",
+		"k8s_manifest_change_requests",
+		"harbor_project_mappings",
+		"harbor_launch_requests",
+	}
+
+	for _, tbl := range tables {
+		q := fmt.Sprintf("DELETE FROM %s WHERE cluster_id = ?", tbl)
+		if tbl == "k8s_clusters" {
+			q = "DELETE FROM k8s_clusters WHERE id = ?"
+		}
+		if _, err := tx.ExecContext(ctx, s.bind(q), id); err != nil {
+			// If the table doesn't exist (e.g. optional/unreleased schema), skip gracefully.
+			if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "doesn't exist") {
+				continue
+			}
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *SQLStore) UpsertK8sInventory(ctx context.Context, item K8sInventoryItem) error {

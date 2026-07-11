@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2717,4 +2718,86 @@ spec:
 	if got.Status != "approved" {
 		t.Fatalf("blocked apply must not move request to running/failed, got %s", got.Status)
 	}
+}
+
+func TestK8sClusterDeletion(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	// Register a cluster
+	regResp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "Bearer secret", map[string]any{
+		"name":       "del-cluster",
+		"server_url": "https://k8s.del.invalid:6443",
+		"auth_mode":  "kubeconfig",
+		"kubeconfig": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://k8s.del.invalid:6443\n  name: del-cluster\ncontexts:\n- context:\n    cluster: del-cluster\n    user: admin\n  name: del-cluster\ncurrent-context: del-cluster\nusers:\n- name: admin\n  user:\n    token: fake-token\n",
+	})
+	defer regResp.Body.Close()
+	if regResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(regResp.Body)
+		t.Fatalf("register: status=%d body=%s", regResp.StatusCode, body)
+	}
+	var regOut struct {
+		Cluster struct {
+			ID string `json:"id"`
+		} `json:"cluster"`
+	}
+	if err := json.NewDecoder(regResp.Body).Decode(&regOut); err != nil {
+		t.Fatal(err)
+	}
+	clusterID := regOut.Cluster.ID
+	if clusterID == "" {
+		t.Fatal("expected cluster ID from register response")
+	}
+
+	// Verify cluster exists
+	cl, err := db.GetK8sCluster(context.Background(), clusterID)
+	if err != nil {
+		t.Fatalf("cluster should exist after register: %v", err)
+	}
+	if cl.Name != "del-cluster" {
+		t.Fatalf("unexpected cluster name: %s", cl.Name)
+	}
+
+	// Delete the cluster
+	req, err := http.NewRequest(http.MethodDelete, proxy.URL+"/admin/k8s/clusters/"+clusterID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	delResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(delResp.Body)
+		t.Fatalf("delete: status=%d body=%s", delResp.StatusCode, body)
+	}
+	var delOut struct {
+		Deleted bool   `json:"deleted"`
+		ID      string `json:"id"`
+	}
+	if err := json.NewDecoder(delResp.Body).Decode(&delOut); err != nil {
+		t.Fatal(err)
+	}
+	if !delOut.Deleted || delOut.ID != clusterID {
+		t.Fatalf("unexpected delete response: %+v", delOut)
+	}
+
+	// Verify cluster is gone from DB
+	_, err = db.GetK8sCluster(context.Background(), clusterID)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cluster should be deleted, got err=%v", err)
+	}
+	_ = fmt.Sprintf("cluster %s successfully deleted", clusterID)
 }

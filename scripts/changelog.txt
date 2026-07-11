@@ -1,3 +1,6 @@
+v0.9.123:
+- **Safe Cluster Deletion (v0.9.123)**: 클러스터 목록에 안전한 삭제 기능을 추가했습니다. `DELETE /admin/k8s/clusters/{id}` API를 신설하여 `k8s_clusters`, `k8s_cluster_credentials`, `k8s_inventory`, `k8s_events`, `k8s_metrics_samples`, `k8s_gpu_samples`, `k8s_security_findings`, `k8s_incidents`, `k8s_action_requests`, `k8s_manifest_change_requests` 등 관련 21개 테이블의 데이터를 하나의 트랜잭션 내에서 안전하게 삭제(Cascade Delete)합니다. UI에서는 클러스터 목록의 각 행에 "삭제" 버튼을 추가하고, 클릭 시 삭제 대상 클러스터의 이름을 직접 입력해야만 삭제 요청이 전송되는 이름 확인(Name Confirmation) 안전장치를 적용했습니다. 삭제 완료 또는 실패 시 Toast 알림을 표시하고 클러스터 목록을 즉시 갱신합니다.
+
 v0.9.122:
 - **GPU Monitor Typo Fix & Auth Guide (v0.9.122)**: GPU 모니터링 화면에서 비용 KPI 연산 함수 `won`이 정의되지 않아 발생하던 자바스크립트 참조 오류(won is not defined)를 핫픽스했습니다. 또한, 브라우저 주소창에 API 엔드포인트(예: `/admin/k8s/clusters`)를 직접 입력하여 접근 시 인가 헤더 누락으로 인한 401 Unauthorized 오류의 처리 규격을 명시하고, SPA의 보안 헤더 처리 안내 문구를 정합했습니다.
 
