@@ -10463,6 +10463,7 @@ const adminHTML = `<!doctype html>
       }).join('') + '</div>';
     }
     function k8sGPUOperationsHTML(response, selectedCluster) {
+      const won = (v) => '₩' + fmt(Math.round(v || 0));
       const r = (response || {}).report || {};
       const s = r.summary || {};
       const policy = r.alert_policy || {};

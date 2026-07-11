@@ -1,3 +1,6 @@
+v0.9.122:
+- **GPU Monitor Typo Fix & Auth Guide (v0.9.122)**: GPU 모니터링 화면에서 비용 KPI 연산 함수 `won`이 정의되지 않아 발생하던 자바스크립트 참조 오류(won is not defined)를 핫픽스했습니다. 또한, 브라우저 주소창에 API 엔드포인트(예: `/admin/k8s/clusters`)를 직접 입력하여 접근 시 인가 헤더 누락으로 인한 401 Unauthorized 오류의 처리 규격을 명시하고, SPA의 보안 헤더 처리 안내 문구를 정합했습니다.
+
 v0.9.121:
 - **Admin Access UX Redirect & Mutation Exceptions (v0.9.121)**: 관리자 영역 API에 대한 인가(Authorization) 처리를 고도화했습니다. 기존에 401(인증되지 않은 토큰)과 403(권한 없음)을 모두 단순 false 처리하던 로직을 `evaluateAdminAccess` 및 `adminAccessDecision` 구조로 정합하여 명확한 오류 원인을 안내하게 했습니다. 또한, 브라우저로 관리자 API 경로(`/admin/*`)에 직접 GET 접근 시 JSON 응답 대신 SPA의 접근 거부(`#/access-denied`) 페이지로 부드럽게 리다이렉트되도록 `withAdminAccessUX` 미들웨어를 보강했습니다. 아울러 보안 관리자(`security_admin`)와 비용 관리자(`billing_admin`) 역할에 한해 전체 `admin:write` 권한이 없더라도 자신의 담당 영역 API(보안 정책, cost 등)에 대한 변경(POST/DELETE)을 허용하는 권한 예외 필터(`adminRoleWriteException`)를 세분화 적용하고 모니터링 테스트 연동을 추가했습니다.
 

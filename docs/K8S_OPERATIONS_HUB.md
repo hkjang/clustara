@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.121** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.122** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.121)
+## 기능 상태 (v0.9.122)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -28,6 +28,7 @@
 | Manifest Studio Secret Guard & Policy UX — Manifest 생성/변경 화면에 data/stringData 페이로드 탐지 및 저장 차단(Secret 안전 경로 유도 모달)을 추가하고, 정책 센터에 각 규칙 유형(Rule Type)의 해설 카탈로그(Help UI) 및 정책 토글 스위치 제공 | ✅ (v0.9.119) |
 | Node & GPU Operations Monitoring — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.120) |
 | Admin Access UX Redirect & Mutation Exceptions — 관리자 API 인가(Authorization)를 고도화하여 401/403 응답을 정합하고 브라우저 직접 접근 시 SPA의 Access Denied 화면으로 리다이렉트 지원, 보안(security_admin) 및 비용(billing_admin) 관리 역할에 대해 각각 쓰기(admin:write) 권한 예외 세분화 및 모니터링 테스트 연동 | ✅ (v0.9.121) |
+| GPU Monitor Typo Fix & Auth Guide — GPU 모니터링 화면에서 비용 KPI 함수 won 미정의 오류를 해결하고 브라우저 다이렉트 API 요청에 대한 401 인가 명세 및 SPA 헤더 처리 가이드 추가 | ✅ (v0.9.122) |
 | Cluster Group Membership CRUD — 추가한 클러스터를 그룹에 배정·변경·해제하고, 그룹 수정/삭제·오너십 수정/삭제까지 `#/k8s-meta`에서 처리 | ✅ (v0.9.112) |
 | External Integration Credential Vault — 설정 그룹의 외부연동 설정 메뉴에서 GitLab·Bitbucket·Harbor·Mattermost Token/Password를 사용자별 암호화 저장하고 GitOps/Harbor 화면에서 `credential_id`로 재사용 | ✅ (v0.9.111) |
 | Internal Git Provider Integration — 사내 GitLab·Bitbucket Server 6.x provider 원장, 사용자별 저장 Credential 또는 일회성 token 연결 확인, project/repo/branch/tree/file catalog picker, PR API payload preview | ✅ (v0.9.109) |
