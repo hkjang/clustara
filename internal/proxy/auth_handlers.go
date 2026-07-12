@@ -36,6 +36,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid email or password", "invalid_request_error", "invalid_credentials")
 		return
 	}
+	if !s.enforceAdminLoginIP(w, r, user) {
+		return
+	}
 	teamID, _ := s.db.PrimaryTeamForUser(r.Context(), user.ID)
 	tokens, err := s.issueTokenPair(r.Context(), user, teamID, clientIP(r), r.UserAgent())
 	if err != nil {
@@ -118,12 +121,13 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"menu_version": menuVersion,
 		"user": map[string]any{
 			"id": claims.Subject, "email": claims.Email, "role": claims.Role,
-			"roles":        []string{claims.Role},
-			"team_id":      claims.TeamID,
-			"cost_center":  "",
-			"scopes":       claims.Scopes,
-			"features":     s.featureFlags(),
-			"default_home": resolveHome(claims.Role, claims.Scopes),
+			"roles":                    []string{claims.Role},
+			"team_id":                  claims.TeamID,
+			"cost_center":              "",
+			"scopes":                   claims.Scopes,
+			"features":                 s.featureFlags(),
+			"default_home":             resolveHome(claims.Role, claims.Scopes),
+			"password_change_required": claims.PasswordChangeRequired,
 		},
 	})
 }

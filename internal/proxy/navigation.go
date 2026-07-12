@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 42
+const menuVersion = 43
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -32,6 +32,16 @@ var menuRegistry = []menuItem{
 	{ID: "me.keys", Label: "개인 키 관리", Path: "#/mykeys", Tab: "mykeys", Group: "me", DataScope: "self"},
 	{ID: "me.integrations", Label: "나의 외부 연동", Path: "#/my-integrations", Tab: "my-integrations", Group: "me", DataScope: "self"},
 	{ID: "me.profile", Label: "개인화 설정", Path: "#/my-profile", Tab: "my-profile", Group: "me", DataScope: "self"},
+	// 서비스 플랫폼 — Kubernetes 객체를 사용자 중심 서비스 인스턴스로 추상화.
+	{ID: "svc.home", Label: "서비스 홈", Path: "#/service-home", Tab: "service-home", Group: "service", Scopes: []string{"service:read"}, DataScope: "all"},
+	{ID: "svc.catalog", Label: "서비스 카탈로그", Path: "#/services/catalog", Tab: "services-catalog", Group: "service", Scopes: []string{"service:read"}, DataScope: "all"},
+	{ID: "svc.mine", Label: "내 서비스", Path: "#/services/mine", Tab: "services-mine", Group: "service", Scopes: []string{"service:read"}, DataScope: "self"},
+	{ID: "svc.all", Label: "전체 서비스", Path: "#/services/all", Tab: "services-all", Group: "service", Scopes: []string{"admin:read", "service:catalog:manage"}, DataScope: "all"},
+	{ID: "svc.jupyter", Label: "Jupyter 관리", Path: "#/services/jupyter", Tab: "services-jupyter", Group: "service", Scopes: []string{"admin:read", "service:catalog:manage"}, DataScope: "all"},
+	{ID: "svc.database", Label: "데이터베이스", Path: "#/services/databases", Tab: "services-databases", Group: "service", Scopes: []string{"admin:read", "service:catalog:manage"}, DataScope: "all"},
+	{ID: "svc.apps", Label: "WAS·애플리케이션", Path: "#/services/apps", Tab: "services-apps", Group: "service", Scopes: []string{"admin:read", "service:catalog:manage"}, DataScope: "all"},
+	{ID: "svc.operations", Label: "작업 이력", Path: "#/services/operations", Tab: "services-operations", Group: "service", Scopes: []string{"admin:read", "service:catalog:manage"}, DataScope: "all"},
+	{ID: "svc.templates", Label: "템플릿 관리", Path: "#/services/templates", Tab: "services-templates", Group: "service", Scopes: []string{"service:catalog:manage"}, DataScope: "all"},
 	// 운영 영역 — Kubernetes 운영 허브 (admin:read).
 	{ID: "ops.k8s_home", Label: "운영 홈", Path: "#/k8s-home", Tab: "k8s-home", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.work_calendar", Label: "전체 업무 캘린더", Path: "#/work-calendar", Tab: "work-calendar", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -48,7 +58,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_pods", Label: "Pod 관리", Path: "#/k8s-pods", Tab: "k8s-pods", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_nodes", Label: "노드 관리", Path: "#/k8s-nodes", Tab: "k8s-nodes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
-	{ID: "ops.service_catalog", Label: "서비스 카탈로그", Path: "#/service-catalog", Tab: "service-catalog", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.service_catalog", Label: "서비스 디렉터리", Path: "#/service-catalog", Tab: "service-catalog", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_stacks", Label: "앱 배포", Path: "#/k8s-stacks", Tab: "k8s-stacks", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_manifest_changes", Label: "YAML 변경/생성", Path: "#/k8s-manifest-changes", Tab: "k8s-manifest-changes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.harbor", Label: "Harbor 레지스트리", Path: "#/harbor", Tab: "harbor", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
@@ -156,6 +166,8 @@ func menuDecision(item menuItem, scopes []string, features map[string]bool) (boo
 // Domain pages require both the admin surface and their functional read scope.
 func menuGroupScopeAccessible(item menuItem, scopes []string) bool {
 	switch item.Group {
+	case "service":
+		return hasScope(scopes, "service:read") || hasScope(scopes, "service:catalog:manage")
 	case "ops":
 		return hasScope(scopes, "admin:read") && hasScope(scopes, "observability:read")
 	case "billing":

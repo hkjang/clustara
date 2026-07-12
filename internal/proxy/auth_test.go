@@ -125,7 +125,7 @@ func TestAuthUserRoleChangeAndDeactivation(t *testing.T) {
 
 	// create a developer account
 	create := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{
-		"email": "dev@example.com", "password": "dev-password", "name": "Dev", "role": "developer",
+		"email": "dev@example.com", "password": "Dev-credential-2026!", "name": "Dev", "role": "developer",
 	})
 	if create.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(create.Body)
@@ -140,7 +140,7 @@ func TestAuthUserRoleChangeAndDeactivation(t *testing.T) {
 	create.Body.Close()
 
 	// the new account can log in
-	devLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "dev@example.com", "password": "dev-password"})
+	devLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "dev@example.com", "password": "Dev-credential-2026!"})
 	var devTok struct {
 		AccessToken string `json:"access_token"`
 	}
@@ -176,6 +176,16 @@ func TestAuthUserRoleChangeAndDeactivation(t *testing.T) {
 	if !foundRoleChange {
 		t.Fatalf("role_changed audit event missing: %+v", events)
 	}
+	roleStaleReq, _ := http.NewRequest(http.MethodGet, proxy.URL+"/auth/me", nil)
+	roleStaleReq.Header.Set("Authorization", "Bearer "+devTok.AccessToken)
+	roleStale, err := http.DefaultClient.Do(roleStaleReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleStale.Body.Close()
+	if roleStale.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("role change should revoke tokens carrying the old authorization, got %d", roleStale.StatusCode)
+	}
 
 	// deactivate → live access token dies immediately (session revoked)
 	patch2, _ := http.NewRequest(http.MethodPatch, proxy.URL+"/admin/users/"+created.User.ID, strings.NewReader(`{"status":"disabled"}`))
@@ -200,7 +210,7 @@ func TestAuthUserRoleChangeAndDeactivation(t *testing.T) {
 		t.Fatalf("deactivated user's access token should be rejected, got %d", meRes.StatusCode)
 	}
 	// and a fresh login is refused
-	relogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "dev@example.com", "password": "dev-password"})
+	relogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "dev@example.com", "password": "Dev-credential-2026!"})
 	relogin.Body.Close()
 	if relogin.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("deactivated user login should fail, got %d", relogin.StatusCode)
@@ -254,9 +264,9 @@ func TestHardDeleteKeyTeamChangeAndScopeEdit(t *testing.T) {
 	}
 
 	// --- ② hard delete: admin role denied, super_admin allowed ---
-	cu := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{"email": "adm@example.com", "password": "pw-adm", "role": "admin"})
+	cu := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{"email": "adm@example.com", "password": "Adm-credential-2026!", "role": "admin"})
 	cu.Body.Close()
-	admLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "adm@example.com", "password": "pw-adm"})
+	admLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "adm@example.com", "password": "Adm-credential-2026!"})
 	var admTok struct {
 		AccessToken string `json:"access_token"`
 	}
@@ -290,7 +300,7 @@ func TestHardDeleteKeyTeamChangeAndScopeEdit(t *testing.T) {
 	}
 	_ = json.NewDecoder(tm.Body).Decode(&teamOut)
 	tm.Body.Close()
-	cu2 := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{"email": "member@example.com", "password": "pw-m", "role": "developer"})
+	cu2 := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{"email": "member@example.com", "password": "Member-pass-2026!", "role": "developer"})
 	var memberOut struct {
 		User struct {
 			ID string `json:"id"`
@@ -339,35 +349,45 @@ func TestTeamAdminIsolationAndRoleEscalationGuards(t *testing.T) {
 	beta.Body.Close()
 
 	teamAdmin := postJSON(t, proxy.URL+"/admin/users", rootTok.AccessToken, map[string]string{
-		"email": "team-admin@example.com", "password": "team-admin-password", "role": "team_admin", "team_id": "team_alpha",
+		"email": "team-admin@example.com", "password": "Temp-team-2026!", "role": "team_admin", "team_id": "team_alpha",
 	})
 	teamAdmin.Body.Close()
 	if teamAdmin.StatusCode != http.StatusCreated {
 		t.Fatalf("super_admin should create team_admin, got %d", teamAdmin.StatusCode)
 	}
-	teamLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "team-admin@example.com", "password": "team-admin-password"})
+	teamLogin := postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "team-admin@example.com", "password": "Temp-team-2026!"})
 	var teamTok struct {
 		AccessToken string `json:"access_token"`
 	}
 	_ = json.NewDecoder(teamLogin.Body).Decode(&teamTok)
 	teamLogin.Body.Close()
+	change := postJSON(t, proxy.URL+"/auth/password/change", teamTok.AccessToken, map[string]string{
+		"current_password": "Temp-team-2026!", "new_password": "Team-admin-2026!",
+	})
+	change.Body.Close()
+	if change.StatusCode != http.StatusOK {
+		t.Fatalf("new team_admin should complete forced password change, got %d", change.StatusCode)
+	}
+	teamLogin = postJSON(t, proxy.URL+"/auth/login", "", map[string]string{"email": "team-admin@example.com", "password": "Team-admin-2026!"})
+	_ = json.NewDecoder(teamLogin.Body).Decode(&teamTok)
+	teamLogin.Body.Close()
 
 	crossTeamUser := postJSON(t, proxy.URL+"/admin/users", teamTok.AccessToken, map[string]string{
-		"email": "beta-dev@example.com", "password": "pw-beta", "role": "developer", "team_id": "team_beta",
+		"email": "beta-dev@example.com", "password": "Beta-pass-2026!", "role": "developer", "team_id": "team_beta",
 	})
 	crossTeamUser.Body.Close()
 	if crossTeamUser.StatusCode != http.StatusForbidden {
 		t.Fatalf("team_admin should not create users in another team, got %d", crossTeamUser.StatusCode)
 	}
 	escalatedUser := postJSON(t, proxy.URL+"/admin/users", teamTok.AccessToken, map[string]string{
-		"email": "bad-admin@example.com", "password": "pw-bad", "role": "admin", "team_id": "team_alpha",
+		"email": "bad-admin@example.com", "password": "Bad-admin-2026!", "role": "admin", "team_id": "team_alpha",
 	})
 	escalatedUser.Body.Close()
 	if escalatedUser.StatusCode != http.StatusForbidden {
 		t.Fatalf("team_admin should not assign admin role, got %d", escalatedUser.StatusCode)
 	}
 	ownTeamUser := postJSON(t, proxy.URL+"/admin/users", teamTok.AccessToken, map[string]string{
-		"email": "alpha-dev@example.com", "password": "pw-alpha", "role": "developer", "team_id": "team_alpha",
+		"email": "alpha-dev@example.com", "password": "Alpha-pass-2026!", "role": "developer", "team_id": "team_alpha",
 	})
 	ownTeamUser.Body.Close()
 	if ownTeamUser.StatusCode != http.StatusCreated {

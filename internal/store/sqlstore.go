@@ -137,6 +137,9 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN password_changed_at TEXT`,
+		`ALTER TABLE users ADD COLUMN password_reset_at TEXT`,
 		`CREATE TABLE IF NOT EXISTS teams (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -2846,6 +2849,96 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_debug_sessions_target ON k8s_debug_sessions(cluster_id, namespace, pod, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_debug_sessions_status ON k8s_debug_sessions(status, created_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_catalogs (
+			id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, category TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', docs_url TEXT NOT NULL DEFAULT '',
+			deployment_type TEXT NOT NULL DEFAULT 'manifest', required_capabilities_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_catalogs_category ON k8s_service_catalogs(category, enabled)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_versions (
+			id TEXT PRIMARY KEY, catalog_id TEXT NOT NULL, version TEXT NOT NULL, chart_ref TEXT NOT NULL DEFAULT '',
+			deployment_type TEXT NOT NULL DEFAULT 'manifest', template TEXT NOT NULL DEFAULT '', values_schema_json TEXT NOT NULL DEFAULT '{}',
+			default_values_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'available', recommended INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(catalog_id, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_versions_catalog ON k8s_service_versions(catalog_id, status)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_profiles (
+			id TEXT PRIMARY KEY, catalog_id TEXT NOT NULL, name TEXT NOT NULL, cpu TEXT NOT NULL DEFAULT '', memory TEXT NOT NULL DEFAULT '',
+			gpu TEXT NOT NULL DEFAULT '', storage TEXT NOT NULL DEFAULT '', values_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+			UNIQUE(catalog_id, name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_profiles_catalog ON k8s_service_profiles(catalog_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_instances (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, namespace TEXT NOT NULL, catalog_id TEXT NOT NULL, version_id TEXT NOT NULL,
+			profile_id TEXT NOT NULL DEFAULT '', stack_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, environment TEXT NOT NULL DEFAULT 'development',
+			status TEXT NOT NULL DEFAULT 'draft', owner_id TEXT NOT NULL DEFAULT '', owner_team_id TEXT NOT NULL DEFAULT '', workspace_id TEXT NOT NULL DEFAULT '',
+			criticality TEXT NOT NULL DEFAULT 'normal', values_json TEXT NOT NULL DEFAULT '{}', policy_result_json TEXT NOT NULL DEFAULT '{}',
+			expires_at TEXT NOT NULL DEFAULT '', cost_center TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_instances_cluster ON k8s_service_instances(cluster_id, namespace, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_instances_owner ON k8s_service_instances(owner_id, owner_team_id, status)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_components (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, cluster_id TEXT NOT NULL, kind TEXT NOT NULL, namespace TEXT NOT NULL,
+			resource_name TEXT NOT NULL, uid TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_components_cluster ON k8s_service_components(cluster_id, service_instance_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_endpoints (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, endpoint_type TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 0,
+			tls_enabled INTEGER NOT NULL DEFAULT 0, path TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_endpoints_instance ON k8s_service_endpoints(service_instance_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_credentials (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, secret_name TEXT NOT NULL, username_key TEXT NOT NULL DEFAULT '',
+			password_key TEXT NOT NULL DEFAULT '', namespace TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_credentials_instance ON k8s_service_credentials(service_instance_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_operations (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, operation_type TEXT NOT NULL, status TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL DEFAULT '', parameters_json TEXT NOT NULL DEFAULT '{}',
+			requested_by TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_service_operations_idem ON k8s_service_operations(idempotency_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_operations_instance ON k8s_service_operations(service_instance_id, created_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_backups (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, backup_type TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '', integrity_status TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_backups_instance ON k8s_service_backups(service_instance_id, started_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_restores (
+			id TEXT PRIMARY KEY, backup_id TEXT NOT NULL, target_instance_id TEXT NOT NULL, status TEXT NOT NULL, request_id TEXT NOT NULL DEFAULT '',
+			started_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_restores_target ON k8s_service_restores(target_instance_id, started_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_dependencies (
+			id TEXT PRIMARY KEY, source_instance_id TEXT NOT NULL, target_instance_id TEXT NOT NULL, dependency_type TEXT NOT NULL,
+			injection_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(source_instance_id, target_instance_id, dependency_type)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_dependencies_source ON k8s_service_dependencies(source_instance_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_access_grants (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, role TEXT NOT NULL,
+			created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE(service_instance_id, subject_type, subject_id, role)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_access_grants_instance ON k8s_service_access_grants(service_instance_id)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_health_snapshots (
+			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, cluster_id TEXT NOT NULL, score INTEGER NOT NULL, status TEXT NOT NULL,
+			reason_json TEXT NOT NULL DEFAULT '{}', observed_at TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_health_cluster ON k8s_service_health_snapshots(cluster_id, service_instance_id, observed_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_reconcile_leases (
+			service_instance_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_reconcile_leases_expiry ON k8s_service_reconcile_leases(expires_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_policies (
+			id TEXT PRIMARY KEY, environment TEXT NOT NULL, catalog_id TEXT NOT NULL DEFAULT '', policy_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_policies_env ON k8s_service_policies(environment, catalog_id, enabled)`,
+		`CREATE TABLE IF NOT EXISTS k8s_service_template_revisions (
+			id TEXT PRIMARY KEY, version_id TEXT NOT NULL, revision INTEGER NOT NULL, template_hash TEXT NOT NULL, template_json TEXT NOT NULL,
+			created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE(version_id, revision)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_service_template_revisions_version ON k8s_service_template_revisions(version_id, revision)`,
 	}
 
 	for _, statement := range statements {

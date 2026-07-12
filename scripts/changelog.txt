@@ -1,3 +1,18 @@
+v0.9.128:
+- **CSI VolumeSnapshot Safe Clone Restore (v0.9.128)**: `readyToUse` 및 무결성 검증이 끝난 CSI VolumeSnapshot 백업을 기존 PVC에 덮어쓰지 않고 새 PVC로 복구하는 Clone Restore를 추가했습니다. Restore Preview는 원본/대상 서비스 유형, 동일 클러스터·Namespace, 스냅샷 관측 상태, 새 PVC DNS 이름, 용량 quantity, StorageClass, 기존 PVC 충돌을 검사합니다. 허용된 요청은 `dataSource.kind: VolumeSnapshot`인 PVC 초안으로 변환되어 기존 Manifest Change Studio의 정책·dry-run·승인·SSA Apply를 재사용하며, PVC가 `Bound`가 되면 복구 원장을 성공으로 갱신합니다. UI는 논리 복구와 스냅샷 복구 입력을 구분하고 생성 리소스·차단·경고·YAML을 함께 표시합니다.
+
+v0.9.127:
+- **Service Restore Preview & CSI VolumeSnapshot (v0.9.127)**: 성공·무결성 검증된 PostgreSQL 논리 백업에 대해 원본/대상 서비스 유형, 동일 클러스터·Namespace, Bound 백업 PVC, 대상 Service와 Kubernetes Secret 참조를 검사하는 Restore Preview를 추가했습니다. 허용된 복구는 read-only 백업 PVC와 `psql --set ON_ERROR_STOP=on`을 사용하는 Job 초안으로 생성되어 기존 Manifest Change Studio의 검증·승인·SSA Apply를 거치며, idempotency와 복구 원장·완료 Job reconcile을 지원합니다. 백업에는 서비스 데이터 PVC 기반 CSI VolumeSnapshot 초안을 추가하고 선택적 VolumeSnapshotClass와 `readyToUse` 성공 증적을 추적합니다. `service:restore` 권한은 중첩된 backup 경로보다 우선 적용됩니다.
+
+v0.9.126:
+- **Service Platform Automatic Reconcile & PostgreSQL Backup Draft (v0.9.126)**: ServiceInstance를 런타임 설정 주기와 배치 크기로 자동 동기화하는 worker를 추가하고 인스턴스별 DB lease로 멀티 Clustara Pod 중복 실행을 방지했습니다. 인벤토리 표본이 없거나 오래된 경우 실제 장애로 오판하지 않고 `collecting/missing/stale`로 구분하며 건별 timeout, Health snapshot 보존, Dry-run/즉시 실행과 worker 상태 UX를 제공합니다. PostgreSQL 논리 백업은 등록된 Kubernetes Secret 참조와 별도 Bound PVC만 사용해 `pg_dumpall` Job 초안을 만들고 기존 Manifest Change Studio의 검증·승인·SSA Apply에 연결합니다. 완료 Job은 다음 reconcile에서 백업 성공·무결성 증적으로 반영됩니다.
+
+v0.9.125:
+- **Service Platform Reconciliation & Health Evidence (v0.9.125)**: ServiceInstance의 Application Stack manifest를 실제 Kubernetes 인벤토리와 대조하여 Deployment/StatefulSet/Service/Ingress/Route/Pod/PVC 구성요소와 Endpoint를 동기화하고 Health snapshot을 저장합니다. Health Score는 워크로드 25, Endpoint 15, 스토리지 15, 장애·재시작 15, 백업 10, 보안 10, 자원 포화 10의 증적 기반 점수로 계산하며, 관측 Pod request 또는 자원 프로파일 기반 월 비용을 제공합니다. 접속정보는 Kubernetes Secret 이름과 key 참조만 저장·응답하고 별도 capability로 보호합니다. 서비스 상세 화면에는 구성요소·누락·영역별 점수·Endpoint·Secret 참조·비용과 즉시 상태 동기화 검증 UX를 추가했습니다.
+
+v0.9.124:
+- **Service Platform & Administrator Security (v0.9.124)**: PostgreSQL·Redis·Tomcat·Spring Boot·JupyterLab·JupyterHub 기본 카탈로그, 버전·자원 프로파일, 서비스 인스턴스, 생성 마법사, 정책/manifest 미리보기와 `service:*` capability를 추가했습니다. ServiceInstance 생성은 기존 Application Stack 및 append-only revision으로 변환하고 시작·중지·확장·재시작은 기존 Action Center 승인 실행기로 연결해 별도 배포/승인 엔진을 만들지 않았습니다. 함께 로컬 계정의 본인 비밀번호 변경, 관리자 임시 비밀번호 초기화·강제 변경·전체 세션 폐기, 역할/팀 변경 세션 폐기, 신뢰 프록시 기반 관리자 IP/CIDR 허용 정책과 잠금 방지 dry-run·비상 우회 감사 UX를 추가했습니다.
+
 v0.9.123:
 - **Safe Cluster Deletion (v0.9.123)**: 클러스터 목록에 안전한 삭제 기능을 추가했습니다. `DELETE /admin/k8s/clusters/{id}` API를 신설하여 `k8s_clusters`, `k8s_cluster_credentials`, `k8s_inventory`, `k8s_events`, `k8s_metrics_samples`, `k8s_gpu_samples`, `k8s_security_findings`, `k8s_incidents`, `k8s_action_requests`, `k8s_manifest_change_requests` 등 관련 21개 테이블의 데이터를 하나의 트랜잭션 내에서 안전하게 삭제(Cascade Delete)합니다. UI에서는 클러스터 목록의 각 행에 "삭제" 버튼을 추가하고, 클릭 시 삭제 대상 클러스터의 이름을 직접 입력해야만 삭제 요청이 전송되는 이름 확인(Name Confirmation) 안전장치를 적용했습니다. 삭제 완료 또는 실패 시 Toast 알림을 표시하고 클러스터 목록을 즉시 갱신합니다.
 

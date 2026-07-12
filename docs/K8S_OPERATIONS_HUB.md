@@ -1,11 +1,16 @@
 # K8s Operations Hub
 
-> **버전: v0.9.123** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.128** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.123)
+## 기능 상태 (v0.9.128)
 
 | 기능 | 상태 |
 | --- | --- |
+| Service Platform Phase 1 — 배포 상품 카탈로그, 버전·자원 프로파일, 서비스 인스턴스, 검증/미리보기, Application Stack 변환, Action Center 운영 요청, `service:*` capability | ✅ (v0.9.124) |
+| Service Platform Phase 2 기반 — Stack/인벤토리 구성요소 동기화, 가중 Health Score, Endpoint 파생, Secret 참조, 비용 추정 및 화면 내 검증 | ✅ (v0.9.125) |
+| Service Platform 자동 운영 — 런타임 설정형 주기 reconcile, DB lease 중복 방지, 수집 실패/실제 장애 분리, PostgreSQL 백업 Job 승인 초안 | ✅ (v0.9.126) |
+| Service Platform 복구·스냅샷 — Restore Preview, 대상 서비스 복구 Job 승인 초안, 복구 원장, CSI VolumeSnapshot 백업·상태 추적 | ✅ (v0.9.127) |
+| Service Platform Snapshot Clone Restore — readyToUse 스냅샷에서 비파괴 새 PVC 생성, 충돌·용량·범위 검증, 승인 초안과 Bound 완료 추적 | ✅ (v0.9.128) |
 | 클러스터 등록(kubeconfig/token AES-GCM 암호화) · 연결 테스트 · 라이브 수집(client-go) | ✅ |
 | 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |

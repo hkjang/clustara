@@ -68,14 +68,17 @@ type APIKeyPublic struct {
 }
 
 type AuthUser struct {
-	ID           string    `json:"id"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"-"`
-	Name         string    `json:"name"`
-	Role         string    `json:"role"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Email              string    `json:"email"`
+	PasswordHash       string    `json:"-"`
+	Name               string    `json:"name"`
+	Role               string    `json:"role"`
+	Status             string    `json:"status"`
+	MustChangePassword bool      `json:"must_change_password"`
+	PasswordChangedAt  time.Time `json:"password_changed_at,omitempty"`
+	PasswordResetAt    time.Time `json:"password_reset_at,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type AuthTeam struct {

@@ -60,6 +60,7 @@ var roleDescriptions = map[string]string{
 	"security_admin":  "보안 관리자 — 보안 조회와 정책·예외·승인 변경, 일반 운영 변경 불가",
 	"billing_admin":   "비용 관리자 — 비용 조회와 예산·단가·비용 정책 변경, 일반 운영 변경 불가",
 	"readonly_admin":  "읽기전용 관리자 — 운영 조회, 변경 불가",
+	"service_admin":   "서비스 관리자 — 서비스 카탈로그·인스턴스·생명주기·승인 관리",
 }
 
 // roleInfo is one row of the role catalog (GET /admin/roles).

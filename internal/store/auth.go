@@ -21,24 +21,29 @@ func (s *SQLStore) CreateAuthUser(ctx context.Context, user AuthUser) error {
 	if user.Role == "" {
 		user.Role = "developer"
 	}
-	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO users (id, email, password_hash, name, role, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO users (id, email, password_hash, name, role, status, must_change_password, password_changed_at, password_reset_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			email = excluded.email,
 			password_hash = excluded.password_hash,
 			name = excluded.name,
 			role = excluded.role,
 			status = excluded.status,
+			must_change_password = excluded.must_change_password,
+			password_changed_at = excluded.password_changed_at,
+			password_reset_at = excluded.password_reset_at,
 			updated_at = excluded.updated_at`),
-		user.ID, user.Email, user.PasswordHash, user.Name, user.Role, user.Status, formatTime(user.CreatedAt), formatTime(user.UpdatedAt))
+		user.ID, user.Email, user.PasswordHash, user.Name, user.Role, user.Status, boolInt(user.MustChangePassword), formatOptionalTime(user.PasswordChangedAt), formatOptionalTime(user.PasswordResetAt), formatTime(user.CreatedAt), formatTime(user.UpdatedAt))
 	return err
 }
 
 func (s *SQLStore) AuthUserByEmail(ctx context.Context, email string) (AuthUser, bool, error) {
 	var user AuthUser
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, email, password_hash, COALESCE(name, ''), role, status, created_at, updated_at
-		FROM users WHERE email = ?`), email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &createdAt, &updatedAt)
+	var mustChange int
+	var changedAt, resetAt string
+	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, email, password_hash, COALESCE(name, ''), role, status, COALESCE(must_change_password,0), COALESCE(password_changed_at,''), COALESCE(password_reset_at,''), created_at, updated_at
+		FROM users WHERE email = ?`), email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &mustChange, &changedAt, &resetAt, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return AuthUser{}, false, nil
 	}
@@ -47,14 +52,19 @@ func (s *SQLStore) AuthUserByEmail(ctx context.Context, email string) (AuthUser,
 	}
 	user.CreatedAt = parseOptionalTime(createdAt)
 	user.UpdatedAt = parseOptionalTime(updatedAt)
+	user.MustChangePassword = mustChange != 0
+	user.PasswordChangedAt = parseOptionalTime(changedAt)
+	user.PasswordResetAt = parseOptionalTime(resetAt)
 	return user, true, nil
 }
 
 func (s *SQLStore) AuthUserByID(ctx context.Context, id string) (AuthUser, bool, error) {
 	var user AuthUser
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, email, password_hash, COALESCE(name, ''), role, status, created_at, updated_at
-		FROM users WHERE id = ?`), id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &createdAt, &updatedAt)
+	var mustChange int
+	var changedAt, resetAt string
+	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, email, password_hash, COALESCE(name, ''), role, status, COALESCE(must_change_password,0), COALESCE(password_changed_at,''), COALESCE(password_reset_at,''), created_at, updated_at
+		FROM users WHERE id = ?`), id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &mustChange, &changedAt, &resetAt, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return AuthUser{}, false, nil
 	}
@@ -63,11 +73,14 @@ func (s *SQLStore) AuthUserByID(ctx context.Context, id string) (AuthUser, bool,
 	}
 	user.CreatedAt = parseOptionalTime(createdAt)
 	user.UpdatedAt = parseOptionalTime(updatedAt)
+	user.MustChangePassword = mustChange != 0
+	user.PasswordChangedAt = parseOptionalTime(changedAt)
+	user.PasswordResetAt = parseOptionalTime(resetAt)
 	return user, true, nil
 }
 
 func (s *SQLStore) ListAuthUsers(ctx context.Context) ([]AuthUser, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, email, password_hash, COALESCE(name, ''), role, status, created_at, updated_at FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, email, password_hash, COALESCE(name, ''), role, status, COALESCE(must_change_password,0), COALESCE(password_changed_at,''), COALESCE(password_reset_at,''), created_at, updated_at FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +88,44 @@ func (s *SQLStore) ListAuthUsers(ctx context.Context) ([]AuthUser, error) {
 	out := []AuthUser{}
 	for rows.Next() {
 		var user AuthUser
-		var createdAt, updatedAt string
-		if err := rows.Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &createdAt, &updatedAt); err != nil {
+		var mustChange int
+		var changedAt, resetAt, createdAt, updatedAt string
+		if err := rows.Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role, &user.Status, &mustChange, &changedAt, &resetAt, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		user.CreatedAt = parseOptionalTime(createdAt)
 		user.UpdatedAt = parseOptionalTime(updatedAt)
+		user.MustChangePassword = mustChange != 0
+		user.PasswordChangedAt = parseOptionalTime(changedAt)
+		user.PasswordResetAt = parseOptionalTime(resetAt)
 		out = append(out, user)
 	}
 	return out, rows.Err()
+}
+
+// UpdateAuthUserPassword updates the credential lifecycle state. Administrative resets set
+// mustChange=true; self-service changes clear it. Session revocation is intentionally handled by
+// the caller so the security event and credential update remain explicit in the workflow.
+func (s *SQLStore) UpdateAuthUserPassword(ctx context.Context, id, passwordHash string, mustChange bool) error {
+	now := time.Now().UTC()
+	changedAt, resetAt := "", ""
+	if mustChange {
+		resetAt = formatTime(now)
+	} else {
+		changedAt = formatTime(now)
+	}
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE users SET password_hash = ?, must_change_password = ?,
+		password_changed_at = CASE WHEN ? = '' THEN password_changed_at ELSE ? END,
+		password_reset_at = CASE WHEN ? = '' THEN password_reset_at ELSE ? END,
+		updated_at = ? WHERE id = ?`), passwordHash, boolInt(mustChange), changedAt, changedAt, resetAt, resetAt, formatTime(now), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateAuthUserRoleStatus applies a partial role/status update (empty = keep).

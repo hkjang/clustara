@@ -23,6 +23,17 @@ ADMIN_TOKEN=<openssl rand -hex 32>        # 어드민 API/UI 접근 토큰
 
 `GATEWAY_SECRET` 은 한 번 정해지면 절대 바꾸면 안 됩니다(저장된 provider key 를 복호화 못 함). 운영 전에 반드시 안전한 값으로 고정하세요.
 
+관리자 네트워크를 제한할 때는 아래 값을 부트스트랩 기본값으로 둘 수 있습니다. 기동 후에는 **런타임 설정 → 관리자 IP 허용 정책**에서 재기동 없이 검증·변경할 수 있습니다.
+
+```bash
+ADMIN_IP_ALLOWLIST_ENABLED=false
+ADMIN_IP_ALLOWED_CIDRS="10.20.0.0/16,203.0.113.10"
+ADMIN_TRUSTED_PROXY_CIDRS="10.0.0.0/8"
+ADMIN_IP_EMERGENCY_TOKEN=<openssl rand -hex 32>
+```
+
+프록시 CIDR은 Clustara에 직접 연결되는 로드밸런서/Ingress 주소만 좁게 등록하세요. 허용 정책 활성화는 현재 접속 IP 포함 여부를 서버가 검증합니다. 비상 토큰을 사용한 요청은 `admin_ip_break_glass` 감사 이벤트로 남습니다.
+
 ---
 
 ## 2. 기동 절차
@@ -285,9 +296,28 @@ curl -X POST http://localhost:9090/admin/fallback
 
 `POSTGRES_DSN=postgres://user:pass@host:5432/db?sslmode=disable` 또는 `DATABASE_URL` 을 설정하면 자동으로 PostgreSQL 을 사용합니다. SQLite 와 동일한 스키마가 자동 생성됩니다. 백업은 운영 중인 Postgres 의 표준 백업(pg_basebackup/pg_dump) 으로 수행하세요.
 
+### 6.4 Service Platform 스냅샷 복구
+
+서비스 데이터의 CSI VolumeSnapshot이 `readyToUse`인지 확인한 뒤 서비스 상세의 **복구 미리보기**에서 새 PVC 이름과 원본 이상 용량을 입력합니다. Clustara는 동일 클러스터·Namespace, 서비스 유형, 기존 PVC 이름 충돌을 검사하고 `dataSource.kind: VolumeSnapshot` PVC를 Manifest Change Studio 승인 초안으로 생성합니다. PVC가 `Bound`로 수집되면 복구 원장은 성공으로 전환됩니다.
+
+이 흐름은 기존 PVC와 워크로드를 자동 변경하지 않습니다. 클론 PVC의 데이터 검증 후 StatefulSet/Deployment 볼륨 전환을 별도 변경 요청으로 수행하고, 전환 전 원본 PVC와 스냅샷 보존 정책을 확인하세요. 타 Namespace 또는 타 클러스터 복구는 VolumeSnapshotContent 이동과 스토리지 드라이버 정책 검증이 필요하므로 현재 자동 흐름에서 차단됩니다.
+
 ---
 
 ## 7. 보존 / Retention
+
+### Service Platform 자동 동기화
+
+ServiceInstance 자동 동기화는 기본 300초 주기로 실행되며, 다중 Clustara Pod에서는 인스턴스별 DB lease가 중복 실행을 막습니다. 아래 환경변수는 초기값이고 운영 중에는 **설정 → 런타임 설정 → k8s.services**에서 재시작 없이 변경할 수 있습니다.
+
+| 환경변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `K8S_SERVICE_RECONCILE_ENABLED` | true | 자동 동기화 활성화 |
+| `K8S_SERVICE_RECONCILE_INTERVAL_SECONDS` | 300 | 인스턴스별 재평가 주기 |
+| `K8S_SERVICE_RECONCILE_BATCH_SIZE` | 100 | tick당 최대 처리 수 |
+| `K8S_SERVICE_RECONCILE_TIMEOUT_SECONDS` | 30 | 인스턴스 1건 제한 시간 |
+| `K8S_SERVICE_INVENTORY_STALE_SECONDS` | 900 | 인벤토리 신뢰 가능 최대 나이 |
+| `K8S_SERVICE_HEALTH_RETENTION_DAYS` | 90 | Health snapshot 보존 일수 |
 
 오래된 행이 무한히 쌓이지 않도록 백그라운드 워커가 매 `RETENTION_INTERVAL` (기본 1시간) 마다 다음을 삭제합니다.
 

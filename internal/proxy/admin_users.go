@@ -67,6 +67,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			enriched = append(enriched, map[string]any{
 				"id": u.ID, "email": u.Email, "name": u.Name, "role": u.Role,
 				"status": u.Status, "team_id": teamID, "created_at": u.CreatedAt,
+				"must_change_password": u.MustChangePassword, "password_changed_at": u.PasswordChangedAt, "password_reset_at": u.PasswordResetAt,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"users": users, "auth_users": enriched, "team_names": s.teamNameByID(r)})
@@ -85,6 +86,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		email := strings.ToLower(strings.TrimSpace(p.Email))
 		if email == "" || p.Password == "" {
 			writeOpenAIError(w, http.StatusBadRequest, "email and password are required", "invalid_request_error", "missing_user_fields")
+			return
+		}
+		if err := passwordPolicyError(p.Password); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "password_policy_failed")
 			return
 		}
 		role := strings.TrimSpace(p.Role)
@@ -121,12 +126,14 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user := store.AuthUser{
-			ID:           "usr_" + audit.HashText(email)[:16],
-			Email:        email,
-			PasswordHash: string(hash),
-			Name:         strings.TrimSpace(p.Name),
-			Role:         role,
-			Status:       "active",
+			ID:                 "usr_" + audit.HashText(email)[:16],
+			Email:              email,
+			PasswordHash:       string(hash),
+			Name:               strings.TrimSpace(p.Name),
+			Role:               role,
+			Status:             "active",
+			MustChangePassword: true,
+			PasswordResetAt:    time.Now().UTC(),
 		}
 		if err := s.db.CreateAuthUser(r.Context(), user); err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "user_create_failed")
@@ -245,6 +252,10 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		id = id[:idx]
 		if sub == "report" {
 			s.handleUserReport(w, r, id)
+			return
+		}
+		if sub == "password-reset" {
+			s.handleAdminUserPasswordReset(w, r, id)
 			return
 		}
 		writeOpenAIError(w, http.StatusNotFound, "not found", "invalid_request_error", "not_found")
@@ -415,6 +426,11 @@ func (s *Server) handleAuthUserUpdate(w http.ResponseWriter, r *http.Request, id
 	}
 	if status == "disabled" {
 		// kill live sessions + refresh tokens so the account stops working now
+		_ = s.db.RevokeAuthSessionsForUser(r.Context(), id)
+	}
+	if (role != "" && role != user.Role) || p.TeamID != nil {
+		// Role and team are embedded in access tokens. Revoke all sessions so the new
+		// authorization boundary takes effect immediately instead of waiting for expiry.
 		_ = s.db.RevokeAuthSessionsForUser(r.Context(), id)
 	}
 	if role != "" && role != user.Role {

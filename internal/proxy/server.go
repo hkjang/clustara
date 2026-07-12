@@ -31,57 +31,59 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.123"
+const AppVersion = "v0.9.128"
 
 type Server struct {
-	cfg            config.Config
-	db             *store.SQLStore
-	logger         *store.AsyncLogger
-	client         *http.Client
-	metrics        *Metrics
-	secrets        atomic.Pointer[secret.Cipher]
-	secretsMu      sync.Mutex // guards concurrent rotation
-	retention      *store.RetentionWorker
-	killState      atomicKillState
-	loggedRequests sync.Map
-	mcpPolicy      atomic.Pointer[mcpPolicySnapshot]
-	routingRules   atomic.Pointer[routingRulesSnapshot]
-	knowledge      atomic.Pointer[knowledgeSnapshot]
-	deprecations   atomic.Pointer[deprecationSnapshot]
-	costCache      atomic.Pointer[costSnapshot]
-	learnCache     atomic.Pointer[routingLearnSnapshot]
-	priceCache     atomic.Pointer[pricingSnapshot]
-	mmCache        atomic.Pointer[mattermostSnapshot]
-	t2sExec        atomic.Pointer[sql.DB]                  // lazily-opened read-only DB for Text2SQL execute mode (default / env)
-	t2sExecConns   sync.Map                                // named exec connections: connID → *sql.DB
-	t2sTwin        atomic.Pointer[sql.DB]                  // lazily-opened SQL Digital Twin DB (masked/sample) for safe validation
-	t2sKilled      atomic.Bool                             // runtime kill switch: when set, Text2SQL is disabled regardless of config
-	t2sFeatures    atomic.Pointer[map[string]bool]         // runtime Text2SQL feature toggles (admin-managed)
-	t2sRuntime     atomic.Pointer[config.Text2SQLConfig]   // admin-settings overlay over cfg.Text2SQL (runtime snapshot)
-	chRuntime      atomic.Pointer[config.ClickHouseConfig] // admin-settings overlay over cfg.ClickHouse (runtime snapshot)
-	chSinkMu       sync.Mutex                              // guards the managed ClickHouse sink worker lifecycle
-	chSinkStop     context.CancelFunc                      // cancels the running sink worker (nil when stopped)
-	chSinkStarted  bool                                    // true once the startup worker apply has run (gates reload-time restarts)
-	carbonRuntime  atomic.Pointer[config.CarbonConfig]     // admin-settings overlay over cfg.Carbon
-	insRuntime     atomic.Pointer[config.InsuranceConfig]  // admin-settings overlay over cfg.Insurance
-	cacheRuntime   atomic.Pointer[config.CacheConfig]      // admin-settings overlay over cfg.Cache
-	pricingRuntime atomic.Pointer[config.PricingConfig]    // admin-settings overlay over cfg.PricingConf
-	skillsRuntime  atomic.Pointer[config.SkillsConfig]     // admin-settings overlay over cfg.Skills
-	limitsRuntime  atomic.Pointer[config.LimitsConfig]     // admin-settings overlay over cfg.Limits
-	loggingRuntime atomic.Pointer[config.LoggingConfig]    // admin-settings overlay over cfg.Logging
-	mcpRuntime     atomic.Pointer[config.MCPConfig]        // admin-settings overlay over cfg.MCP
-	keycloakCfg    atomic.Pointer[config.KeycloakConfig]   // DB-backed Keycloak provider overlay over cfg.Keycloak (secret decrypted)
-	chFactQueue    chan store.LogRecord                    // async per-request fact ingest queue (bounded)
-	chFactDropped  atomic.Int64                            // requests dropped when the fact queue was full
-	alertWorker    atomic.Pointer[AlertWorker]             // optional alert worker attached by cmd/clustara
-	dwCache        *dwQueryCache                           // short-TTL cache for DW dashboard ClickHouse reads
-	sessions       *sessionInferer
-	sessionGCAt    atomic.Int64
-	extSeen        sync.Map // external key id -> struct{}; dedupes lazy registration
-	mcpConns       sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
-	mcpTools       atomic.Pointer[mcpToolsSnapshot]
-	lastReloadNano atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
-	lastReloadTok  atomic.Pointer[string] // admin_settings change token this pod last applied
+	cfg              config.Config
+	db               *store.SQLStore
+	logger           *store.AsyncLogger
+	client           *http.Client
+	metrics          *Metrics
+	secrets          atomic.Pointer[secret.Cipher]
+	secretsMu        sync.Mutex // guards concurrent rotation
+	retention        *store.RetentionWorker
+	killState        atomicKillState
+	loggedRequests   sync.Map
+	mcpPolicy        atomic.Pointer[mcpPolicySnapshot]
+	routingRules     atomic.Pointer[routingRulesSnapshot]
+	knowledge        atomic.Pointer[knowledgeSnapshot]
+	deprecations     atomic.Pointer[deprecationSnapshot]
+	costCache        atomic.Pointer[costSnapshot]
+	learnCache       atomic.Pointer[routingLearnSnapshot]
+	priceCache       atomic.Pointer[pricingSnapshot]
+	mmCache          atomic.Pointer[mattermostSnapshot]
+	t2sExec          atomic.Pointer[sql.DB]                  // lazily-opened read-only DB for Text2SQL execute mode (default / env)
+	t2sExecConns     sync.Map                                // named exec connections: connID → *sql.DB
+	t2sTwin          atomic.Pointer[sql.DB]                  // lazily-opened SQL Digital Twin DB (masked/sample) for safe validation
+	t2sKilled        atomic.Bool                             // runtime kill switch: when set, Text2SQL is disabled regardless of config
+	t2sFeatures      atomic.Pointer[map[string]bool]         // runtime Text2SQL feature toggles (admin-managed)
+	t2sRuntime       atomic.Pointer[config.Text2SQLConfig]   // admin-settings overlay over cfg.Text2SQL (runtime snapshot)
+	chRuntime        atomic.Pointer[config.ClickHouseConfig] // admin-settings overlay over cfg.ClickHouse (runtime snapshot)
+	chSinkMu         sync.Mutex                              // guards the managed ClickHouse sink worker lifecycle
+	chSinkStop       context.CancelFunc                      // cancels the running sink worker (nil when stopped)
+	chSinkStarted    bool                                    // true once the startup worker apply has run (gates reload-time restarts)
+	carbonRuntime    atomic.Pointer[config.CarbonConfig]     // admin-settings overlay over cfg.Carbon
+	insRuntime       atomic.Pointer[config.InsuranceConfig]  // admin-settings overlay over cfg.Insurance
+	cacheRuntime     atomic.Pointer[config.CacheConfig]      // admin-settings overlay over cfg.Cache
+	pricingRuntime   atomic.Pointer[config.PricingConfig]    // admin-settings overlay over cfg.PricingConf
+	skillsRuntime    atomic.Pointer[config.SkillsConfig]     // admin-settings overlay over cfg.Skills
+	limitsRuntime    atomic.Pointer[config.LimitsConfig]     // admin-settings overlay over cfg.Limits
+	loggingRuntime   atomic.Pointer[config.LoggingConfig]    // admin-settings overlay over cfg.Logging
+	mcpRuntime       atomic.Pointer[config.MCPConfig]        // admin-settings overlay over cfg.MCP
+	adminIPPolicy    atomic.Pointer[adminIPPolicy]           // runtime administrator source-network policy
+	keycloakCfg      atomic.Pointer[config.KeycloakConfig]   // DB-backed Keycloak provider overlay over cfg.Keycloak (secret decrypted)
+	chFactQueue      chan store.LogRecord                    // async per-request fact ingest queue (bounded)
+	chFactDropped    atomic.Int64                            // requests dropped when the fact queue was full
+	alertWorker      atomic.Pointer[AlertWorker]             // optional alert worker attached by cmd/clustara
+	serviceReconcile *serviceReconcileRuntime                // periodic ServiceInstance inventory/health reconciliation
+	dwCache          *dwQueryCache                           // short-TTL cache for DW dashboard ClickHouse reads
+	sessions         *sessionInferer
+	sessionGCAt      atomic.Int64
+	extSeen          sync.Map // external key id -> struct{}; dedupes lazy registration
+	mcpConns         sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
+	mcpTools         atomic.Pointer[mcpToolsSnapshot]
+	lastReloadNano   atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
+	lastReloadTok    atomic.Pointer[string] // admin_settings change token this pod last applied
 }
 
 func (s *Server) AttachAlertWorker(worker *AlertWorker) {
@@ -118,10 +120,11 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 			Timeout:   cfg.Upstream.Timeout,
 			Transport: transport,
 		},
-		metrics:   newMetrics(),
-		retention: retention,
-		sessions:  newSessionInferer(cfg.Session.IdleTimeout),
-		dwCache:   newDWQueryCache(0),
+		metrics:          newMetrics(),
+		retention:        retention,
+		sessions:         newSessionInferer(cfg.Session.IdleTimeout),
+		dwCache:          newDWQueryCache(0),
+		serviceReconcile: newServiceReconcileRuntime(),
 	}
 	server.secrets.Store(secrets)
 
@@ -163,6 +166,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 	go server.k8sReportScheduler()
 	go server.k8sCollectScheduler()
 	go server.k8sNodeMetricScheduler()
+	go server.serviceReconcileScheduler()
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)
@@ -217,6 +221,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/auth/refresh", s.handleAuthRefresh)
 	mux.HandleFunc("/auth/me", s.handleAuthMe)
+	mux.HandleFunc("/auth/password/change", s.handleAuthPasswordChange)
 	mux.HandleFunc("/auth/sso/status", s.handleSSOStatus)
 	mux.HandleFunc("/auth/keycloak/login", s.handleKeycloakLogin)
 	mux.HandleFunc("/auth/keycloak/callback", s.handleKeycloakCallback)
@@ -372,6 +377,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/policies/compliance", s.handleK8sPolicyCompliance)
 	mux.HandleFunc("/admin/k8s/stacks", s.handleK8sStacks)
 	mux.HandleFunc("/admin/k8s/stacks/validate", s.handleK8sStackValidate)
+	mux.HandleFunc("/admin/k8s/services/catalogs", s.handleServiceCatalogs)
+	mux.HandleFunc("/admin/k8s/services/catalogs/", s.handleServiceCatalogByID)
+	mux.HandleFunc("/admin/k8s/services/reconcile", s.handleServiceReconcileWorker)
+	mux.HandleFunc("/admin/k8s/services/backups/", s.handleServiceBackupOperation)
+	mux.HandleFunc("/admin/k8s/services/instances/draft", s.handleServiceInstanceSpecial)
+	mux.HandleFunc("/admin/k8s/services/instances/validate", s.handleServiceInstanceSpecial)
+	mux.HandleFunc("/admin/k8s/services/instances", s.handleServiceInstances)
+	mux.HandleFunc("/admin/k8s/services/instances/", s.handleServiceInstanceByID)
 	mux.HandleFunc("/admin/k8s/stacks/", s.handleK8sStackByID)
 	mux.HandleFunc("/admin/k8s/policies/export", s.handleK8sPolicyExport)
 	mux.HandleFunc("/admin/k8s/policies/import", s.handleK8sPolicyImport)
@@ -634,6 +647,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/approvals", s.handleApprovals)
 	mux.HandleFunc("/admin/approvals/", s.handleApprovalDecision)
 	mux.HandleFunc("/admin/security/secrets", s.handleSecretEvents)
+	mux.HandleFunc("/admin/security/access-policy", s.handleAdminAccessPolicy)
 	mux.HandleFunc("/admin/replay", s.handleReplay)
 	mux.HandleFunc("/admin/golden-prompts", s.handleGoldenPrompts)
 	mux.HandleFunc("/admin/golden-prompts/run", s.handleGoldenRun)
@@ -753,7 +767,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1", s.handleOpenAI)
 	mux.HandleFunc("/v1/skills", s.handlePublicSkills)
 	mux.HandleFunc("/v1/skills/", s.handlePublicSkills)
-	return withTrace(s.withAdminAccessUX(s.withEnterpriseEnforcement(mux)))
+	return withTrace(s.withAdminIPPolicy(s.withPasswordChangeGate(s.withAdminAccessUX(s.withEnterpriseEnforcement(mux)))))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -2009,6 +2023,43 @@ func (s *Server) currentAccessClaims(r *http.Request) (accessClaims, bool) {
 }
 
 func adminRequiredScope(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/admin/k8s/services/") {
+		path := r.URL.Path
+		if strings.Contains(path, "/catalogs") {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				return "service:read"
+			}
+			return "service:catalog:manage"
+		}
+		if strings.Contains(path, "/credentials") {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				return "service:credential:read"
+			}
+			return "service:credential:rotate"
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			return "service:read"
+		}
+		if strings.Contains(path, "/restore") {
+			return "service:restore"
+		}
+		if strings.Contains(path, "/backups") {
+			return "service:backup"
+		}
+		if strings.Contains(path, "/rotate") {
+			return "service:credential:rotate"
+		}
+		if strings.HasSuffix(path, "/start") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") || strings.HasSuffix(path, "/scale") {
+			return "service:operate"
+		}
+		if r.Method == http.MethodDelete {
+			return "service:delete"
+		}
+		if strings.HasSuffix(path, "/draft") || strings.HasSuffix(path, "/validate") || path == "/admin/k8s/services/instances" {
+			return "service:create"
+		}
+		return "service:update"
+	}
 	if strings.HasPrefix(r.URL.Path, "/admin/routing") {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/admin/routing/preview" {
 			return "routing:read"

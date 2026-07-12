@@ -60,6 +60,7 @@ type settingDef struct {
 	Secret   bool
 	Restart  bool // changing this requires a worker restart / connection swap (informational)
 	ReadOnly bool // env-only: shown for visibility but cannot be changed via admin settings
+	Managed  bool // changed only through a dedicated safety-aware endpoint
 	envValue func(cfg config.Config) string
 	validate func(string) error
 }
@@ -250,6 +251,20 @@ func buildSettingRegistry() []settingDef {
 		{Key: "logging.raw_bodies", Category: "logging", Type: stBool, envValue: func(c config.Config) string { return strconv.FormatBool(c.Logging.RawBodies) }},
 		{Key: "logging.response_max_bytes", Category: "logging", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Logging.ResponseMaxBytes) }},
 
+		// ---- Administrator network access policy ----
+		{Key: "security.admin_access.ip_allowlist_enabled", Category: "security.admin_access", Type: stBool, Managed: true, envValue: func(config.Config) string { return envOr("ADMIN_IP_ALLOWLIST_ENABLED", "false") }},
+		{Key: "security.admin_access.allowed_cidrs", Category: "security.admin_access", Type: stText, Managed: true, validate: validateIPCIDRListSetting, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("ADMIN_IP_ALLOWED_CIDRS")) }},
+		{Key: "security.admin_access.trusted_proxy_cidrs", Category: "security.admin_access", Type: stText, Managed: true, validate: validateIPCIDRListSetting, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("ADMIN_TRUSTED_PROXY_CIDRS")) }},
+		{Key: "security.admin_access.emergency_token", Category: "security.admin_access", Type: stString, Secret: true, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("ADMIN_IP_EMERGENCY_TOKEN")) }},
+
+		// ---- Kubernetes Service Platform reconciliation ----
+		{Key: "k8s.services.reconcile_enabled", Category: "k8s.services", Type: stBool, envValue: func(config.Config) string { return envOr("K8S_SERVICE_RECONCILE_ENABLED", "true") }},
+		{Key: "k8s.services.reconcile_interval_seconds", Category: "k8s.services", Type: stInt, validate: boundedInt(30, 86400), envValue: func(config.Config) string { return envOr("K8S_SERVICE_RECONCILE_INTERVAL_SECONDS", "300") }},
+		{Key: "k8s.services.reconcile_batch_size", Category: "k8s.services", Type: stInt, validate: boundedInt(1, 1000), envValue: func(config.Config) string { return envOr("K8S_SERVICE_RECONCILE_BATCH_SIZE", "100") }},
+		{Key: "k8s.services.reconcile_timeout_seconds", Category: "k8s.services", Type: stInt, validate: boundedInt(5, 600), envValue: func(config.Config) string { return envOr("K8S_SERVICE_RECONCILE_TIMEOUT_SECONDS", "30") }},
+		{Key: "k8s.services.inventory_stale_seconds", Category: "k8s.services", Type: stInt, validate: boundedInt(30, 86400), envValue: func(config.Config) string { return envOr("K8S_SERVICE_INVENTORY_STALE_SECONDS", "900") }},
+		{Key: "k8s.services.health_retention_days", Category: "k8s.services", Type: stInt, validate: boundedInt(1, 3650), envValue: func(config.Config) string { return envOr("K8S_SERVICE_HEALTH_RETENTION_DAYS", "90") }},
+
 		// ---- Kubernetes node / GPU monitoring ----
 		{Key: "k8s.monitoring.enabled", Category: "k8s.monitoring", Type: stBool, envValue: func(config.Config) string { return envOr("K8S_NODE_METRICS_ENABLED", "true") }},
 		{Key: "k8s.monitoring.interval_seconds", Category: "k8s.monitoring", Type: stInt, validate: boundedInt(20, 3600), envValue: func(config.Config) string { return envOr("K8S_NODE_METRICS_INTERVAL_SECONDS", "60") }},
@@ -403,6 +418,18 @@ var settingDescriptions = map[string]string{
 	"logging.raw_prompts":        "프롬프트 원문 캡처 여부(LOG_RAW_PROMPTS). true면 content_text(원문)도 별도 저장. false면 redacted_text(리덕션)만 보관.",
 	"logging.raw_bodies":         "요청·응답 원시 바디 캡처 여부(LOG_RAW_BODIES). true면 raw_request/raw_response 컬럼에 전체 바이트 저장. 디버그 목적. 저장 공간 주의.",
 	"logging.response_max_bytes": "응답 캡처 최대 바이트(LOG_RESPONSE_MAX_BYTES). 초과 분 잘림. 기본 1MB.",
+	// Administrator access network policy
+	"security.admin_access.ip_allowlist_enabled": "관리자 API의 접속 IP 허용 정책. 활성화 전에 현재 접속 IP가 허용 범위에 포함되는지 잠금 방지 검사를 수행.",
+	"security.admin_access.allowed_cidrs":        "관리자 접속을 허용할 단일 IP 또는 CIDR 목록(쉼표·줄바꿈 구분). IPv4/IPv6 지원.",
+	"security.admin_access.trusted_proxy_cidrs":  "전달 IP 헤더를 신뢰할 프록시·로드밸런서 CIDR. 여기에 없는 발신자의 X-Forwarded-For는 무시.",
+	"security.admin_access.emergency_token":      "IP 정책 장애 시 X-Clustara-Break-Glass 헤더로 사용할 비상 토큰. 암호화 저장·마스킹되며 모든 우회가 감사 기록됨.",
+	// Kubernetes Service Platform reconciliation
+	"k8s.services.reconcile_enabled":          "ServiceInstance와 실제 Kubernetes 인벤토리의 주기 동기화 on/off. 저장 후 다음 worker tick에 반영.",
+	"k8s.services.reconcile_interval_seconds": "인스턴스별 Health/구성요소 재평가 주기(30~86400초).",
+	"k8s.services.reconcile_batch_size":       "한 worker tick에서 처리할 최대 서비스 인스턴스 수. 대규모 환경에서는 점진적으로 조정.",
+	"k8s.services.reconcile_timeout_seconds":  "서비스 인스턴스 1건의 동기화 제한 시간. 초과는 수집 오류로 기록하고 실제 장애 상태로 덮어쓰지 않음.",
+	"k8s.services.inventory_stale_seconds":    "인벤토리 최신 표본을 신뢰할 최대 나이. 초과 시 장애가 아닌 collecting/stale로 구분.",
+	"k8s.services.health_retention_days":      "Service Health snapshot 증적 보존 일수.",
 	// Kubernetes node/GPU monitoring
 	"k8s.monitoring.enabled":                  "경량 metrics.k8s.io Node 수집 on/off. 저장 즉시 모든 파드의 다음 scheduler tick에 반영.",
 	"k8s.monitoring.interval_seconds":         "Node CPU/Memory와 DCGM GPU 수집 주기(20~3600초). 전체 인벤토리 reconcile 주기와 독립.",
@@ -618,6 +645,7 @@ func (s *Server) reloadRuntimeConfig(ctx context.Context) {
 	s.limitsRuntime.Store(&limits)
 	s.loggingRuntime.Store(&logging)
 	s.mcpRuntime.Store(&mcp)
+	s.adminIPPolicy.Store(s.buildAdminIPPolicy(stored))
 	audit.SetFallbackPriceModel(pricing.FallbackModel) // apply the runtime fallback model
 	// Apply retention changes to the running worker (day thresholds next run; interval recreates the ticker).
 	if s.retention != nil && prevRet != ret {
@@ -855,7 +883,7 @@ func settingPermissionGroup(d settingDef) string {
 		return "security" // Skill policy enforcement is a governance gate
 	}
 	switch {
-	case strings.HasPrefix(d.Category, "clickhouse"), strings.HasPrefix(d.Category, "retention"), strings.HasPrefix(d.Category, "cache"), strings.HasPrefix(d.Category, "limits"), strings.HasPrefix(d.Category, "k8s.monitoring"):
+	case strings.HasPrefix(d.Category, "clickhouse"), strings.HasPrefix(d.Category, "retention"), strings.HasPrefix(d.Category, "cache"), strings.HasPrefix(d.Category, "limits"), strings.HasPrefix(d.Category, "k8s.monitoring"), strings.HasPrefix(d.Category, "k8s.services"):
 		return "ops"
 	case strings.HasPrefix(d.Category, "pricing"), strings.HasPrefix(d.Category, "carbon"), strings.HasPrefix(d.Category, "insurance"):
 		return "billing"
@@ -863,6 +891,8 @@ func settingPermissionGroup(d settingDef) string {
 		return "ai"
 	case strings.HasPrefix(d.Category, "logging"):
 		return "security" // captures sensitive content (prompts/responses)
+	case strings.HasPrefix(d.Category, "security"):
+		return "security"
 	default:
 		return "admin"
 	}
@@ -911,7 +941,7 @@ func (s *Server) callerSettingsRole(r *http.Request) string {
 
 // canWriteSetting reports whether the caller may modify a specific setting.
 func (s *Server) canWriteSetting(r *http.Request, d settingDef) bool {
-	return roleCanWriteGroup(s.callerSettingsRole(r), settingPermissionGroup(d))
+	return !d.ReadOnly && !d.Managed && roleCanWriteGroup(s.callerSettingsRole(r), settingPermissionGroup(d))
 }
 
 func settingDefByKey(key string) (settingDef, bool) {
@@ -1083,6 +1113,7 @@ func (s *Server) effectiveSettingView(stored map[string]store.AdminSetting, d se
 		"layers":             layers,
 		"restart_required":   d.Restart,
 		"read_only":          d.ReadOnly,
+		"managed_endpoint":   d.Managed,
 		"description":        settingDescriptions[d.Key],
 		"permission_group":   settingPermissionGroup(d),
 		"can_write":          s.canWriteSetting(r, d),
@@ -1209,6 +1240,10 @@ func (s *Server) handleAdminSettingByKey(w http.ResponseWriter, r *http.Request)
 	}
 	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && d.ReadOnly {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "this setting is read-only (env variable); change it via container environment", "invalid_request_error", "setting_read_only")
+		return
+	}
+	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && d.Managed {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "this setting must be changed through its dedicated safety-checked endpoint", "invalid_request_error", "setting_managed_endpoint")
 		return
 	}
 	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && !s.canWriteSetting(r, d) {
@@ -1348,6 +1383,10 @@ func (s *Server) applySettingsBatch(w http.ResponseWriter, r *http.Request, item
 		}
 		if rejectSecret && d.Secret {
 			errs[key] = "secret keys cannot be imported; set them individually"
+			continue
+		}
+		if d.Managed {
+			errs[key] = "use the dedicated safety-checked endpoint"
 			continue
 		}
 		if !s.canWriteSetting(r, d) {

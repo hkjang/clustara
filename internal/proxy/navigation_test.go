@@ -310,6 +310,24 @@ func TestTeamManagerNavigation(t *testing.T) {
 	}
 }
 
+func TestDeveloperServicePlatformNavigation(t *testing.T) {
+	tabs := tabSet(roleScopes["developer"], map[string]bool{})
+	for _, want := range []string{"service-home", "services-catalog", "services-mine"} {
+		if !tabs[want] {
+			t.Errorf("developer should see service platform tab %q", want)
+		}
+	}
+	if tabs["services-templates"] {
+		t.Error("developer must not see service template administration")
+	}
+	if tabs["services-all"] {
+		t.Error("developer must not see the operator-wide service list")
+	}
+	if tabs["k8s-home"] {
+		t.Error("service self-service must not expose the general operations menu")
+	}
+}
+
 func TestRoleHomeOverrides(t *testing.T) {
 	features := map[string]bool{}
 	// security_admin keeps a tailored landing; admin-scoped roles fall back to the ops home.

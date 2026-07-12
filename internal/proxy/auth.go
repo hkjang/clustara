@@ -25,6 +25,8 @@ var allScopes = []string{
 	"admin:read", "admin:write", "routing:read", "routing:write",
 	"observability:read", "costs:read", "security:read", "mcp:use", "mcp:admin",
 	"team:read",
+	"service:read", "service:create", "service:update", "service:operate", "service:delete",
+	"service:backup", "service:restore", "service:credential:read", "service:credential:rotate", "service:approve", "service:catalog:manage",
 }
 
 var roleScopes = map[string][]string{
@@ -34,29 +36,38 @@ var roleScopes = map[string][]string{
 	// team_manager sees only their team's surface (team:read) — NOT the full operator
 	// dashboard (no admin:read), so they land on /team rather than /admin.
 	"team_manager":    {"chat:completion", "embeddings:create", "models:read", "observability:read", "costs:read", "mcp:use", "team:read"},
-	"developer":       {"chat:completion", "embeddings:create", "models:read", "routing:read", "observability:read", "costs:read", "mcp:use"},
-	"viewer":          {"models:read", "admin:read", "routing:read", "observability:read", "costs:read", "security:read"},
+	"developer":       {"chat:completion", "embeddings:create", "models:read", "routing:read", "observability:read", "costs:read", "mcp:use", "service:read", "service:create", "service:update", "service:operate", "service:backup", "service:credential:read"},
+	"viewer":          {"models:read", "admin:read", "routing:read", "observability:read", "costs:read", "security:read", "service:read"},
 	"service_account": {"chat:completion", "embeddings:create", "models:read", "mcp:use"},
 	// Settings-scoped sub-admins: they can read the admin surface (admin:read) and write
 	// only their slice of runtime settings (enforced per-category in the settings handlers,
 	// not via a broad admin:write grant).
-	"ops_admin":      {"admin:read", "observability:read", "costs:read", "models:read"},
+	"ops_admin":      {"admin:read", "observability:read", "costs:read", "models:read", "service:read", "service:create", "service:update", "service:operate", "service:delete", "service:backup", "service:restore", "service:credential:read", "service:credential:rotate"},
 	"ai_admin":       {"admin:read", "models:read", "routing:read", "routing:write", "observability:read"},
 	"security_admin": {"admin:read", "security:read"},
 	"billing_admin":  {"admin:read", "costs:read", "observability:read", "models:read"},
-	"readonly_admin": {"admin:read", "observability:read", "costs:read", "security:read"},
+	"readonly_admin": {"admin:read", "observability:read", "costs:read", "security:read", "service:read"},
+	"service_admin":  {"admin:read", "observability:read", "costs:read", "security:read", "service:read", "service:create", "service:update", "service:operate", "service:delete", "service:backup", "service:restore", "service:credential:read", "service:credential:rotate", "service:approve", "service:catalog:manage"},
 }
 
 type accessClaims struct {
-	Subject   string   `json:"sub"`
-	Email     string   `json:"email"`
-	Role      string   `json:"role"`
-	TeamID    string   `json:"team_id"`
-	Scopes    []string `json:"scopes"`
-	SessionID string   `json:"sid"`
-	ExpiresAt int64    `json:"exp"`
-	IssuedAt  int64    `json:"iat"`
-	Type      string   `json:"typ"`
+	Subject                string   `json:"sub"`
+	Email                  string   `json:"email"`
+	Role                   string   `json:"role"`
+	TeamID                 string   `json:"team_id"`
+	Scopes                 []string `json:"scopes"`
+	SessionID              string   `json:"sid"`
+	ExpiresAt              int64    `json:"exp"`
+	IssuedAt               int64    `json:"iat"`
+	Type                   string   `json:"typ"`
+	PasswordChangeRequired bool     `json:"pwd_change_required,omitempty"`
+}
+
+func (s *Server) tokenScopesForUser(ctx context.Context, user store.AuthUser) []string {
+	if user.MustChangePassword {
+		return []string{}
+	}
+	return s.effectiveScopesForRole(ctx, user.Role)
 }
 
 func (s *Server) bootstrapAdmin(ctx context.Context) error {
@@ -113,15 +124,16 @@ func (s *Server) issueTokenPairWithSession(ctx context.Context, user store.AuthU
 		return nil, "", err
 	}
 	access, err := s.signAccessToken(accessClaims{
-		Subject:   user.ID,
-		Email:     user.Email,
-		Role:      user.Role,
-		TeamID:    teamID,
-		Scopes:    s.effectiveScopesForRole(ctx, user.Role),
-		SessionID: sessionID,
-		ExpiresAt: now.Add(s.cfg.Auth.AccessTokenTTL).Unix(),
-		IssuedAt:  now.Unix(),
-		Type:      "access",
+		Subject:                user.ID,
+		Email:                  user.Email,
+		Role:                   user.Role,
+		TeamID:                 teamID,
+		Scopes:                 s.tokenScopesForUser(ctx, user),
+		SessionID:              sessionID,
+		ExpiresAt:              now.Add(s.cfg.Auth.AccessTokenTTL).Unix(),
+		IssuedAt:               now.Unix(),
+		Type:                   "access",
+		PasswordChangeRequired: user.MustChangePassword,
 	})
 	if err != nil {
 		return nil, "", err
@@ -133,7 +145,7 @@ func (s *Server) issueTokenPairWithSession(ctx context.Context, user store.AuthU
 		"expires_in":         int(s.cfg.Auth.AccessTokenTTL.Seconds()),
 		"refresh_expires_in": int(s.cfg.Auth.RefreshTokenTTL.Seconds()),
 		"user": map[string]any{
-			"id": user.ID, "email": user.Email, "name": user.Name, "role": user.Role, "team_id": teamID,
+			"id": user.ID, "email": user.Email, "name": user.Name, "role": user.Role, "team_id": teamID, "password_change_required": user.MustChangePassword,
 		},
 	}, sessionID, nil
 }
@@ -182,8 +194,9 @@ func (s *Server) rotateRefreshToken(ctx context.Context, raw string, ip, ua stri
 	}
 	access, err := s.signAccessToken(accessClaims{
 		Subject: user.ID, Email: user.Email, Role: user.Role, TeamID: teamID,
-		Scopes: s.effectiveScopesForRole(ctx, user.Role), SessionID: rec.SessionID,
+		Scopes: s.tokenScopesForUser(ctx, user), SessionID: rec.SessionID,
 		ExpiresAt: now.Add(s.cfg.Auth.AccessTokenTTL).Unix(), IssuedAt: now.Unix(), Type: "access",
+		PasswordChangeRequired: user.MustChangePassword,
 	})
 	if err != nil {
 		return nil, err
@@ -259,7 +272,7 @@ func roleRank(role string) int {
 	switch role {
 	case "super_admin":
 		return 5
-	case "admin":
+	case "admin", "service_admin":
 		return 4
 	case "team_admin":
 		return 3

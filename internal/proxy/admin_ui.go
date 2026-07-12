@@ -782,6 +782,20 @@ const adminHTML = `<!doctype html>
           <a href="#/my-profile" data-tab="my-profile">개인화 설정</a>
         </div>
       </div>
+	  <div class="nav-group">
+		<button class="nav-group-toggle" type="button">서비스 플랫폼</button>
+		<div class="nav-group-menu">
+		  <a href="#/service-home" data-tab="service-home">서비스 홈</a>
+		  <a href="#/services/catalog" data-tab="services-catalog">서비스 카탈로그</a>
+		  <a href="#/services/mine" data-tab="services-mine">내 서비스</a>
+		  <a href="#/services/all" data-tab="services-all">전체 서비스</a>
+		  <a href="#/services/jupyter" data-tab="services-jupyter">Jupyter 관리</a>
+		  <a href="#/services/databases" data-tab="services-databases">데이터베이스</a>
+		  <a href="#/services/apps" data-tab="services-apps">WAS·애플리케이션</a>
+		  <a href="#/services/operations" data-tab="services-operations">작업 이력</a>
+		  <a href="#/services/templates" data-tab="services-templates">템플릿 관리</a>
+		</div>
+	  </div>
       <div class="nav-group">
         <button class="nav-group-toggle" type="button">리소스 관리</button>
         <div class="nav-group-menu">
@@ -796,7 +810,7 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
           <a href="#/k8s-nodes" data-tab="k8s-nodes">노드 관리</a>
           <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
-          <a href="#/service-catalog" data-tab="service-catalog">서비스 카탈로그</a>
+		  <a href="#/service-catalog" data-tab="service-catalog">서비스 디렉터리</a>
           <a href="#/k8s-capacity" data-tab="k8s-capacity">용량·자동확장</a>
           <a href="#/k8s-meta" data-tab="k8s-meta">그룹·오너십</a>
         </div>
@@ -936,6 +950,7 @@ const adminHTML = `<!doctype html>
       </div>
       <span id="ro-indicator" class="status warn" style="display:none" title="쓰기 권한이 없습니다 — 저장/삭제/변경은 서버에서 차단됩니다">읽기 전용</span>
       <input id="token" type="password" autocomplete="off" placeholder="관리자 토큰">
+	  <button id="token-apply" type="button" class="secondary">적용</button>
     </div>
   </header>
   <main>
@@ -1011,13 +1026,17 @@ const adminHTML = `<!doctype html>
 
     // ---------- token (legacy ADMIN_TOKEN mode) ----------
     const tokenInput = document.getElementById('token');
+	const tokenApply = document.getElementById('token-apply');
     tokenInput.value = sessionStorage.getItem('adminToken') || '';
-    tokenInput.addEventListener('change', async () => {
+	async function applyLegacyAdminToken() {
       sessionStorage.setItem('adminToken', tokenInput.value);
 	authState.user = null;
 	authState.nav = null;
 	await bootAfterAuth(null);
-    });
+	}
+	tokenInput.addEventListener('change', applyLegacyAdminToken);
+	tokenInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyLegacyAdminToken(); } });
+	tokenApply.addEventListener('click', applyLegacyAdminToken);
 
     // ---------- auth (AUTH_ENABLED: email/password → JWT) ----------
     const authState = {
@@ -1028,17 +1047,19 @@ const adminHTML = `<!doctype html>
 	  nav: null,
 	  navError: null,
 	  legacyTokenRequired: false,
+	  passwordChangeRequired: false,
     };
     function saveAuth(tokens) {
       authState.access = tokens.access_token || '';
       authState.refresh = tokens.refresh_token || '';
       if (tokens.user) authState.user = tokens.user;
+	  authState.passwordChangeRequired = !!(tokens.password_change_required || (tokens.user && tokens.user.password_change_required));
       sessionStorage.setItem('authAccess', authState.access);
       sessionStorage.setItem('authRefresh', authState.refresh);
       if (authState.user) sessionStorage.setItem('authUser', JSON.stringify(authState.user));
     }
     function clearAuth() {
-      authState.access = ''; authState.refresh = ''; authState.user = null;
+	  authState.access = ''; authState.refresh = ''; authState.user = null; authState.passwordChangeRequired = false;
       sessionStorage.removeItem('authAccess');
       sessionStorage.removeItem('authRefresh');
       sessionStorage.removeItem('authUser');
@@ -1048,6 +1069,7 @@ const adminHTML = `<!doctype html>
       const logoutBtn = document.getElementById('auth-logout');
       if (authState.enabled) {
         tokenInput.style.display = 'none'; // JWT 모드: 수동 토큰 입력 숨김
+		tokenApply.style.display = 'none';
         if (authState.user) {
           chip.style.display = 'inline-flex';
           const loginId = (authState.user.email || '').split('@')[0];
@@ -1060,8 +1082,9 @@ const adminHTML = `<!doctype html>
           chip.title = '개인 메뉴 열기';
           logoutBtn.style.display = 'none';
         }
-      } else {
-        tokenInput.style.display = '';
+	  } else {
+		tokenInput.style.display = '';
+		tokenApply.style.display = '';
         // Token mode has no user, but the chip stays as the menu trigger so theme /
         // refresh / help / 개인화 / 내 키 remain reachable.
         chip.style.display = 'inline-flex';
@@ -1118,6 +1141,39 @@ const adminHTML = `<!doctype html>
     function hideLogin() {
       document.getElementById('login-backdrop').classList.remove('open');
     }
+	function passwordChangeFormHTML(forced) {
+	  return '<form id="password-change-form" class="card-body" style="display:grid;gap:10px;max-width:560px">' +
+		(forced ? '<div class="status warn">관리자가 초기화한 임시 비밀번호를 변경해야 계속 사용할 수 있습니다.</div>' : '<p class="muted">변경하면 모든 기기에서 로그아웃되고 새 비밀번호로 다시 로그인해야 합니다.</p>') +
+		'<label>현재 비밀번호<input id="password-current" type="password" autocomplete="current-password" required></label>' +
+		'<label>새 비밀번호<input id="password-new" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>' +
+		'<label>새 비밀번호 확인<input id="password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>' +
+		'<div class="muted" style="font-size:11px">12~128자 · 영문 대/소문자, 숫자, 특수문자 중 3종 이상 · 흔한 비밀번호 사용 불가</div>' +
+		'<div><button type="submit">비밀번호 변경</button> <span id="password-change-out" class="muted"></span></div></form>';
+	}
+	function bindPasswordChangeForm() {
+	  const form = document.getElementById('password-change-form');
+	  if (!form) return;
+	  form.addEventListener('submit', async e => {
+		e.preventDefault();
+		const out = document.getElementById('password-change-out');
+		const current = document.getElementById('password-current').value;
+		const next = document.getElementById('password-new').value;
+		const confirmValue = document.getElementById('password-confirm').value;
+		if (next !== confirmValue) { out.innerHTML = '<span class="status error">새 비밀번호 확인이 일치하지 않습니다.</span>'; return; }
+		out.textContent = '변경 중…';
+		try {
+		  await api('/auth/password/change', { method:'POST', body:JSON.stringify({ current_password:current, new_password:next }) });
+		  clearAuth(); authState.passwordChangeRequired = false; alert('비밀번호가 변경되었습니다. 모든 세션이 종료되어 다시 로그인해야 합니다.'); showLogin();
+		} catch (err) { out.innerHTML = '<span class="status error">' + escapeHTML(err.message) + '</span>'; }
+	  });
+	}
+	function renderPasswordChangeRequired() {
+	  document.getElementById('subtabs').innerHTML = '';
+	  document.getElementById('permission-banner').innerHTML = '';
+	  document.getElementById('view').innerHTML = '<div class="access-state" style="max-width:640px"><span class="status warn">비밀번호 변경 필요</span><h2>임시 비밀번호를 변경해주세요</h2>' + passwordChangeFormHTML(true) + '</div>';
+	  bindPasswordChangeForm();
+	}
+	window.openMyPasswordChange = () => { openModal('내 비밀번호 변경', passwordChangeFormHTML(false)); bindPasswordChangeForm(); };
     async function tryRefresh() {
       if (!authState.refresh) return false;
       try {
@@ -1238,6 +1294,10 @@ const adminHTML = `<!doctype html>
     async function bootAfterAuth(me) {
       renderAuthHeader();
       if (me) updateMenuMeta(me);
+	  if (authState.passwordChangeRequired || (authState.user && authState.user.password_change_required)) {
+		renderPasswordChangeRequired();
+		return;
+	  }
 	  const navigationReady = await loadNavigation();
 	  if (!navigationReady) {
 		renderAccessFailure(authState.navError);
@@ -1285,6 +1345,7 @@ const adminHTML = `<!doctype html>
           const me = await res.json();
           authState.enabled = !!me.auth_enabled;
 		  authState.legacyTokenRequired = !!me.legacy_token_required;
+		  authState.passwordChangeRequired = !!(me.user && me.user.password_change_required);
           if (me.user) { authState.user = me.user; sessionStorage.setItem('authUser', JSON.stringify(me.user)); }
 		  else if (!me.auth_enabled) { authState.user = null; sessionStorage.removeItem('authUser'); }
           await bootAfterAuth(me);
@@ -1480,6 +1541,8 @@ const adminHTML = `<!doctype html>
 	  const type = (e && e.type) || '';
 	  let message = (e && e.message) || '';
 	  if (res.status === 401) message = authState.enabled ? '로그인이 만료되었거나 인증 정보가 유효하지 않습니다.' : '관리자 토큰을 확인해주세요.';
+	  else if (res.status === 403 && code === 'admin_ip_denied') message = '현재 접속 IP가 관리자 허용 정책에 포함되지 않습니다. 보안 관리자에게 허용 범위를 확인해주세요.';
+	  else if (res.status === 403 && code === 'password_change_required') message = '임시 비밀번호를 먼저 변경해야 합니다.';
 	  else if (res.status === 403) message = '현재 역할에는 이 화면 또는 작업에 필요한 권한이 없습니다.';
 	  else if (!message) message = '요청 처리 중 오류가 발생했습니다. (' + res.status + ')';
 	  return new ClustaraAPIError(message, res.status, code, type, raw && !payload ? raw.slice(0, 300) : '');
@@ -1488,7 +1551,7 @@ const adminHTML = `<!doctype html>
 	function isPermissionError(err) { return Number((err && err.status) || 0) === 403 || (err && err.code) === 'permission_denied'; }
     async function api(path, options = {}) {
       const doFetch = () => {
-        const requestHeaders = headers();
+		const requestHeaders = { ...headers(), ...(options.headers || {}) };
         if (options.body) requestHeaders['Content-Type'] = 'application/json';
         return fetch(path, { ...options, headers: requestHeaders });
       };
@@ -2834,7 +2897,7 @@ const adminHTML = `<!doctype html>
         clickhouse: 'dwdashboard', dwmetrics: 'dwdashboard', runtimesettings: 'settings', changesets: 'settings',
         'prompt-lab': 'chat-test',
       };
-      const navTab = navParent[tab] || tab;
+	  const navTab = tab === 'services' ? ('services-' + (rest[0] || 'all')) : (navParent[tab] || tab);
       setActiveTab(navTab);
       renderSubTabs(tab, rest);
       // Route guard: the same allowed_tabs the server used to filter the menu also blocks
@@ -2894,6 +2957,8 @@ const adminHTML = `<!doctype html>
           case 'k8s-nodes': await renderK8sNodes(params); break;
           case 'k8s-developer': await renderK8sDeveloper(params); break;
           case 'service-catalog': await renderServiceCatalog(params); break;
+		  case 'service-home': await renderServicePlatform('home', params); break;
+		  case 'services': await renderServicePlatform(rest[0] || 'all', params, rest.slice(1)); break;
           case 'k8s-timeline': await renderK8sTimeline(params); break;
           case 'problems': await renderAIOpsProblems(params); break;
           case 'k8s-rca': await renderK8sRCACenter(params); break;
@@ -7641,6 +7706,146 @@ const adminHTML = `<!doctype html>
         result.innerHTML = '<span class="status error">평가 실패</span> ' + escapeHTML(err.message || String(err));
       }
     }
+
+	async function renderServicePlatform(mode, params, rest) {
+	  const view = document.getElementById('view');
+	  view.innerHTML = section('서비스 플랫폼', '<div class="empty">서비스 카탈로그와 인스턴스를 불러오는 중...</div>');
+	  const mine = mode === 'mine';
+	  const ownerID = mine && authState.user ? (authState.user.id || '') : '';
+	  const [catResp, instResp, reconcileResp] = await Promise.all([
+		api('/admin/k8s/services/catalogs'),
+		api('/admin/k8s/services/instances?limit=500' + (ownerID ? '&owner_id=' + encodeURIComponent(ownerID) : '')),
+		api('/admin/k8s/services/reconcile').catch(() => ({worker:{}}))
+	  ]);
+	  let catalogs = catResp.catalogs || [], instances = instResp.instances || []; const reconcileWorker = reconcileResp.worker || {};
+	  const catByID = {}; catalogs.forEach(c => { catByID[c.id] = c; });
+	  if (mode === 'jupyter') { catalogs = catalogs.filter(c => c.category === 'data-analysis'); instances = instances.filter(i => (catByID[i.catalog_id] || {}).category === 'data-analysis'); }
+	  if (mode === 'databases') { catalogs = catalogs.filter(c => c.category === 'database'); instances = instances.filter(i => (catByID[i.catalog_id] || {}).category === 'database'); }
+	  if (mode === 'apps') { catalogs = catalogs.filter(c => ['was','application'].includes(c.category)); instances = instances.filter(i => ['was','application'].includes((catByID[i.catalog_id] || {}).category)); }
+	  const failed = instances.filter(i => ['degraded','failed'].includes(i.status)).length;
+	  const pending = instances.filter(i => i.status === 'pending_approval').length;
+	  const svcTabs = '<div class="subnav">' + [
+		['home','서비스 홈','#/service-home'],['catalog','서비스 카탈로그','#/services/catalog'],['mine','내 서비스','#/services/mine'],['all','전체 서비스','#/services/all'],['jupyter','Jupyter 관리','#/services/jupyter'],['databases','데이터베이스','#/services/databases'],['apps','WAS·애플리케이션','#/services/apps'],['operations','작업 이력','#/services/operations'],['templates','템플릿 관리','#/services/templates']
+	  ].filter(x => uxAllowed(x[0] === 'home' ? 'service-home' : 'services-' + x[0])).map(x => '<a href="' + x[2] + '"' + (mode === x[0] ? ' class="active"' : '') + '>' + x[1] + '</a>').join('') + '</div>';
+	  const instanceRows = instances.map(i => {
+		const c = catByID[i.catalog_id] || {};
+		return '<tr><td><a href="#/services/all?id=' + encodeURIComponent(i.id) + '"><strong>' + escapeHTML(i.name) + '</strong></a><div class="muted">' + escapeHTML(i.id) + '</div></td><td>' + escapeHTML(c.name || i.catalog_id) + '</td><td><span class="status ' + (i.status === 'failed' ? 'error' : (['degraded','pending_approval','collecting'].includes(i.status) ? 'warn' : '')) + '">' + escapeHTML(i.status) + '</span></td><td>' + escapeHTML(i.environment) + '</td><td><code>' + escapeHTML(i.cluster_id + '/' + i.namespace) + '</code></td><td>' + escapeHTML(i.owner_team_id || i.owner_id || '-') + '</td><td><button class="secondary" onclick="serviceOperate(\'' + escapeAttr(i.id) + '\',\'restart\')">재시작 요청</button> <a class="button secondary" href="#/k8s-stacks?id=' + encodeURIComponent(i.stack_id) + '">Stack</a></td></tr>';
+	  }).join('') || '<tr><td colspan="7" class="muted">조건에 맞는 서비스 인스턴스가 없습니다.</td></tr>';
+	  const table = card('서비스 인스턴스', '<div class="card-body"><table><thead><tr><th>서비스</th><th>유형</th><th>상태</th><th>환경</th><th>배치</th><th>소유자</th><th>운영</th></tr></thead><tbody>' + instanceRows + '</tbody></table></div>');
+	  const canCreate = ((authState.nav || {}).scopes || []).includes('service:create');
+	  const cards = catalogs.map(c => '<div class="card"><div class="card-body"><span class="pill">' + escapeHTML(c.category) + '</span><h3>' + escapeHTML(c.name) + '</h3><p class="muted" style="min-height:38px">' + escapeHTML(c.description) + '</p><div><span class="status">' + escapeHTML(c.deployment_type) + '</span> ' + (canCreate ? '<button type="button" onclick="openServiceCreate(\'' + escapeAttr(c.id) + '\')">서비스 생성</button>' : '<span class="muted">조회 전용</span>') + '</div></div></div>').join('');
+	  let body = '';
+	  if (mode === 'catalog' || mode === 'templates') body = section(mode === 'templates' ? '서비스 템플릿 관리' : '설치 가능한 서비스', '<div class="grid3">' + cards + '</div>') + (mode === 'templates' ? card('새 템플릿 버전 등록','<form id="service-template-form" class="card-body" style="display:grid;gap:8px"><div class="grid2"><label>카탈로그<select id="svct-cat">'+catalogs.map(c=>'<option value="'+escapeAttr(c.id)+'">'+escapeHTML(c.name)+'</option>').join('')+'</select></label><label>버전<input id="svct-version" placeholder="예: 17.1.0" required></label><label>배포 방식<select id="svct-type"><option value="manifest">Manifest</option><option value="helm">Helm</option><option value="kustomize">Kustomize</option></select></label><label>Chart Ref<input id="svct-chart" placeholder="internal-helm/postgresql"></label></div><label>렌더링 템플릿<textarea id="svct-template" rows="12" style="font-family:ui-monospace,monospace" required></textarea></label><div class="muted">신규 버전은 기본 draft로 저장되며 승인 전 사용자 카탈로그에 노출하지 않습니다.</div><div><button type="submit">draft 버전 등록</button> <span id="svct-out"></span></div></form>') : '');
+	  else if (mode === 'home') body = section('서비스 홈','<div class="card-body"><div class="kpis">' + kpi('전체 서비스',fmt(instances.length)) + kpi('정상 서비스',fmt(instances.filter(i=>i.status==='ready').length)) + kpi('위험 서비스',fmt(failed)) + kpi('승인 대기',fmt(pending)) + kpi('카탈로그',fmt(catalogs.length)) + '</div><p class="muted">ServiceInstance는 상위 추상화이며 실제 적용·승인·롤백은 기존 Application Stack과 Action Center가 담당합니다.</p></div>') + card('서비스 상태 자동 동기화','<div class="card-body"><div class="kpis">' + kpi('Worker',reconcileWorker.enabled===false?'비활성':(reconcileWorker.running?'실행 중':'대기')) + kpi('주기',fmt(reconcileWorker.interval_seconds||0)+'초') + kpi('최근 처리',fmt(reconcileWorker.reconciled||0)) + kpi('수집 대기',fmt(reconcileWorker.collecting||0)) + kpi('실패',fmt(reconcileWorker.failed||0)) + '</div><div class="kv">' + row('최근 성공',escapeHTML(reconcileWorker.last_success||'-')) + row('최근 오류',escapeHTML(reconcileWorker.last_error||'-')) + row('중복 방지','인스턴스별 DB lease · 건별 '+fmt(reconcileWorker.timeout_seconds||0)+'초 timeout') + row('인벤토리 신선도',fmt(reconcileWorker.inventory_stale_seconds||0)+'초 초과 시 장애가 아닌 collecting 처리') + '</div><div style="margin-top:12px"><button onclick="runServiceReconcileWorker(true)">Dry-run 검증</button> <button class="secondary" onclick="runServiceReconcileWorker(false)">지금 동기화</button> <a class="button secondary" href="#/settings/runtime">주기 설정</a></div></div>') + table;
+	  else body = section(({mine:'내 서비스',all:'전체 서비스',jupyter:'Jupyter 관리',databases:'데이터베이스',apps:'WAS·애플리케이션',operations:'서비스 작업 이력'})[mode] || '서비스 인스턴스','') + table;
+	  view.innerHTML = svcTabs + body;
+	  const templateForm = document.getElementById('service-template-form'); if (templateForm) templateForm.addEventListener('submit', saveServiceTemplateVersion);
+	  const detailID = params && params.get('id');
+	  if (detailID) await openServiceInstanceDetail(detailID);
+	}
+	async function saveServiceTemplateVersion(e){e.preventDefault();const out=document.getElementById('svct-out');try{const cat=document.getElementById('svct-cat').value;const d=await api('/admin/k8s/services/catalogs/'+encodeURIComponent(cat)+'/versions',{method:'POST',body:JSON.stringify({version:document.getElementById('svct-version').value.trim(),deployment_type:document.getElementById('svct-type').value,chart_ref:document.getElementById('svct-chart').value.trim(),template:document.getElementById('svct-template').value,status:'draft'})});out.innerHTML='<span class="status">등록됨</span> '+escapeHTML(d.version.id);showToast('ok','템플릿 draft 등록',d.version.version)}catch(err){out.innerHTML='<span class="status error">'+escapeHTML(err.message)+'</span>'}}
+
+	window.openServiceCreate = async (catalogID) => {
+	  try {
+		const [d, clusters] = await Promise.all([api('/admin/k8s/services/catalogs/' + encodeURIComponent(catalogID)), api('/admin/k8s/clusters')]);
+		const versions = d.versions || [], profiles = d.profiles || [], c = d.catalog || {};
+		const clusterRows = clusters.clusters || [], noCluster = clusterRows.length === 0;
+		openModal('서비스 생성 · ' + (c.name || ''), '<form id="service-create-form" class="card-body" style="display:grid;gap:10px">' +
+		  '<div class="grid2"><label>버전<select id="svc-version">' + versions.map(v=>'<option value="'+escapeAttr(v.id)+'">'+escapeHTML(v.version)+(v.recommended?' · 권장':'')+'</option>').join('') + '</select></label><label>프로파일<select id="svc-profile">' + profiles.map(p=>'<option value="'+escapeAttr(p.id)+'">'+escapeHTML(p.name+' · '+p.cpu+' / '+p.memory+' / '+p.storage)+'</option>').join('') + '</select></label>' +
+		  '<label>클러스터<select id="svc-cluster"' + (noCluster ? ' disabled' : '') + '>' + clusterRows.map(x=>'<option value="'+escapeAttr(x.id)+'">'+escapeHTML(x.name||x.id)+'</option>').join('') + '</select></label><label>Namespace<input id="svc-namespace" value="default" required></label>' +
+		  '<label>인스턴스명<input id="svc-name" placeholder="orders-db" required></label><label>환경<select id="svc-env"><option value="development">개발</option><option value="validation">검증</option><option value="production">운영 · 승인 필수</option></select></label>' +
+		  '<label style="grid-column:1/-1">Harbor 이미지<input id="svc-image" value="' + escapeAttr(jsonValue(versions[0] && versions[0].default_values_json,'image')) + '" required></label>' +
+		  '<label>접속 Secret 이름 · 선택<input id="svc-secret" placeholder="orders-db-auth"></label><label>Username key<input id="svc-secret-user" placeholder="username"></label><label>Password key<input id="svc-secret-pass" placeholder="password"></label></div>' +
+		  '<div class="banner">기본 보안: non-root, 최소 권한 ServiceAccount, NetworkPolicy. 운영 이미지는 <code>@sha256:</code> digest 고정이 필요합니다. Secret은 이름과 key 참조만 저장합니다.</div>' + (noCluster ? '<div class="banner warn">등록된 클러스터가 없습니다. <a href="#/k8s">클러스터 등록</a> 후 생성할 수 있습니다.</div>' : '') + '<div id="svc-preview" class="muted"></div><div><button type="button" class="secondary" onclick="previewServiceCreate(\'' + escapeAttr(catalogID) + '\')"' + (noCluster ? ' disabled' : '') + '>리소스·정책 미리보기</button> <button type="submit"' + (noCluster ? ' disabled' : '') + '>Stack 초안 생성</button></div></form>', null, {wide:true});
+		document.getElementById('service-create-form').addEventListener('submit', async e => { e.preventDefault(); await submitServiceCreate(catalogID); });
+	  } catch(e) { showToast('error','서비스 생성 화면 실패',e.message); }
+	};
+	function jsonValue(raw,key){try{return (JSON.parse(raw||'{}')||{})[key]||''}catch(_){return ''}}
+	function serviceCreatePayload(catalogID){return {catalog_id:catalogID,version_id:document.getElementById('svc-version').value,profile_id:document.getElementById('svc-profile').value,cluster_id:document.getElementById('svc-cluster').value,namespace:document.getElementById('svc-namespace').value.trim(),name:document.getElementById('svc-name').value.trim(),environment:document.getElementById('svc-env').value,credential_secret_name:document.getElementById('svc-secret').value.trim(),credential_username_key:document.getElementById('svc-secret-user').value.trim(),credential_password_key:document.getElementById('svc-secret-pass').value.trim(),values:{image:document.getElementById('svc-image').value.trim()}}}
+	window.previewServiceCreate = async catalogID => { const out=document.getElementById('svc-preview');out.textContent='검증 중...';try{const d=await api('/admin/k8s/services/instances/validate',{method:'POST',body:JSON.stringify(serviceCreatePayload(catalogID))});out.innerHTML='<span class="status">검증 통과</span> · 리소스 ' + fmt((((d.resource_plan||{}).resources)||[]).length) + '개 · 승인 ' + (d.approval_required?'필요':'정책 기준') + '<pre style="max-height:220px;overflow:auto">'+escapeHTML(d.manifest||'')+'</pre>'}catch(e){out.innerHTML='<span class="status error">검증 실패</span> '+escapeHTML(e.message)}};
+	window.submitServiceCreate = async catalogID => { try{const d=await api('/admin/k8s/services/instances',{method:'POST',body:JSON.stringify(serviceCreatePayload(catalogID))});closeModal();showToast('ok','서비스 Stack 초안 생성',d.instance.name+' · '+d.instance.status);location.hash='#/services/all?id='+encodeURIComponent(d.instance.id)}catch(e){showToast('error','서비스 생성 실패',e.message)} };
+	window.serviceOperate = async (id,op) => {if(!confirm(op+' 작업을 기존 Action Center 승인 요청으로 생성할까요?'))return;try{const d=await api('/admin/k8s/services/instances/'+encodeURIComponent(id)+'/'+op,{method:'POST',body:'{}'});showToast('ok','운영 요청 생성',d.action_request_id||d.operation.id)}catch(e){showToast('error','운영 요청 실패',e.message)}};
+	window.runServiceReconcileWorker = async dryRun => {
+	  if (!dryRun && !confirm('현재 서비스 인스턴스를 배치 단위로 동기화할까요? Kubernetes 리소스는 변경하지 않고 Clustara 상태 증적만 갱신합니다.')) return;
+	  try {
+		const d = await api('/admin/k8s/services/reconcile', {method:'POST', body:JSON.stringify({dry_run:dryRun, force:true, limit:20})});
+		const r = d.result || {}, previews = r.previews || [];
+		if (dryRun) {
+		  openModal('서비스 동기화 Dry-run', '<div class="card-body"><div class="kpis">' + kpi('대상',fmt(r.selected||0)) + kpi('검증',fmt(r.reconciled||0)) + kpi('수집 대기',fmt(r.collecting||0)) + kpi('오류',fmt(r.failed||0)) + '</div><table><thead><tr><th>서비스</th><th>Health</th><th>판정</th><th>인벤토리</th></tr></thead><tbody>' + (previews.map(x=>'<tr><td>'+escapeHTML((x.instance||{}).name||'-')+'</td><td>'+fmt((x.health||{}).score||0)+'</td><td>'+escapeHTML((x.health||{}).status||'-')+'</td><td>'+escapeHTML((x.health||{}).collection_status||'-')+'</td></tr>').join('')||'<tr><td colspan="4" class="muted">검증 대상이 없습니다.</td></tr>') + '</tbody></table><p class="muted">Dry-run은 구성요소와 Health를 계산하지만 snapshot과 인스턴스 상태를 변경하지 않습니다.</p></div>',null,{wide:true});
+		} else {
+		  showToast('ok','서비스 상태 동기화 완료','처리 '+fmt(r.reconciled||0)+' · 수집 대기 '+fmt(r.collecting||0)+' · 오류 '+fmt(r.failed||0));
+		  await renderServicePlatform('home', new URLSearchParams(), []);
+		}
+	  } catch(e) { showToast('error','서비스 상태 동기화 실패',e.message); }
+	};
+	async function openServiceInstanceDetail(id) {
+	  try {
+		const base = '/admin/k8s/services/instances/' + encodeURIComponent(id);
+		const [d, cost] = await Promise.all([api(base), api(base + '/cost').catch(() => ({}))]);
+		const i = d.instance || {}, h = d.health || {}, areas = h.areas || {};
+		const serviceScopes = ((authState.nav || {}).scopes || []), isServiceAdmin = serviceScopes.includes('admin:write'), canBackup = serviceScopes.includes('service:backup') || isServiceAdmin, canRestore = serviceScopes.includes('service:restore') || isServiceAdmin, canUpdateService = serviceScopes.includes('service:update') || isServiceAdmin, canOperateService = serviceScopes.includes('service:operate') || isServiceAdmin, canCredentialService = serviceScopes.includes('service:credential:rotate') || isServiceAdmin;
+		const areaNames = {workload:'워크로드', endpoint:'Endpoint', storage:'스토리지', incidents:'장애·재시작', backup:'백업', security:'보안', saturation:'자원 포화'};
+		const healthRows = Object.entries(areas).map(([name, a]) => '<tr><td><strong>' + escapeHTML(areaNames[name] || name) + '</strong></td><td>' + fmt(a.score || 0) + ' / ' + fmt(a.max || 0) + '</td><td><span class="status ' + (a.status === 'error' ? 'error' : (a.status === 'warning' ? 'warn' : '')) + '">' + escapeHTML(a.status || '-') + '</span></td><td>' + escapeHTML((a.evidence || []).join(' · ') || '정상') + '</td></tr>').join('');
+		const componentRows = (d.components || []).map(c => '<tr><td>' + escapeHTML(c.kind) + '</td><td><code>' + escapeHTML(c.namespace + '/' + c.resource_name) + '</code></td><td><span class="status ' + (c.status === 'missing' ? 'error' : '') + '">' + escapeHTML(c.status || '-') + '</span></td></tr>').join('') || '<tr><td colspan="3" class="muted">동기화된 구성요소가 없습니다.</td></tr>';
+		const endpointRows = (d.endpoints || []).map(e => '<tr><td>' + escapeHTML(e.endpoint_type) + '</td><td><code>' + escapeHTML((e.tls_enabled ? 'https://' : 'http://') + e.host + ':' + e.port + (e.path || '')) + '</code></td><td>' + (e.tls_enabled ? 'TLS' : '내부 정책') + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">파생된 Endpoint가 없습니다.</td></tr>';
+		const credentialRows = (d.credentials || []).map(c => '<tr><td><code>' + escapeHTML(c.namespace + '/' + c.secret_name) + '</code></td><td>' + escapeHTML(c.username_key || '-') + '</td><td>' + escapeHTML(c.password_key || '-') + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">조회 권한이 없거나 등록된 Secret 참조가 없습니다.</td></tr>';
+		const backupRows = (d.backups || []).map(b => '<tr><td>' + escapeHTML(b.backup_type) + '</td><td><code>' + escapeHTML(b.location || '-') + '</code></td><td><span class="status ' + (b.status === 'failed' ? 'error' : (b.status === 'pending_approval' ? 'warn' : '')) + '">' + escapeHTML(b.status || '-') + '</span></td><td>' + (b.request_id ? '<a href="#/k8s-manifest-changes?id=' + encodeURIComponent(b.request_id) + '">변경 요청</a>' : '-') + '</td><td>' + ((b.status==='success' && (b.backup_type==='logical'||b.backup_type==='snapshot') && canRestore)?'<button class="secondary" onclick="openServiceRestorePreview(\''+escapeAttr(b.id)+'\',\''+escapeAttr(id)+'\',\''+escapeAttr(b.backup_type)+'\')">복구 미리보기</button>':'-') + '</td><td>' + ago(b.started_at) + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">백업 요청 이력이 없습니다.</td></tr>';
+		const restoreRows = (d.restores || []).map(x => '<tr><td><code>' + escapeHTML(x.backup_id) + '</code></td><td><span class="status ' + (x.status==='failed'?'error':(x.status==='pending_approval'?'warn':'')) + '">' + escapeHTML(x.status||'-') + '</span></td><td>' + (x.request_id?'<a href="#/k8s-manifest-changes?id='+encodeURIComponent(x.request_id)+'">변경 요청</a>':'-') + '</td><td>' + ago(x.started_at) + '</td></tr>').join('') || '<tr><td colspan="4" class="muted">복구 요청 이력이 없습니다.</td></tr>';
+		const operationRows = (d.operations || []).map(o => '<tr><td>' + escapeHTML(o.operation_type) + '</td><td>' + escapeHTML(o.status) + '</td><td>' + escapeHTML(o.request_id || '-') + '</td><td>' + ago(o.created_at) + '</td></tr>').join('') || '<tr><td colspan="4" class="muted">작업 없음</td></tr>';
+		const actualStatus = h.status || i.status || '-';
+		const monthly = cost.estimated_monthly_krw == null ? '-' : '₩' + fmt(Math.round(cost.estimated_monthly_krw));
+		openModal('서비스 상세 · ' + (i.name || id), '<div class="card-body">' +
+		  '<div class="kpis">' + kpi('Health', fmt(h.score || 0)) + kpi('관측 상태', escapeHTML(actualStatus)) + kpi('수집 상태', escapeHTML(h.collection_status || '-')) + kpi('월 예상비용', monthly) + kpi('Stack rev', fmt((d.stack || {}).revision_no || 0)) + '</div>' +
+		  '<div class="kv">' + row('서비스', escapeHTML((d.catalog || {}).name || i.catalog_id)) + row('배치', '<code>' + escapeHTML(i.cluster_id + '/' + i.namespace) + '</code>') + row('소유자', escapeHTML(i.owner_team_id || i.owner_id || '-')) + row('증적', '구성요소 ' + fmt(h.observed_components || 0) + '개 관측 · 누락 ' + fmt(h.missing_components || 0) + '개 · 재시작 ' + fmt(h.total_restarts || 0) + '회') + row('인벤토리 최신 표본', escapeHTML(h.inventory_observed_at || '수집 대기')) + row('실행 엔진', '<a href="#/k8s-stacks?id=' + encodeURIComponent(i.stack_id || '') + '">Application Stack</a> · <a href="#/k8s-actions">Action Center</a> · <a href="#/k8s-graph?cluster_id=' + encodeURIComponent(i.cluster_id || '') + '&namespace=' + encodeURIComponent(i.namespace || '') + '">Resource Graph</a>') + '</div>' +
+		  '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">' + (canUpdateService?'<button onclick="reconcileServiceInstance(\'' + escapeAttr(id) + '\')">상태 동기화·검증</button>':'') + (canOperateService?'<button class="secondary" onclick="serviceOperate(\'' + escapeAttr(id) + '\',\'restart\')">재시작 요청</button>':'') + (canCredentialService?'<button class="secondary" onclick="openServiceCredentialRef(\'' + escapeAttr(id) + '\')">Secret 참조 관리</button>':'') + (canBackup ? '<button class="secondary" onclick="openServiceBackupRequest(\'' + escapeAttr(id) + '\')">백업 요청</button>' : '') + '</div>' +
+		  '<h3>Health Score 근거</h3><table><thead><tr><th>영역</th><th>점수</th><th>판정</th><th>증적</th></tr></thead><tbody>' + (healthRows || '<tr><td colspan="4" class="muted">상태 동기화 전입니다.</td></tr>') + '</tbody></table>' +
+		  '<div class="grid2" style="margin-top:14px"><div><h3>구성요소</h3><table><thead><tr><th>종류</th><th>리소스</th><th>상태</th></tr></thead><tbody>' + componentRows + '</tbody></table></div><div><h3>Endpoint</h3><table><thead><tr><th>유형</th><th>주소</th><th>보호</th></tr></thead><tbody>' + endpointRows + '</tbody></table><h3>접속 Secret 참조</h3><table><thead><tr><th>Secret</th><th>사용자 키</th><th>암호 키</th></tr></thead><tbody>' + credentialRows + '</tbody></table></div></div>' +
+		  '<h3>백업 원장</h3><table><thead><tr><th>방식</th><th>대상</th><th>상태</th><th>승인·적용</th><th>복구</th><th>요청 시각</th></tr></thead><tbody>' + backupRows + '</tbody></table>' +
+		  '<h3>복구 원장</h3><table><thead><tr><th>백업</th><th>상태</th><th>승인·적용</th><th>요청 시각</th></tr></thead><tbody>' + restoreRows + '</tbody></table>' +
+		  '<h3>작업 이력</h3><table><thead><tr><th>작업</th><th>상태</th><th>승인 요청</th><th>시각</th></tr></thead><tbody>' + operationRows + '</tbody></table></div>', null, {wide:true});
+	  } catch (e) { showToast('error', '서비스 상세 실패', e.message); }
+	}
+	window.reconcileServiceInstance = async id => {
+	  try {
+		const d = await api('/admin/k8s/services/instances/' + encodeURIComponent(id) + '/reconcile', {method:'POST', body:'{}'});
+		showToast('ok', '서비스 상태 동기화 완료', 'Health ' + fmt((d.health || {}).score || 0) + ' · ' + ((d.health || {}).status || '-'));
+		await openServiceInstanceDetail(id);
+	  } catch (e) { showToast('error', '서비스 상태 동기화 실패', e.message); }
+	};
+	window.openServiceCredentialRef = id => {
+	  openModal('Kubernetes Secret 참조 관리', '<form id="service-credential-form" class="card-body"><div class="banner">Secret 원문은 Clustara DB나 API에 저장·반환하지 않습니다. Kubernetes Secret 이름과 key 참조만 관리합니다.</div><div class="grid2"><label>Secret 이름<input id="svcc-secret" required placeholder="orders-db-auth"></label><label>Username key<input id="svcc-user" placeholder="username"></label><label>Password key<input id="svcc-pass" placeholder="password"></label></div><div style="margin-top:12px"><button type="submit">참조 저장</button></div></form>');
+	  document.getElementById('service-credential-form').addEventListener('submit', async e => {
+		e.preventDefault();
+		try {
+		  await api('/admin/k8s/services/instances/' + encodeURIComponent(id) + '/credentials', {method:'POST', body:JSON.stringify({secret_name:document.getElementById('svcc-secret').value.trim(), username_key:document.getElementById('svcc-user').value.trim(), password_key:document.getElementById('svcc-pass').value.trim()})});
+		  showToast('ok', 'Secret 참조 저장', '원문 없이 참조만 저장했습니다.');
+		  await openServiceInstanceDetail(id);
+		} catch (err) { showToast('error', 'Secret 참조 저장 실패', err.message); }
+	  });
+	};
+	window.openServiceBackupRequest = id => {
+	  openModal('서비스 백업 요청', '<form id="service-backup-form" class="card-body"><div class="banner">논리 백업은 별도 Bound PVC에 저장하며 PostgreSQL을 지원합니다. CSI Snapshot은 서비스 데이터 PVC를 원본으로 VolumeSnapshot 초안을 만듭니다. 두 방식 모두 Manifest Change Studio 승인을 거칩니다.</div><label>백업 방식<select id="svcb-type" onchange="serviceBackupTypeChanged()"><option value="logical">PostgreSQL 논리 백업</option><option value="snapshot">CSI VolumeSnapshot</option></select></label><div id="svcb-logical"><label>백업 대상 PVC<input id="svcb-pvc" placeholder="orders-backups"></label></div><div id="svcb-snapshot" style="display:none" class="grid2"><label>원본 데이터 PVC<input id="svcb-source-pvc" placeholder="data-orders-db-0"></label><label>VolumeSnapshotClass · 선택<input id="svcb-snapshot-class" placeholder="csi-snapclass"></label></div><div style="margin-top:12px"><button type="submit">백업 변경 요청 생성</button></div></form>');
+	  document.getElementById('service-backup-form').addEventListener('submit', async e => {
+		e.preventDefault();
+		try {
+		  const type=document.getElementById('svcb-type').value; const d = await api('/admin/k8s/services/instances/' + encodeURIComponent(id) + '/backups', {method:'POST', body:JSON.stringify({backup_type:type, target_pvc:document.getElementById('svcb-pvc').value.trim(), source_pvc:document.getElementById('svcb-source-pvc').value.trim(), snapshot_class:document.getElementById('svcb-snapshot-class').value.trim()})});
+		  showToast('ok','백업 승인 요청 생성',(d.manifest_change||{}).id||'Manifest Change Studio');
+		  await openServiceInstanceDetail(id);
+		} catch(err) { showToast('error','백업 요청 실패',err.message); }
+	  });
+	};
+	window.serviceBackupTypeChanged = () => { const snapshot=document.getElementById('svcb-type').value==='snapshot'; document.getElementById('svcb-logical').style.display=snapshot?'none':''; document.getElementById('svcb-snapshot').style.display=snapshot?'grid':'none'; };
+	window.openServiceRestorePreview = (backupID, targetID, backupType) => {
+	  const snapshot=backupType==='snapshot';
+	  openModal('서비스 복구 미리보기', '<div class="card-body"><div class="banner warn">'+(snapshot?'스냅샷 복구는 기존 PVC를 덮어쓰지 않고 새 PVC를 생성합니다. 생성 후 워크로드 볼륨 연결은 별도 승인 변경으로 수행하세요.':'논리 복구는 대상 데이터에 영향을 주므로 사전 영향도 검토가 필요합니다.')+' 모든 복구는 기존 Manifest Change 승인을 거칩니다.</div><label>대상 ServiceInstance ID<input id="svcr-target" value="'+escapeAttr(targetID)+'" required></label><div id="svcr-snapshot-fields" class="grid2" style="display:'+(snapshot?'grid':'none')+'"><label>새 클론 PVC 이름<input id="svcr-target-pvc" placeholder="orders-db-restore"></label><label>요청 용량<input id="svcr-storage-size" value="20Gi" placeholder="20Gi"></label><label>StorageClass · 선택<input id="svcr-storage-class" placeholder="fast-csi"></label></div><input id="svcr-backup-type" type="hidden" value="'+escapeAttr(backupType||'logical')+'"><div style="margin-top:10px"><button onclick="previewServiceRestore(\''+escapeAttr(backupID)+'\')">영향도 다시 계산</button></div><div id="svcr-preview" class="muted" style="margin-top:12px">미리보기를 계산하는 중...</div></div>',null,{wide:true});
+	  previewServiceRestore(backupID);
+	};
+	function serviceRestorePayload() { const byId=id=>{const el=document.getElementById(id);return el?el.value.trim():'';}; return {target_instance_id:byId('svcr-target'),target_pvc:byId('svcr-target-pvc'),storage_size:byId('svcr-storage-size'),storage_class:byId('svcr-storage-class')}; }
+	window.previewServiceRestore = async backupID => {
+	  const out=document.getElementById('svcr-preview'), payload=serviceRestorePayload(), target=payload.target_instance_id; out.textContent='검증 중...';
+	  try { const p=await api('/admin/k8s/services/backups/'+encodeURIComponent(backupID)+'/restore-preview',{method:'POST',body:JSON.stringify(payload)}); const blockers=p.blockers||[], warnings=p.warnings||[]; out.innerHTML='<div class="kpis">'+kpi('허용',p.allowed?'예':'아니오')+kpi('방식',escapeHTML(p.mode||'-'))+kpi('생성 리소스',escapeHTML(p.resource_kind||'-'))+kpi('차단',fmt(blockers.length))+kpi('경고',fmt(warnings.length))+'</div><div class="kv">'+row('차단 조건',escapeHTML(blockers.join(' · ')||'없음'))+row('주의',escapeHTML(warnings.join(' · ')||'없음'))+row('대상',escapeHTML(((p.target_instance||{}).name)||target))+row('리소스 이름',escapeHTML(p.resource_name||'-'))+'</div>'+(p.manifest?'<details><summary>'+escapeHTML(p.resource_kind||'복구 리소스')+' YAML</summary><pre style="max-height:260px;overflow:auto">'+escapeHTML(p.manifest)+'</pre></details>':'')+(p.allowed?'<div style="margin-top:12px"><button onclick="submitServiceRestore(\''+escapeAttr(backupID)+'\')">승인형 복구 요청 생성</button></div>':''); } catch(err){out.innerHTML='<span class="status error">'+escapeHTML(err.message)+'</span>';}
+	};
+	window.submitServiceRestore = async backupID => { const payload=serviceRestorePayload(), target=payload.target_instance_id, snapshot=(document.getElementById('svcr-backup-type')||{}).value==='snapshot'; if(!confirm(snapshot?'스냅샷에서 새 PVC를 생성하는 승인 요청을 만들까요? 기존 PVC는 변경하지 않습니다.':'대상 서비스 데이터에 영향을 주는 논리 복구 승인 요청을 생성할까요?'))return; try{const d=await api('/admin/k8s/services/backups/'+encodeURIComponent(backupID)+'/restore',{method:'POST',body:JSON.stringify(payload)});showToast('ok','복구 승인 요청 생성',(d.manifest_change||{}).id||'Manifest Change Studio');await openServiceInstanceDetail(target);}catch(err){showToast('error','복구 요청 실패',err.message);} };
 
     async function renderServiceCatalog(params) {
       const q = ((params && params.get('q')) || '').trim().toLowerCase();
@@ -21642,8 +21847,9 @@ const adminHTML = `<!doctype html>
             '<button type="button" class="secondary" onclick="myProfileClearPins()">고정 메뉴 초기화</button>' +
             '<button type="button" class="secondary" onclick="myProfileClearResourcePins()">고정 리소스 초기화</button>' +
           '</div><div id="my-profile-out" class="muted" style="font-size:12px;margin-top:8px"></div></div>');
+	  const passwordCard = authState.enabled ? card('계정 보안', '<div class="card-body"><p class="muted">비밀번호 변경 시 현재 세션을 포함한 모든 로그인 세션이 종료됩니다.</p><button type="button" onclick="openMyPasswordChange()">내 비밀번호 변경</button></div>') : '';
       view.innerHTML = section('개인화 설정', '<div class="card-body">' + notes + '</div>') +
-        prefCard +
+		prefCard + passwordCard +
         '<div id="my-profile-notifications"></div><div id="me-sessions"></div>';
       try {
         const n = await api('/me/notifications');
@@ -23452,6 +23658,14 @@ const adminHTML = `<!doctype html>
 
     // ---------- runtime settings (admin-managed config) ----------
     function settingInputId(key) { return 'val-' + key.replace(/[^a-zA-Z0-9]/g, '-'); }
+	function canViewAdminIPPolicy() {
+	  const user = authState.user || {};
+	  return !authState.enabled || ['super_admin','admin','security_admin','readonly_admin'].includes(user.role || '') || (user.scopes || []).includes('security:read');
+	}
+	function canWriteAdminIPPolicy() {
+	  const role = ((authState.user || {}).role || '');
+	  return role === 'super_admin' || role === 'admin' || role === 'security_admin' || (!authState.enabled && role !== 'readonly_admin');
+	}
     function jsonShort(s) { if (!s) return ''; try { return String(JSON.parse(s)); } catch (e) { return s; } }
     function settingLayerBadges(s) {
       const layers = s.layers || [];
@@ -23485,6 +23699,7 @@ const adminHTML = `<!doctype html>
           '<button class="secondary" type="button" onclick="testSettingConn(\'text2sql-twin\')">Twin DB 테스트</button>' +
           '<button class="secondary" type="button" onclick="testSettingConn(\'k8s-monitoring\')">입력값으로 GPU/DCGM 검증</button>' +
           '<button class="secondary" type="button" onclick="openDCGMConfigPreview()">DCGM ConfigMap 미리보기</button>' +
+		  (canViewAdminIPPolicy() ? '<button class="secondary" type="button" onclick="openAdminIPPolicy()">관리자 IP 허용 정책</button>' : '') +
           '<span id="conn-test-result" class="muted"></span>' +
         '</div></div>';
       Object.keys(groups).sort().forEach(cat => {
@@ -23525,8 +23740,8 @@ const adminHTML = `<!doctype html>
             : '';
           html += '<tr><td><code>' + escapeHTML(s.key) + '</code>' + desc + '</td><td>' + editor + '</td>' +
             '<td><span class="status">' + escapeHTML(activeSource) + '</span>' + ver + settingLayerBadges(s) + '</td>' +
-			'<td>' + restart + (canWrite ? '' : '<span class="pill" title="현재 역할에 이 설정 그룹의 쓰기 권한이 없습니다">역할 제한</span>') + '</td><td>' +
-			  (canWrite ? '<button type="button" onclick="saveSetting(\'' + s.key + '\',\'' + id + '\',' + (s.is_secret ? 'true' : 'false') + ')">저장</button> ' : '<span class="muted" style="font-size:11px">조회만 가능</span> ') +
+			'<td>' + restart + (canWrite ? '' : (s.managed_endpoint ? '<span class="pill" title="잠금 방지 검사가 있는 전용 화면에서 변경합니다">전용 화면</span>' : '<span class="pill" title="현재 역할에 이 설정 그룹의 쓰기 권한이 없습니다">역할 제한</span>')) + '</td><td>' +
+			  (canWrite ? '<button type="button" onclick="saveSetting(\'' + s.key + '\',\'' + id + '\',' + (s.is_secret ? 'true' : 'false') + ')">저장</button> ' : '<span class="muted" style="font-size:11px">' + (s.managed_endpoint ? '상단 IP 정책에서 관리' : '조회만 가능') + '</span> ') +
               revertBtns +
               '<button class="secondary" type="button" onclick="settingHistory(\'' + s.key + '\')">이력</button>' +
             '</td></tr>';
@@ -23600,6 +23815,54 @@ const adminHTML = `<!doctype html>
         if (kind === 'k8s-monitoring') showK8sMonitoringTest(d);
       } catch (e) { el.textContent = '오류: ' + e.message; }
     }
+
+	async function openAdminIPPolicy() {
+	  try {
+		const d = await api('/admin/security/access-policy');
+		const canWrite = canWriteAdminIPPolicy();
+		const disabled = canWrite ? '' : ' disabled aria-disabled="true"';
+		openModal('관리자 IP 허용 정책', '<div class="card-body">' +
+		  '<div class="banner ' + (d.current_ip_allowed ? '' : 'warn') + '" style="margin:0 0 12px">현재 식별 IP <code>' + escapeHTML(d.current_ip || '-') + '</code> · ' + escapeHTML(d.current_ip_source || '-') + ' · ' + (d.current_ip_allowed ? '현재 정책에서 허용됨' : '현재 정책에서 차단됨') + '</div>' +
+		  (canWrite ? '' : '<div class="banner warn" style="margin:0 0 12px">현재 역할은 정책을 조회할 수 있지만 변경할 수 없습니다.</div>') +
+		  '<p class="muted">관리자 로그인과 관리자 API에만 적용됩니다. 단일 IP 또는 CIDR을 쉼표·줄바꿈으로 입력할 수 있습니다. 전달 IP 헤더는 신뢰 프록시 CIDR에서 온 요청에만 사용합니다.</p>' +
+		  '<label style="display:flex;gap:8px;align-items:center;margin:12px 0"><input id="admin-ip-enabled" type="checkbox" style="width:auto"' + (d.enabled ? ' checked' : '') + disabled + '> 관리자 IP 허용 정책 활성화</label>' +
+		  '<label>허용 IP / CIDR<textarea id="admin-ip-allowed" rows="6" style="width:100%;font-family:ui-monospace,monospace" placeholder="10.20.0.0/16\n203.0.113.10"' + disabled + '>' + escapeHTML(d.allowed_cidrs || '') + '</textarea></label>' +
+		  '<label>신뢰 프록시 CIDR<textarea id="admin-ip-proxies" rows="4" style="width:100%;font-family:ui-monospace,monospace" placeholder="10.0.0.0/8"' + disabled + '>' + escapeHTML(d.trusted_proxy_cidrs || '') + '</textarea></label>' +
+		  '<label>비상 우회 토큰 <input id="admin-ip-breakglass" type="password" autocomplete="off" placeholder="잠금 복구 시에만 입력"' + disabled + '></label>' +
+		  '<div class="muted" style="font-size:11px;margin-top:5px">비상 토큰은 <code>security.admin_access.emergency_token</code>에서 별도 설정합니다. 사용 시 모든 우회가 감사 로그에 기록됩니다.</div>' +
+		  '<div id="admin-ip-result" class="muted" style="margin:12px 0"></div>' +
+		  '<div style="display:flex;gap:8px"><button type="button" class="secondary" onclick="testAdminIPPolicy()"' + disabled + '>입력값 검증</button><button type="button" onclick="saveAdminIPPolicy()"' + disabled + '>검증 후 저장</button></div>' +
+		  '<div class="banner warn" style="margin:14px 0 0">잠금 방지: 활성화 시 현재 요청에서 안전하게 식별한 IP가 새 허용 범위에 포함되지 않으면 저장을 거부합니다.</div></div>', null, { wide: true });
+	  } catch (e) { showToast('error', 'IP 정책 조회 실패', e.message); }
+	}
+	function adminIPPolicyPayload() {
+	  return {
+		enabled: !!document.getElementById('admin-ip-enabled').checked,
+		allowed_cidrs: document.getElementById('admin-ip-allowed').value,
+		trusted_proxy_cidrs: document.getElementById('admin-ip-proxies').value
+	  };
+	}
+	function adminIPPolicyHeaders() {
+	  const token = (document.getElementById('admin-ip-breakglass').value || '').trim();
+	  return token ? { 'X-Clustara-Break-Glass': token } : {};
+	}
+	async function testAdminIPPolicy() {
+	  const out = document.getElementById('admin-ip-result');
+	  out.textContent = '검증 중...';
+	  try {
+		const d = await api('/admin/security/access-policy', { method:'POST', headers:adminIPPolicyHeaders(), body:JSON.stringify(adminIPPolicyPayload()) });
+		out.innerHTML = '<span class="status ' + (d.would_allow_current_ip ? '' : 'error') + '">' + (d.would_allow_current_ip ? '현재 IP 허용' : '현재 IP 차단') + '</span> <code>' + escapeHTML(d.current_ip || '-') + '</code> · ' + escapeHTML(d.current_ip_source || '-');
+	  } catch (e) { out.textContent = '검증 실패: ' + e.message; }
+	}
+	async function saveAdminIPPolicy() {
+	  const out = document.getElementById('admin-ip-result');
+	  try {
+		const d = await api('/admin/security/access-policy', { method:'PUT', headers:adminIPPolicyHeaders(), body:JSON.stringify(adminIPPolicyPayload()) });
+		out.textContent = '저장 완료 · 현재 IP ' + (d.current_ip_allowed ? '허용' : '차단');
+		showToast('ok', '관리자 IP 정책 저장', d.enabled ? '활성화됨' : '비활성화됨');
+		setTimeout(() => { closeModal(); renderRuntimeSettings(); }, 500);
+	  } catch (e) { out.textContent = '저장 실패: ' + e.message; showToast('error', 'IP 정책 저장 실패', e.message); }
+	}
 
     function showK8sMonitoringTest(d) {
       const v = d.validation || {};
@@ -24682,7 +24945,7 @@ const adminHTML = `<!doctype html>
       });
       makeSortable('#view', 'settings');
     }
-    const authRoleOptionsFallback = ['developer', 'viewer', 'team_admin', 'admin', 'super_admin', 'service_account'];
+	const authRoleOptionsFallback = ['developer', 'viewer', 'team_admin', 'service_admin', 'admin', 'super_admin', 'service_account'];
     function authAccountsPanel(users, teams, events, roleOptions) {
       const authRoleOptions = (roleOptions && roleOptions.length) ? roleOptions : authRoleOptionsFallback;
       const note = authState.enabled
@@ -24710,9 +24973,9 @@ const adminHTML = `<!doctype html>
           '<td><strong>' + escapeHTML(u.email) + '</strong><div class="muted">' + escapeHTML(u.name || '') + ' · ' + escapeHTML(u.id) + '</div></td>' +
           '<td>' + roleSelect(u) + '</td>' +
           '<td>' + teamSelect(u) + '</td>' +
-          '<td><span class="status ' + (u.status === 'active' ? '' : 'error') + '">' + (u.status === 'active' ? '활성' : '비활성') + '</span></td>' +
+		  '<td><span class="status ' + (u.status === 'active' ? '' : 'error') + '">' + (u.status === 'active' ? '활성' : '비활성') + '</span>' + (u.must_change_password ? ' <span class="status warn">비밀번호 변경 필요</span>' : '') + '</td>' +
           '<td>' + ago(u.created_at) + '</td>' +
-          '<td><button class="' + (u.status === 'active' ? 'danger' : 'secondary') + '" type="button" onclick="toggleAuthUser(\'' + escapeAttr(u.id) + '\', \'' + (u.status === 'active' ? 'disabled' : 'active') + '\')">' + (u.status === 'active' ? '비활성화' : '활성화') + '</button></td>' +
+		  '<td>' + (canAdminResetPasswords() ? '<button class="secondary" type="button" onclick="openAdminPasswordReset(\'' + escapeAttr(u.id) + '\',\'' + escapeAttr(u.email) + '\')">비밀번호 초기화</button> ' : '') + '<button class="' + (u.status === 'active' ? 'danger' : 'secondary') + '" type="button" onclick="toggleAuthUser(\'' + escapeAttr(u.id) + '\', \'' + (u.status === 'active' ? 'disabled' : 'active') + '\')">' + (u.status === 'active' ? '비활성화' : '활성화') + '</button></td>' +
         '</tr>').join('') + '</tbody></table>'
         : '<div class="empty">로그인 계정 없음. 부트스트랩 계정은 AUTH_ADMIN_BOOTSTRAP_EMAIL/PASSWORD 로 첫 기동 시 자동 생성됩니다.</div>';
       const teamForm =
@@ -24740,7 +25003,7 @@ const adminHTML = `<!doctype html>
         '<h3 style="margin:6px 14px 8px; font-size:14px">계정</h3>' + userForm + userTable +
         '<h3 style="margin:14px 14px 8px; font-size:14px">팀</h3>' + teamForm + teamList +
         '<h3 style="margin:14px 14px 8px; font-size:14px">최근 인증 이벤트</h3>' + eventTable +
-        '<div class="muted" style="font-size:12px; padding:8px 14px 12px">역할 변경은 즉시 적용되며 <code>role_changed</code> 로 감사 기록됩니다. 비활성화하면 그 계정의 모든 세션·refresh token이 즉시 폐기됩니다. team_admin 은 자기 팀의 계정 생성만 가능하고 역할 변경/비활성화는 불가합니다.</div>';
+		'<div class="muted" style="font-size:12px; padding:8px 14px 12px">역할·팀 변경은 <code>role_changed</code> 등으로 감사 기록되고 모든 세션을 종료해 다음 로그인부터 새 권한을 적용합니다. 비활성화도 모든 세션·refresh token을 즉시 폐기합니다. team_admin 은 자기 팀의 계정 생성만 가능하고 역할 변경/비활성화는 불가합니다.</div>';
     }
     async function createAuthUser(e) {
       e.preventDefault();
@@ -24774,6 +25037,17 @@ const adminHTML = `<!doctype html>
       await api('/admin/users/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ status }) });
       route();
     };
+	function canAdminResetPasswords() { return !authState.enabled || ['super_admin','admin'].includes(((authState.user || {}).role || '')); }
+	window.openAdminPasswordReset = (id, email) => {
+	  openModal('사용자 비밀번호 초기화', '<form id="admin-password-reset-form" class="card-body" style="display:grid;gap:10px"><p><strong>' + escapeHTML(email || id) + '</strong> 계정의 모든 세션을 종료하고 임시 비밀번호를 설정합니다. 사용자는 다음 로그인에서 반드시 새 비밀번호로 변경해야 합니다.</p><label>임시 비밀번호<input id="admin-temp-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label><label>임시 비밀번호 확인<input id="admin-temp-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label><div class="muted" style="font-size:11px">임시 비밀번호는 응답·감사로그에 저장되지 않습니다. 안전한 별도 채널로 사용자에게 전달하세요.</div><div><button type="submit">초기화 및 세션 종료</button> <span id="admin-password-reset-out"></span></div></form>');
+	  document.getElementById('admin-password-reset-form').addEventListener('submit', async e => {
+		e.preventDefault(); const out = document.getElementById('admin-password-reset-out');
+		const password = document.getElementById('admin-temp-password').value;
+		if (password !== document.getElementById('admin-temp-password-confirm').value) { out.innerHTML = '<span class="status error">확인이 일치하지 않습니다.</span>'; return; }
+		try { await api('/admin/users/' + encodeURIComponent(id) + '/password-reset', { method:'POST', body:JSON.stringify({ temporary_password:password }) }); closeModal(); showToast('ok','비밀번호 초기화 완료','모든 세션 종료 · 다음 로그인 시 변경 필수'); route(); }
+		catch (err) { out.innerHTML = '<span class="status error">' + escapeHTML(err.message) + '</span>'; }
+	  });
+	};
     async function createAuthTeam(e) {
       e.preventDefault();
       const name = document.getElementById('at-name').value.trim();
@@ -24781,7 +25055,7 @@ const adminHTML = `<!doctype html>
       await api('/admin/teams', { method: 'POST', body: JSON.stringify({ name }) });
       route();
     }
-    const allApiScopes = ['chat:completion', 'embeddings:create', 'models:read', 'admin:read', 'admin:write', 'routing:read', 'routing:write', 'observability:read', 'costs:read', 'security:read', 'mcp:use', 'mcp:admin'];
+	const allApiScopes = ['chat:completion', 'embeddings:create', 'models:read', 'admin:read', 'admin:write', 'routing:read', 'routing:write', 'observability:read', 'costs:read', 'security:read', 'mcp:use', 'mcp:admin', 'service:read', 'service:create', 'service:update', 'service:operate', 'service:delete', 'service:backup', 'service:restore', 'service:credential:read', 'service:credential:rotate', 'service:approve', 'service:catalog:manage'];
     let apiKeysCache = {};
     function canHardDeleteKeys() {
       return !authState.enabled || (authState.user && authState.user.role === 'super_admin');

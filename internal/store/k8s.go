@@ -337,6 +337,29 @@ func (s *SQLStore) DeleteK8sCluster(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 
+	// Service Platform child ledgers do not carry cluster_id by design; remove them before
+	// deleting the cluster-scoped ServiceInstance rows.
+	serviceInstanceSubquery := `SELECT id FROM k8s_service_instances WHERE cluster_id = ?`
+	serviceDeletes := []string{
+		`DELETE FROM k8s_service_reconcile_leases WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_restores WHERE target_instance_id IN (` + serviceInstanceSubquery + `) OR backup_id IN (SELECT id FROM k8s_service_backups WHERE service_instance_id IN (` + serviceInstanceSubquery + `))`,
+		`DELETE FROM k8s_service_backups WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_operations WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_endpoints WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_credentials WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_access_grants WHERE service_instance_id IN (` + serviceInstanceSubquery + `)`,
+		`DELETE FROM k8s_service_dependencies WHERE source_instance_id IN (` + serviceInstanceSubquery + `) OR target_instance_id IN (` + serviceInstanceSubquery + `)`,
+	}
+	for _, q := range serviceDeletes {
+		args := []any{id}
+		if strings.Count(q, "?") == 2 {
+			args = append(args, id)
+		}
+		if _, err := tx.ExecContext(ctx, s.bind(q), args...); err != nil && !strings.Contains(err.Error(), "no such table") && !strings.Contains(err.Error(), "doesn't exist") {
+			return err
+		}
+	}
+
 	tables := []string{
 		"k8s_clusters",
 		"k8s_cluster_credentials",
@@ -359,6 +382,9 @@ func (s *SQLStore) DeleteK8sCluster(ctx context.Context, id string) error {
 		"k8s_manifest_change_requests",
 		"harbor_project_mappings",
 		"harbor_launch_requests",
+		"k8s_service_components",
+		"k8s_service_health_snapshots",
+		"k8s_service_instances",
 	}
 
 	for _, tbl := range tables {
