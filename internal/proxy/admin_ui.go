@@ -62,7 +62,8 @@ const adminHTML = `<!doctype html>
       background: var(--panel);
       position: sticky; top: 0; z-index: 4;
     }
-    h1 { margin: 0; font-size: 18px; font-weight: 700; }
+    h1 { margin: 0; font-size: 18px; font-weight: 700; display: flex; align-items: center; }
+    .brand-logo { margin-right: 8px; flex-shrink: 0; }
     nav { display: flex; gap: 2px; flex-wrap: wrap; }
     nav a {
       text-decoration: none; color: var(--muted); padding: 8px 12px;
@@ -767,7 +768,21 @@ const adminHTML = `<!doctype html>
 </head>
 <body>
   <header>
-    <h1>Clustara</h1>
+    <h1>
+      <svg class="brand-logo" width="24" height="24" viewBox="0 0 32 32">
+        <defs>
+          <linearGradient id="starGradHeader" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#06b6d4"/>
+            <stop offset="100%" stop-color="#3b82f6"/>
+          </linearGradient>
+        </defs>
+        <polygon points="16,4 20,16 16,28 12,16" fill="url(#starGradHeader)"/>
+        <polygon points="4,16 16,20 28,16 16,12" fill="url(#starGradHeader)" opacity="0.8"/>
+        <circle cx="16" cy="16" r="3" fill="#ffffff"/>
+        <circle cx="16" cy="16" r="1.6" fill="#3b82f6"/>
+      </svg>
+      Clustara
+    </h1>
     <nav id="tabs">
       <a href="#/k8s-home" data-tab="k8s-home" class="active">운영 홈</a>
       <a href="#/k8s-actions" data-tab="k8s-actions">액션 승인함<span id="k8s-action-nav-badge" class="nav-badge warn" style="display:none"></span></a>
@@ -963,6 +978,20 @@ const adminHTML = `<!doctype html>
 
   <div id="login-backdrop" class="login-backdrop">
     <form class="login-card" id="login-form" autocomplete="on">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <svg width="56" height="56" viewBox="0 0 32 32">
+          <defs>
+            <linearGradient id="starGradLogin" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#06b6d4"/>
+              <stop offset="100%" stop-color="#3b82f6"/>
+            </linearGradient>
+          </defs>
+          <polygon points="16,4 20,16 16,28 12,16" fill="url(#starGradLogin)"/>
+          <polygon points="4,16 16,20 28,16 16,12" fill="url(#starGradLogin)" opacity="0.8"/>
+          <circle cx="16" cy="16" r="3" fill="#ffffff"/>
+          <circle cx="16" cy="16" r="1.6" fill="#3b82f6"/>
+        </svg>
+      </div>
       <h2>관리자 로그인</h2>
       <div class="sub">Clustara 어드민</div>
       <label for="login-email">이메일</label>

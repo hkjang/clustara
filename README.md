@@ -1,4 +1,9 @@
+<p align="center">
+  <img src="docs/images/logo.svg" alt="Clustara Logo" width="160" />
+</p>
+
 # Clustara
+
 
 **Clustara**는 Kubernetes 운영을 위한 **장애 분석·변경 추적·보안·용량·비용 통합 운영 허브**입니다. `kubectl` 없이도 클러스터의 위험과 장애 원인 후보를 한 화면에서 확인하고, 변경 이력을 추적하며, 위험 작업을 승인 워크플로우로 안전하게 실행합니다. 폐쇄망 운영을 위한 오프라인 도커 이미지 릴리즈를 제공합니다.
 
