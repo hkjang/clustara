@@ -352,6 +352,403 @@ func TestServicePlatformCatalogValidationStackBridgeAndActionCenter(t *testing.T
 	}
 }
 
+func TestRedisRDBBackupRestoreRequiresScaledToZero(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	if err := db.UpsertK8sCluster(context.Background(), store.K8sCluster{ID: "cluster_redis", Name: "redis", ServerURL: "https://k8s.invalid", AuthMode: "token", Status: "connected"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogs struct {
+		Catalogs []store.K8sServiceCatalog `json:"catalogs"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&catalogs)
+	resp.Body.Close()
+	var redisCatalog store.K8sServiceCatalog
+	for _, catalog := range catalogs.Catalogs {
+		if catalog.Code == "redis" {
+			redisCatalog = catalog
+		}
+	}
+	if redisCatalog.ID == "" {
+		t.Fatal("redis catalog missing")
+	}
+	detailResp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs/" + redisCatalog.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail struct {
+		Versions []store.K8sServiceVersion `json:"versions"`
+		Profiles []store.K8sServiceProfile `json:"profiles"`
+	}
+	_ = json.NewDecoder(detailResp.Body).Decode(&detail)
+	detailResp.Body.Close()
+	createResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances", "", map[string]any{
+		"catalog_id": redisCatalog.ID, "version_id": detail.Versions[0].ID, "profile_id": detail.Profiles[0].ID,
+		"cluster_id": "cluster_redis", "namespace": "cache", "name": "session-cache", "environment": "development",
+		"credential_secret_name": "session-cache-auth", "credential_password_key": "password",
+		"values": map[string]any{"image": "harbor.local/redis@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	})
+	var created struct {
+		Instance store.K8sServiceInstance `json:"instance"`
+	}
+	_ = json.NewDecoder(createResp.Body).Decode(&created)
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated || created.Instance.ID == "" {
+		t.Fatalf("redis service create failed: status=%d payload=%+v", createResp.StatusCode, created)
+	}
+	for _, item := range []store.K8sInventoryItem{
+		{ID: "sts-redis", ClusterID: "cluster_redis", Kind: "StatefulSet", Namespace: "cache", Name: "session-cache", UID: "uid-sts-redis", Status: "Ready", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}, Spec: map[string]any{"replicas": float64(1)}, StatusObject: map[string]any{"readyReplicas": float64(1), "currentReplicas": float64(1)}},
+		{ID: "svc-redis", ClusterID: "cluster_redis", Kind: "Service", Namespace: "cache", Name: "session-cache", UID: "uid-svc-redis", Status: "Active", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}},
+		{ID: "pod-redis", ClusterID: "cluster_redis", Kind: "Pod", Namespace: "cache", Name: "session-cache-0", UID: "uid-pod-redis", Status: "Running", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}},
+		{ID: "pvc-redis-data", ClusterID: "cluster_redis", Kind: "PersistentVolumeClaim", Namespace: "cache", Name: "data-session-cache-0", UID: "uid-pvc-redis-data", Status: "Bound", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}},
+		{ID: "pvc-redis-backup", ClusterID: "cluster_redis", Kind: "PersistentVolumeClaim", Namespace: "cache", Name: "redis-backups", UID: "uid-pvc-redis-backup", Status: "Bound", HealthScore: 100},
+	} {
+		if err := db.UpsertK8sInventory(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/stop", "", map[string]any{})
+	var stopResult struct {
+		ActionRequestID string `json:"action_request_id"`
+	}
+	_ = json.NewDecoder(stopResp.Body).Decode(&stopResult)
+	stopResp.Body.Close()
+	stopAction, stopErr := db.GetK8sActionRequest(context.Background(), stopResult.ActionRequestID)
+	if stopResp.StatusCode != http.StatusAccepted || stopErr != nil || stopAction.Action != "scale" || serviceInt(stopAction.Parameters["replicas"]) != 0 {
+		t.Fatalf("redis stop request must bridge to scale zero: status=%d action=%+v err=%v", stopResp.StatusCode, stopAction, stopErr)
+	}
+
+	backupResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/backups", "", map[string]any{"backup_type": "logical", "target_pvc": "redis-backups", "idempotency_key": "redis-rdb-backup-test"})
+	var backupResult struct {
+		Backup         store.K8sServiceBackup         `json:"backup"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(backupResp.Body).Decode(&backupResult)
+	backupResp.Body.Close()
+	if backupResp.StatusCode != http.StatusAccepted || !strings.HasSuffix(backupResult.Backup.Location, ".rdb") || !strings.Contains(backupResult.ManifestChange.AfterYAML, "redis-cli") || !strings.Contains(backupResult.ManifestChange.AfterYAML, "REDISCLI_AUTH") || !strings.Contains(backupResult.ManifestChange.AfterYAML, "claimName: redis-backups") {
+		t.Fatalf("redis RDB backup draft failed: status=%d payload=%+v", backupResp.StatusCode, backupResult)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "job-redis-backup", ClusterID: "cluster_redis", Kind: "Job", Namespace: "cache", Name: backupResult.ManifestChange.Name, UID: "uid-job-redis-backup", Status: "Complete", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileBackup := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/reconcile", "", map[string]any{})
+	reconcileBackup.Body.Close()
+	blockedResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID, "target_data_pvc": "data-session-cache-0"})
+	var blocked serviceRestorePreview
+	_ = json.NewDecoder(blockedResp.Body).Decode(&blocked)
+	blockedResp.Body.Close()
+	if blockedResp.StatusCode != http.StatusOK || blocked.Allowed || !strings.Contains(strings.Join(blocked.Blockers, " "), "replicas=0") {
+		t.Fatalf("running Redis restore must be blocked: status=%d payload=%+v", blockedResp.StatusCode, blocked)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "sts-redis", ClusterID: "cluster_redis", Kind: "StatefulSet", Namespace: "cache", Name: "session-cache", UID: "uid-sts-redis", Status: "Stopped", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}, Spec: map[string]any{"replicas": float64(0)}, StatusObject: map[string]any{"readyReplicas": float64(0), "currentReplicas": float64(0)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "pod-redis", ClusterID: "cluster_redis", Kind: "Pod", Namespace: "cache", Name: "session-cache-0", UID: "uid-pod-redis", Status: "Terminated", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}}); err != nil {
+		t.Fatal(err)
+	}
+	allowedResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID, "target_data_pvc": "data-session-cache-0"})
+	var allowed serviceRestorePreview
+	_ = json.NewDecoder(allowedResp.Body).Decode(&allowed)
+	allowedResp.Body.Close()
+	if allowedResp.StatusCode != http.StatusOK || !allowed.Allowed || allowed.Mode != "redis_rdb_in_place" || allowed.ResourceKind != "Job" || !strings.Contains(allowed.Manifest, "dump.rdb.clustara-tmp") || !strings.Contains(allowed.Manifest, "claimName: data-session-cache-0") || !strings.Contains(allowed.Manifest, "readOnly: true") {
+		t.Fatalf("stopped Redis RDB restore preview failed: status=%d payload=%+v", allowedResp.StatusCode, allowed)
+	}
+	restoreResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore", "", map[string]any{"target_instance_id": created.Instance.ID, "target_data_pvc": "data-session-cache-0", "idempotency_key": "redis-rdb-restore-test"})
+	var restoreResult struct {
+		Restore        store.K8sServiceRestore        `json:"restore"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(restoreResp.Body).Decode(&restoreResult)
+	restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusAccepted || restoreResult.ManifestChange.Kind != "Job" || restoreResult.Restore.Status != "pending_approval" {
+		t.Fatalf("redis restore was not bridged to Manifest Change Studio: status=%d payload=%+v", restoreResp.StatusCode, restoreResult)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "job-redis-restore", ClusterID: "cluster_redis", Kind: "Job", Namespace: "cache", Name: restoreResult.ManifestChange.Name, UID: "uid-job-redis-restore", Status: "Complete", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "session-cache"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileRestore := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/reconcile", "", map[string]any{})
+	reconcileRestore.Body.Close()
+	restores, err := db.ListK8sServiceRestores(context.Background(), created.Instance.ID, 10)
+	if reconcileRestore.StatusCode != http.StatusOK || err != nil || len(restores) != 1 || restores[0].Status != "success" {
+		t.Fatalf("completed Redis restore Job did not update ledger: status=%d restores=%+v err=%v", reconcileRestore.StatusCode, restores, err)
+	}
+}
+
+func TestJupyterLabWorkspaceBackupAndStagedRestore(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	if err := db.UpsertK8sCluster(context.Background(), store.K8sCluster{ID: "cluster_jupyter", Name: "jupyter", ServerURL: "https://k8s.invalid", AuthMode: "token", Status: "connected"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	resp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogs struct {
+		Catalogs []store.K8sServiceCatalog `json:"catalogs"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&catalogs)
+	resp.Body.Close()
+	var jupyterCatalog store.K8sServiceCatalog
+	for _, catalog := range catalogs.Catalogs {
+		if catalog.Code == "jupyterlab" {
+			jupyterCatalog = catalog
+		}
+	}
+	if jupyterCatalog.ID == "" {
+		t.Fatal("jupyterlab catalog missing")
+	}
+	detailResp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs/" + jupyterCatalog.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail struct {
+		Versions []store.K8sServiceVersion `json:"versions"`
+		Profiles []store.K8sServiceProfile `json:"profiles"`
+	}
+	_ = json.NewDecoder(detailResp.Body).Decode(&detail)
+	detailResp.Body.Close()
+	createResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances", "", map[string]any{
+		"catalog_id": jupyterCatalog.ID, "version_id": detail.Versions[0].ID, "profile_id": detail.Profiles[0].ID,
+		"cluster_id": "cluster_jupyter", "namespace": "notebooks", "name": "analyst-lab", "environment": "development",
+		"values": map[string]any{"image": "harbor.local/jupyterlab@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+	})
+	var created struct {
+		Instance store.K8sServiceInstance `json:"instance"`
+	}
+	_ = json.NewDecoder(createResp.Body).Decode(&created)
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated || created.Instance.ID == "" {
+		t.Fatalf("JupyterLab service create failed: status=%d payload=%+v", createResp.StatusCode, created)
+	}
+	for _, item := range []store.K8sInventoryItem{
+		{ID: "dep-jupyter", ClusterID: "cluster_jupyter", Kind: "Deployment", Namespace: "notebooks", Name: "analyst-lab", UID: "uid-dep-jupyter", Status: "Ready", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}, Spec: map[string]any{"replicas": float64(1)}, StatusObject: map[string]any{"readyReplicas": float64(1), "availableReplicas": float64(1)}},
+		{ID: "pod-jupyter", ClusterID: "cluster_jupyter", Kind: "Pod", Namespace: "notebooks", Name: "analyst-lab-abc", UID: "uid-pod-jupyter", Status: "Running", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}},
+		{ID: "pvc-jupyter-workspace", ClusterID: "cluster_jupyter", Kind: "PersistentVolumeClaim", Namespace: "notebooks", Name: "analyst-lab-workspace", UID: "uid-pvc-jupyter-workspace", Status: "Bound", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}},
+		{ID: "pvc-jupyter-backup", ClusterID: "cluster_jupyter", Kind: "PersistentVolumeClaim", Namespace: "notebooks", Name: "jupyter-backups", UID: "uid-pvc-jupyter-backup", Status: "Bound", HealthScore: 100},
+	} {
+		if err := db.UpsertK8sInventory(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runningBackup := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/backups", "", map[string]any{"backup_type": "filesystem", "source_pvc": "analyst-lab-workspace", "target_pvc": "jupyter-backups"})
+	runningBackup.Body.Close()
+	if runningBackup.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("running JupyterLab workspace backup should be blocked, got %d", runningBackup.StatusCode)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "dep-jupyter", ClusterID: "cluster_jupyter", Kind: "Deployment", Namespace: "notebooks", Name: "analyst-lab", UID: "uid-dep-jupyter", Status: "Stopped", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}, Spec: map[string]any{"replicas": float64(0)}, StatusObject: map[string]any{"readyReplicas": float64(0), "availableReplicas": float64(0)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "pod-jupyter", ClusterID: "cluster_jupyter", Kind: "Pod", Namespace: "notebooks", Name: "analyst-lab-abc", UID: "uid-pod-jupyter", Status: "Terminated", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}}); err != nil {
+		t.Fatal(err)
+	}
+	backupResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/backups", "", map[string]any{"backup_type": "filesystem", "source_pvc": "analyst-lab-workspace", "target_pvc": "jupyter-backups", "idempotency_key": "jupyter-workspace-backup-test"})
+	var backupResult struct {
+		Backup         store.K8sServiceBackup         `json:"backup"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(backupResp.Body).Decode(&backupResult)
+	backupResp.Body.Close()
+	manifest := backupResult.ManifestChange.AfterYAML
+	if backupResp.StatusCode != http.StatusAccepted || backupResult.Backup.BackupType != "filesystem" || !strings.HasSuffix(backupResult.Backup.Location, ".tar.gz") || !strings.Contains(manifest, "tar -czf") || !strings.Contains(manifest, "claimName: analyst-lab-workspace") || !strings.Contains(manifest, "claimName: jupyter-backups") || !strings.Contains(manifest, "readOnly: true") || strings.Contains(manifest, "secretKeyRef") {
+		t.Fatalf("JupyterLab workspace backup draft failed: status=%d payload=%+v", backupResp.StatusCode, backupResult)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "job-jupyter-backup", ClusterID: "cluster_jupyter", Kind: "Job", Namespace: "notebooks", Name: backupResult.ManifestChange.Name, UID: "uid-job-jupyter-backup", Status: "Complete", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileBackup := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/reconcile", "", map[string]any{})
+	reconcileBackup.Body.Close()
+	blockedResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID})
+	var blocked serviceRestorePreview
+	_ = json.NewDecoder(blockedResp.Body).Decode(&blocked)
+	blockedResp.Body.Close()
+	if blockedResp.StatusCode != http.StatusOK || blocked.Allowed || !strings.Contains(strings.Join(blocked.Blockers, " "), "작업공간 PVC") {
+		t.Fatalf("JupyterLab restore without workspace PVC should be blocked: status=%d payload=%+v", blockedResp.StatusCode, blocked)
+	}
+	allowedResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID, "target_workspace_pvc": "analyst-lab-workspace"})
+	var allowed serviceRestorePreview
+	_ = json.NewDecoder(allowedResp.Body).Decode(&allowed)
+	allowedResp.Body.Close()
+	if allowedResp.StatusCode != http.StatusOK || !allowed.Allowed || allowed.Mode != "jupyterlab_workspace_staged_restore" || allowed.ResourceKind != "Job" || !strings.Contains(allowed.Manifest, "os.path.commonpath") || !strings.Contains(allowed.Manifest, "archive links and special files are not allowed") || !strings.Contains(allowed.Manifest, ".clustara-restore") || !strings.Contains(allowed.Manifest, "readOnly: true") {
+		t.Fatalf("JupyterLab staged restore preview failed: status=%d payload=%+v", allowedResp.StatusCode, allowed)
+	}
+	restoreResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore", "", map[string]any{"target_instance_id": created.Instance.ID, "target_workspace_pvc": "analyst-lab-workspace", "idempotency_key": "jupyter-workspace-restore-test"})
+	var restoreResult struct {
+		Restore        store.K8sServiceRestore        `json:"restore"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(restoreResp.Body).Decode(&restoreResult)
+	restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusAccepted || restoreResult.ManifestChange.Kind != "Job" || restoreResult.Restore.Status != "pending_approval" {
+		t.Fatalf("JupyterLab restore was not bridged to Manifest Change Studio: status=%d payload=%+v", restoreResp.StatusCode, restoreResult)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "job-jupyter-restore", ClusterID: "cluster_jupyter", Kind: "Job", Namespace: "notebooks", Name: restoreResult.ManifestChange.Name, UID: "uid-job-jupyter-restore", Status: "Complete", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "analyst-lab"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileRestore := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/reconcile", "", map[string]any{})
+	reconcileRestore.Body.Close()
+	restores, err := db.ListK8sServiceRestores(context.Background(), created.Instance.ID, 10)
+	if reconcileRestore.StatusCode != http.StatusOK || err != nil || len(restores) != 1 || restores[0].Status != "success" {
+		t.Fatalf("completed JupyterLab restore Job did not update ledger: status=%d restores=%+v err=%v", reconcileRestore.StatusCode, restores, err)
+	}
+}
+
+func TestJupyterHubUserWorkspaceMappingBackupAndRestore(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	if err := db.UpsertK8sCluster(context.Background(), store.K8sCluster{ID: "cluster_hub", Name: "hub", ServerURL: "https://k8s.invalid", AuthMode: "token", Status: "connected"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	catalogResp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogs struct {
+		Catalogs []store.K8sServiceCatalog `json:"catalogs"`
+	}
+	_ = json.NewDecoder(catalogResp.Body).Decode(&catalogs)
+	catalogResp.Body.Close()
+	var hubCatalog store.K8sServiceCatalog
+	for _, catalog := range catalogs.Catalogs {
+		if catalog.Code == "jupyterhub" {
+			hubCatalog = catalog
+		}
+	}
+	if hubCatalog.ID == "" {
+		t.Fatal("jupyterhub catalog missing")
+	}
+	detailResp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs/" + hubCatalog.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail struct {
+		Versions []store.K8sServiceVersion `json:"versions"`
+		Profiles []store.K8sServiceProfile `json:"profiles"`
+	}
+	_ = json.NewDecoder(detailResp.Body).Decode(&detail)
+	detailResp.Body.Close()
+	createResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances", "", map[string]any{
+		"catalog_id": hubCatalog.ID, "version_id": detail.Versions[0].ID, "profile_id": detail.Profiles[0].ID,
+		"cluster_id": "cluster_hub", "namespace": "science", "name": "team-hub", "environment": "development",
+		"values": map[string]any{"image": "harbor.local/jupyterhub@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+	})
+	var created struct {
+		Instance store.K8sServiceInstance `json:"instance"`
+	}
+	_ = json.NewDecoder(createResp.Body).Decode(&created)
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated || created.Instance.ID == "" {
+		t.Fatalf("JupyterHub service create failed: status=%d payload=%+v", createResp.StatusCode, created)
+	}
+	workspaceLabels := map[string]string{"hub.jupyter.org/username": "alice", "hub.jupyter.org/deployment": "team-hub"}
+	for _, item := range []store.K8sInventoryItem{
+		{ID: "dep-hub", ClusterID: "cluster_hub", Kind: "Deployment", Namespace: "science", Name: "team-hub", UID: "uid-dep-hub", Status: "Ready", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "team-hub"}, Spec: map[string]any{"replicas": float64(1)}, StatusObject: map[string]any{"readyReplicas": float64(1)}},
+		{ID: "pvc-hub-alice", ClusterID: "cluster_hub", Kind: "PersistentVolumeClaim", Namespace: "science", Name: "claim-alice", UID: "uid-pvc-hub-alice", Status: "Bound", HealthScore: 100, Labels: workspaceLabels, Spec: map[string]any{"storageClassName": "fast-csi", "resources": map[string]any{"requests": map[string]any{"storage": "20Gi"}}}},
+		{ID: "pod-hub-alice", ClusterID: "cluster_hub", Kind: "Pod", Namespace: "science", Name: "jupyter-alice", UID: "uid-pod-hub-alice", Status: "Running", HealthScore: 100, Labels: workspaceLabels, Spec: map[string]any{"volumes": []any{map[string]any{"name": "workspace", "persistentVolumeClaim": map[string]any{"claimName": "claim-alice"}}}}},
+		{ID: "pvc-hub-backup", ClusterID: "cluster_hub", Kind: "PersistentVolumeClaim", Namespace: "science", Name: "hub-backups", UID: "uid-pvc-hub-backup", Status: "Bound", HealthScore: 100},
+	} {
+		if err := db.UpsertK8sInventory(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaceResp, err := http.Get(proxy.URL + "/admin/k8s/services/instances/" + created.Instance.ID + "/jupyter-workspaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mapped struct {
+		Workspaces []serviceJupyterWorkspace `json:"workspaces"`
+	}
+	_ = json.NewDecoder(workspaceResp.Body).Decode(&mapped)
+	workspaceResp.Body.Close()
+	if workspaceResp.StatusCode != http.StatusOK || len(mapped.Workspaces) != 1 || mapped.Workspaces[0].Username != "alice" || mapped.Workspaces[0].PVCName != "claim-alice" || mapped.Workspaces[0].Status != "active" || mapped.Workspaces[0].Capacity != "20Gi" {
+		t.Fatalf("JupyterHub workspace mapping failed: status=%d payload=%+v", workspaceResp.StatusCode, mapped)
+	}
+	activeBackup := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/backups", "", map[string]any{"backup_type": "filesystem", "workspace_owner": "alice", "source_pvc": "claim-alice", "target_pvc": "hub-backups"})
+	activeBackup.Body.Close()
+	if activeBackup.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("active JupyterHub user workspace backup should be blocked, got %d", activeBackup.StatusCode)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "pod-hub-alice", ClusterID: "cluster_hub", Kind: "Pod", Namespace: "science", Name: "jupyter-alice", UID: "uid-pod-hub-alice", Status: "Terminated", HealthScore: 100, Labels: workspaceLabels, Spec: map[string]any{"volumes": []any{map[string]any{"name": "workspace", "persistentVolumeClaim": map[string]any{"claimName": "claim-alice"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	backupResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/backups", "", map[string]any{"backup_type": "filesystem", "workspace_owner": "alice", "source_pvc": "claim-alice", "target_pvc": "hub-backups", "idempotency_key": "hub-alice-backup-test"})
+	var backupResult struct {
+		Backup         store.K8sServiceBackup         `json:"backup"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(backupResp.Body).Decode(&backupResult)
+	backupResp.Body.Close()
+	if backupResp.StatusCode != http.StatusAccepted || backupResult.Backup.BackupType != "filesystem" || !strings.Contains(backupResult.ManifestChange.AfterYAML, "claimName: claim-alice") || !strings.Contains(backupResult.ManifestChange.AfterYAML, "claimName: hub-backups") {
+		t.Fatalf("JupyterHub user workspace backup draft failed: status=%d payload=%+v", backupResp.StatusCode, backupResult)
+	}
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "job-hub-backup", ClusterID: "cluster_hub", Kind: "Job", Namespace: "science", Name: backupResult.ManifestChange.Name, UID: "uid-job-hub-backup", Status: "Complete", HealthScore: 100, Labels: map[string]string{"app.kubernetes.io/name": "team-hub"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileBackup := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/reconcile", "", map[string]any{})
+	reconcileBackup.Body.Close()
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{ID: "pvc-hub-bob", ClusterID: "cluster_hub", Kind: "PersistentVolumeClaim", Namespace: "science", Name: "claim-bob", UID: "uid-pvc-hub-bob", Status: "Bound", HealthScore: 100, Labels: map[string]string{"hub.jupyter.org/username": "bob", "hub.jupyter.org/deployment": "team-hub"}}); err != nil {
+		t.Fatal(err)
+	}
+	wrongOwnerResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID, "workspace_owner": "bob", "target_workspace_pvc": "claim-bob"})
+	var wrongOwner serviceRestorePreview
+	_ = json.NewDecoder(wrongOwnerResp.Body).Decode(&wrongOwner)
+	wrongOwnerResp.Body.Close()
+	if wrongOwnerResp.StatusCode != http.StatusOK || wrongOwner.Allowed || !strings.Contains(strings.Join(wrongOwner.Blockers, " "), "백업 소유자") {
+		t.Fatalf("JupyterHub restore with mismatched owner should be blocked: status=%d payload=%+v", wrongOwnerResp.StatusCode, wrongOwner)
+	}
+	allowedResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore-preview", "", map[string]any{"target_instance_id": created.Instance.ID, "workspace_owner": "alice", "target_workspace_pvc": "claim-alice"})
+	var allowed serviceRestorePreview
+	_ = json.NewDecoder(allowedResp.Body).Decode(&allowed)
+	allowedResp.Body.Close()
+	if allowedResp.StatusCode != http.StatusOK || !allowed.Allowed || allowed.Mode != "jupyterhub_user_workspace_staged_restore" || !strings.Contains(allowed.Manifest, ".clustara-restore") || !strings.Contains(allowed.Manifest, "claimName: claim-alice") {
+		t.Fatalf("JupyterHub user staged restore preview failed: status=%d payload=%+v", allowedResp.StatusCode, allowed)
+	}
+	restoreResp := postJSON(t, proxy.URL+"/admin/k8s/services/backups/"+backupResult.Backup.ID+"/restore", "", map[string]any{"target_instance_id": created.Instance.ID, "workspace_owner": "alice", "target_workspace_pvc": "claim-alice", "idempotency_key": "hub-alice-restore-test"})
+	var restoreResult struct {
+		Restore        store.K8sServiceRestore        `json:"restore"`
+		ManifestChange store.K8sManifestChangeRequest `json:"manifest_change"`
+	}
+	_ = json.NewDecoder(restoreResp.Body).Decode(&restoreResult)
+	restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusAccepted || restoreResult.Restore.Status != "pending_approval" || restoreResult.ManifestChange.Kind != "Job" {
+		t.Fatalf("JupyterHub user restore was not bridged to Manifest Change Studio: status=%d payload=%+v", restoreResp.StatusCode, restoreResult)
+	}
+}
+
 func TestServiceInventoryFreshnessSeparatesCollectionState(t *testing.T) {
 	now := time.Now().UTC()
 	if status, _ := serviceInventoryFreshness(nil, now, 10*time.Minute); status != "missing" {

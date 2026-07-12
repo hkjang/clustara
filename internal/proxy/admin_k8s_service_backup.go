@@ -15,6 +15,7 @@ type serviceBackupRequest struct {
 	BackupType     string `json:"backup_type"`
 	TargetPVC      string `json:"target_pvc"`
 	SourcePVC      string `json:"source_pvc"`
+	WorkspaceOwner string `json:"workspace_owner"`
 	SnapshotClass  string `json:"snapshot_class"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
@@ -41,14 +42,19 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 	input.BackupType = firstNonEmpty(strings.ToLower(strings.TrimSpace(input.BackupType)), "logical")
 	input.TargetPVC = strings.TrimSpace(input.TargetPVC)
 	input.SourcePVC = strings.TrimSpace(input.SourcePVC)
+	input.WorkspaceOwner = strings.TrimSpace(input.WorkspaceOwner)
 	input.SnapshotClass = strings.TrimSpace(input.SnapshotClass)
 	input.IdempotencyKey = firstNonEmpty(strings.TrimSpace(input.IdempotencyKey), strings.TrimSpace(r.Header.Get("Idempotency-Key")), newID("svcbackupidem"))
-	if input.BackupType != "logical" && input.BackupType != "snapshot" {
-		writeOpenAIError(w, http.StatusUnprocessableEntity, "backup_type must be logical or snapshot", "invalid_request_error", "backup_strategy_unsupported")
+	if input.BackupType != "logical" && input.BackupType != "snapshot" && input.BackupType != "filesystem" {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "backup_type must be logical, filesystem, or snapshot", "invalid_request_error", "backup_strategy_unsupported")
 		return
 	}
-	if input.BackupType == "logical" && (input.TargetPVC == "" || validateK8sDNSLabelSetting(input.TargetPVC) != nil) {
+	if (input.BackupType == "logical" || input.BackupType == "filesystem") && (input.TargetPVC == "" || validateK8sDNSLabelSetting(input.TargetPVC) != nil) {
 		writeOpenAIError(w, http.StatusBadRequest, "target_pvc must be a valid Kubernetes PVC name", "invalid_request_error", "invalid_backup_target")
+		return
+	}
+	if input.BackupType == "filesystem" && (input.SourcePVC == "" || validateK8sDNSLabelSetting(input.SourcePVC) != nil) {
+		writeOpenAIError(w, http.StatusBadRequest, "source_pvc must be a valid Kubernetes workspace PVC name", "invalid_request_error", "invalid_workspace_source")
 		return
 	}
 	if input.BackupType == "snapshot" && input.SourcePVC != "" && validateK8sDNSLabelSetting(input.SourcePVC) != nil {
@@ -74,8 +80,12 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 		return
 	}
 	catalog, err := s.db.GetK8sServiceCatalog(r.Context(), instance.CatalogID)
-	if err != nil || catalog.Code != "postgresql" {
-		writeOpenAIError(w, http.StatusUnprocessableEntity, "logical backup template is currently available for PostgreSQL only", "invalid_request_error", "backup_template_unavailable")
+	if input.BackupType == "filesystem" {
+		s.createJupyterLabFilesystemBackup(w, r, instance, catalog, input, changeIdempotencyKey)
+		return
+	}
+	if err != nil || (catalog.Code != "postgresql" && catalog.Code != "redis") {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "logical backup template is currently available for PostgreSQL and Redis", "invalid_request_error", "backup_template_unavailable")
 		return
 	}
 	credentialRows, err := s.db.ListK8sServiceCredentials(r.Context(), instance.ID)
@@ -115,15 +125,20 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 		return
 	}
 	jobName := serviceBackupJobName(instance.Name, time.Now().UTC())
-	backup := store.K8sServiceBackup{ID: newID("svcbackup"), ServiceInstanceID: instance.ID, BackupType: input.BackupType, Location: "pvc://" + instance.Namespace + "/" + input.TargetPVC + "/" + jobName + ".sql", Status: "preparing", IntegrityStatus: "pending"}
+	fileExtension, strategyName, operationType := ".sql", "PostgreSQL logical", "backup"
+	manifest := postgresBackupJobManifest(instance, jobName, image, input.TargetPVC, credential)
+	if catalog.Code == "redis" {
+		fileExtension, strategyName, operationType = ".rdb", "Redis RDB", "backup_redis_rdb"
+		manifest = redisBackupJobManifest(instance, jobName, image, input.TargetPVC, credential)
+	}
+	backup := store.K8sServiceBackup{ID: newID("svcbackup"), ServiceInstanceID: instance.ID, BackupType: input.BackupType, Location: "pvc://" + instance.Namespace + "/" + input.TargetPVC + "/" + jobName + fileExtension, Status: "preparing", IntegrityStatus: "pending"}
 	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_save_failed")
 		return
 	}
-	manifest := postgresBackupJobManifest(instance, jobName, image, input.TargetPVC, credential)
 	change, prepareErr := s.prepareK8sManifestChangeRequest(r.Context(), adminID(r), manifestChangeCreateInput{
 		ClusterID: instance.ClusterID, Namespace: instance.Namespace, Kind: "Job", APIVersion: "batch/v1", Name: jobName,
-		Operation: "create", AfterYAML: manifest, Reason: "Service Platform PostgreSQL logical backup " + backup.ID,
+		Operation: "create", AfterYAML: manifest, Reason: "Service Platform " + strategyName + " backup " + backup.ID,
 		IdempotencyKey: changeIdempotencyKey,
 	})
 	if prepareErr != nil {
@@ -141,9 +156,107 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 		return
 	}
 	params, _ := json.Marshal(map[string]any{"backup_id": backup.ID, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID})
-	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
-	s.auditAdmin(r, "k8s.service_backup.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "manifest_change_id": change.Request.ID, "target_pvc": input.TargetPVC}))
+	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: operationType, Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.auditAdmin(r, "k8s.service_backup.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "strategy": catalog.Code, "manifest_change_id": change.Request.ID, "target_pvc": input.TargetPVC}))
 	writeJSON(w, http.StatusAccepted, map[string]any{"backup": backup, "manifest_change": change.Request, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": "실제 Job 적용은 기존 Manifest Change Studio 검증·승인·SSA Apply 흐름에서 수행합니다."})
+}
+
+func (s *Server) createJupyterLabFilesystemBackup(w http.ResponseWriter, r *http.Request, instance store.K8sServiceInstance, catalog store.K8sServiceCatalog, input serviceBackupRequest, changeIdempotencyKey string) {
+	if catalog.Code != "jupyterlab" && catalog.Code != "jupyterhub" {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "filesystem backup template is available for JupyterLab and mapped JupyterHub user workspaces", "invalid_request_error", "backup_template_unavailable")
+		return
+	}
+	inventory, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: instance.ClusterID, Namespace: instance.Namespace, Limit: 5000})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "workspace_backup_inventory_failed")
+		return
+	}
+	sourceReady, targetReady, workspaceStopped := false, false, false
+	workspacePVCs := map[string]bool{}
+	if catalog.Code == "jupyterhub" {
+		if !validWorkspaceOwner(input.WorkspaceOwner) {
+			writeOpenAIError(w, http.StatusBadRequest, "workspace_owner is required for a JupyterHub user workspace backup", "invalid_request_error", "workspace_owner_required")
+			return
+		}
+		workspaces, discoverErr := s.discoverJupyterHubWorkspaces(r.Context(), instance)
+		if discoverErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, discoverErr.Error(), "server_error", "jupyter_workspace_discovery_failed")
+			return
+		}
+		for _, workspace := range workspaces {
+			workspacePVCs[workspace.PVCName] = true
+			if workspace.PVCName == input.SourcePVC && workspace.Username == input.WorkspaceOwner && strings.EqualFold(workspace.PVCStatus, "Bound") {
+				sourceReady = workspace.Status == "idle"
+				workspaceStopped = workspace.Status == "idle"
+			}
+		}
+	}
+	for _, item := range inventory {
+		if !strings.EqualFold(item.Kind, "PersistentVolumeClaim") || !strings.EqualFold(item.Status, "Bound") {
+			continue
+		}
+		associated := item.Labels["app.kubernetes.io/name"] == instance.Name || strings.HasPrefix(item.Name, "data-"+instance.Name+"-") || strings.HasPrefix(item.Name, instance.Name+"-workspace")
+		if catalog.Code == "jupyterlab" && item.Name == input.SourcePVC {
+			sourceReady = associated
+			workspaceStopped = sourceReady
+		}
+		if item.Name == input.TargetPVC {
+			targetReady = !associated && !workspacePVCs[item.Name] && item.Name != input.SourcePVC
+		}
+	}
+	if !sourceReady {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "source_pvc must be a Bound idle workspace PVC mapped to the requested Jupyter service and user", "invalid_request_error", "workspace_source_not_ready")
+		return
+	}
+	if !targetReady {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "target_pvc must be a separate Bound backup PVC", "invalid_request_error", "workspace_backup_target_not_ready")
+		return
+	}
+	if catalog.Code == "jupyterlab" {
+		workspaceStopped = serviceWorkloadStoppedInInventory(inventory, instance.Name)
+	}
+	if !workspaceStopped {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "the target Jupyter workspace must have no active Pod before a consistent filesystem backup", "invalid_request_error", "workspace_backup_requires_stop")
+		return
+	}
+	values := map[string]any{}
+	_ = json.Unmarshal([]byte(instance.ValuesJSON), &values)
+	image := strings.TrimSpace(fmt.Sprint(values["image"]))
+	if image == "" || image == "<nil>" {
+		writeOpenAIError(w, http.StatusUnprocessableEntity, "service image is unavailable", "invalid_request_error", "backup_image_unavailable")
+		return
+	}
+	jobName := serviceBackupJobName(instance.Name, time.Now().UTC())
+	fileName := jobName + ".tar.gz"
+	manifest := jupyterLabWorkspaceBackupJobManifest(instance, jobName, image, input.SourcePVC, input.TargetPVC, fileName)
+	backup := store.K8sServiceBackup{ID: newID("svcbackup"), ServiceInstanceID: instance.ID, BackupType: "filesystem", Location: "pvc://" + instance.Namespace + "/" + input.TargetPVC + "/" + fileName, Status: "preparing", IntegrityStatus: "pending"}
+	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_save_failed")
+		return
+	}
+	change, prepareErr := s.prepareK8sManifestChangeRequest(r.Context(), adminID(r), manifestChangeCreateInput{
+		ClusterID: instance.ClusterID, Namespace: instance.Namespace, Kind: "Job", APIVersion: "batch/v1", Name: jobName,
+		Operation: "create", AfterYAML: manifest, Reason: "Service Platform Jupyter workspace backup " + backup.ID,
+		IdempotencyKey: changeIdempotencyKey,
+	})
+	if prepareErr != nil {
+		backup.Status = "failed"
+		backup.IntegrityStatus = "not_started"
+		backup.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = s.db.InsertK8sServiceBackup(r.Context(), backup)
+		writeManifestChangeCreateError(w, prepareErr)
+		return
+	}
+	backup.Status = "pending_approval"
+	backup.RequestID = change.Request.ID
+	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_link_failed")
+		return
+	}
+	params, _ := json.Marshal(map[string]any{"backup_id": backup.ID, "workspace_owner": input.WorkspaceOwner, "source_pvc": input.SourcePVC, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID})
+	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup_workspace", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.auditAdmin(r, "k8s.service_backup.workspace.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "workspace_owner": input.WorkspaceOwner, "source_pvc": input.SourcePVC, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID}))
+	writeJSON(w, http.StatusAccepted, map[string]any{"backup": backup, "manifest_change": change.Request, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": "중지된 Jupyter 작업공간을 read-only로 마운트한 아카이브 Job이며 기존 승인·SSA Apply 흐름에서 실행됩니다."})
 }
 
 func (s *Server) createServiceVolumeSnapshotBackup(w http.ResponseWriter, r *http.Request, instance store.K8sServiceInstance, input serviceBackupRequest, changeIdempotencyKey string) {
@@ -311,6 +424,120 @@ spec:
           persistentVolumeClaim:
             claimName: %s
 `, jobName, instance.Namespace, instance.Name, instance.ID, instance.Name, image, fileName, fileName, instance.Name+"."+instance.Namespace+".svc", credential.SecretName, usernameKey, credential.SecretName, passwordKey, targetPVC)
+}
+
+func redisBackupJobManifest(instance store.K8sServiceInstance, jobName, image, targetPVC string, credential store.K8sServiceCredential) string {
+	passwordKey := firstNonEmpty(credential.PasswordKey, "password")
+	fileName := jobName + ".rdb"
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app.kubernetes.io/name: %s
+    app.kubernetes.io/component: backup
+    clustara.io/service-instance: %s
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: %s
+        app.kubernetes.io/component: backup
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis-rdb-backup
+          image: %q
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - 'export REDISCLI_AUTH="$REDIS_PASSWORD"; redis-cli --host="$REDIS_HOST" --rdb "/backup/%s"; test -s "/backup/%s"'
+          env:
+            - name: REDIS_HOST
+              value: %q
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: %s
+                  key: %q
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: %s
+`, jobName, instance.Namespace, instance.Name, instance.ID, instance.Name, image, fileName, fileName, instance.Name+"."+instance.Namespace+".svc", credential.SecretName, passwordKey, targetPVC)
+}
+
+func jupyterLabWorkspaceBackupJobManifest(instance store.K8sServiceInstance, jobName, image, sourcePVC, targetPVC, fileName string) string {
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app.kubernetes.io/name: %s
+    app.kubernetes.io/component: backup
+    clustara.io/service-instance: %s
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: %s
+        app.kubernetes.io/component: backup
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace-archive
+          image: %q
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - 'tar -czf "/backup/%s" -C /workspace .; test -s "/backup/%s"'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+              readOnly: true
+            - name: backup
+              mountPath: /backup
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: %s
+        - name: backup
+          persistentVolumeClaim:
+            claimName: %s
+`, jobName, instance.Namespace, instance.Name, instance.ID, instance.Name, image, fileName, fileName, sourcePVC, targetPVC)
 }
 
 // reconcileServiceBackupStatuses links the existing Manifest Change/Job execution evidence back

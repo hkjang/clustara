@@ -511,14 +511,18 @@ func (s *Server) handleServiceInstanceByID(w http.ResponseWriter, r *http.Reques
 		health, healthErr := s.reconcileServiceInstance(r.Context(), in, false)
 		backups, _ := s.db.ListK8sServiceBackups(r.Context(), in.ID, 50)
 		restores, _ := s.db.ListK8sServiceRestores(r.Context(), in.ID, 50)
+		jupyterWorkspaces := []serviceJupyterWorkspace{}
+		if cat.Code == "jupyterhub" {
+			jupyterWorkspaces, _ = s.discoverJupyterHubWorkspaces(r.Context(), in)
+		}
 		if healthErr != nil {
 			components, _ := s.db.ListK8sServiceComponents(r.Context(), in.ID)
 			endpoints, _ := s.db.ListK8sServiceEndpoints(r.Context(), in.ID)
 			snapshot, _ := s.db.LatestK8sServiceHealthSnapshot(r.Context(), in.ID)
-			writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": components, "endpoints": endpoints, "credentials": credentials, "backups": backups, "restores": restores, "health": snapshot, "health_stale": true})
+			writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": components, "endpoints": endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": snapshot, "health_stale": true})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": health.Components, "endpoints": health.Endpoints, "credentials": credentials, "backups": backups, "restores": restores, "health": health.Health, "health_stale": false})
+		writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": health.Components, "endpoints": health.Endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": health.Health, "health_stale": false})
 	case http.MethodDelete:
 		s.recordServiceOperation(w, r, in, "delete", map[string]any{"preserve_pvc": true, "require_backup": true})
 	default:
@@ -546,6 +550,9 @@ func (s *Server) handleServiceOperation(w http.ResponseWriter, r *http.Request, 
 		return
 	case "backups":
 		s.handleServiceBackups(w, r, in)
+		return
+	case "jupyter-workspaces":
+		s.handleServiceJupyterWorkspaces(w, r, in)
 		return
 	case "health":
 		if r.Method == http.MethodGet {

@@ -1,3 +1,12 @@
+v0.9.131:
+- **JupyterHub User Workspace Mapping & Ownership Guard (v0.9.131)**: JupyterHub 표준 사용자/배포/인스턴스 라벨과 Notebook Pod의 `persistentVolumeClaim` mount를 결합해 사용자→Pod→PVC, 용량, StorageClass, active/idle/conflict 상태를 제공하는 workspace API와 서비스 상세 UI를 추가했습니다. 사용자별 파일 백업은 요청 사용자와 Bound PVC 매핑이 일치하고 해당 Notebook Pod가 비활성인 경우만 허용하며, 복구 시 백업 작업 원장에 기록된 사용자 소유권과 대상 사용자·PVC를 다시 비교해 교차 사용자 복구를 차단합니다. 승인형 read-only 아카이브와 경로 이탈·링크 차단 staging 복구, 감사·작업 원장 흐름을 기존 Manifest Change Studio에 연결했습니다.
+
+v0.9.130:
+- **JupyterLab Workspace Archive & Staged Restore (v0.9.130)**: 단독 JupyterLab 서비스에 실제 scale-to-zero와 실행 중 Pod 부재를 확인한 뒤 서비스 연관 Bound 작업공간 PVC를 read-only로 마운트하고 별도 백업 PVC에 `.tar.gz`를 생성하는 승인형 백업을 추가했습니다. 복구는 동일 유형·클러스터·Namespace와 PVC 상태를 검증하고 아카이브의 경로 이탈, symlink/hardlink, 특수 파일을 차단한 뒤 기존 파일을 덮어쓰지 않는 `.clustara-restore/<작업ID>` staging 디렉터리에만 해제합니다. Jupyter 전용 UI, 백업·복구 원장과 완료 Job reconcile을 제공하며, 사용자별 Pod·PVC 매핑이 필요한 JupyterHub는 안전을 위해 CSI Snapshot만 노출합니다.
+
+v0.9.129:
+- **Redis RDB Backup & Safe Restore (v0.9.129)**: Service Platform의 Redis 인스턴스에 Kubernetes Secret 참조와 별도 Bound PVC를 사용하는 `redis-cli --rdb` 백업 Job을 추가했습니다. Restore Preview는 성공·무결성 검증된 RDB, 동일 Redis 유형과 클러스터·Namespace, Bound 백업/데이터 PVC, 데이터 PVC의 서비스 연관성, 실제 워크로드 `spec.replicas=0`, 준비 Replica 0, 실행 중 Pod 부재를 모두 검사합니다. 허용된 복구는 RDB를 임시 파일로 복사한 후 `dump.rdb`로 교체하는 Job 초안으로 기존 Manifest Change Studio 승인 흐름에 연결되고, 완료 Job은 복구 원장을 갱신합니다. 서비스 상세에는 중지·시작 요청과 Redis 전용 백업·복구 입력 및 안전 안내를 추가했습니다.
+
 v0.9.128:
 - **CSI VolumeSnapshot Safe Clone Restore (v0.9.128)**: `readyToUse` 및 무결성 검증이 끝난 CSI VolumeSnapshot 백업을 기존 PVC에 덮어쓰지 않고 새 PVC로 복구하는 Clone Restore를 추가했습니다. Restore Preview는 원본/대상 서비스 유형, 동일 클러스터·Namespace, 스냅샷 관측 상태, 새 PVC DNS 이름, 용량 quantity, StorageClass, 기존 PVC 충돌을 검사합니다. 허용된 요청은 `dataSource.kind: VolumeSnapshot`인 PVC 초안으로 변환되어 기존 Manifest Change Studio의 정책·dry-run·승인·SSA Apply를 재사용하며, PVC가 `Bound`가 되면 복구 원장을 성공으로 갱신합니다. UI는 논리 복구와 스냅샷 복구 입력을 구분하고 생성 리소스·차단·경고·YAML을 함께 표시합니다.
 

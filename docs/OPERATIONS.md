@@ -302,6 +302,24 @@ curl -X POST http://localhost:9090/admin/fallback
 
 이 흐름은 기존 PVC와 워크로드를 자동 변경하지 않습니다. 클론 PVC의 데이터 검증 후 StatefulSet/Deployment 볼륨 전환을 별도 변경 요청으로 수행하고, 전환 전 원본 PVC와 스냅샷 보존 정책을 확인하세요. 타 Namespace 또는 타 클러스터 복구는 VolumeSnapshotContent 이동과 스토리지 드라이버 정책 검증이 필요하므로 현재 자동 흐름에서 차단됩니다.
 
+### 6.5 Redis RDB 백업·복구
+
+Redis 백업은 별도 Bound 백업 PVC와 Kubernetes Secret의 password key를 사용합니다. 생성된 Job은 `REDISCLI_AUTH` 환경변수와 `redis-cli --rdb`로 RDB를 저장하고 비어 있지 않은 파일을 확인한 경우에만 성공합니다. Secret 원문은 Clustara DB, API, Job YAML에 포함하지 않습니다.
+
+RDB 복구 전 서비스 상세에서 **중지 요청**을 생성해 Action Center 승인·실행을 완료하고 최신 인벤토리를 수집하세요. Restore Preview는 워크로드의 `spec.replicas=0`, 준비 Replica 0, 실행 중 Pod 없음, 백업 PVC와 대상 데이터 PVC의 Bound 상태 및 서비스 연관성을 모두 검사합니다. 복구 Job 완료 후 **시작 요청**을 승인하고 Redis 연결, key 수, 복제 상태, 최근 백업 원장을 검증하세요.
+
+### 6.6 JupyterLab 작업공간 백업·복구
+
+단독 JupyterLab의 파일 아카이브 백업은 **중지 요청** 승인·실행과 최신 인벤토리 수집 후 사용합니다. 작업공간 PVC는 read-only, 별도 Bound 백업 PVC는 read-write로 마운트해 `.tar.gz`를 생성하며 Secret 원문을 사용하지 않습니다. 실행 중 Pod가 있거나 원본·백업 PVC가 동일하면 요청이 차단됩니다.
+
+복구 Job은 아카이브의 절대/상위 경로 이탈과 symlink, hardlink, 특수 파일을 거부하고 대상 PVC의 `.clustara-restore/<작업ID>`에만 해제합니다. 완료 후 staging 파일을 검증하고 필요한 파일만 작업공간으로 승격한 다음 **시작 요청**을 승인하세요. JupyterHub는 아래 사용자별 매핑 절차를 추가로 적용합니다.
+
+### 6.7 JupyterHub 사용자별 작업공간
+
+JupyterHub 상세의 사용자 작업공간 표는 `hub.jupyter.org/username`과 배포/인스턴스 라벨, Notebook Pod의 PVC volume mount를 함께 사용합니다. `active` 사용자는 서버를 먼저 중지하고 최신 인벤토리를 수집해야 하며, `conflict`는 라벨 사용자와 Pod mount 소유권이 불일치하므로 수정 전 백업하지 마세요.
+
+사용자별 백업 요청에는 사용자명, 원본 PVC, 별도 백업 PVC를 모두 입력합니다. 복구 시 백업 작업 원장에 기록된 사용자와 대상 사용자·PVC 매핑을 다시 비교하므로 다른 사용자 PVC로의 복구는 차단됩니다. staging 복구 완료 후 해당 사용자 권한으로 파일을 검증하고 필요한 파일만 승격한 다음 Notebook 서버를 시작하세요.
+
 ---
 
 ## 7. 보존 / Retention

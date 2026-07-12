@@ -2,7 +2,7 @@
 
 Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중심 서비스 인스턴스로 관리하는 상위 추상화 계층입니다. 실제 배포 실행기나 승인 엔진을 새로 만들지 않고 기존 Application Stack, Stack Apply, Action Center, 보안 정책, Resource Graph를 재사용합니다.
 
-## 현재 구현 범위 (v0.9.128)
+## 현재 구현 범위 (v0.9.131)
 
 - 기본 카탈로그: PostgreSQL, Redis, Tomcat, Spring Boot, JupyterLab, JupyterHub
 - 카탈로그 버전과 Small/Medium/Large 자원 프로파일
@@ -26,8 +26,11 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 - 원본 또는 사전 생성된 clone 대상 ServiceInstance로의 승인형 논리 복구와 복구 원장
 - 서비스 데이터 PVC 기반 CSI VolumeSnapshot 초안, 선택적 VolumeSnapshotClass, `readyToUse` 상태 추적
 - 검증 완료 VolumeSnapshot에서 새 PVC를 만드는 안전한 Clone Restore Preview·승인 초안·Bound 완료 증적
+- Redis `redis-cli --rdb` 백업, 실제 scale-to-zero·실행 Pod 부재 확인, 전용 데이터 PVC RDB 복구와 완료 증적
+- 단독 JupyterLab 작업공간 PVC 아카이브, 중지 상태 일관성 검증, 경로 이탈·링크 차단 staging 복구
+- JupyterHub 표준 사용자·배포 라벨과 Notebook Pod volume을 결합한 사용자→Pod→PVC 매핑 및 사용자별 안전 백업·복구
 
-PostgreSQL 외 서비스의 논리 백업·복구 전략, VolumeSnapshotContent 기반 타 Namespace/클러스터 clone, 클론 PVC의 StatefulSet 자동 전환, 서비스별 exporter, Helm chart 원격 fetch/render, 의존성 Secret 자동 주입은 후속 단계입니다. 백업·복구 Job, VolumeSnapshot, 클론 PVC는 별도 실행기가 아니라 Manifest Change Studio에서 승인·적용합니다.
+JupyterHub REST API 기반 Named Server 시작·중지, 사용자별 동시 서버/유휴 정책, VolumeSnapshotContent 기반 타 Namespace/클러스터 clone, 클론 PVC의 StatefulSet 자동 전환, 서비스별 exporter, Helm chart 원격 fetch/render, 의존성 Secret 자동 주입은 후속 단계입니다. 백업·복구 Job, VolumeSnapshot, 클론 PVC는 별도 실행기가 아니라 Manifest Change Studio에서 승인·적용합니다.
 
 ## 생성 흐름
 
@@ -102,3 +105,11 @@ Secret 값은 Clustara DB에 저장하지 않습니다. `k8s_service_credentials
 8. 스냅샷 복구는 `readyToUse`와 동일 클러스터·Namespace, 동일 서비스 유형, 새 PVC 이름, 요청 용량, 기존 PVC 충돌을 검사합니다.
 9. 허용된 스냅샷 복구는 `dataSource.kind: VolumeSnapshot`인 새 PVC만 생성하며 기존 PVC나 워크로드 볼륨 연결을 자동 변경하지 않습니다.
 10. 새 PVC가 `Bound`로 관측되면 복구 원장을 성공으로 전환합니다. 실제 워크로드 전환은 별도 영향도 분석·승인 변경으로 진행합니다.
+11. Redis 논리 백업은 Secret 원문 없이 `REDISCLI_AUTH`와 `redis-cli --rdb`를 사용해 별도 Bound 백업 PVC에 RDB를 저장합니다.
+12. Redis RDB 복구는 대상 StatefulSet/Deployment의 `spec.replicas=0`, 준비 Replica 0, 실행 중 Pod 없음이 실제 인벤토리에서 확인되어야 합니다.
+13. 대상 데이터 PVC는 `Bound`이며 대상 Redis 서비스 label/이름과 연결되어야 합니다. 복구 Job은 임시 파일로 복사한 후 `dump.rdb`로 원자적 교체하며, 완료 후 시작 요청과 데이터 검증이 필요합니다.
+14. JupyterLab 파일 백업은 작업공간 PVC를 read-only, 별도 백업 PVC를 read-write로 마운트하며 실제 scale-to-zero와 실행 중 Pod 부재를 요구합니다.
+15. JupyterLab 복구는 tar 경로 이탈과 symlink/hardlink·특수 파일을 거부하고 `.clustara-restore/<작업ID>`에만 해제합니다. 기존 파일은 덮어쓰지 않으며 사용자가 검증한 파일만 수동 승격합니다.
+16. JupyterHub는 `hub.jupyter.org/username`, `hub.jupyter.org/deployment`, `app.kubernetes.io/instance`, `clustara.io/service-instance`와 Pod `persistentVolumeClaim` mount를 결합해 사용자→Pod→PVC를 매핑합니다.
+17. JupyterHub 사용자별 파일 백업은 요청 사용자와 PVC 매핑이 일치하고 해당 Notebook Pod가 비활성인 경우만 허용합니다. 복구도 백업 당시 사용자 소유권 증적과 대상 사용자·PVC가 모두 일치해야 합니다.
+18. 사용자/PVC 충돌은 `conflict`로 표시하고 백업·복구에서 차단합니다. Secret 값은 작업공간 탐색에 사용하지 않습니다.

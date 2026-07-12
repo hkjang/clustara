@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.128** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.131** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.128)
+## 기능 상태 (v0.9.131)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -11,6 +11,9 @@
 | Service Platform 자동 운영 — 런타임 설정형 주기 reconcile, DB lease 중복 방지, 수집 실패/실제 장애 분리, PostgreSQL 백업 Job 승인 초안 | ✅ (v0.9.126) |
 | Service Platform 복구·스냅샷 — Restore Preview, 대상 서비스 복구 Job 승인 초안, 복구 원장, CSI VolumeSnapshot 백업·상태 추적 | ✅ (v0.9.127) |
 | Service Platform Snapshot Clone Restore — readyToUse 스냅샷에서 비파괴 새 PVC 생성, 충돌·용량·범위 검증, 승인 초안과 Bound 완료 추적 | ✅ (v0.9.128) |
+| Service Platform Redis RDB 보호 — Secret 참조형 RDB 백업, 실제 scale-to-zero·실행 Pod 부재 검증, 데이터 PVC 교체 승인과 완료 추적 | ✅ (v0.9.129) |
+| Service Platform JupyterLab Workspace 보호 — 중지 상태 PVC 아카이브, read-only 원본, 경로 이탈·링크 차단 staging 복구와 완료 추적 | ✅ (v0.9.130) |
+| Service Platform JupyterHub User Workspace — 사용자·배포 라벨+Pod mount 기반 사용자/PVC 매핑, active/conflict 차단, 소유권 고정 백업·복구 | ✅ (v0.9.131) |
 | 클러스터 등록(kubeconfig/token AES-GCM 암호화) · 연결 테스트 · 라이브 수집(client-go) | ✅ |
 | 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |

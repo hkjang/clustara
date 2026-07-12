@@ -14,11 +14,14 @@ import (
 )
 
 type serviceRestoreInput struct {
-	TargetInstanceID string `json:"target_instance_id"`
-	TargetPVC        string `json:"target_pvc"`
-	StorageClass     string `json:"storage_class"`
-	StorageSize      string `json:"storage_size"`
-	IdempotencyKey   string `json:"idempotency_key"`
+	TargetInstanceID   string `json:"target_instance_id"`
+	TargetPVC          string `json:"target_pvc"`
+	TargetDataPVC      string `json:"target_data_pvc"`
+	TargetWorkspacePVC string `json:"target_workspace_pvc"`
+	WorkspaceOwner     string `json:"workspace_owner"`
+	StorageClass       string `json:"storage_class"`
+	StorageSize        string `json:"storage_size"`
+	IdempotencyKey     string `json:"idempotency_key"`
 }
 
 type serviceRestorePreview struct {
@@ -72,6 +75,9 @@ func (s *Server) handleServiceBackupOperation(w http.ResponseWriter, r *http.Req
 	}
 	input.TargetInstanceID = firstNonEmpty(strings.TrimSpace(input.TargetInstanceID), source.ID)
 	input.TargetPVC = strings.TrimSpace(input.TargetPVC)
+	input.TargetDataPVC = strings.TrimSpace(input.TargetDataPVC)
+	input.TargetWorkspacePVC = strings.TrimSpace(input.TargetWorkspacePVC)
+	input.WorkspaceOwner = strings.TrimSpace(input.WorkspaceOwner)
 	input.StorageClass = strings.TrimSpace(input.StorageClass)
 	input.StorageSize = strings.TrimSpace(input.StorageSize)
 	preview := s.prepareServiceRestorePreview(r.Context(), backup, source, input, time.Now().UTC())
@@ -152,6 +158,12 @@ func (s *Server) prepareServiceRestorePreview(ctx context.Context, backup store.
 	if backup.BackupType == "snapshot" {
 		return s.prepareSnapshotCloneRestorePreview(ctx, preview, sourceCatalog, targetCatalog, input)
 	}
+	if backup.BackupType == "logical" && sourceCatalog.Code == "redis" {
+		return s.prepareRedisRDBRestorePreview(ctx, preview, sourceCatalog, targetCatalog, input, now)
+	}
+	if backup.BackupType == "filesystem" {
+		return s.prepareJupyterWorkspaceRestorePreview(ctx, preview, sourceCatalog, targetCatalog, input, now)
+	}
 	preview.Mode = "clone_target"
 	if target.ID == source.ID {
 		preview.Mode = "in_place"
@@ -166,7 +178,7 @@ func (s *Server) prepareServiceRestorePreview(ctx context.Context, backup store.
 	if target.ClusterID != source.ClusterID || target.Namespace != source.Namespace {
 		preview.Blockers = append(preview.Blockers, "PVC 기반 논리 백업은 현재 동일 클러스터·Namespace 대상에만 복구할 수 있습니다.")
 	}
-	namespace, pvc, file, locationErr := parsePVCBackupLocation(backup.Location)
+	namespace, pvc, file, locationErr := parsePVCBackupLocation(backup.Location, ".sql")
 	if locationErr != nil {
 		preview.Blockers = append(preview.Blockers, locationErr.Error())
 	}
@@ -208,6 +220,193 @@ func (s *Server) prepareServiceRestorePreview(ctx context.Context, backup store.
 		preview.Allowed = true
 	}
 	return preview
+}
+
+func (s *Server) prepareRedisRDBRestorePreview(ctx context.Context, preview serviceRestorePreview, sourceCatalog, targetCatalog store.K8sServiceCatalog, input serviceRestoreInput, now time.Time) serviceRestorePreview {
+	target := preview.Target
+	preview.Mode = "redis_rdb_clone_target"
+	if target.ID == preview.Source.ID {
+		preview.Mode = "redis_rdb_in_place"
+	}
+	preview.Warnings = append(preview.Warnings, "RDB 파일 교체 후 Redis 서비스를 다시 시작하고 데이터·복제 상태를 검증해야 합니다.")
+	if sourceCatalog.Code != "redis" || targetCatalog.Code != "redis" {
+		preview.Blockers = append(preview.Blockers, "원본과 대상 서비스가 모두 Redis여야 합니다.")
+	}
+	if target.ClusterID != preview.Source.ClusterID || target.Namespace != preview.Source.Namespace {
+		preview.Blockers = append(preview.Blockers, "PVC 기반 Redis RDB 복구는 현재 동일 클러스터·Namespace에서만 지원합니다.")
+	}
+	namespace, backupPVC, file, locationErr := parsePVCBackupLocation(preview.Backup.Location, ".rdb")
+	if locationErr != nil {
+		preview.Blockers = append(preview.Blockers, locationErr.Error())
+	}
+	if namespace != "" && namespace != target.Namespace {
+		preview.Blockers = append(preview.Blockers, "백업 PVC Namespace와 대상 Redis Namespace가 다릅니다.")
+	}
+	if input.TargetDataPVC == "" || validateK8sDNSLabelSetting(input.TargetDataPVC) != nil {
+		preview.Blockers = append(preview.Blockers, "대상 Redis 데이터 PVC 이름이 필요하며 Kubernetes DNS label 형식이어야 합니다.")
+	}
+	inventory, _ := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: target.ClusterID, Namespace: target.Namespace, Limit: 5000})
+	backupPVCReady, dataPVCReady := false, false
+	for _, item := range inventory {
+		if strings.EqualFold(item.Kind, "PersistentVolumeClaim") && item.Name == backupPVC && strings.EqualFold(item.Status, "Bound") {
+			backupPVCReady = true
+		}
+		if strings.EqualFold(item.Kind, "PersistentVolumeClaim") && item.Name == input.TargetDataPVC && strings.EqualFold(item.Status, "Bound") {
+			associated := item.Labels["app.kubernetes.io/name"] == target.Name || strings.HasPrefix(item.Name, "data-"+target.Name+"-")
+			dataPVCReady = associated
+		}
+	}
+	if !backupPVCReady {
+		preview.Blockers = append(preview.Blockers, "Redis RDB 백업 PVC가 Bound 상태로 관측되지 않습니다.")
+	}
+	if !dataPVCReady {
+		preview.Blockers = append(preview.Blockers, "대상 데이터 PVC가 Bound 상태이면서 Redis 서비스에 연결된 PVC인지 확인해야 합니다.")
+	}
+	if !serviceWorkloadStoppedInInventory(inventory, target.Name) {
+		preview.Blockers = append(preview.Blockers, "Redis 워크로드의 spec.replicas=0, 준비 Replica 0, 실행 중 Pod 없음이 관측된 후에만 RDB를 교체할 수 있습니다.")
+	}
+	values := map[string]any{}
+	_ = json.Unmarshal([]byte(target.ValuesJSON), &values)
+	image := strings.TrimSpace(fmt.Sprint(values["image"]))
+	if image == "" || image == "<nil>" {
+		preview.Blockers = append(preview.Blockers, "대상 Redis 서비스 이미지 정보가 없습니다.")
+	}
+	preview.Impact = map[string]any{"mode": preview.Mode, "source_instance_id": preview.Source.ID, "target_instance_id": target.ID, "backup_id": preview.Backup.ID, "backup_pvc": backupPVC, "backup_file": file, "target_data_pvc": input.TargetDataPVC, "requires_scaled_to_zero": true, "replaces_dump_rdb": true, "requires_restart": true, "requires_post_restore_health_check": true}
+	if len(preview.Blockers) == 0 {
+		preview.JobName = serviceRestoreJobName(target.Name, now)
+		preview.ResourceKind = "Job"
+		preview.ResourceName = preview.JobName
+		preview.Manifest = redisRDBRestoreJobManifest(target, preview.JobName, image, backupPVC, file, input.TargetDataPVC)
+		preview.Allowed = true
+	}
+	return preview
+}
+
+func (s *Server) prepareJupyterWorkspaceRestorePreview(ctx context.Context, preview serviceRestorePreview, sourceCatalog, targetCatalog store.K8sServiceCatalog, input serviceRestoreInput, now time.Time) serviceRestorePreview {
+	target := preview.Target
+	preview.Mode = "jupyterlab_workspace_staged_restore"
+	if sourceCatalog.Code == "jupyterhub" {
+		preview.Mode = "jupyterhub_user_workspace_staged_restore"
+	}
+	preview.Warnings = append(preview.Warnings, "기존 작업공간을 덮어쓰지 않고 .clustara-restore 아래 staging 디렉터리에 복구합니다. 검증 후 사용자가 필요한 파일만 승격해야 합니다.")
+	if (sourceCatalog.Code != "jupyterlab" && sourceCatalog.Code != "jupyterhub") || sourceCatalog.Code != targetCatalog.Code {
+		preview.Blockers = append(preview.Blockers, "원본과 대상이 같은 유형의 JupyterLab 또는 JupyterHub 서비스여야 합니다.")
+	}
+	if target.ClusterID != preview.Source.ClusterID || target.Namespace != preview.Source.Namespace {
+		preview.Blockers = append(preview.Blockers, "PVC 기반 Jupyter 작업공간 복구는 현재 동일 클러스터·Namespace에서만 지원합니다.")
+	}
+	namespace, backupPVC, file, locationErr := parsePVCBackupLocation(preview.Backup.Location, ".tar.gz")
+	if locationErr != nil {
+		preview.Blockers = append(preview.Blockers, locationErr.Error())
+	}
+	if namespace != "" && namespace != target.Namespace {
+		preview.Blockers = append(preview.Blockers, "백업 PVC Namespace와 대상 Jupyter Namespace가 다릅니다.")
+	}
+	if input.TargetWorkspacePVC == "" || validateK8sDNSLabelSetting(input.TargetWorkspacePVC) != nil {
+		preview.Blockers = append(preview.Blockers, "대상 Jupyter 작업공간 PVC 이름이 필요하며 Kubernetes DNS label 형식이어야 합니다.")
+	}
+	inventory, _ := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: target.ClusterID, Namespace: target.Namespace, Limit: 5000})
+	backupPVCReady, workspacePVCReady, workspaceStopped := false, false, false
+	for _, item := range inventory {
+		if strings.EqualFold(item.Kind, "PersistentVolumeClaim") && item.Name == backupPVC && strings.EqualFold(item.Status, "Bound") {
+			backupPVCReady = true
+		}
+		if targetCatalog.Code == "jupyterlab" && strings.EqualFold(item.Kind, "PersistentVolumeClaim") && item.Name == input.TargetWorkspacePVC && strings.EqualFold(item.Status, "Bound") {
+			associated := item.Labels["app.kubernetes.io/name"] == target.Name || strings.HasPrefix(item.Name, "data-"+target.Name+"-") || strings.HasPrefix(item.Name, target.Name+"-workspace")
+			workspacePVCReady = associated
+		}
+	}
+	if targetCatalog.Code == "jupyterhub" {
+		if !validWorkspaceOwner(input.WorkspaceOwner) {
+			preview.Blockers = append(preview.Blockers, "JupyterHub 복구에는 유효한 workspace_owner가 필요합니다.")
+		} else {
+			recordedOwner := s.jupyterHubBackupWorkspaceOwner(ctx, preview.Source.ID, preview.Backup.RequestID)
+			if recordedOwner == "" {
+				preview.Blockers = append(preview.Blockers, "백업 작업에서 JupyterHub 사용자 소유권 증적을 찾을 수 없습니다.")
+			} else if recordedOwner != input.WorkspaceOwner {
+				preview.Blockers = append(preview.Blockers, "백업 소유자와 대상 JupyterHub 사용자가 일치하지 않습니다.")
+			}
+			workspaces, _ := s.discoverJupyterHubWorkspaces(ctx, target)
+			for _, workspace := range workspaces {
+				if workspace.PVCName == input.TargetWorkspacePVC && workspace.Username == input.WorkspaceOwner && strings.EqualFold(workspace.PVCStatus, "Bound") {
+					workspacePVCReady = true
+					workspaceStopped = workspace.Status == "idle"
+				}
+			}
+		}
+	} else {
+		workspaceStopped = serviceWorkloadStoppedInInventory(inventory, target.Name)
+	}
+	if !backupPVCReady {
+		preview.Blockers = append(preview.Blockers, "Jupyter 아카이브 백업 PVC가 Bound 상태로 관측되지 않습니다.")
+	}
+	if !workspacePVCReady {
+		preview.Blockers = append(preview.Blockers, "대상 작업공간 PVC가 Bound 상태이고 요청한 Jupyter 서비스·사용자와 연결되었는지 확인해야 합니다.")
+	}
+	if !workspaceStopped {
+		preview.Blockers = append(preview.Blockers, "대상 Jupyter 작업공간에 실행 중인 Pod가 없어야 하며, JupyterLab은 워크로드 Replica 0도 관측되어야 합니다.")
+	}
+	values := map[string]any{}
+	_ = json.Unmarshal([]byte(target.ValuesJSON), &values)
+	image := strings.TrimSpace(fmt.Sprint(values["image"]))
+	if image == "" || image == "<nil>" {
+		preview.Blockers = append(preview.Blockers, "대상 Jupyter 서비스 이미지 정보가 없습니다.")
+	}
+	jobName := serviceRestoreJobName(target.Name, now)
+	stagingPath := ".clustara-restore/" + jobName
+	preview.Impact = map[string]any{"mode": preview.Mode, "source_instance_id": preview.Source.ID, "target_instance_id": target.ID, "workspace_owner": input.WorkspaceOwner, "backup_id": preview.Backup.ID, "backup_pvc": backupPVC, "backup_file": file, "target_workspace_pvc": input.TargetWorkspacePVC, "staging_path": stagingPath, "overwrites_existing_files": false, "rejects_links_and_special_files": true, "requires_stopped_workspace": true, "requires_manual_promotion": true, "requires_post_restore_health_check": true}
+	if len(preview.Blockers) == 0 {
+		preview.JobName = jobName
+		preview.ResourceKind = "Job"
+		preview.ResourceName = jobName
+		preview.Manifest = jupyterWorkspaceRestoreJobManifest(target, jobName, image, backupPVC, file, input.TargetWorkspacePVC, stagingPath)
+		preview.Allowed = true
+	}
+	return preview
+}
+
+func (s *Server) jupyterHubBackupWorkspaceOwner(ctx context.Context, instanceID, requestID string) string {
+	operations, err := s.db.ListK8sServiceOperations(ctx, instanceID, 500)
+	if err != nil {
+		return ""
+	}
+	for _, operation := range operations {
+		if operation.RequestID != requestID || operation.OperationType != "backup_workspace" {
+			continue
+		}
+		params := map[string]any{}
+		if json.Unmarshal([]byte(operation.ParametersJSON), &params) == nil {
+			return cleanRestoreValue(params["workspace_owner"])
+		}
+	}
+	return ""
+}
+
+func serviceWorkloadScaledToZero(item store.K8sInventoryItem) bool {
+	desiredRaw, desiredObserved := item.Spec["replicas"]
+	if !desiredObserved || serviceInt(desiredRaw) != 0 {
+		return false
+	}
+	for _, key := range []string{"readyReplicas", "availableReplicas", "currentReplicas", "updatedReplicas"} {
+		if raw, ok := item.StatusObject[key]; ok && serviceInt(raw) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func serviceWorkloadStoppedInInventory(inventory []store.K8sInventoryItem, serviceName string) bool {
+	workloadStopped, activePod := false, false
+	for _, item := range inventory {
+		if (strings.EqualFold(item.Kind, "StatefulSet") || strings.EqualFold(item.Kind, "Deployment")) && item.Name == serviceName {
+			workloadStopped = serviceWorkloadScaledToZero(item)
+		}
+		if strings.EqualFold(item.Kind, "Pod") && (item.Labels["app.kubernetes.io/name"] == serviceName || strings.HasPrefix(item.Name, serviceName+"-")) {
+			status := strings.ToLower(strings.TrimSpace(item.Status))
+			activePod = activePod || (status != "" && status != "succeeded" && status != "failed" && status != "completed" && status != "terminated")
+		}
+	}
+	return workloadStopped && !activePod
 }
 
 func (s *Server) prepareSnapshotCloneRestorePreview(ctx context.Context, preview serviceRestorePreview, sourceCatalog, targetCatalog store.K8sServiceCatalog, input serviceRestoreInput) serviceRestorePreview {
@@ -337,7 +536,7 @@ spec:
 `, pvcName, target.Namespace, target.Name, target.ID, classLine, snapshotName, storageSize)
 }
 
-func parsePVCBackupLocation(location string) (string, string, string, error) {
+func parsePVCBackupLocation(location, requiredExtension string) (string, string, string, error) {
 	const prefix = "pvc://"
 	if !strings.HasPrefix(location, prefix) {
 		return "", "", "", fmt.Errorf("백업 위치가 PVC logical backup 형식이 아닙니다")
@@ -347,10 +546,135 @@ func parsePVCBackupLocation(location string) (string, string, string, error) {
 		return "", "", "", fmt.Errorf("백업 PVC 위치 형식이 올바르지 않습니다")
 	}
 	file := path.Base(parts[2])
-	if file != parts[2] || !strings.HasSuffix(file, ".sql") || len(file) > 128 {
-		return "", "", "", fmt.Errorf("백업 파일 경로가 안전한 .sql 파일이 아닙니다")
+	if file != parts[2] || !strings.HasSuffix(file, requiredExtension) || len(file) > 128 {
+		return "", "", "", fmt.Errorf("백업 파일 경로가 안전한 %s 파일이 아닙니다", requiredExtension)
 	}
 	return parts[0], parts[1], file, nil
+}
+
+func redisRDBRestoreJobManifest(target store.K8sServiceInstance, jobName, image, backupPVC, backupFile, targetDataPVC string) string {
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app.kubernetes.io/name: %s
+    app.kubernetes.io/component: restore
+    clustara.io/service-instance: %s
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: %s
+        app.kubernetes.io/component: restore
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis-rdb-restore
+          image: %q
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - 'test -s "/backup/%s"; test -d /data; cp "/backup/%s" /data/dump.rdb.clustara-tmp; sync; mv /data/dump.rdb.clustara-tmp /data/dump.rdb; test -s /data/dump.rdb'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+              readOnly: true
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: %s
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: %s
+`, jobName, target.Namespace, target.Name, target.ID, target.Name, image, backupFile, backupFile, backupPVC, targetDataPVC)
+}
+
+func jupyterWorkspaceRestoreJobManifest(target store.K8sServiceInstance, jobName, image, backupPVC, backupFile, workspacePVC, stagingPath string) string {
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app.kubernetes.io/name: %s
+    app.kubernetes.io/component: restore
+    clustara.io/service-instance: %s
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: %s
+        app.kubernetes.io/component: restore
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace-staged-restore
+          image: %q
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              import tarfile
+              archive = %q
+              target = %q
+              os.makedirs(target, exist_ok=False)
+              root = os.path.realpath(target)
+              with tarfile.open(archive, "r:gz") as bundle:
+                  members = bundle.getmembers()
+                  for member in members:
+                      destination = os.path.realpath(os.path.join(root, member.name))
+                      if os.path.commonpath([root, destination]) != root:
+                          raise SystemExit("unsafe archive path")
+                      if not (member.isfile() or member.isdir()):
+                          raise SystemExit("archive links and special files are not allowed")
+                  bundle.extractall(root, members=members)
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+              readOnly: true
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: %s
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: %s
+`, jobName, target.Namespace, target.Name, target.ID, target.Name, image, "/backup/"+backupFile, "/workspace/"+stagingPath, backupPVC, workspacePVC)
 }
 
 func serviceRestoreJobName(serviceName string, now time.Time) string {
