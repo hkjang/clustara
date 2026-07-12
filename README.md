@@ -93,4 +93,6 @@ docker run -d --name clustara --restart=always -p 9090:9090 -v $PWD/data:/data \
 
 ## 라이선스 / 기여
 
-내부 운영 도구입니다. 변경 이력은 [scripts/changelog.txt](scripts/changelog.txt)를 참고하세요.
+이 프로젝트는 **GNU Affero General Public License v3.0 (AGPL-3.0)** 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](file:///d:/project/clustara/LICENSE) 파일을 참고하세요.
+
+변경 이력은 [scripts/changelog.txt](scripts/changelog.txt)를 참고하세요.
