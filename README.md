@@ -15,7 +15,7 @@
 - **[GitOps Change Manager 가이드](docs/GITOPS_CHANGE_MANAGER.md)** — Stack·Git Source·Drift·PR Draft·Progressive Rollout·Evidence 운영 동선
 - **[운영 가이드](docs/OPERATIONS.md)** — 기동/종료, 헬스체크, 백업·복구, 장애 대응 런북
 - **[관리자 가이드](docs/ADMIN_GUIDE.md)** — 어드민 UI/설정/운영 체크리스트
-- **[서비스 플랫폼 가이드](docs/SERVICE_PLATFORM.md)** — 서비스 카탈로그, Stack/Action Center 연결, PostgreSQL·Redis·Jupyter 작업공간 백업과 CSI 스냅샷 Clone Restore
+- **[서비스 플랫폼 가이드](docs/SERVICE_PLATFORM.md)** — 서비스 카탈로그, Stack/Action Center 연결, PostgreSQL·Redis·Jupyter 백업, JupyterHub Named Server·유휴 정책과 CSI 스냅샷 Clone Restore
 - **[안전 및 보안 거버넌스 가이드](docs/SAFETY_GUIDE.md)** — 정책 엔진·승인 워크플로우
 - **[PostgreSQL 가이드](docs/POSTGRES_GUIDE.md)** — 운영 DB 구성
 - **[릴리즈 가이드](docs/RELEASE_GUIDE.md)** — 빌드·태깅·GitHub 릴리즈·오프라인 패키지·롤백

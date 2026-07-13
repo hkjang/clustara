@@ -320,6 +320,12 @@ JupyterHub 상세의 사용자 작업공간 표는 `hub.jupyter.org/username`과
 
 사용자별 백업 요청에는 사용자명, 원본 PVC, 별도 백업 PVC를 모두 입력합니다. 복구 시 백업 작업 원장에 기록된 사용자와 대상 사용자·PVC 매핑을 다시 비교하므로 다른 사용자 PVC로의 복구는 차단됩니다. staging 복구 완료 후 해당 사용자 권한으로 파일을 검증하고 필요한 파일만 승격한 다음 Notebook 서버를 시작하세요.
 
+### 6.8 JupyterHub Named Server와 유휴 정책
+
+서비스 상세의 **JupyterHub API 설정**에 Hub URL과 최소 scope의 서비스 토큰을 등록하고 연결 테스트를 실행합니다. 토큰은 서비스 범위 Credential Vault에 암호화되며 화면, API 응답, 감사 로그에는 반환되지 않습니다. 토큰 교체 시 새 값만 입력하고 저장한 뒤 다시 연결 테스트를 수행하세요.
+
+Named Server 표에서 실행 상태, 마지막 활동, 유휴 시간을 확인할 수 있습니다. 시작·중지 버튼은 실제 API를 즉시 호출하지 않고 Action Center 요청을 생성합니다. 자동 유휴 정책을 사용하면 Service reconcile이 기준을 넘긴 서버별 종료 승인 요청을 한 번만 생성합니다. 승인 실행 직전에 서버 활동을 다시 조회하며 최근 활동, pending, stopped 또는 삭제 상태이면 idle guard가 실행을 실패 처리합니다. 유휴 종료가 실패한 경우 사용자를 강제 종료하지 말고 현재 활동과 JupyterHub 이벤트를 확인한 뒤 새 요청을 생성하세요.
+
 ---
 
 ## 7. 보존 / Retention
@@ -335,6 +341,9 @@ ServiceInstance 자동 동기화는 기본 300초 주기로 실행되며, 다중
 | `K8S_SERVICE_RECONCILE_BATCH_SIZE` | 100 | tick당 최대 처리 수 |
 | `K8S_SERVICE_RECONCILE_TIMEOUT_SECONDS` | 30 | 인스턴스 1건 제한 시간 |
 | `K8S_SERVICE_INVENTORY_STALE_SECONDS` | 900 | 인벤토리 신뢰 가능 최대 나이 |
+| `K8S_SERVICE_JUPYTERHUB_IDLE_THRESHOLD_MINUTES` | 60 | JupyterHub 유휴 종료 후보 기본 기준(분) |
+| `K8S_SERVICE_JUPYTERHUB_HTTP_TIMEOUT_SECONDS` | 10 | JupyterHub REST API 제한 시간(초) |
+| `K8S_SERVICE_JUPYTERHUB_USER_LIMIT` | 500 | 한 번에 조회할 최대 JupyterHub 사용자 수 |
 | `K8S_SERVICE_HEALTH_RETENTION_DAYS` | 90 | Health snapshot 보존 일수 |
 
 오래된 행이 무한히 쌓이지 않도록 백그라운드 워커가 매 `RETENTION_INTERVAL` (기본 1시간) 마다 다음을 삭제합니다.

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -370,6 +371,20 @@ func (s *SQLStore) ListK8sServiceOperations(ctx context.Context, id string, limi
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// UpdateK8sServiceOperationsByRequestID keeps the service-level operation ledger
+// aligned with the Action Center request that performs the actual mutation.
+// Requests that do not originate from Service Platform simply update zero rows.
+func (s *SQLStore) UpdateK8sServiceOperationsByRequestID(ctx context.Context, requestID, status, result string) (int64, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_service_operations SET status=?, result=?, updated_at=? WHERE request_id=?`), status, result, nowString(), requestID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *SQLStore) ReplaceK8sServiceComponents(ctx context.Context, instanceID string, rows []K8sServiceComponent) error {

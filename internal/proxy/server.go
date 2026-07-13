@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.131"
+const AppVersion = "v0.9.135"
 
 type Server struct {
 	cfg              config.Config
@@ -2037,6 +2037,12 @@ func adminRequiredScope(r *http.Request) string {
 			}
 			return "service:credential:rotate"
 		}
+		if strings.Contains(path, "/jupyter-config") {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				return "service:credential:read"
+			}
+			return "service:credential:rotate"
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			return "service:read"
 		}
@@ -2049,7 +2055,7 @@ func adminRequiredScope(r *http.Request) string {
 		if strings.Contains(path, "/rotate") {
 			return "service:credential:rotate"
 		}
-		if strings.HasSuffix(path, "/start") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") || strings.HasSuffix(path, "/scale") {
+		if strings.HasSuffix(path, "/start") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart") || strings.HasSuffix(path, "/scale") || strings.Contains(path, "/jupyter-server-actions") || strings.Contains(path, "/jupyter-idle-policy") {
 			return "service:operate"
 		}
 		if r.Method == http.MethodDelete {

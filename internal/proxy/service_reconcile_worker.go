@@ -40,16 +40,18 @@ type ServiceReconcileWorkerStatus struct {
 	Failed              int    `json:"failed"`
 	LeaseSkipped        int    `json:"lease_skipped"`
 	PrunedSnapshots     int64  `json:"pruned_snapshots"`
+	IdleActionsQueued   int    `json:"idle_actions_queued"`
 }
 
 type serviceReconcileBatchResult struct {
-	Selected     int                      `json:"selected"`
-	Reconciled   int                      `json:"reconciled"`
-	Collecting   int                      `json:"collecting"`
-	Failed       int                      `json:"failed"`
-	LeaseSkipped int                      `json:"lease_skipped"`
-	Errors       []string                 `json:"errors"`
-	Previews     []serviceReconcileResult `json:"previews,omitempty"`
+	Selected          int                      `json:"selected"`
+	Reconciled        int                      `json:"reconciled"`
+	Collecting        int                      `json:"collecting"`
+	Failed            int                      `json:"failed"`
+	LeaseSkipped      int                      `json:"lease_skipped"`
+	IdleActionsQueued int                      `json:"idle_actions_queued"`
+	Errors            []string                 `json:"errors"`
+	Previews          []serviceReconcileResult `json:"previews,omitempty"`
 }
 
 func newServiceReconcileRuntime() *serviceReconcileRuntime {
@@ -159,6 +161,11 @@ func (s *Server) runServiceReconcileBatch(ctx context.Context, force, persist bo
 		}
 		instanceCtx, cancel := context.WithTimeout(ctx, timeout)
 		reconciled, reconcileErr := s.reconcileServiceInstance(instanceCtx, instance, persist)
+		idleQueued := 0
+		var idleErr error
+		if reconcileErr == nil && persist {
+			idleQueued, idleErr = s.queueJupyterHubIdleStopActions(instanceCtx, instance)
+		}
 		cancel()
 		if persist {
 			_ = s.db.ReleaseK8sServiceReconcileLease(context.Background(), instance.ID, runtime.owner)
@@ -172,6 +179,10 @@ func (s *Server) runServiceReconcileBatch(ctx context.Context, force, persist bo
 			continue
 		}
 		result.Reconciled++
+		result.IdleActionsQueued += idleQueued
+		if idleErr != nil {
+			result.Errors = append(result.Errors, instance.ID+": jupyterhub idle policy: "+idleErr.Error())
+		}
 		if reconciled.Health.CollectionStatus != "observed" {
 			result.Collecting++
 		}
@@ -216,6 +227,7 @@ func (s *Server) updateServiceReconcileStatus(settings ServiceReconcileWorkerSta
 	status.OwnerID = s.serviceReconcile.owner
 	status.LastRun = now
 	status.Selected, status.Reconciled, status.Collecting, status.Failed, status.LeaseSkipped = result.Selected, result.Reconciled, result.Collecting, result.Failed, result.LeaseSkipped
+	status.IdleActionsQueued = result.IdleActionsQueued
 	status.Running = false
 	status.PrunedSnapshots = previousPruned
 	status.LastSuccess = previousSuccess

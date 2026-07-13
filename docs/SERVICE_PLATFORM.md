@@ -2,7 +2,7 @@
 
 Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중심 서비스 인스턴스로 관리하는 상위 추상화 계층입니다. 실제 배포 실행기나 승인 엔진을 새로 만들지 않고 기존 Application Stack, Stack Apply, Action Center, 보안 정책, Resource Graph를 재사용합니다.
 
-## 현재 구현 범위 (v0.9.131)
+## 현재 구현 범위 (v0.9.135)
 
 - 기본 카탈로그: PostgreSQL, Redis, Tomcat, Spring Boot, JupyterLab, JupyterHub
 - 카탈로그 버전과 Small/Medium/Large 자원 프로파일
@@ -12,6 +12,10 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 - 시작·중지·확장·재시작을 기존 Action Center의 `scale`/`rollout_restart` 승인 요청으로 변환
 - 소유자 기반 목록 격리와 `service:*` capability 기반 메뉴/API 권한
 - 서비스 홈, 카탈로그, 내 서비스, 전체 서비스, Jupyter, DB, WAS/앱, 작업 이력, 템플릿 화면
+- 9개 서비스 업무 영역을 아이콘·설명·실시간 건수·현재 위치로 구분하고 모바일 가로 탐색을 지원하는 전용 소메뉴
+- 오버플로 시에만 표시되는 이전·다음 컨트롤과 `←/→/Home/End` 키보드 focus 탐색
+- 서비스 홈의 Ready 비율, 상태 요약, Jupyter/DB/WAS별 정상률, 위험·승인·만료 우선 조치 큐
+- capability에 따른 생성·동기화·재시작·Stack 액션 노출과 제한 역할의 허용된 상세 경로 유지
 - Application Stack manifest와 수집된 Kubernetes 인벤토리의 구성요소/Pod/PVC 동기화
 - 워크로드·Endpoint·스토리지·재시작·백업·보안·자원 포화도를 합산한 100점 Health Score
 - Service/Ingress/Route에서 내부·외부 Endpoint 파생 및 Kubernetes Secret 이름/key 참조 관리
@@ -29,8 +33,11 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 - Redis `redis-cli --rdb` 백업, 실제 scale-to-zero·실행 Pod 부재 확인, 전용 데이터 PVC RDB 복구와 완료 증적
 - 단독 JupyterLab 작업공간 PVC 아카이브, 중지 상태 일관성 검증, 경로 이탈·링크 차단 staging 복구
 - JupyterHub 표준 사용자·배포 라벨과 Notebook Pod volume을 결합한 사용자→Pod→PVC 매핑 및 사용자별 안전 백업·복구
+- 서비스 범위 Credential Vault에 암호화한 JupyterHub API 연결과 토큰 비노출 연결 테스트
+- 기본/Named Server 상태·마지막 활동·유휴 시간 조회와 Action Center 승인형 시작·중지
+- Service reconcile 기반 유휴 종료 승인 요청 자동 생성, idempotency 중복 방지와 실행 직전 활동 재검사
 
-JupyterHub REST API 기반 Named Server 시작·중지, 사용자별 동시 서버/유휴 정책, VolumeSnapshotContent 기반 타 Namespace/클러스터 clone, 클론 PVC의 StatefulSet 자동 전환, 서비스별 exporter, Helm chart 원격 fetch/render, 의존성 Secret 자동 주입은 후속 단계입니다. 백업·복구 Job, VolumeSnapshot, 클론 PVC는 별도 실행기가 아니라 Manifest Change Studio에서 승인·적용합니다.
+사용자별 최대 동시 서버 수, 프로파일 기반 spawn options, VolumeSnapshotContent 기반 타 Namespace/클러스터 clone, 클론 PVC의 StatefulSet 자동 전환, 서비스별 exporter, Helm chart 원격 fetch/render, 의존성 Secret 자동 주입은 후속 단계입니다. 백업·복구 Job, VolumeSnapshot, 클론 PVC는 별도 실행기가 아니라 Manifest Change Studio에서 승인·적용합니다.
 
 ## 생성 흐름
 
@@ -73,6 +80,9 @@ Developer는 카탈로그와 본인 소유 서비스만 볼 수 있습니다. `s
 - `POST /admin/k8s/services/instances/{id}/reconcile`
 - `GET /admin/k8s/services/instances/{id}/endpoints|cost`
 - `GET/POST /admin/k8s/services/instances/{id}/credentials`
+- `GET/POST /admin/k8s/services/instances/{id}/jupyter-config`
+- `GET /admin/k8s/services/instances/{id}/jupyter-servers`
+- `POST /admin/k8s/services/instances/{id}/jupyter-server-actions`
 - `GET/POST /admin/k8s/services/reconcile`
 - `GET/POST /admin/k8s/services/instances/{id}/backups`
 - `POST /admin/k8s/services/backups/{backupId}/restore-preview`
@@ -90,8 +100,13 @@ Secret 값은 Clustara DB에 저장하지 않습니다. `k8s_service_credentials
 | `k8s.services.reconcile_timeout_seconds` | `K8S_SERVICE_RECONCILE_TIMEOUT_SECONDS` | `30` |
 | `k8s.services.inventory_stale_seconds` | `K8S_SERVICE_INVENTORY_STALE_SECONDS` | `900` |
 | `k8s.services.health_retention_days` | `K8S_SERVICE_HEALTH_RETENTION_DAYS` | `90` |
+| `k8s.services.jupyterhub_idle_threshold_minutes` | `K8S_SERVICE_JUPYTERHUB_IDLE_THRESHOLD_MINUTES` | `60` |
+| `k8s.services.jupyterhub_http_timeout_seconds` | `K8S_SERVICE_JUPYTERHUB_HTTP_TIMEOUT_SECONDS` | `10` |
+| `k8s.services.jupyterhub_user_limit` | `K8S_SERVICE_JUPYTERHUB_USER_LIMIT` | `500` |
 
 런타임 설정 화면에서 저장하면 재시작 없이 다음 worker tick에 반영됩니다. `POST /admin/k8s/services/reconcile`의 `dry_run=true`는 Health를 계산하지만 구성요소·snapshot·인스턴스 상태를 변경하지 않습니다.
+
+JupyterHub 서비스 상세의 **API 설정**에서 서비스 계정 API URL, 토큰, 서비스별 유휴 기준과 자동 승인 요청 여부를 설정합니다. 토큰은 `enterprise_records`의 서비스 scope에 암호화되어 API 응답에 포함되지 않습니다. 자동 유휴 정책은 Notebook을 직접 종료하지 않고 Action Center 요청만 만들며, 승인·실행 시 현재 활동이 기준보다 최근이면 stop 호출을 차단합니다.
 
 ## 백업·복구 안전 흐름
 

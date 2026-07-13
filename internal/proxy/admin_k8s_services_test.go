@@ -3,10 +3,12 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -749,6 +751,223 @@ func TestJupyterHubUserWorkspaceMappingBackupAndRestore(t *testing.T) {
 	}
 }
 
+func TestJupyterHubNamedServerCredentialIdlePolicyAndApprovedExecution(t *testing.T) {
+	var mu sync.Mutex
+	lastActivity := time.Now().UTC().Add(-2 * time.Hour)
+	startCalls, stopCalls := 0, 0
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "token hub-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		activity := lastActivity
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/hub/api/users":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name": "alice", "last_activity": activity.Format(time.RFC3339),
+				"servers": map[string]any{"analysis": map[string]any{"name": "analysis", "ready": true, "stopped": false, "url": "/user/alice/analysis/", "started": activity.Add(-time.Hour).Format(time.RFC3339), "last_activity": activity.Format(time.RFC3339)}},
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/hub/api/users/alice/servers/analysis":
+			mu.Lock()
+			startCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodDelete && r.URL.Path == "/hub/api/users/alice/servers/analysis":
+			mu.Lock()
+			stopCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer hub.Close()
+
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	if err := db.UpsertK8sCluster(context.Background(), store.K8sCluster{ID: "cluster_hub_api", Name: "hub-api", ServerURL: "https://k8s.invalid", AuthMode: "token", Status: "connected"}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+
+	catalogResp, err := http.Get(proxy.URL + "/admin/k8s/services/catalogs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogs struct {
+		Catalogs []store.K8sServiceCatalog `json:"catalogs"`
+	}
+	_ = json.NewDecoder(catalogResp.Body).Decode(&catalogs)
+	catalogResp.Body.Close()
+	var catalog store.K8sServiceCatalog
+	for _, candidate := range catalogs.Catalogs {
+		if candidate.Code == "jupyterhub" {
+			catalog = candidate
+		}
+	}
+	versions, _ := db.ListK8sServiceVersions(context.Background(), catalog.ID)
+	profiles, _ := db.ListK8sServiceProfiles(context.Background(), catalog.ID)
+	createResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances", "", map[string]any{
+		"catalog_id": catalog.ID, "version_id": versions[0].ID, "profile_id": profiles[0].ID,
+		"cluster_id": "cluster_hub_api", "namespace": "science", "name": "team-hub-api", "environment": "development",
+		"values": map[string]any{"image": "harbor.local/jupyterhub@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+	})
+	var created struct {
+		Instance store.K8sServiceInstance `json:"instance"`
+	}
+	_ = json.NewDecoder(createResp.Body).Decode(&created)
+	createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("JupyterHub service create failed: status=%d payload=%+v", createResp.StatusCode, created)
+	}
+
+	// Validate the values currently entered in the settings form before storing
+	// either the URL or token. The token must remain request-memory only.
+	testDraftResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-config", "", map[string]any{
+		"action": "test", "base_url": hub.URL, "token": "hub-secret", "idle_threshold_minutes": 60, "auto_stop_enabled": true,
+	})
+	var testDraft struct {
+		OK            bool `json:"ok"`
+		SampleServers int  `json:"sample_servers"`
+	}
+	_ = json.NewDecoder(testDraftResp.Body).Decode(&testDraft)
+	testDraftResp.Body.Close()
+	if testDraftResp.StatusCode != http.StatusOK || !testDraft.OK || testDraft.SampleServers != 1 {
+		t.Fatalf("unsaved JupyterHub config test failed: status=%d payload=%+v", testDraftResp.StatusCode, testDraft)
+	}
+	unsavedRows, _ := db.ListEnterpriseRecords(context.Background(), store.EnterpriseRecordFilter{Kind: serviceJupyterHubAPIKind, ScopeType: "service", ScopeID: created.Instance.ID, Limit: 10})
+	if len(unsavedRows) != 0 {
+		t.Fatal("connection test must not persist the draft JupyterHub credential")
+	}
+
+	configResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-config", "", map[string]any{
+		"action": "save", "base_url": hub.URL, "token": "hub-secret", "idle_threshold_minutes": 60, "auto_stop_enabled": true,
+	})
+	configBody, _ := io.ReadAll(configResp.Body)
+	configResp.Body.Close()
+	if configResp.StatusCode != http.StatusOK || strings.Contains(string(configBody), "hub-secret") || strings.Contains(string(configBody), "encrypted_token") {
+		t.Fatalf("JupyterHub config must save without exposing token: status=%d body=%s", configResp.StatusCode, configBody)
+	}
+	getConfig, _ := http.Get(proxy.URL + "/admin/k8s/services/instances/" + created.Instance.ID + "/jupyter-config")
+	getConfigBody, _ := io.ReadAll(getConfig.Body)
+	getConfig.Body.Close()
+	if getConfig.StatusCode != http.StatusOK || strings.Contains(string(getConfigBody), "hub-secret") || !strings.Contains(string(getConfigBody), `"token_configured":true`) {
+		t.Fatalf("masked JupyterHub config response invalid: status=%d body=%s", getConfig.StatusCode, getConfigBody)
+	}
+	credentialRows, _ := db.ListEnterpriseRecords(context.Background(), store.EnterpriseRecordFilter{Kind: serviceJupyterHubAPIKind, ScopeType: "service", ScopeID: created.Instance.ID, Limit: 10})
+	auditRows, _ := db.ListAdminAudit(context.Background(), 100)
+	credentialJSON, _ := json.Marshal(credentialRows)
+	auditJSON, _ := json.Marshal(auditRows)
+	if strings.Contains(string(credentialJSON), "hub-secret") || strings.Contains(string(auditJSON), "hub-secret") {
+		t.Fatal("JupyterHub token must never be persisted in plaintext or copied into admin audit")
+	}
+
+	serversResp, _ := http.Get(proxy.URL + "/admin/k8s/services/instances/" + created.Instance.ID + "/jupyter-servers")
+	var servers struct {
+		Servers        []serviceJupyterHubServer `json:"servers"`
+		IdleCandidates int                       `json:"idle_candidates"`
+	}
+	_ = json.NewDecoder(serversResp.Body).Decode(&servers)
+	serversResp.Body.Close()
+	if serversResp.StatusCode != http.StatusOK || len(servers.Servers) != 1 || servers.IdleCandidates != 1 || !servers.Servers[0].IdleCandidate || servers.Servers[0].ServerName != "analysis" {
+		t.Fatalf("JupyterHub Named Server idle inventory invalid: status=%d payload=%+v", serversResp.StatusCode, servers)
+	}
+
+	startResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-server-actions", "", map[string]any{"action": "start", "username": "alice", "server_name": "analysis", "reason": "user request"})
+	var startResult struct {
+		Action store.K8sActionRequest `json:"action"`
+	}
+	_ = json.NewDecoder(startResp.Body).Decode(&startResult)
+	startResp.Body.Close()
+	if startResp.StatusCode != http.StatusAccepted || startResult.Action.Status != "approval_required" || startResult.Action.Action != "jupyter_server_start" {
+		t.Fatalf("Named Server start must enter Action Center: status=%d payload=%+v", startResp.StatusCode, startResult)
+	}
+	approveStart := postJSON(t, proxy.URL+"/admin/k8s/actions/"+startResult.Action.ID+"/approve", "", map[string]any{"result": "approved in test"})
+	approveStart.Body.Close()
+	executeStart := postJSON(t, proxy.URL+"/admin/k8s/actions/"+startResult.Action.ID+"/execute", "", map[string]any{})
+	executeStart.Body.Close()
+	mu.Lock()
+	gotStartCalls := startCalls
+	mu.Unlock()
+	if approveStart.StatusCode != http.StatusOK || executeStart.StatusCode != http.StatusOK || gotStartCalls != 1 {
+		t.Fatalf("approved Named Server start was not executed: approve=%d execute=%d calls=%d", approveStart.StatusCode, executeStart.StatusCode, gotStartCalls)
+	}
+	operations, _ := db.ListK8sServiceOperations(context.Background(), created.Instance.ID, 50)
+	if len(operations) == 0 || operations[0].RequestID != startResult.Action.ID || operations[0].Status != "executed" {
+		t.Fatalf("service operation ledger must follow Action Center execution: %+v", operations)
+	}
+
+	previewResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-idle-policy", "", map[string]any{"queue": false})
+	var preview struct {
+		Evaluation serviceJupyterHubIdleEvaluation `json:"evaluation"`
+	}
+	_ = json.NewDecoder(previewResp.Body).Decode(&preview)
+	previewResp.Body.Close()
+	if previewResp.StatusCode != http.StatusOK || preview.Evaluation.CandidateCount != 1 || preview.Evaluation.Queued != 0 || preview.Evaluation.AlreadyTracked != 0 {
+		t.Fatalf("idle policy dry-run invalid: status=%d payload=%+v", previewResp.StatusCode, preview)
+	}
+	queueResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-idle-policy", "", map[string]any{"queue": true})
+	var queued struct {
+		Evaluation serviceJupyterHubIdleEvaluation `json:"evaluation"`
+	}
+	_ = json.NewDecoder(queueResp.Body).Decode(&queued)
+	queueResp.Body.Close()
+	if queueResp.StatusCode != http.StatusOK || queued.Evaluation.Queued != 1 || len(queued.Evaluation.Candidates) != 1 || queued.Evaluation.Candidates[0].IdleActionStatus != "approval_required" {
+		t.Fatalf("idle policy should queue one tracked approval: status=%d payload=%+v", queueResp.StatusCode, queued)
+	}
+	queueAgainResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-idle-policy", "", map[string]any{"queue": true})
+	var queuedAgain struct {
+		Evaluation serviceJupyterHubIdleEvaluation `json:"evaluation"`
+	}
+	_ = json.NewDecoder(queueAgainResp.Body).Decode(&queuedAgain)
+	queueAgainResp.Body.Close()
+	if queueAgainResp.StatusCode != http.StatusOK || queuedAgain.Evaluation.Queued != 0 || queuedAgain.Evaluation.AlreadyTracked != 1 {
+		t.Fatalf("idle policy request must be idempotent and report the tracked action: status=%d payload=%+v", queueAgainResp.StatusCode, queuedAgain)
+	}
+
+	stopResp := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+created.Instance.ID+"/jupyter-server-actions", "", map[string]any{"action": "stop", "username": "alice", "server_name": "analysis", "reason": "idle policy", "idle_guard": true})
+	var stopResult struct {
+		Action store.K8sActionRequest `json:"action"`
+	}
+	_ = json.NewDecoder(stopResp.Body).Decode(&stopResult)
+	stopResp.Body.Close()
+	mu.Lock()
+	lastActivity = time.Now().UTC()
+	mu.Unlock()
+	approveStop := postJSON(t, proxy.URL+"/admin/k8s/actions/"+stopResult.Action.ID+"/approve", "", map[string]any{"result": "approved before activity refresh"})
+	approveStop.Body.Close()
+	executeStop := postJSON(t, proxy.URL+"/admin/k8s/actions/"+stopResult.Action.ID+"/execute", "", map[string]any{})
+	executeStop.Body.Close()
+	mu.Lock()
+	gotStopCalls := stopCalls
+	mu.Unlock()
+	storedStop, _ := db.GetK8sActionRequest(context.Background(), stopResult.Action.ID)
+	if executeStop.StatusCode != http.StatusBadGateway || gotStopCalls != 0 || storedStop.Status != "failed" || !strings.Contains(storedStop.Result, "idle guard blocked") {
+		t.Fatalf("idle guard must block a newly active server: execute=%d calls=%d action=%+v", executeStop.StatusCode, gotStopCalls, storedStop)
+	}
+	operations, _ = db.ListK8sServiceOperations(context.Background(), created.Instance.ID, 50)
+	foundFailed := false
+	for _, operation := range operations {
+		if operation.RequestID == stopResult.Action.ID && operation.Status == "failed" && strings.Contains(operation.Result, "idle guard blocked") {
+			foundFailed = true
+		}
+	}
+	if !foundFailed {
+		t.Fatalf("failed idle guard execution must update the service operation ledger: %+v", operations)
+	}
+}
+
 func TestServiceInventoryFreshnessSeparatesCollectionState(t *testing.T) {
 	now := time.Now().UTC()
 	if status, _ := serviceInventoryFreshness(nil, now, 10*time.Minute); status != "missing" {
@@ -766,11 +985,14 @@ func TestServiceInventoryFreshnessSeparatesCollectionState(t *testing.T) {
 
 func TestServiceReconcileRuntimeSettingBounds(t *testing.T) {
 	for key, good := range map[string]string{
-		"k8s.services.reconcile_interval_seconds": "300",
-		"k8s.services.reconcile_batch_size":       "100",
-		"k8s.services.reconcile_timeout_seconds":  "30",
-		"k8s.services.inventory_stale_seconds":    "900",
-		"k8s.services.health_retention_days":      "90",
+		"k8s.services.reconcile_interval_seconds":        "300",
+		"k8s.services.reconcile_batch_size":              "100",
+		"k8s.services.reconcile_timeout_seconds":         "30",
+		"k8s.services.inventory_stale_seconds":           "900",
+		"k8s.services.health_retention_days":             "90",
+		"k8s.services.jupyterhub_idle_threshold_minutes": "60",
+		"k8s.services.jupyterhub_http_timeout_seconds":   "10",
+		"k8s.services.jupyterhub_user_limit":             "500",
 	} {
 		def, ok := settingDefByKey(key)
 		if !ok || def.validate == nil || def.validate(good) != nil {
@@ -803,5 +1025,21 @@ func TestServiceCredentialRoutesUseDedicatedCapabilities(t *testing.T) {
 	restoreReq := httptest.NewRequest(http.MethodPost, "/admin/k8s/services/backups/backup-1/restore-preview", nil)
 	if got := adminRequiredScope(restoreReq); got != "service:restore" {
 		t.Fatalf("restore preview scope = %q", got)
+	}
+	jhubConfigGet := httptest.NewRequest(http.MethodGet, "/admin/k8s/services/instances/svc-1/jupyter-config", nil)
+	if got := adminRequiredScope(jhubConfigGet); got != "service:credential:read" {
+		t.Fatalf("JupyterHub config GET scope = %q", got)
+	}
+	jhubConfigPost := httptest.NewRequest(http.MethodPost, "/admin/k8s/services/instances/svc-1/jupyter-config", nil)
+	if got := adminRequiredScope(jhubConfigPost); got != "service:credential:rotate" {
+		t.Fatalf("JupyterHub config POST scope = %q", got)
+	}
+	jhubAction := httptest.NewRequest(http.MethodPost, "/admin/k8s/services/instances/svc-1/jupyter-server-actions", nil)
+	if got := adminRequiredScope(jhubAction); got != "service:operate" {
+		t.Fatalf("JupyterHub server action scope = %q", got)
+	}
+	jhubIdle := httptest.NewRequest(http.MethodPost, "/admin/k8s/services/instances/svc-1/jupyter-idle-policy", nil)
+	if got := adminRequiredScope(jhubIdle); got != "service:operate" {
+		t.Fatalf("JupyterHub idle policy scope = %q", got)
 	}
 }

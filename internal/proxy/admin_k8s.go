@@ -768,6 +768,7 @@ func (s *Server) handleK8sActionByID(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_update_failed")
 		return
 	}
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(r.Context(), id, status, firstNonEmpty(strings.TrimSpace(payload.Result), "Action Center "+status))
 	s.auditAdmin(r, "k8s.action."+command, "", auditJSON(map[string]string{"id": id, "status": status}))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": status})
 }
@@ -791,6 +792,9 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	if act.Status != "approved" {
 		return k8sActionRunErr(http.StatusConflict, "action must be approved before execution (current: "+act.Status+")", "invalid_request_error", "action_not_approved", store.ErrInvalidTransition)
 	}
+	if act.Action == "jupyter_server_start" || act.Action == "jupyter_server_stop" {
+		return s.runApprovedJupyterHubAction(ctx, actor, act)
+	}
 	cluster, err := s.db.GetK8sCluster(ctx, act.ClusterID)
 	if err != nil {
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed", err)
@@ -813,6 +817,7 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	} else if err != nil {
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed", err)
 	}
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, "running", "Action Center execution in progress")
 
 	var execErr error
 	switch strings.ToLower(act.Action) {
@@ -844,6 +849,7 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	} else if err != nil {
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 	}
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, resultStatus, resultMsg)
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
 	}
@@ -880,7 +886,7 @@ func (s *Server) executeK8sAction(w http.ResponseWriter, r *http.Request, id str
 
 func k8sActionExecutable(actionName string) bool {
 	switch strings.ToLower(strings.TrimSpace(actionName)) {
-	case "scale", "rollout_restart", "cordon", "uncordon", "delete_pod":
+	case "scale", "rollout_restart", "cordon", "uncordon", "delete_pod", "jupyter_server_start", "jupyter_server_stop":
 		return true
 	default:
 		return false

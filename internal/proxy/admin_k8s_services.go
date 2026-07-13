@@ -554,6 +554,18 @@ func (s *Server) handleServiceOperation(w http.ResponseWriter, r *http.Request, 
 	case "jupyter-workspaces":
 		s.handleServiceJupyterWorkspaces(w, r, in)
 		return
+	case "jupyter-config":
+		s.handleServiceJupyterHubConfig(w, r, in)
+		return
+	case "jupyter-servers":
+		s.handleServiceJupyterHubServers(w, r, in)
+		return
+	case "jupyter-server-actions":
+		s.handleServiceJupyterHubServerAction(w, r, in)
+		return
+	case "jupyter-idle-policy":
+		s.handleServiceJupyterHubIdlePolicy(w, r, in)
+		return
 	case "health":
 		if r.Method == http.MethodGet {
 			result, err := s.reconcileServiceInstance(r.Context(), in, false)

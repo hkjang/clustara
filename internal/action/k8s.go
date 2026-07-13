@@ -14,6 +14,8 @@ func Classify(action string) Decision {
 	switch name {
 	case "scale", "rollout_restart":
 		return Decision{RiskLevel: "medium", RequiresApproval: false, DryRunRequired: true, Reason: "workload-scoped reversible action"}
+	case "jupyter_server_start", "jupyter_server_stop":
+		return Decision{RiskLevel: "medium", RequiresApproval: true, DryRunRequired: true, Reason: "user-scoped JupyterHub server lifecycle action"}
 	case "cordon", "uncordon":
 		return Decision{RiskLevel: "high", RequiresApproval: true, DryRunRequired: true, Reason: "node scheduling state change"}
 	case "delete_pod":

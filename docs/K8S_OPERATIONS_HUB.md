@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.131** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.135** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.131)
+## 기능 상태 (v0.9.135)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -14,6 +14,10 @@
 | Service Platform Redis RDB 보호 — Secret 참조형 RDB 백업, 실제 scale-to-zero·실행 Pod 부재 검증, 데이터 PVC 교체 승인과 완료 추적 | ✅ (v0.9.129) |
 | Service Platform JupyterLab Workspace 보호 — 중지 상태 PVC 아카이브, read-only 원본, 경로 이탈·링크 차단 staging 복구와 완료 추적 | ✅ (v0.9.130) |
 | Service Platform JupyterHub User Workspace — 사용자·배포 라벨+Pod mount 기반 사용자/PVC 매핑, active/conflict 차단, 소유권 고정 백업·복구 | ✅ (v0.9.131) |
+| Service Platform JupyterHub Named Server — 서비스 범위 암호화 API 토큰, 서버·활동 조회, 승인형 start/stop, 자동 유휴 승인 요청과 실행 직전 활동 재검사 | ✅ (v0.9.132) |
+| Service Platform Subnavigation UX — 9개 업무 영역 아이콘·설명·건수, 현재 위치·접근성, 반응형 scroll-snap 탐색 | ✅ (v0.9.133) |
+| Service Subnavigation Controls — overflow 전용 이전·다음 버튼, 경계 상태, 좌우/Home/End 키보드 탐색 | ✅ (v0.9.134) |
+| Service Operations Home — Ready 비율·유형별 정상률·우선 조치 큐·worker 상태와 role-aware 액션 | ✅ (v0.9.135) |
 | 클러스터 등록(kubeconfig/token AES-GCM 암호화) · 연결 테스트 · 라이브 수집(client-go) | ✅ |
 | 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |

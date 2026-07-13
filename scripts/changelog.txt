@@ -1,3 +1,15 @@
+v0.9.135:
+- **Service Operations Home & Role-Aware Actions (v0.9.135)**: 서비스 홈을 단순 KPI/목록에서 운영 지휘 화면으로 재구성했습니다. 전체 Ready 비율, 정상·위험·승인·수집/중지 요약, Jupyter·DB·WAS별 정상률, Failed→Degraded→승인 대기→만료 우선순위 조치 큐와 reconcile worker 상태를 제공합니다. 서비스 생성·전체 목록·승인함·동기화·설정·재시작·Stack 링크는 capability와 허용 메뉴를 다시 확인해 렌더링하고, 전체 서비스 권한이 없는 사용자의 상세 링크는 내 서비스 경로로 안전하게 대체합니다. 데스크톱/모바일 전용 레이아웃과 UI 계약 테스트를 추가했습니다.
+
+v0.9.134:
+- **Service Subnavigation Keyboard & Overflow Controls (v0.9.134)**: 서비스 플랫폼 소메뉴에 오버플로가 있을 때만 나타나는 이전·다음 버튼과 시작/끝 경계 disabled 상태를 추가했습니다. `ArrowLeft`, `ArrowRight`, `Home`, `End` 키로 권한상 노출된 메뉴 사이의 focus를 이동하고 해당 카드를 자동 노출하며 Enter의 기존 링크 이동은 유지합니다. 스크롤·리사이즈마다 컨트롤 상태를 다시 계산해 데스크톱에서는 불필요한 버튼을 숨기고 모바일에서는 현재 위치를 잃지 않도록 했으며 접근성 레이블과 UI 계약 테스트를 보강했습니다.
+
+v0.9.133:
+- **Service Platform Subnavigation UX (v0.9.133)**: 서비스 홈·카탈로그·내/전체 서비스·Jupyter·DB·WAS·작업 이력·템플릿의 9개 하위 메뉴를 전용 탐색 셸로 재설계했습니다. 현재 화면의 명칭과 목적, 메뉴 위치, 영역별 아이콘·설명, 권한 필터를 유지한 실시간 건수 배지, 명확한 활성·키보드 focus 상태를 제공하며 좁은 화면에서는 활성 메뉴 중심의 가로 scroll-snap 탐색으로 전환합니다. 서비스 플랫폼 전용 UI 계약 테스트로 전체 경로, `aria-current`, 권한 필터와 활성 메뉴 자동 노출을 고정했습니다.
+
+v0.9.132:
+- **JupyterHub Named Server Operations & Idle Approval Guard (v0.9.132)**: 서비스별 JupyterHub REST API URL과 토큰을 서비스 범위 Credential Vault에 암호화 저장하고 토큰을 응답·로그·감사 원장에 노출하지 않는 연결 설정과 테스트를 추가했습니다. 기본/Named Server 목록, 상태, 마지막 활동, 유휴 시간을 조회하며 시작·중지는 기존 Action Center 승인 후 실제 API로 실행합니다. 자동 유휴 정책은 주기 Service reconcile에서 중복 없는 종료 승인 요청을 생성하고, 승인 실행 직전에 활동을 다시 조회해 사용자가 복귀한 서버 종료를 차단합니다. 유휴 기준·HTTP timeout·사용자 조회 한도는 런타임 설정과 환경변수로 재시작 없이 변경할 수 있습니다.
+
 v0.9.131:
 - **JupyterHub User Workspace Mapping & Ownership Guard (v0.9.131)**: JupyterHub 표준 사용자/배포/인스턴스 라벨과 Notebook Pod의 `persistentVolumeClaim` mount를 결합해 사용자→Pod→PVC, 용량, StorageClass, active/idle/conflict 상태를 제공하는 workspace API와 서비스 상세 UI를 추가했습니다. 사용자별 파일 백업은 요청 사용자와 Bound PVC 매핑이 일치하고 해당 Notebook Pod가 비활성인 경우만 허용하며, 복구 시 백업 작업 원장에 기록된 사용자 소유권과 대상 사용자·PVC를 다시 비교해 교차 사용자 복구를 차단합니다. 승인형 read-only 아카이브와 경로 이탈·링크 차단 staging 복구, 감사·작업 원장 흐름을 기존 Manifest Change Studio에 연결했습니다.
 
