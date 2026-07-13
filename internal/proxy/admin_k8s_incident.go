@@ -58,6 +58,9 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 	revisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Limit: 2000})
 	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
 	drafts := analyzer.BuildIncidents(items, rca, events)
+	metrics, _ := s.db.ListK8sMetricSamplesFiltered(ctx, store.K8sMetricSampleFilter{ClusterID: clusterID, Since: time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano), Limit: 100000})
+	metricDrafts := analyzer.BuildMetricRiskIncidents(items, metrics, events, time.Now().UTC())
+	drafts = append(drafts, metricDrafts...)
 
 	// Restart storms (POD-RULE-06): a service-wide restart wave opens one workload incident.
 	stormPods := []analyzer.RestartStormPod{}
@@ -89,6 +92,11 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 			updated++
 		}
 	}
+	activePredictive := map[string]bool{}
+	for _, d := range metricDrafts {
+		activePredictive[d.Key] = true
+	}
+	_, _ = s.db.ResolveOpenK8sIncidentsByKeyPrefix(ctx, clusterID, "predictive:", activePredictive)
 	return opened, updated, len(drafts), nil
 }
 
@@ -182,7 +190,34 @@ func (s *Server) handleK8sIncidentByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"incident": inc, "actions": related, "events": relatedEvents, "revisions": revisions,
 		"findings": relatedFindings, "graph": graph, "impact": graph.Impact, "confidence": confidence,
+		"response_plan": predictiveIncidentResponsePlan(inc),
 	})
+}
+
+func predictiveIncidentResponsePlan(inc store.K8sIncident) map[string]any {
+	predictive := strings.HasPrefix(inc.DedupKey, "predictive:")
+	checks := []string{"최근 메트릭과 Kubernetes 상태·Warning 이벤트의 시각을 대조", "최근 배포·설정·노드 변경과 위험 상승 시점을 비교", "영향도 그래프에서 상위 서비스와 인접 Pod·Node 범위 확인"}
+	preparations := []string{"담당자와 관찰 주기를 지정하고 워룸 Incident를 유지", "승인형 완화 조치의 실행 조건과 롤백 기준을 사전 확인"}
+	recovery := []string{"위험 신호가 연속 3회 정상 범위인지 확인", "Ready·재시작·Warning과 사용자 영향이 함께 회복됐는지 검증"}
+	switch inc.Condition {
+	case "PodMemorySaturation", "PredictedMemoryExhaustion":
+		checks = append(checks, "working set 증가율, memory limit, OOMKilled와 캐시·누수 패턴 확인")
+		preparations = append(preparations, "안전한 scale-out 또는 memory limit 조정 변경안을 미리 검증")
+	case "PodCPUSaturation", "PredictedCPUExhaustion":
+		checks = append(checks, "CPU throttling, 요청 지연, HPA 목표·최대 replica 확인")
+		preparations = append(preparations, "HPA/replica 확장 또는 CPU limit 조정의 용량·비용 영향 확인")
+	case "NodeResourceRisk", "PredictedCapacityExhaustion":
+		checks = append(checks, "Node Pressure, allocatable 대비 사용량, 상위 소비 Pod와 PDB 확인")
+		preparations = append(preparations, "대체 노드 용량과 cordon/drain 승인 경로 및 PDB 차단 여부 확인")
+	case "PodGPURisk":
+		checks = append(checks, "DCGM 온도·XID·ECC·VRAM과 동일 노드의 GPU Pod 경합 확인")
+		preparations = append(preparations, "대체 GPU 노드와 체크포인트·재스케줄 가능 여부 확인")
+	}
+	stage := "detected"
+	if predictive {
+		stage = "preventive_observation"
+	}
+	return map[string]any{"stage": stage, "checks": checks, "preparations": preparations, "recovery_criteria": recovery, "auto_resolve": predictive}
 }
 
 func k8sEventMatchesIncident(inc store.K8sIncident, e store.K8sEvent) bool {

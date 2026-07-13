@@ -8,19 +8,25 @@ import (
 )
 
 type ResourceGraphNode struct {
-	ID          string `json:"id"`
-	ClusterID   string `json:"cluster_id"`
-	Kind        string `json:"kind"`
-	Namespace   string `json:"namespace"`
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Status      string `json:"status"`
-	RiskLevel   string `json:"risk_level"`
-	Team        string `json:"team"`
-	Service     string `json:"service"`
-	Criticality string `json:"criticality"`
-	CostCenter  string `json:"cost_center"`
-	Focus       bool   `json:"focus"`
+	ID                 string  `json:"id"`
+	ClusterID          string  `json:"cluster_id"`
+	Kind               string  `json:"kind"`
+	Namespace          string  `json:"namespace"`
+	Name               string  `json:"name"`
+	Label              string  `json:"label"`
+	Status             string  `json:"status"`
+	RiskLevel          string  `json:"risk_level"`
+	Team               string  `json:"team"`
+	Service            string  `json:"service"`
+	Criticality        string  `json:"criticality"`
+	CostCenter         string  `json:"cost_center"`
+	Focus              bool    `json:"focus"`
+	CPUMillicores      float64 `json:"cpu_millicores,omitempty"`
+	MemoryBytes        float64 `json:"memory_bytes,omitempty"`
+	GPUUtilizationPct  float64 `json:"gpu_utilization_pct,omitempty"`
+	GPUMemoryUsedBytes float64 `json:"gpu_memory_used_bytes,omitempty"`
+	GPUObserved        bool    `json:"gpu_observed,omitempty"`
+	MetricsObservedAt  string  `json:"metrics_observed_at,omitempty"`
 }
 
 type ResourceGraphEdge struct {

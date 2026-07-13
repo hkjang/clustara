@@ -114,6 +114,25 @@ func (s *SQLStore) ResolveK8sIncident(ctx context.Context, id string) error {
 	return nil
 }
 
+// ResolveOpenK8sIncidentsByKeyPrefix resolves preventive incidents whose signal disappeared while
+// leaving observed-failure incidents untouched. activeKeys is the current scan's live signal set.
+func (s *SQLStore) ResolveOpenK8sIncidentsByKeyPrefix(ctx context.Context, clusterID, prefix string, activeKeys map[string]bool) (int, error) {
+	incidents, err := s.ListK8sIncidents(ctx, K8sIncidentFilter{ClusterID: clusterID, Status: "open", Limit: 500})
+	if err != nil {
+		return 0, err
+	}
+	resolved := 0
+	for _, incident := range incidents {
+		if !strings.HasPrefix(incident.DedupKey, prefix) || activeKeys[incident.DedupKey] {
+			continue
+		}
+		if err := s.ResolveK8sIncident(ctx, incident.ID); err == nil {
+			resolved++
+		}
+	}
+	return resolved, nil
+}
+
 func scanK8sIncident(sc k8sClusterScanner) (K8sIncident, error) {
 	var inc K8sIncident
 	var ev string

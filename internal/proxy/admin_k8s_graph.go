@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"strings"
 
 	"clustara/internal/analyzer"
 	"clustara/internal/store"
@@ -33,5 +34,17 @@ func (s *Server) handleK8sResourceGraph(w http.ResponseWriter, r *http.Request) 
 		Name:      q.Get("name"),
 		Radius:    intParam(q.Get("radius"), 2),
 	})
+	metrics, _ := s.db.ListK8sMetricSamplesFiltered(r.Context(), store.K8sMetricSampleFilter{ClusterID: clusterID, ResourceKind: "Pod", Limit: 100000})
+	usageByPod := latestPodUsage(metrics)
+	for i := range graph.Nodes {
+		node := &graph.Nodes[i]
+		if !strings.EqualFold(node.Kind, "Pod") {
+			continue
+		}
+		usage := usageByPod[podUsageKey(node.Namespace, node.Name)]
+		node.CPUMillicores, node.MemoryBytes = usage.CPUMillicores, usage.MemoryBytes
+		node.GPUUtilizationPct, node.GPUMemoryUsedBytes, node.GPUObserved = usage.GPUUtilizationPct, usage.GPUMemoryUsedBytes, usage.GPUObserved
+		node.MetricsObservedAt = usage.ObservedAt
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"graph": graph})
 }

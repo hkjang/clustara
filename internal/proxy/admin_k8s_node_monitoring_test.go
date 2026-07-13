@@ -11,8 +11,64 @@ import (
 	"time"
 
 	"clustara/internal/analyzer"
+	"clustara/internal/prometheus"
 	"clustara/internal/store"
 )
+
+func TestQueryNodeMetricSupportsThanosPrometheusLabelsAndFallback(t *testing.T) {
+	queries := []string{}
+	prom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		queries = append(queries, query)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(query, "node_cpu_seconds_total") {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"node":"worker-1"},"value":[1,"1.25"]}]}}`))
+	}))
+	defer prom.Close()
+	values, err := queryNodeMetric(context.Background(), prometheus.NewClient(prom.URL, ""), map[string]string{"worker-1": "worker-1"}, []string{
+		`sum by (instance) (rate(node_cpu_seconds_total[5m]))`,
+		`sum by (node) (rate(container_cpu_usage_seconds_total[5m]))`,
+	})
+	if err != nil || values["worker-1"] != 1.25 || len(queries) != 2 {
+		t.Fatalf("unexpected fallback result values=%+v queries=%v err=%v", values, queries, err)
+	}
+}
+
+func TestNodeMetricAliasesIncludeHostnameAndNodeAddresses(t *testing.T) {
+	aliases := nodeMetricAliases([]store.K8sInventoryItem{{Name: "worker-1", Labels: map[string]string{"kubernetes.io/hostname": "worker-a"}, StatusObject: map[string]any{
+		"addresses": []any{map[string]any{"type": "InternalIP", "address": "10.0.0.11"}},
+	}}})
+	for _, alias := range []string{"worker-1", "worker-a", "10.0.0.11"} {
+		if aliases[alias] != "worker-1" {
+			t.Fatalf("alias %q was not resolved: %+v", alias, aliases)
+		}
+	}
+}
+
+func TestMergePodGPUMetricsAggregatesDevices(t *testing.T) {
+	metrics := map[string]store.K8sMetricSample{"prod\x00trainer": {Namespace: "prod", ResourceKind: "Pod", ResourceName: "trainer", CPUMillicores: 750, MemoryBytes: 2 << 30}}
+	mergePodGPUMetrics(metrics, []store.K8sGPUSample{
+		{Namespace: "prod", Pod: "trainer", UtilizationPct: 40, FramebufferUsedBytes: 8 << 30, TemperatureC: 65},
+		{Namespace: "prod", Pod: "trainer", UtilizationPct: 80, FramebufferUsedBytes: 12 << 30, TemperatureC: 72},
+	}, time.Now())
+	metric := metrics["prod\x00trainer"]
+	if !metric.GPUObserved || metric.GPUUtilizationPct != 60 || metric.GPUMemoryUsedBytes != 20<<30 || metric.GPUTemperatureC != 72 || metric.CPUMillicores != 750 {
+		t.Fatalf("unexpected Pod GPU aggregate: %+v", metric)
+	}
+}
+
+func TestLatestPodUsageCombinesLatestCPUAndGPUObservation(t *testing.T) {
+	usage := latestPodUsage([]store.K8sMetricSample{
+		{Namespace: "prod", ResourceName: "api", CPUMillicores: 250, MemoryBytes: 512 << 20, ObservedAt: "2026-07-13T01:00:00Z"},
+		{Namespace: "prod", ResourceName: "api", GPUObserved: true, GPUUtilizationPct: 45, GPUMemoryUsedBytes: 4 << 30, ObservedAt: "2026-07-13T00:59:00Z"},
+	})["prod\x00api"]
+	if !usage.Available || usage.CPUMillicores != 250 || !usage.GPUObserved || usage.GPUUtilizationPct != 45 {
+		t.Fatalf("unexpected latest Pod usage: %+v", usage)
+	}
+}
 
 func TestK8sNodeAndGPUOperationsEndpoints(t *testing.T) {
 	db := openTestStore(t)

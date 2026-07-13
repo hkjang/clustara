@@ -48,6 +48,18 @@ type k8sPodView struct {
 	Symptoms             []string                 `json:"symptoms,omitempty"`
 	Containers           []k8sContainerStatusView `json:"containers,omitempty"`
 	Resources            analyzer.ResourceTags    `json:"resources"`
+	Usage                k8sPodUsage              `json:"usage"`
+}
+
+type k8sPodUsage struct {
+	Available          bool    `json:"available"`
+	CPUMillicores      float64 `json:"cpu_millicores"`
+	MemoryBytes        float64 `json:"memory_bytes"`
+	GPUUtilizationPct  float64 `json:"gpu_utilization_pct"`
+	GPUMemoryUsedBytes float64 `json:"gpu_memory_used_bytes"`
+	GPUTemperatureC    float64 `json:"gpu_temperature_c"`
+	GPUObserved        bool    `json:"gpu_observed"`
+	ObservedAt         string  `json:"observed_at"`
 }
 
 type k8sContainerStatusView struct {
@@ -356,9 +368,12 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 1000)
+	metrics, _ := s.db.ListK8sMetricSamplesFiltered(r.Context(), store.K8sMetricSampleFilter{ClusterID: clusterID, ResourceKind: "Pod", Limit: 100000})
+	usageByPod := latestPodUsage(metrics)
 	views := make([]k8sPodView, 0, len(items))
 	for _, item := range items {
 		view := podView(item, events, false)
+		view.Usage = usageByPod[podUsageKey(item.Namespace, item.Name)]
 		if !podMatchesFilters(view, q) {
 			continue
 		}
@@ -469,6 +484,7 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 	}
 	s.recordPodAccess(r, clusterID, namespace, pod, "detail", "pod_detail")
 	pv := podView(item, events, true)
+	pv.Usage = latestPodUsage(relatedMetrics)[podUsageKey(namespace, pod)]
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pod":         pv,
 		"briefing":    s.buildPodBriefing(r.Context(), clusterID, item, pv, relatedEvents),
@@ -477,6 +493,24 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 		"log_queries": relatedLogQueries,
 		"manifest":    assembleManifest(item),
 	})
+}
+
+func podUsageKey(namespace, pod string) string { return namespace + "\x00" + pod }
+
+func latestPodUsage(metrics []store.K8sMetricSample) map[string]k8sPodUsage {
+	out := map[string]k8sPodUsage{}
+	for _, metric := range metrics {
+		key := podUsageKey(metric.Namespace, metric.ResourceName)
+		usage, exists := out[key]
+		if !exists {
+			usage = k8sPodUsage{Available: true, CPUMillicores: metric.CPUMillicores, MemoryBytes: metric.MemoryBytes, ObservedAt: metric.ObservedAt}
+		}
+		if metric.GPUObserved && !usage.GPUObserved {
+			usage.GPUObserved, usage.GPUUtilizationPct, usage.GPUMemoryUsedBytes, usage.GPUTemperatureC = true, metric.GPUUtilizationPct, metric.GPUMemoryUsedBytes, metric.GPUTemperatureC
+		}
+		out[key] = usage
+	}
+	return out
 }
 
 // buildPodBriefing assembles the one-page diagnosis from the pod view, a recent revision (recent

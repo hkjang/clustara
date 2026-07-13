@@ -440,7 +440,7 @@ var settingDescriptions = map[string]string{
 	"k8s.monitoring.enabled":                  "경량 metrics.k8s.io Node 수집 on/off. 저장 즉시 모든 파드의 다음 scheduler tick에 반영.",
 	"k8s.monitoring.interval_seconds":         "Node CPU/Memory와 DCGM GPU 수집 주기(20~3600초). 전체 인벤토리 reconcile 주기와 독립.",
 	"k8s.monitoring.retention_days":           "Node/GPU 원시 시계열 보존 일수. 6시간마다 오래된 metric/device sample을 정리.",
-	"k8s.monitoring.prometheus_url":           "DCGM, workload latency, vLLM 품질 지표를 조회할 Prometheus URL. PROMETHEUS_URL 런타임 오버레이.",
+	"k8s.monitoring.prometheus_url":           "노드 CPU·메모리 폴백, DCGM, workload latency, vLLM 품질 지표를 조회할 Prometheus/Thanos Query URL. PROMETHEUS_URL 런타임 오버레이.",
 	"k8s.monitoring.prometheus_token":         "Prometheus Bearer token. 암호화 저장·마스킹. PROMETHEUS_TOKEN 런타임 오버레이.",
 	"k8s.monitoring.dcgm_node_label":          "DCGM 시계열에서 Kubernetes Node 이름을 찾을 우선 label(기본 Hostname).",
 	"k8s.monitoring.dcgm_metrics_promql":      "고급 override PromQL. 비우면 counter CSV의 metric 목록으로 안전한 selector를 자동 생성.",

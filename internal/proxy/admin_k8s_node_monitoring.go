@@ -28,6 +28,7 @@ type k8sNodeMetricCollectResult struct {
 	GPUMetrics     int    `json:"gpu_metrics"`
 	ObservedAt     string `json:"observed_at"`
 	MetricsError   string `json:"metrics_error,omitempty"`
+	MetricsSource  string `json:"metrics_source,omitempty"`
 	GPUCollectNote string `json:"gpu_collect_note,omitempty"`
 }
 
@@ -96,6 +97,11 @@ func (s *Server) runK8sNodeMetricTick(ctx context.Context, lastAttempt map[strin
 		if result.GPUCollectNote != "" && strings.HasPrefix(result.GPUCollectNote, "error:") {
 			slog.Warn("k8s gpu metrics collect degraded", "cluster", cluster.ID, "detail", result.GPUCollectNote)
 		}
+		// Turn fresh resource pressure/forecast signals into deduplicated preventive incidents without
+		// waiting for an operator to open the war-room screen.
+		if _, _, _, scanErr := s.scanK8sIncidentsForCluster(ctx, cluster.ID); scanErr != nil {
+			slog.Warn("k8s predictive incident scan failed", "cluster", cluster.ID, "error", scanErr)
+		}
 	}
 }
 
@@ -108,6 +114,22 @@ func (s *Server) collectNodeMetricsForCluster(ctx context.Context, cluster store
 		return result, err
 	}
 	metrics, err := client.CollectNodeMetrics(ctx)
+	result.MetricsSource = "metrics.k8s.io"
+	if err != nil || (len(metrics) == 0 && cluster.NodeCount > 0) {
+		primaryErr := err
+		if primaryErr == nil {
+			primaryErr = fmt.Errorf("metrics.k8s.io returned no node samples")
+		}
+		if fallback, fallbackErr := s.collectPrometheusNodeMetrics(ctx, cluster, now); fallbackErr == nil && len(fallback) > 0 {
+			metrics = fallback
+			err = nil
+			result.MetricsSource = "prometheus"
+		} else if fallbackErr != nil {
+			err = fmt.Errorf("metrics.k8s.io: %v; Prometheus/Thanos fallback: %v", primaryErr, fallbackErr)
+		} else {
+			err = primaryErr
+		}
+	}
 	if err != nil {
 		result.MetricsError = err.Error()
 		s.recordNodeMetricCollectorStatus(ctx, cluster.ID, "error", "", err.Error())
@@ -161,6 +183,23 @@ func (s *Server) collectNodeMetricsForCluster(ctx context.Context, cluster store
 			break
 		}
 	}
+	// Pod CPU/memory from kubelet/cAdvisor and Pod-attributed GPU telemetry share one stored sample,
+	// so Pod management and the topology map can render one coherent latest-usage snapshot.
+	podMetrics, podMetricErr := s.collectPrometheusPodMetrics(ctx, now)
+	mergePodGPUMetrics(podMetrics, deviceSamples, now)
+	for _, metric := range podMetrics {
+		metric.ID = newID("k8smet")
+		metric.ClusterID = cluster.ID
+		if insertErr := s.db.InsertK8sMetricSample(ctx, metric); insertErr != nil {
+			if result.MetricsError == "" {
+				result.MetricsError = insertErr.Error()
+			}
+			break
+		}
+	}
+	if podMetricErr != nil && len(deviceSamples) == 0 && result.MetricsError == "" {
+		result.MetricsError = "Pod Prometheus metrics: " + podMetricErr.Error()
+	}
 	if result.GPUMetrics > 0 {
 		_ = s.db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{
 			ID: newID("k8scol"), ClusterID: cluster.ID, Collector: "node_gpu_metrics", Status: "ok", LastSuccessAt: result.ObservedAt,
@@ -171,6 +210,181 @@ func (s *Server) collectNodeMetricsForCluster(ctx context.Context, cluster store
 		})
 	}
 	return result, err
+}
+
+func (s *Server) collectPrometheusPodMetrics(ctx context.Context, now time.Time) (map[string]store.K8sMetricSample, error) {
+	promURL, promToken := s.monitoringPrometheusConfig(ctx)
+	if promURL == "" {
+		return map[string]store.K8sMetricSample{}, fmt.Errorf("Prometheus URL is not configured")
+	}
+	client := prometheus.NewClient(promURL, promToken)
+	queries := []struct {
+		kind, promQL string
+	}{
+		{"cpu", `sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace!="",pod!="",container!="",container!="POD"}[5m]))`},
+		{"memory", `sum by (namespace, pod) (container_memory_working_set_bytes{namespace!="",pod!="",container!="",container!="POD"})`},
+	}
+	out := map[string]store.K8sMetricSample{}
+	errorsFound := []string{}
+	observedAt := now.UTC().Format(time.RFC3339Nano)
+	for _, query := range queries {
+		samples, err := client.Query(ctx, query.promQL)
+		if err != nil {
+			errorsFound = append(errorsFound, query.kind+": "+err.Error())
+			continue
+		}
+		for _, sample := range samples {
+			namespace, pod := firstLabel(sample.Labels, "namespace", "exported_namespace"), firstLabel(sample.Labels, "pod", "exported_pod")
+			if namespace == "" || pod == "" {
+				continue
+			}
+			key := namespace + "\x00" + pod
+			metric := out[key]
+			metric.Namespace, metric.ResourceKind, metric.ResourceName, metric.ObservedAt = namespace, "Pod", pod, observedAt
+			if query.kind == "cpu" {
+				metric.CPUMillicores = sample.Value * 1000
+			} else {
+				metric.MemoryBytes = sample.Value
+			}
+			out[key] = metric
+		}
+	}
+	if len(errorsFound) > 0 && len(out) == 0 {
+		return out, errors.New(strings.Join(errorsFound, "; "))
+	}
+	return out, nil
+}
+
+func mergePodGPUMetrics(metrics map[string]store.K8sMetricSample, samples []store.K8sGPUSample, now time.Time) {
+	type gpuAggregate struct {
+		utilization, memory, temperature float64
+		count                            int
+	}
+	byPod := map[string]*gpuAggregate{}
+	for _, sample := range samples {
+		if sample.Namespace == "" || sample.Pod == "" {
+			continue
+		}
+		key := sample.Namespace + "\x00" + sample.Pod
+		a := byPod[key]
+		if a == nil {
+			a = &gpuAggregate{}
+			byPod[key] = a
+		}
+		a.utilization += sample.UtilizationPct
+		a.memory += sample.FramebufferUsedBytes
+		if sample.TemperatureC > a.temperature {
+			a.temperature = sample.TemperatureC
+		}
+		a.count++
+	}
+	for key, gpu := range byPod {
+		parts := strings.SplitN(key, "\x00", 2)
+		metric := metrics[key]
+		metric.Namespace, metric.ResourceKind, metric.ResourceName = parts[0], "Pod", parts[1]
+		if metric.ObservedAt == "" {
+			metric.ObservedAt = now.UTC().Format(time.RFC3339Nano)
+		}
+		metric.GPUUtilizationPct, metric.GPUMemoryUsedBytes, metric.GPUTemperatureC, metric.GPUObserved = gpu.utilization/float64(gpu.count), gpu.memory, gpu.temperature, true
+		metrics[key] = metric
+	}
+}
+
+// collectPrometheusNodeMetrics uses the Prometheus-compatible instant query API exposed by both
+// Prometheus and Thanos Query. It first prefers node-exporter host metrics (whole-node usage), then
+// falls back to kubelet/cAdvisor container working-set metrics when node-exporter is unavailable.
+func (s *Server) collectPrometheusNodeMetrics(ctx context.Context, cluster store.K8sCluster, now time.Time) ([]store.K8sMetricSample, error) {
+	promURL, promToken := s.monitoringPrometheusConfig(ctx)
+	if promURL == "" {
+		return nil, fmt.Errorf("Prometheus URL is not configured")
+	}
+	items, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: cluster.ID, Kind: "Node", Limit: 10000})
+	if err != nil {
+		return nil, fmt.Errorf("list node inventory: %w", err)
+	}
+	aliases := nodeMetricAliases(items)
+	client := prometheus.NewClient(promURL, promToken)
+	cpu, cpuErr := queryNodeMetric(ctx, client, aliases, []string{
+		`sum by (instance) (rate(node_cpu_seconds_total{mode!="idle",mode!="iowait",mode!="steal"}[5m]))`,
+		`sum by (node) (rate(container_cpu_usage_seconds_total{container!="",container!="POD",pod!=""}[5m]))`,
+	})
+	memory, memoryErr := queryNodeMetric(ctx, client, aliases, []string{
+		`max by (instance) (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)`,
+		`sum by (node) (container_memory_working_set_bytes{container!="",container!="POD",pod!=""})`,
+	})
+	if cpuErr != nil && memoryErr != nil {
+		return nil, fmt.Errorf("CPU query: %v; memory query: %v", cpuErr, memoryErr)
+	}
+	observedAt := now.UTC().Format(time.RFC3339Nano)
+	byNode := map[string]store.K8sMetricSample{}
+	for node, cores := range cpu {
+		metric := byNode[node]
+		metric.ResourceKind, metric.ResourceName, metric.ObservedAt = "Node", node, observedAt
+		metric.CPUMillicores = cores * 1000
+		byNode[node] = metric
+	}
+	for node, bytes := range memory {
+		metric := byNode[node]
+		metric.ResourceKind, metric.ResourceName, metric.ObservedAt = "Node", node, observedAt
+		metric.MemoryBytes = bytes
+		byNode[node] = metric
+	}
+	out := make([]store.K8sMetricSample, 0, len(byNode))
+	for _, metric := range byNode {
+		out = append(out, metric)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("node CPU/memory series not found")
+	}
+	return out, nil
+}
+
+func nodeMetricAliases(items []store.K8sInventoryItem) map[string]string {
+	out := map[string]string{}
+	for _, item := range items {
+		for _, value := range []string{item.Name, item.Labels["kubernetes.io/hostname"], item.Labels["beta.kubernetes.io/hostname"]} {
+			if value = strings.TrimSpace(value); value != "" {
+				out[strings.ToLower(value)] = item.Name
+			}
+		}
+		if addresses, ok := item.StatusObject["addresses"].([]any); ok {
+			for _, raw := range addresses {
+				address, _ := raw.(map[string]any)
+				value := strings.TrimSpace(fmt.Sprint(address["address"]))
+				if value != "" && value != "<nil>" {
+					out[strings.ToLower(value)] = item.Name
+				}
+			}
+		}
+	}
+	return out
+}
+
+func queryNodeMetric(ctx context.Context, client *prometheus.Client, aliases map[string]string, queries []string) (map[string]float64, error) {
+	var lastErr error
+	for _, query := range queries {
+		samples, err := client.Query(ctx, query)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		values := map[string]float64{}
+		for _, sample := range samples {
+			raw := firstLabel(sample.Labels, "node", "nodename", "kubernetes_node", "instance")
+			if host, _, ok := strings.Cut(raw, ":"); ok {
+				raw = host
+			}
+			node := aliases[strings.ToLower(strings.TrimSpace(raw))]
+			if node != "" {
+				values[node] += sample.Value
+			}
+		}
+		if len(values) > 0 {
+			return values, nil
+		}
+		lastErr = fmt.Errorf("query returned no inventory-matched node series")
+	}
+	return nil, lastErr
 }
 
 func (s *Server) recordNodeMetricCollectorStatus(ctx context.Context, clusterID, status, successAt, lastError string) {
@@ -417,7 +631,7 @@ func (s *Server) handleK8sNodeMonitoring(w http.ResponseWriter, r *http.Request)
 			"enabled":          s.monitoringBool(r.Context(), "k8s.monitoring.enabled", true),
 			"interval_seconds": s.monitoringInt(r.Context(), "k8s.monitoring.interval_seconds", k8sNodeMetricsDefaultSecs),
 			"retention_days":   s.monitoringInt(r.Context(), "k8s.monitoring.retention_days", 30),
-			"metrics_source":   "metrics.k8s.io", "gpu_source_configured": promURL != "",
+			"metrics_source":   "metrics.k8s.io → Prometheus/Thanos fallback", "prometheus_configured": promURL != "", "gpu_source_configured": promURL != "",
 		},
 		"note": "임계치 도달 예상은 저장된 추세를 선형 연장한 운영 선행 경보이며 실제 장애 시점을 보장하지 않습니다. GPU 실사용률/온도는 Prometheus DCGM Exporter가 있을 때만 제공됩니다.",
 	})

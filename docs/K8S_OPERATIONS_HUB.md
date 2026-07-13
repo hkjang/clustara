@@ -418,7 +418,11 @@ kubectl create clusterrolebinding clustara-reader `
 
 ### Node/GPU 실사용 모니터링
 
-`metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 관리자 **설정 → 런타임 설정 → `k8s.monitoring`**에서 `enabled`, `interval_seconds`, `retention_days`를 재시작 없이 조정할 수 있습니다. Metrics Server 미설치 또는 RBAC 거부는 사용률 0%로 처리하지 않고 `미수집`으로 표시합니다. 보존기간을 지난 Node/GPU 표본은 6시간마다 정리됩니다.
+`metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 관리자 **설정 → 런타임 설정 → `k8s.monitoring`**에서 `enabled`, `interval_seconds`, `retention_days`를 재시작 없이 조정할 수 있습니다. Metrics Server가 없거나 RBAC가 거부되면 설정된 Prometheus/Thanos Query API에서 node-exporter의 CPU·메모리 메트릭을 조회하고, 없으면 kubelet/cAdvisor 메트릭으로 한 번 더 폴백합니다. 어느 소스에서도 조회되지 않을 때만 `미수집`으로 표시하며 0%로 오인하지 않습니다. 보존기간을 지난 Node/GPU 표본은 6시간마다 정리됩니다.
+
+Pod 실사용량은 Metrics Server 표본과 Prometheus/Thanos의 kubelet/cAdvisor CPU·working set 메모리를 사용합니다. DCGM Exporter가 `namespace`, `pod`, `container` 라벨을 제공하면 장치별 GPU 사용률·VRAM·온도를 Pod 단위로 집계합니다. 최신 CPU·메모리·GPU 표본은 **리소스 관리 → Pod 관리** 목록/상세와 **리소스 토폴로지 맵**의 Pod 노드에 함께 표시됩니다. GPU 라벨이 없거나 Pod가 GPU를 사용하지 않는 경우는 CPU·메모리와 별도로 `GPU 미수집/미사용`으로 표시합니다.
+
+노드·Pod 메트릭 수집 직후 예방 Incident 스캔을 실행합니다. 노드 위험 점수와 24시간 내 자원 임계치 예측, Pod CPU·메모리 limit의 연속 90% 초과, 최근 증가 추세상 24시간 내 limit 도달, DCGM GPU 98% 포화 또는 85°C 이상을 설명 가능한 근거와 함께 `predictive:` Incident로 묶습니다. 같은 신호는 하나의 Incident를 갱신해 추적하며 신호가 사라지면 자동으로 해결 이력을 남깁니다. 장애 워룸은 예방 관찰과 실제 발생을 구분하고 즉시 확인, 사전 대비, 복구 판정 기준을 조건별로 제공합니다. 자동 조치는 실행하지 않으며 scale, limit 변경, cordon/drain 같은 변경은 기존 승인 흐름을 따릅니다.
 
 GPU 할당 현황은 Node의 `nvidia.com/gpu`·`amd.com/gpu`·`intel.com/gpu` allocatable과 Pod request로 항상 계산합니다. 실제 H100/H200/L40S 장치 관측에는 Prometheus와 NVIDIA DCGM Exporter가 필요합니다.
 

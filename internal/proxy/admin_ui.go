@@ -10665,14 +10665,22 @@ const adminHTML = `<!doctype html>
         else if (sig === 'unknown') note = '<div class="muted" style="font-size:10px">시각 미확인</div>';
         return '<td data-num="' + fmt(p.restart_count || 0) + '">' + fmt(p.restart_count || 0) + note + '</td>';
       };
+      const podUsageCell = (usage) => {
+        const u = usage || {};
+        if (!u.available) return '<span class="muted">미수집</span>';
+        let html = '<strong>CPU ' + fmt(Math.round(u.cpu_millicores || 0)) + 'm</strong><div class="muted" style="font-size:10px">MEM ' + fmt(Math.round((u.memory_bytes || 0) / 1024 / 1024)) + 'Mi</div>';
+        html += u.gpu_observed ? '<div style="font-size:10px;color:#7c3aed">GPU ' + fmt(Math.round(u.gpu_utilization_pct || 0)) + '% · VRAM ' + fmt(Math.round((u.gpu_memory_used_bytes || 0) / 1024 / 1024)) + 'Mi</div>' : '<div class="muted" style="font-size:10px">GPU 미수집/미사용</div>';
+        return html + '<div class="muted" style="font-size:9px">' + (u.observed_at ? ago(u.observed_at) : '') + '</div>';
+      };
       const rows = (d.pods || []).length ? (d.pods || []).map(p => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || '', namespace: p.namespace || '', pod: p.name || '' }).toString();
         return '<tr>' + healthCell(p) + '<td>' + riskBadge(p.risk_level, p.status) + '</td><td><a href="' + escapeAttr(href) + '"><strong>' + escapeHTML(p.name || '-') + '</strong></a><div class="muted" style="font-size:11px">' + escapeHTML(p.cluster_id || '') + '</div><div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(p.cluster_id, 'Pod', p.namespace, p.name, 'YAML') + '</div></td>' +
           '<td>' + escapeHTML(p.namespace || '-') + '</td><td>' + escapeHTML(p.phase || p.status || '-') + '</td><td>' + escapeHTML(p.ready || '-') + '</td>' + restartCell(p) +
           '<td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML((p.owner_kind || '-') + '/' + (p.owner_name || '-')) + '</td>' +
+          '<td style="font-size:11px">' + podUsageCell(p.usage) + '</td>' +
           '<td style="font-size:11px">' + (k8sResTags(p.resources) || '<span class="muted">미설정</span>') + '</td>' +
           '<td>' + fmt(p.warning_events || 0) + ((p.recent_warning_events || 0) ? '<div class="muted" style="font-size:10px">최근 ' + fmt(p.recent_warning_events || 0) + '</div>' : '') + '</td></tr>';
-      }).join('') : '<tr><td colspan="11" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
+      }).join('') : '<tr><td colspan="12" class="muted">Pod가 없습니다. 클러스터 수집 또는 realtime agent 상태를 확인하세요.</td></tr>';
       const bmRows = ((d.bookmarks || []).concat(d.auto_bookmarks || [])).slice(0, 10).map(b => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: b.cluster_id || '', namespace: b.namespace || '', pod: b.pod || '' }).toString();
         return '<tr><td>' + (b.auto ? '<span class="status warn" style="font-size:10px">auto</span>' : '<span class="status" style="font-size:10px">manual</span>') + '</td><td><a href="' + escapeAttr(href) + '">' + escapeHTML((b.namespace || '-') + '/' + (b.pod || '-')) + '</a><div class="muted" style="font-size:11px">' + escapeHTML(b.reason || b.note || '') + '</div></td><td class="muted" style="font-size:11px">' + ago(b.updated_at) + '</td></tr>';
@@ -10736,7 +10744,7 @@ const adminHTML = `<!doctype html>
           '<select id="pod-risk"><option value="">risk 전체</option><option value="high"' + ((params && params.get('risk')) === 'high' ? ' selected' : '') + '>high</option><option value="medium"' + ((params && params.get('risk')) === 'medium' ? ' selected' : '') + '>medium</option></select>' +
           '<button type="button" onclick="k8sPodFilter()">적용</button></div>') +
         card('북마크와 최근 이력', '<div class="grid2"><div class="card-body"><h4 style="margin-top:0">Pod 북마크</h4><table><thead><tr><th>Type</th><th>Pod</th><th>Updated</th></tr></thead><tbody>' + bmRows + '</tbody></table></div><div class="card-body"><h4 style="margin-top:0">최근 접속 Pod</h4><table><thead><tr><th>Pod</th><th>Action</th><th>Count</th><th>Last</th></tr></thead><tbody>' + accessRows + '</tbody></table></div></div>') +
-        card('Pod 목록 (Health 낮은 순)', '<div class="card-body"><table><thead><tr><th>Health</th><th>Risk</th><th>Pod</th><th>Namespace</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node</th><th>Owner</th><th>자원(req·lim)</th><th>Warn</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        card('Pod 목록 (Health 낮은 순)', '<div class="card-body"><table><thead><tr><th>Health</th><th>Risk</th><th>Pod</th><th>Namespace</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Node</th><th>Owner</th><th>실사용 CPU·MEM·GPU</th><th>자원(req·lim)</th><th>Warn</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     window.k8sPodFilter = () => {
       const q = new URLSearchParams();
@@ -10824,7 +10832,7 @@ const adminHTML = `<!doctype html>
     }
     function k8sNodeUsageHTML(usage, kind) {
       usage = usage || {};
-      if (!usage.available) return '<span class="muted">미수집</span><div class="muted" style="font-size:10px">metrics-server/RBAC 확인</div>';
+      if (!usage.available) return '<span class="muted">미수집</span><div class="muted" style="font-size:10px">Metrics Server 또는 Prometheus/Thanos 노드 메트릭 확인</div>';
       const used = kind === 'cpu' ? fmt(Math.round(usage.used || 0)) + 'm' : opsBytes(usage.used || 0);
       const cap = kind === 'cpu' ? fmt(Math.round(usage.capacity || 0)) + 'm' : opsBytes(usage.capacity || 0);
       const trend = Number(usage.trend_per_hour || 0);
@@ -11120,7 +11128,7 @@ const adminHTML = `<!doctype html>
       const containers = (p.containers || []).length ? (p.containers || []).map(c => '<tr><td>' + escapeHTML(c.name || '-') + '</td><td>' + escapeHTML(c.image || '-') + '</td><td>' + (c.ready ? '<span class="status">ready</span>' : '<span class="status warn">not ready</span>') + '</td><td>' + fmt(c.restart_count || 0) + restartNote(c) + '</td><td>' + escapeHTML(c.state || '-') + '</td><td>' + escapeHTML(c.reason || c.last_reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(c.started_at || '-') + '</td></tr>').join('') : '<tr><td colspan="7" class="muted">컨테이너 상태가 없습니다.</td></tr>';
       const containerOpts = (p.containers || []).map(c => '<option value="' + escapeAttr(c.name || '') + '">' + escapeHTML(c.name || '-') + '</option>').join('');
       const events = (d.events || []).length ? (d.events || []).map(e => '<tr><td>' + escapeHTML(e.type || '-') + '</td><td>' + escapeHTML(e.reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td><td>' + fmt(e.count || 0) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.last_seen || e.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">이벤트가 없습니다.</td></tr>';
-      const metrics = (d.metrics || []).length ? (d.metrics || []).map(m => '<tr><td>' + fmt(m.cpu_millicores || 0) + 'm</td><td>' + fmt(Math.round((m.memory_bytes || 0) / 1024 / 1024)) + 'Mi</td><td class="muted" style="font-size:11px">' + escapeHTML(m.observed_at || '') + '</td></tr>').join('') : '<tr><td colspan="3" class="muted">최근 메트릭이 없습니다.</td></tr>';
+      const metrics = (d.metrics || []).length ? (d.metrics || []).map(m => '<tr><td>' + fmt(Math.round(m.cpu_millicores || 0)) + 'm</td><td>' + fmt(Math.round((m.memory_bytes || 0) / 1024 / 1024)) + 'Mi</td><td>' + (m.gpu_observed ? fmt(Math.round(m.gpu_utilization_pct || 0)) + '%' : '<span class="muted">-</span>') + '</td><td>' + (m.gpu_observed ? fmt(Math.round((m.gpu_memory_used_bytes || 0) / 1024 / 1024)) + 'Mi' : '<span class="muted">-</span>') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(m.observed_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">최근 메트릭이 없습니다.</td></tr>';
       const logAudits = (d.log_queries || []).length ? (d.log_queries || []).map(q => '<tr><td>' + escapeHTML(q.stream ? 'stream' : (q.previous ? 'previous' : 'current')) + '</td><td>' + escapeHTML(q.container || '-') + '</td><td>' + fmt(q.tail_lines || 0) + '</td><td>' + escapeHTML(q.query || '-') + '</td><td>' + fmt(q.line_count || 0) + '</td><td>' + fmt(q.error_count || 0) + '</td><td>' + escapeHTML(q.requested_by || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(q.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="8" class="muted">최근 로그 조회 이력이 없습니다.</td></tr>';
       view.innerHTML =
         section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Health', fmt(p.health_score || 0) + (p.primary_symptom && p.primary_symptom !== 'Healthy' ? ' · ' + escapeHTML(p.primary_symptom) : '')) + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0) + (p.restart_signal === 'recent' ? ' · 최근 ' + fmt(p.recent_restart_count || 0) : (p.restart_signal === 'historical' ? ' · 과거 누적' : ''))) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
@@ -11152,7 +11160,7 @@ const adminHTML = `<!doctype html>
           '<button type="button" class="secondary" onclick="k8sPodExecBriefingFromDetail()">Risk Briefing</button><button type="button" onclick="k8sPodRequestExecFromDetail()">세션 요청</button></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(' + "'ps aux'" + ')">ps</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(' + "'env'" + ')">env</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(' + "'df -h'" + ')">df</button><button type="button" class="secondary" style="font-size:11px" onclick="k8sPodExecTemplate(' + "'nslookup kubernetes.default'" + ')">dns</button></div><div id="podexec-result" class="muted" style="font-size:12px;margin-top:8px">Terminal Policy 평가 후 세션 요청과 감사 기록을 생성합니다.</div></div>') +
         card('Debug Container 요청', '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="poddebug-image"><option value="busybox:1.36">busybox</option><option value="curlimages/curl:8.8.0">curl</option><option value="nicolaka/netshoot:latest">netshoot</option><option value="postgres:16-alpine">postgres-client</option><option value="redis:7-alpine">redis-cli</option></select><select id="poddebug-target"><option value="">기본 컨테이너</option>' + containerOpts + '</select><input id="poddebug-template" placeholder="템플릿 예: DNS 점검" style="min-width:160px"><input id="poddebug-reason" placeholder="사유" style="min-width:220px"><button type="button" onclick="k8sPodDebugRequestFromDetail()">Debug 요청</button><button type="button" class="secondary" onclick="k8sPodDebugSessionsFromDetail()">이력</button></div><div id="poddebug-result" class="muted" style="font-size:12px;margin-top:8px">허용된 debug image만 승인 요청으로 저장합니다. privileged/hostPID/hostNetwork는 기본 차단됩니다.</div></div>') +
         card('로그 감사', '<div class="card-body"><table><thead><tr><th>Mode</th><th>Container</th><th>Tail</th><th>Query</th><th>Lines</th><th>Errors</th><th>User</th><th>Time</th></tr></thead><tbody>' + logAudits + '</tbody></table></div>') +
-        card('리소스', '<div class="card-body"><table><thead><tr><th>CPU</th><th>Memory</th><th>Observed</th></tr></thead><tbody>' + metrics + '</tbody></table></div>') +
+        card('리소스 실사용', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:6px">Metrics Server 또는 Prometheus/Thanos(cAdvisor), GPU는 DCGM Exporter의 Pod 라벨을 사용합니다.</div><table><thead><tr><th>CPU</th><th>Memory</th><th>GPU Util</th><th>GPU VRAM</th><th>Observed</th></tr></thead><tbody>' + metrics + '</tbody></table></div>') +
         card('Manifest', '<div class="card-body"><pre style="white-space:pre-wrap;max-height:360px;overflow:auto">' + escapeHTML(JSON.stringify(d.manifest || {}, null, 2)) + '</pre></div>');
     }
     function podLogQuery() {
@@ -11904,7 +11912,8 @@ const adminHTML = `<!doctype html>
       const nodeSvg = visibleNodes.map(n => {
         const p = pos[n.id];
         const riskClass = k8sSeverityClass(n.risk_level || '');
-        const meta = [n.namespace || '-', n.status || '', n.team || n.service || ''].filter(Boolean).join(' · ');
+        const usage = String(n.kind || '').toLowerCase() === 'pod' && n.metrics_observed_at ? ('CPU ' + fmt(Math.round(n.cpu_millicores || 0)) + 'm / MEM ' + fmt(Math.round((n.memory_bytes || 0) / 1024 / 1024)) + 'Mi' + (n.gpu_observed ? ' / GPU ' + fmt(Math.round(n.gpu_utilization_pct || 0)) + '%' : '')) : '';
+        const meta = [usage || n.namespace || '-', usage ? n.namespace : n.status || '', usage ? '' : n.team || n.service || ''].filter(Boolean).join(' · ');
         return '<a ' + k8sGraphNodeAnchorAttrs(n, radius || '2', !!modalMode) + '>' +
           '<g class="resource-graph-svg-node">' +
             '<rect class="rg-node-rect' + (n.focus ? ' focus' : '') + '" x="' + p.x + '" y="' + p.y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8"></rect>' +
@@ -11912,7 +11921,7 @@ const adminHTML = `<!doctype html>
             '<text class="rg-node-kind" x="' + (p.x + 26) + '" y="' + (p.y + 20) + '">' + escapeHTML(n.kind || '-') + (n.focus ? ' · FOCUS' : '') + '</text>' +
             '<text class="rg-node-name" x="' + (p.x + 14) + '" y="' + (p.y + 42) + '">' + escapeHTML(k8sGraphShortText(n.name || '-', 23)) + '</text>' +
             '<text class="rg-node-meta" x="' + (p.x + 14) + '" y="' + (p.y + 61) + '">' + escapeHTML(k8sGraphShortText(meta, 28)) + '</text>' +
-            '<title>' + escapeHTML(k8sGraphNodeTitle(n)) + '</title>' +
+            '<title>' + escapeHTML(k8sGraphNodeTitle(n) + (usage ? ' · ' + usage + (n.gpu_observed ? ' · VRAM ' + Math.round((n.gpu_memory_used_bytes || 0) / 1024 / 1024) + 'Mi' : '') : '')) + '</title>' +
           '</g></a>';
       }).join('');
       const omitted = allNodes.length > visibleNodes.length ? '<span class="pill">노드 ' + fmt(allNodes.length - visibleNodes.length) + '개는 표에서만 표시</span>' : '';
@@ -12012,15 +12021,16 @@ const adminHTML = `<!doctype html>
       const rows = incs.length ? incs.map(i =>
         '<tr style="cursor:pointer" onclick="location.hash=\'#/k8s-incidents?id=' + escapeAttr(i.id) + '\'">' +
         '<td><span class="status ' + sevClass(i.severity) + '" style="font-size:10px">' + escapeHTML(i.severity) + '</span></td>' +
-        '<td>' + escapeHTML(i.condition) + '</td>' +
+        '<td>' + (String(i.dedup_key || '').indexOf('predictive:') === 0 ? '<span class="status warn" style="font-size:9px;margin-right:4px">예방</span>' : '<span class="status error" style="font-size:9px;margin-right:4px">발생</span>') + escapeHTML(i.condition) + '</td>' +
         '<td>' + escapeHTML((i.namespace || '-') + '/' + i.kind + '/' + i.name) + '</td>' +
         '<td>' + (i.status === 'open' ? '<span class="status warn" style="font-size:10px">open</span>' : '<span class="status" style="font-size:10px">resolved</span>') + '</td>' +
         '<td class="muted" style="font-size:11px">' + ago(i.opened_at) + '</td></tr>'
       ).join('') : '<tr><td colspan="5" class="muted">장애가 없습니다.</td></tr>';
       const openN = incs.filter(i => i.status === 'open').length;
+      const predictedN = incs.filter(i => i.status === 'open' && String(i.dedup_key || '').indexOf('predictive:') === 0).length;
       view.innerHTML =
-        section('K8s 장애 워룸', '<div class="kpis">' + kpi('열린 장애', fmt(openN)) + kpi('전체', fmt(incs.length)) + '</div>') +
-        card('필터', '<div class="card-body"><select id="k8sinc-cluster" onchange="k8sIncGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">화면 진입 시 현재 high/critical 장애를 자동 스캔해 incident로 묶습니다.</span></div>') +
+        section('K8s 장애 워룸', '<div class="kpis">' + kpi('열린 장애', fmt(openN)) + kpi('예방 관찰', fmt(predictedN)) + kpi('실제 발생', fmt(Math.max(0, openN - predictedN))) + kpi('전체 이력', fmt(incs.length)) + '</div>') +
+        card('필터', '<div class="card-body"><select id="k8sinc-cluster" onchange="k8sIncGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">메트릭 수집마다 CPU·메모리·GPU 추세와 현재 장애를 자동 스캔합니다. 예방 신호는 동일 Incident로 갱신되고 정상화되면 자동 해결 처리됩니다.</span></div>') +
         card('장애 목록 (클릭하면 워크스페이스)', '<div class="card-body"><table><thead><tr><th>심각도</th><th>조건</th><th>대상</th><th>상태</th><th>발생</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
     window.k8sIncGo = () => {
@@ -12060,6 +12070,8 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(f.evidence || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">이 리소스에 직접 연결된 열린 finding이 없습니다.</td></tr>';
       const graph = d.graph || {};
+      const plan = d.response_plan || {};
+      const planList = (values) => (values || []).map(v => '<li style="font-size:12px">' + escapeHTML(v) + '</li>').join('');
       view.innerHTML =
         section('장애 워크스페이스', '<div style="padding:0 4px"><a href="#/k8s-incidents">← 목록</a></div>') +
         card((i.severity || '-') + ' ' + (i.title || i.condition),
@@ -12086,6 +12098,7 @@ const adminHTML = `<!doctype html>
             '<div class="muted" style="font-size:11px;margin-bottom:4px">이 원인을 믿어야 하는 근거(가중치 합산):</div>' +
             '<ul style="margin:0;padding-left:16px">' + facts + '</ul></div>');
         })() +
+        card('지능형 대비·추적 계획', '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><span class="status ' + (plan.stage === 'preventive_observation' ? 'warn' : 'error') + '">' + escapeHTML(plan.stage === 'preventive_observation' ? '예방 관찰' : '장애 대응') + '</span>' + (plan.auto_resolve ? '<span class="pill">신호 정상화 시 자동 해결 추적</span>' : '<span class="pill">운영자 복구 확인 필요</span>') + '</div><div class="grid3"><div><strong>즉시 파악</strong><ol style="padding-left:18px">' + planList(plan.checks) + '</ol></div><div><strong>사전 대비</strong><ol style="padding-left:18px">' + planList(plan.preparations) + '</ol></div><div><strong>복구 판정</strong><ol style="padding-left:18px">' + planList(plan.recovery_criteria) + '</ol></div></div></div>') +
         card('영향도 그래프', '<div class="card-body">' + k8sGraphImpactKpis(graph) +
           '<div style="margin-top:12px">' + k8sGraphStatusHTML(graph) + k8sGraphVisualHTML(graph, '2') + '</div>' +
           '<div style="margin-top:12px">' + k8sGraphImpactHTML(graph) + '</div>' +
