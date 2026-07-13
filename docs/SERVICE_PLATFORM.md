@@ -2,6 +2,8 @@
 
 Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중심 서비스 인스턴스로 관리하는 상위 추상화 계층입니다. 실제 배포 실행기나 승인 엔진을 새로 만들지 않고 기존 Application Stack, Stack Apply, Action Center, 보안 정책, Resource Graph를 재사용합니다.
 
+서비스 플랫폼 폼을 추가하거나 변경할 때는 [Admin UI 디자인 규칙](ADMIN_UI_DESIGN.md)의 공통 필드 구조, 간격, 필수·선택 표시, 버튼 순서와 리뷰 체크리스트를 적용합니다.
+
 ## 현재 구현 범위 (v0.9.135)
 
 - 기본 카탈로그: PostgreSQL, Redis, Tomcat, Spring Boot, JupyterLab, JupyterHub
