@@ -2,12 +2,134 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
 	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
+
+type serviceDiscoveryLabelInput struct {
+	ClusterID         string `json:"cluster_id"`
+	Namespace         string `json:"namespace"`
+	Kind              string `json:"kind"`
+	Name              string `json:"name"`
+	ServiceName       string `json:"service_name"`
+	ServiceInstanceID string `json:"service_instance_id"`
+	PropagateTemplate bool   `json:"propagate_to_pod_template"`
+	Force             bool   `json:"force"`
+}
+
+// handleServiceDiscoveryLabel creates an auditable Manifest Change from a discovery row. It never
+// mutates the cluster outside the existing validate/approval/SSA flow.
+func (s *Server) handleServiceDiscoveryLabel(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "unauthorized", "permission_error", "authentication_required")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	var in serviceDiscoveryLabelInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON", "invalid_request_error", "invalid_body")
+		return
+	}
+	in.ClusterID, in.Namespace, in.Kind, in.Name, in.ServiceName = strings.TrimSpace(in.ClusterID), strings.TrimSpace(in.Namespace), strings.TrimSpace(in.Kind), strings.TrimSpace(in.Name), strings.TrimSpace(in.ServiceName)
+	in.ServiceInstanceID = strings.TrimSpace(in.ServiceInstanceID)
+	if in.ClusterID == "" || in.Kind == "" || in.Name == "" || in.ServiceName == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id, kind, name and service_name are required", "invalid_request_error", "missing_fields")
+		return
+	}
+	item, err := s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, in.Kind, in.Namespace, in.Name)
+	if err != nil {
+		writeOpenAIError(w, http.StatusNotFound, "inventory resource not found", "invalid_request_error", "resource_not_found")
+		return
+	}
+	if in.ServiceInstanceID != "" {
+		instance, getErr := s.db.GetK8sServiceInstance(r.Context(), in.ServiceInstanceID)
+		if getErr != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "service instance not found", "invalid_request_error", "service_instance_not_found")
+			return
+		}
+		if instance.ClusterID != in.ClusterID || instance.Namespace != item.Namespace || instance.Name != in.ServiceName {
+			writeOpenAIError(w, http.StatusConflict, "service instance target does not match the resource placement or service name", "invalid_request_error", "service_instance_target_mismatch")
+			return
+		}
+	}
+	wanted := map[string]string{"app.kubernetes.io/name": in.ServiceName, "app.kubernetes.io/instance": in.ServiceName}
+	if in.ServiceInstanceID != "" {
+		wanted["clustara.io/service-instance-id"] = in.ServiceInstanceID
+	}
+	conflicts := []string{}
+	for key, value := range wanted {
+		if current := strings.TrimSpace(item.Labels[key]); current != "" && current != value {
+			conflicts = append(conflicts, fmt.Sprintf("%s=%s (요청 %s)", key, current, value))
+		}
+	}
+	if len(conflicts) > 0 && !in.Force {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"message": "기존 서비스 라벨 충돌", "code": "service_label_conflict"}, "conflicts": conflicts, "requires_force": true})
+		return
+	}
+	doc := sanitizeManifestDocForLedger(assembleManifest(item))
+	setManifestLabels(doc, wanted)
+	rolloutImpact := false
+	if in.PropagateTemplate {
+		rolloutImpact = setWorkloadTemplateLabels(doc, wanted)
+	}
+	result, err := s.prepareK8sManifestChangeRequest(r.Context(), adminID(r), manifestChangeCreateInput{
+		ClusterID: in.ClusterID, Namespace: item.Namespace, Kind: item.Kind, APIVersion: item.APIVersion, Name: item.Name,
+		Operation: "update", AfterYAML: mustManifestYAML(doc), Reason: "서비스 자동 발견 라벨 연결: " + in.ServiceName,
+		IdempotencyKey: fmt.Sprintf("service-label:%s:%s:%s:%s:%s:%s:%t", in.ClusterID, item.Namespace, item.Kind, item.Name, in.ServiceName, in.ServiceInstanceID, in.PropagateTemplate),
+	})
+	if err != nil {
+		writeManifestChangeCreateError(w, err)
+		return
+	}
+	s.auditAdmin(r, "k8s.service_discovery.label_request", item.ID, auditJSON(map[string]any{"request_id": result.Request.ID, "labels": wanted, "rollout_impact": rolloutImpact}))
+	writeJSON(w, http.StatusCreated, map[string]any{"request": result.Request, "diffs": result.Diffs, "labels": wanted, "rollout_impact": rolloutImpact, "next": "#/k8s-manifest-changes?id=" + result.Request.ID})
+}
+
+func setManifestLabels(doc map[string]any, labels map[string]string) {
+	metadata, _ := doc["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+		doc["metadata"] = metadata
+	}
+	current, _ := metadata["labels"].(map[string]any)
+	if current == nil {
+		current = map[string]any{}
+		metadata["labels"] = current
+	}
+	for key, value := range labels {
+		current[key] = value
+	}
+}
+
+func setWorkloadTemplateLabels(doc map[string]any, labels map[string]string) bool {
+	kind := strings.ToLower(strings.TrimSpace(fmt.Sprint(doc["kind"])))
+	spec, _ := doc["spec"].(map[string]any)
+	if spec == nil {
+		return false
+	}
+	if kind == "cronjob" {
+		jobTemplate, _ := spec["jobTemplate"].(map[string]any)
+		spec, _ = jobTemplate["spec"].(map[string]any)
+	}
+	if kind == "job" || kind == "cronjob" || kind == "deployment" || kind == "statefulset" || kind == "daemonset" {
+		template, _ := spec["template"].(map[string]any)
+		if template == nil {
+			return false
+		}
+		setManifestLabels(template, labels)
+		return true
+	}
+	return false
+}
 
 type serviceDiscoveryResource struct {
 	Kind      string   `json:"kind"`

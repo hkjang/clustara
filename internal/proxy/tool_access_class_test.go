@@ -14,6 +14,7 @@ func TestInferToolAccessClass(t *testing.T) {
 		{"db", "run_sql", "execute"}, // run_ matches execute before sql/write
 		{"shell", "exec", "execute"},
 		{"k8s", "kubectl_apply", "execute"},
+		{"gateway", "k8s_apply_manifest_change", "execute"},
 		{"http", "fetch_url", "network"},
 		{"mail", "send_email", "network"},
 		{"vault", "get_secret", "secret"},

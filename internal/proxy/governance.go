@@ -727,7 +727,7 @@ func inferToolAccessClass(server, tool string) string {
 	switch {
 	case contains("secret", "credential", "password", "vault", "apikey", "api_key", "access key", "access_key", "token", "private key", "private_key", "env var", "환경 변수", "비밀"):
 		return "secret"
-	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "ssh", "systemctl", "sudo"):
+	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "apply", "rollback", "restore", "ssh", "systemctl", "sudo"):
 		return "execute"
 	case contains("http", "fetch", "request", "curl", "url", "web", "browse", "download", "upload", "webhook", "email", "send_", "smtp", "network", "socket"):
 		return "network"

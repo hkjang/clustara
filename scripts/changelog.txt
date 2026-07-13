@@ -1,3 +1,6 @@
+v0.9.140:
+- **MCP Operations & Service Label Workflow (v0.9.140)**: Clustara 전체 OpenAPI operation을 LLM이 검색할 수 있는 `gateway_search_api_catalog`과 API catalog·coverage·operator guide 리소스를 추가하고, Node/Pod CPU·Memory·GPU 조회 및 권한형 Kubernetes Manifest Change 생성→검증→승인→SSA Apply→사후검증 도구를 `/mcp/gateway`에 연결했습니다. 읽기는 `admin:read`, YAML 변경은 `admin:write`, MCP Tool Scope·거버넌스 승인·Secret payload 차단·drift guard를 그대로 적용합니다. 사용자 메뉴의 `🤖 MCP 사용 가이드`를 OpenAPI 다운로드 위에 노출하고 권한 내비게이션 레지스트리에 등록했습니다. 서비스 자동 발견 화면에는 연결 신뢰도·유형 분류 가이드와 표준 app/Clustara 라벨 변경 요청 생성 기능을 추가했으며, 기존 Manifest Change Studio 승인 흐름을 재사용해 라벨 충돌과 Pod template 롤아웃 영향을 사전 안내합니다.
+
 v0.9.139:
 - **Intelligent Existing Service Discovery (v0.9.139)**: 서비스 자동 발견 기능을 신설해 Kubernetes 인벤토리의 명시적 Clustara ID, 표준 app 라벨, 워크로드·Pod 이름 관계를 신뢰도 순으로 평가합니다. 등록 서비스에는 자동 연결 수준·근거·리소스 수를 표시하고, 미등록 Deployment·StatefulSet·DaemonSet·Job·CronJob은 유형 추천과 토폴로지 검토가 가능한 후보로 제공합니다. Namespace 단독 매칭과 무승인 자동 등록을 피하고 권한별 후보 노출을 제한하며, reconcile도 동일한 매칭 기준을 사용합니다.
 

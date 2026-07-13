@@ -75,6 +75,7 @@ func (s *Server) dispatchGatewayMCP(r *http.Request, apiKeyID string, authCtx *s
 	case "initialize":
 		return rpcResultResponse(msg.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
+			"instructions":    gatewayMCPInstructions(),
 			"capabilities": map[string]any{
 				"tools":     map[string]any{"listChanged": false},
 				"resources": map[string]any{"listChanged": false, "subscribe": false},
@@ -121,6 +122,8 @@ func (s *Server) handleGatewayMCPInfo(w http.ResponseWriter, r *http.Request) {
 		"contracts":        gatewayToolContracts(),
 		"resources":        gatewayResourceDefs(),
 		"prompts":          gatewayPromptDefs(),
+		"api_coverage":     gatewayAPICoverage(),
+		"instructions":     gatewayMCPInstructions(),
 		"note":             "외부 AI 에이전트가 Proxy API Key로 /mcp/gateway에 MCP JSON-RPC로 연결해 위 tool/resource/prompt를 사용합니다. contracts는 tool별 위험도·비용·timeout·출력 스키마 계약입니다.",
 	})
 }
@@ -173,9 +176,17 @@ func gatewayToolDefs() []mcpToolDef {
 		{Name: "gateway_list_skills", Description: "사용 가능한 production Skill 목록을 조회합니다(팀 권한 기준).", InputSchema: obj(``)},
 		{Name: "gateway_explain_request", Description: "본인 요청의 모델·비용·라우팅·정책 요약(영수증)을 조회합니다.", InputSchema: obj(`"request_id":{"type":"string"}`)},
 		{Name: "gateway_get_usage_summary", Description: "본인 사용량/비용 요약을 조회합니다.", InputSchema: obj(`"window":{"type":"string","description":"예: 7d, 30d"}`)},
+		{Name: "gateway_search_api_catalog", Description: "Clustara의 전체 OpenAPI 계약에서 기능을 검색합니다. 기능 존재 여부를 확인할 때 가장 먼저 사용하세요. 검색 결과는 reference_only 또는 전용 MCP tool을 명시하며 이 도구 자체는 API를 실행하지 않습니다.", InputSchema: obj(`"query":{"type":"string","description":"경로·기능·요약 검색어. 예: pod logs, service backup, policy"},"tag":{"type":"string","description":"선택 OpenAPI tag. 예: k8s, service-platform, mcp"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},"limit":{"type":"integer","minimum":1,"maximum":50,"default":20}`)},
 		{Name: "k8s_list_clusters", Description: "등록된 Kubernetes 클러스터 목록(id·이름·그룹)을 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(``)},
 		{Name: "k8s_list_incidents", Description: "K8s 장애 워룸의 인시던트를 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(`"cluster_id":{"type":"string"},"status":{"type":"string","description":"open|resolved (기본 open)"}`)},
 		{Name: "k8s_pod_health", Description: "클러스터의 워크로드(owner) 단위 Pod Health 요약을 위험 순으로 조회합니다. admin:read 필요. (읽기 전용)", InputSchema: obj(`"cluster_id":{"type":"string"},"namespace":{"type":"string","description":"선택 — 특정 namespace만"}`)},
+		{Name: "k8s_node_metrics", Description: "노드별 CPU·Memory·GPU 사용량, 추세, 포화 예상과 장애 위험 근거를 조회합니다. metrics.k8s.io와 Prometheus/Thanos·DCGM 수집 결과를 사용하며 admin:read가 필요합니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"cluster_id":{"type":"string"},"window":{"type":"string","enum":["1h","6h","24h","7d"],"default":"6h"}},"required":["cluster_id"],"additionalProperties":false}`)},
+		{Name: "k8s_pod_metrics", Description: "Pod별 최신 CPU(mCPU)·Memory(bytes)·GPU 사용률·GPU memory와 관측 시각을 조회합니다. gpu_observed=false는 미수집을 뜻하며 admin:read가 필요합니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"cluster_id":{"type":"string"},"namespace":{"type":"string"},"pod":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500,"default":100}},"required":["cluster_id"],"additionalProperties":false}`)},
+		{Name: "k8s_create_manifest_change", Description: "Kubernetes YAML create/update를 Manifest Change Studio draft로 등록합니다. admin:write 필요. 아직 적용하지 않으며 Secret data/stringData 원문은 금지됩니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"cluster_id":{"type":"string"},"namespace":{"type":"string"},"kind":{"type":"string"},"api_version":{"type":"string"},"name":{"type":"string"},"operation":{"type":"string","enum":["update","create"]},"after_yaml":{"type":"string","description":"단일 Kubernetes manifest YAML. Secret payload 금지"},"reason":{"type":"string"},"idempotency_key":{"type":"string"}},"required":["cluster_id","operation","after_yaml"],"additionalProperties":false}`)},
+		{Name: "k8s_validate_manifest_change", Description: "Manifest Change draft에 schema·policy·Kubernetes server dry-run을 수행합니다. admin:write 필요. 실제 apply는 하지 않습니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string"}},"required":["request_id"],"additionalProperties":false}`)},
+		{Name: "k8s_approve_manifest_change", Description: "검증되어 approval_required인 Manifest Change를 승인 원장에 기록합니다. admin:write와 MCP 거버넌스 승인이 필요할 수 있습니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string"},"note":{"type":"string"}},"required":["request_id","note"],"additionalProperties":false}`)},
+		{Name: "k8s_apply_manifest_change", Description: "validated 또는 approved Manifest Change를 SSA로 실제 적용합니다. admin:write, confirm=true, drift guard, 정책·승인이 모두 필요하며 force drift는 MCP에서 금지합니다.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string"},"confirm":{"type":"boolean","const":true},"note":{"type":"string"}},"required":["request_id","confirm"],"additionalProperties":false}`), Annotations: json.RawMessage(`{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}`)},
+		{Name: "k8s_verify_manifest_change", Description: "적용된 Manifest Change를 API Server·인벤토리·Warning·Incident 기준으로 사후 검증합니다. admin:write 필요.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string"}},"required":["request_id"],"additionalProperties":false}`)},
 	}
 }
 
@@ -186,6 +197,13 @@ func (s *Server) gatewayToolsCall(r *http.Request, apiKeyID string, authCtx *sto
 	}
 	if err := json.Unmarshal(params, &p); err != nil || strings.TrimSpace(p.Name) == "" {
 		return rpcErrorResponse(id, -32602, "invalid params: name is required")
+	}
+	governanceArgs := s.gatewayManifestGovernanceArgs(r.Context(), p.Name, p.Arguments)
+	if s.db != nil {
+		route := mcpRoute{upstreamID: "gateway", upstreamName: "gateway", bareTool: p.Name}
+		if response := s.enforceMCPToolGovernance(r, apiKeyID, authCtx, route, "tools/call", p.Name, p.Name, governanceArgs, id); response != nil {
+			return response
+		}
 	}
 	ctx := r.Context()
 	start := time.Now()
@@ -478,12 +496,31 @@ func (s *Server) runGatewayTool(ctx context.Context, r *http.Request, apiKeyID s
 		}
 		return gatewayToolJSON(map[string]any{"requests": u.Requests, "tokens": u.Tokens, "cost_krw": round1(u.CostKRW), "errors": u.Errors, "since": since.UTC().Format(time.RFC3339)}), nil
 
-	case "k8s_list_clusters", "k8s_list_incidents", "k8s_pod_health":
+	case "gateway_search_api_catalog":
+		var a struct {
+			Query  string `json:"query"`
+			Tag    string `json:"tag"`
+			Method string `json:"method"`
+			Limit  int    `json:"limit"`
+		}
+		_ = json.Unmarshal(args, &a)
+		operations := searchGatewayAPICatalog(a.Query, a.Tag, a.Method, a.Limit)
+		return gatewayToolJSON(map[string]any{
+			"operations": operations, "count": len(operations),
+			"guidance": "mcp_exposure=dedicated_tool인 결과만 mcp_tools의 도구로 호출할 수 있습니다. reference_only는 gateway://api/catalog 또는 /openapi.json에서 계약을 확인하세요.",
+		}), nil
+
+	case "k8s_list_clusters", "k8s_list_incidents", "k8s_pod_health", "k8s_node_metrics", "k8s_pod_metrics":
 		// K8s operational tools are admin-gated (read-only).
 		if authCtx == nil || !hasScope(authCtx.Scopes, "admin:read") {
 			return nil, errGateway("admin:read scope required for K8s tools")
 		}
+		if name == "k8s_node_metrics" || name == "k8s_pod_metrics" {
+			return s.runK8sMonitoringGatewayTool(ctx, name, args)
+		}
 		return s.runK8sGatewayTool(ctx, name, args)
+	case "k8s_create_manifest_change", "k8s_validate_manifest_change", "k8s_approve_manifest_change", "k8s_apply_manifest_change", "k8s_verify_manifest_change":
+		return s.runGatewayManifestTool(r, authCtx, name, args)
 	}
 	return nil, errGateway("unknown tool: " + name)
 }
@@ -606,6 +643,9 @@ func gatewayResourceDefs() []mcpResource {
 		{URI: "gateway://usage/me", Name: "usage", Description: "본인 사용량 요약(30일)", MimeType: "application/json"},
 		{URI: "gateway://quota/me", Name: "quota", Description: "본인 한도 상태", MimeType: "application/json"},
 		{URI: "gateway://onboarding", Name: "onboarding", Description: "MCP/OpenAI SDK 연결 가이드", MimeType: "text/markdown"},
+		{URI: "gateway://api/catalog", Name: "api-catalog", Description: "Clustara 전체 HTTP API operation 카탈로그와 MCP 직접 노출 여부", MimeType: "application/json"},
+		{URI: "gateway://api/coverage", Name: "api-coverage", Description: "OpenAPI와 MCP 카탈로그 커버리지 및 실행 정책", MimeType: "application/json"},
+		{URI: "gateway://operator-guide", Name: "operator-guide", Description: "LLM을 위한 Clustara MCP 도구 선택·K8s 진단·변경 안전 가이드", MimeType: "text/markdown"},
 	}
 }
 
@@ -637,6 +677,14 @@ func (s *Server) gatewayResourcesRead(r *http.Request, authCtx *store.AuthContex
 		text, mime = gatewayResultText(res), "application/json"
 	case "gateway://onboarding":
 		text, mime = gatewayOnboardingMarkdown(), "text/markdown"
+	case "gateway://api/catalog":
+		b, _ := json.MarshalIndent(gatewayAPICatalog(), "", "  ")
+		text, mime = string(b), "application/json"
+	case "gateway://api/coverage":
+		b, _ := json.MarshalIndent(gatewayAPICoverage(), "", "  ")
+		text, mime = string(b), "application/json"
+	case "gateway://operator-guide":
+		text, mime = gatewayOperatorGuideMarkdown(), "text/markdown"
 	default:
 		return rpcErrorResponse(id, -32602, "unknown resource: "+p.URI)
 	}
@@ -661,6 +709,8 @@ func gatewayPromptDefs() []mcpPrompt {
 		{Name: "choose_best_model", Description: "작업 목적별 모델 추천 보조"},
 		{Name: "run_text2sql_report", Description: "저장 리포트 실행 보조"},
 		{Name: "create_ai_app_request", Description: "업무 앱 생성 요청 보조"},
+		{Name: "operate_clustara", Description: "Clustara API 탐색과 전용 MCP 도구 선택을 위한 운영 절차"},
+		{Name: "diagnose_k8s_incident", Description: "Kubernetes 장애를 읽기 증거부터 단계적으로 진단"},
 	}
 }
 
@@ -670,6 +720,8 @@ var gatewayPromptText = map[string]string{
 	"choose_best_model":     "작업 유형(코드 리뷰/요약/SQL/긴 문서)을 입력받아, gateway_list_models의 가격과 품질을 고려해 가장 적합한 모델을 추천하세요. 비용 대비 품질을 함께 설명하세요.",
 	"run_text2sql_report":   "실행할 저장 리포트와 기간·조건·출력 형식을 입력받아, 안전한 SELECT 기반 질의로 결과를 요약하세요. 원문 SQL은 노출하지 않습니다.",
 	"create_ai_app_request": "반복되는 업무를 업무 앱으로 정의하기 위해 목적·입력·사용할 Skill/모델/데이터를 정리해 앱 생성 요청서를 작성하세요.",
+	"operate_clustara":      "먼저 gateway_search_api_catalog으로 요청 기능을 검색하세요. mcp_exposure=dedicated_tool이면 표시된 mcp_tools만 호출하고, reference_only면 직접 실행하지 말고 필요한 권한·HTTP API·관리 화면을 설명하세요. YAML 변경은 k8s_create_manifest_change → k8s_validate_manifest_change → 필요 시 k8s_approve_manifest_change → k8s_apply_manifest_change → k8s_verify_manifest_change 순서와 결과를 확인하세요.",
+	"diagnose_k8s_incident": "k8s_list_clusters로 cluster_id를 확인하고 k8s_list_incidents, k8s_pod_health, k8s_node_metrics, k8s_pod_metrics로 읽기 증거를 수집하세요. 관측 사실과 추론을 구분하고 영향 범위, 가능한 원인, 추가 확인, 안전한 복구 순서로 정리하세요. gpu_observed=false는 0%가 아니라 미수집입니다.",
 }
 
 func gatewayPromptsGet(id, params json.RawMessage) *rpcResponse {

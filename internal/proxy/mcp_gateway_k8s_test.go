@@ -3,7 +3,9 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"clustara/internal/store"
 )
@@ -44,5 +46,29 @@ func TestK8sGatewayToolsDispatch(t *testing.T) {
 	}
 	if _, err := s.runGatewayTool(ctx, nil, "", &store.AuthContext{Scopes: []string{"admin:read"}}, "k8s_list_clusters", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("admin:read caller should be allowed: %v", err)
+	}
+}
+
+func TestK8sGatewayMonitoringReturnsLatestPodCPUAndMemory(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, sample := range []store.K8sMetricSample{
+		{ID: "pod-old", ClusterID: "c1", Namespace: "apps", ResourceKind: "Pod", ResourceName: "api-0", CPUMillicores: 100, MemoryBytes: 1024, ObservedAt: now.Add(-time.Minute).Format(time.RFC3339Nano)},
+		{ID: "pod-new", ClusterID: "c1", Namespace: "apps", ResourceKind: "Pod", ResourceName: "api-0", CPUMillicores: 250, MemoryBytes: 2048, GPUObserved: false, ObservedAt: now.Format(time.RFC3339Nano)},
+	} {
+		if err := db.InsertK8sMetricSample(ctx, sample); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{db: db}
+	result, err := s.runK8sMonitoringGatewayTool(ctx, "k8s_pod_metrics", json.RawMessage(`{"cluster_id":"c1","namespace":"apps"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := gatewayResultText(result)
+	if !strings.Contains(text, `"cpu_millicores": 250`) || !strings.Contains(text, `"gpu_observed": false`) || strings.Count(text, `"resource_name": "api-0"`) != 1 {
+		t.Fatalf("expected one latest Pod metric with explicit GPU observation state: %s", text)
 	}
 }

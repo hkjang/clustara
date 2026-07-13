@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.139** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.140** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.139)
+## 기능 상태 (v0.9.140)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -62,7 +62,7 @@
 | 워크로드 묶음 보기 — owner(ReplicaSet/StatefulSet/DaemonSet) 단위 Pod 상태·Health·증상 집계, 위험 순 정렬 | ✅ |
 | Pod Compare Matrix — 같은 워크로드 Pod를 필드 단위 비교, 다른 값·소수(outlier) Pod 강조 | ✅ |
 | Pod Watch List — 중요 namespace/워크로드 감시 등록, 현재 위험 상태(밴드·위험 Pod·증상) 집계 | ✅ |
-| K8s MCP Toolset — `/mcp/gateway`에 read-only 운영 도구(`k8s_list_clusters`·`k8s_list_incidents`·`k8s_pod_health`) 노출, admin:read 게이트 | ✅ |
+| K8s MCP Toolset — `/mcp/gateway`에 장애·Pod Health·Node/Pod CPU·Memory·GPU 읽기 도구와 승인형 Manifest Change 생성·검증·승인·SSA Apply·사후검증 도구 노출. 읽기는 `admin:read`, YAML 변경은 `admin:write`, MCP Tool Scope와 기존 정책·승인·drift guard 적용 | ✅ |
 | Runbook Orchestrator — 증상별 단계형 플랜(사전점검→진단→조치(승인)→확인→롤백), 최근 변경 시 롤백 후보 노출 | ✅ |
 | 리포트 자동 발송 — 운영 다이제스트를 주기(interval)로 Mattermost 채널에 자동 발송 + 즉시 발송 | ✅ |
 | Env Source Map — Pod 선언 env의 출처(literal/ConfigMap/Secret/Downward) 추적 + Secret 위생 점검(값 미노출·민감 평문 마스킹) | ✅ |

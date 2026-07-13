@@ -30,8 +30,16 @@ func gatewayToolContracts() []gatewayToolContract {
 		{"gateway_list_skills", "low", "free", 10000, "", false, "{skills[]}"},
 		{"gateway_explain_request", "low", "free", 10000, "", false, "{request_id, model, cost, routing, policy} — own request only"},
 		{"gateway_get_usage_summary", "low", "free", 10000, "", false, "{window, requests, tokens, cost_krw}"},
+		{"gateway_search_api_catalog", "low", "free", 10000, "", false, "{operations[], count, guidance} — authoritative OpenAPI discovery; no execution"},
 		{"k8s_list_clusters", "low", "free", 10000, "admin", false, "{clusters[], count} — id·name·group·status (read-only)"},
 		{"k8s_list_incidents", "low", "free", 15000, "admin", false, "{incidents[], count, status} — 장애 워룸 인시던트 (read-only)"},
 		{"k8s_pod_health", "low", "free", 20000, "admin", false, "{workloads[], count} — owner 단위 Pod Health 요약 (read-only)"},
+		{"k8s_node_metrics", "low", "free", 20000, "admin", false, "{cluster_id, window, report, collection} — node CPU/memory/GPU trends and risk"},
+		{"k8s_pod_metrics", "low", "free", 20000, "admin", false, "{pods[], count, units, interpretation} — latest Pod CPU/memory/GPU observations"},
+		{"k8s_create_manifest_change", "medium", "free", 15000, "admin", true, "{request, impact, diffs, operation} — draft only; no cluster mutation"},
+		{"k8s_validate_manifest_change", "medium", "free", 60000, "admin", true, "{request, validation, plan} — schema/policy/server dry-run"},
+		{"k8s_approve_manifest_change", "high", "free", 10000, "admin", true, "{request} — approval ledger transition"},
+		{"k8s_apply_manifest_change", "high", "free", 120000, "admin", true, "{request, apply_result} — real SSA cluster mutation after approval"},
+		{"k8s_verify_manifest_change", "medium", "free", 30000, "admin", true, "{request, verification} — post-apply observation"},
 	}
 }

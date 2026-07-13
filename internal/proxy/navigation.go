@@ -7,7 +7,7 @@ import (
 
 // menuVersion is bumped whenever the menu registry or its access rules change, so the
 // SPA can detect a stale navigation and refresh /me/navigation without a full reload.
-const menuVersion = 43
+const menuVersion = 44
 
 // menuItem is one navigable destination in the admin SPA. Access is decided server-side
 // from the caller's scopes + enabled feature flags — the same registry drives both the
@@ -32,6 +32,10 @@ var menuRegistry = []menuItem{
 	{ID: "me.keys", Label: "개인 키 관리", Path: "#/mykeys", Tab: "mykeys", Group: "me", DataScope: "self"},
 	{ID: "me.integrations", Label: "나의 외부 연동", Path: "#/my-integrations", Tab: "my-integrations", Group: "me", DataScope: "self"},
 	{ID: "me.profile", Label: "개인화 설정", Path: "#/my-profile", Tab: "my-profile", Group: "me", DataScope: "self"},
+	// 사용자 메뉴의 보조 링크도 route guard와 같은 registry에 등록해야 한다.
+	// 등록되지 않은 data-tab은 applyNavPermissions에서 숨겨지므로, MCP 관리
+	// 정보를 조회할 수 있는 admin:read 사용자에게 명시적으로 노출한다.
+	{ID: "me.mcp_guide", Label: "MCP 사용 가이드", Path: "#/gateway-mcp", Tab: "gateway-mcp", Group: "me", Scopes: []string{"admin:read"}, DataScope: "self"},
 	// 서비스 플랫폼 — Kubernetes 객체를 사용자 중심 서비스 인스턴스로 추상화.
 	{ID: "svc.home", Label: "서비스 홈", Path: "#/service-home", Tab: "service-home", Group: "service", Scopes: []string{"service:read"}, DataScope: "all"},
 	{ID: "svc.catalog", Label: "서비스 카탈로그", Path: "#/services/catalog", Tab: "services-catalog", Group: "service", Scopes: []string{"service:read"}, DataScope: "all"},

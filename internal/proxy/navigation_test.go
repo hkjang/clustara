@@ -59,7 +59,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// ai_admin: admin:read but NOT security:read → ops tabs + settings, but no security.
 	aiTabs := tabSet(roleScopes["ai_admin"], features)
-	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "ai-governance", "enterprise", "settings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "gateway-mcp", "k8s-home", "fleet", "external-integrations", "k8s", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-nodes", "service-catalog", "gitops", "problems", "k8s-rca", "ai-governance", "enterprise", "settings"} {
 		if !aiTabs[want] {
 			t.Errorf("ai_admin should see %q", want)
 		}
@@ -73,7 +73,7 @@ func TestAccessibleMenusByRole(t *testing.T) {
 
 	// admin: every K8s area incl. security + nested settings children.
 	adminTabs := tabSet(roleScopes["admin"], features)
-	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "k8s-home", "fleet", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "enterprise", "settings"} {
+	for _, want := range []string{"me", "my-calendar", "mykeys", "my-integrations", "my-profile", "gateway-mcp", "k8s-home", "fleet", "external-integrations", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-timeline", "gitops", "problems", "k8s-conn", "k8s-actions", "k8s-nodes", "service-catalog", "k8s-meta", "finops", "ai-governance", "k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan", "k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "enterprise", "settings"} {
 		if !adminTabs[want] {
 			t.Errorf("admin should see %q", want)
 		}
