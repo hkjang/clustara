@@ -8,7 +8,7 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 
 Deployment, StatefulSet, DaemonSet, Job, CronJob 중 등록 서비스에 귀속되지 않은 워크로드는 **서비스 홈**과 **전체 서비스**의 `지능형 수집 서비스 후보`에 표시합니다. 관련 Pod·PVC·Service는 표준 app 라벨과 이름 관계로 묶고 이미지·이름을 통해 data-analysis, database, application 유형을 추천합니다. 추천 후보는 오탐 방지를 위해 자동 등록하지 않으며 운영자가 토폴로지와 근거를 검토한 뒤 등록합니다. 권한 범위를 벗어난 사용자는 미등록 후보를 조회할 수 없습니다.
 
-서비스 홈의 **자동 연결 기준** 또는 후보 카드의 **연결 신뢰도·유형 분류 가이드**를 누르면 점수별 근거, 유형 추천 기준, 라벨 반영 절차를 모달에서 확인할 수 있습니다. `service:update` 권한이 있는 운영자는 등록 서비스의 **라벨 연결** 또는 수집 후보의 **라벨 적용**으로 `app.kubernetes.io/name`, `app.kubernetes.io/instance`, 필요 시 `clustara.io/service-instance-id` 변경 요청을 즉시 만들 수 있습니다.
+서비스 홈의 **자동 연결 기준** 또는 후보 카드의 **연결 신뢰도·유형 분류 가이드**를 누르면 점수별 근거, 유형 추천 기준, 라벨 반영 절차를 모달에서 확인할 수 있습니다. `service:update` 권한이 있는 운영자는 등록 서비스의 **라벨 연결** 또는 수집 후보의 **라벨 적용**으로 `clustara.io/service-name`, 필요 시 `clustara.io/service-instance-id` 변경 요청을 즉시 만들 수 있습니다. Helm 소유권과 Deployment selector에 사용될 수 있는 기존 `app.kubernetes.io/name`·`app.kubernetes.io/instance` 값은 읽기 신호로만 사용하고 변경하지 않습니다.
 
 라벨 적용은 클러스터를 브라우저에서 직접 변경하지 않습니다. 현재 인벤토리에서 manifest를 재구성하고 기존 라벨을 보존한 diff를 만든 뒤 Manifest Change Studio의 schema·policy·server dry-run, 승인, SSA Apply 흐름으로 연결합니다. 기존 강한 서비스 라벨이 다른 값을 가리키면 명시적 덮어쓰기 확인이 필요합니다. Pod template 전파는 선택 사항이며 Deployment·StatefulSet·DaemonSet·Job·CronJob에서 새 Pod 또는 롤아웃을 유발할 수 있으므로 UI에 영향도를 먼저 표시합니다. 등록 서비스 ID를 적용할 때는 서비스와 리소스의 클러스터·Namespace·서비스 이름이 모두 일치해야 합니다.
 

@@ -51,7 +51,7 @@ func TestServiceDiscoveryLabelCreatesManifestChangeDraft(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated || payload.Request.Status != "draft" || !payload.RolloutImpact {
 		t.Fatalf("unexpected label change response: status=%d payload=%+v", resp.StatusCode, payload)
 	}
-	for _, marker := range []string{"owner: platform", "app.kubernetes.io/name: payments", "app.kubernetes.io/instance: payments"} {
+	for _, marker := range []string{"owner: platform", "clustara.io/service-name: payments"} {
 		if !strings.Contains(payload.Request.AfterYAML, marker) {
 			t.Fatalf("generated manifest is missing %q:\n%s", marker, payload.Request.AfterYAML)
 		}
@@ -65,7 +65,7 @@ func TestServiceDiscoveryLabelCreatesManifestChangeDraft(t *testing.T) {
 		t.Fatalf("unrelated labels must not be treated as a service identity conflict, got %d", conflict.StatusCode)
 	}
 
-	item.Labels["app.kubernetes.io/name"] = "legacy-service"
+	item.Labels["clustara.io/service-name"] = "legacy-service"
 	if err := db.UpsertK8sInventory(ctx, item); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +86,7 @@ func TestScoreServiceInventoryMatchUsesStrongSignalsBeforeName(t *testing.T) {
 		want int
 	}{
 		{"explicit ID", store.K8sInventoryItem{Labels: map[string]string{"clustara.io/service-instance-id": "svc-1"}}, 100},
+		{"explicit Clustara name", store.K8sInventoryItem{Labels: map[string]string{"clustara.io/service-name": "orders"}}, 97},
 		{"standard instance label", store.K8sInventoryItem{Labels: map[string]string{"app.kubernetes.io/instance": "orders"}}, 95},
 		{"standard name label", store.K8sInventoryItem{Labels: map[string]string{"app.kubernetes.io/name": "orders"}}, 85},
 		{"pod naming", store.K8sInventoryItem{Name: "orders-7db7f"}, 65},
@@ -108,8 +109,7 @@ func TestSetWorkloadTemplateLabelsKeepsMetadataAndTemplateInSync(t *testing.T) {
 		"spec":     map[string]any{"template": map[string]any{"metadata": map[string]any{}}},
 	}
 	labels := map[string]string{
-		"app.kubernetes.io/name":          "orders",
-		"app.kubernetes.io/instance":      "orders",
+		"clustara.io/service-name":        "orders",
 		"clustara.io/service-instance-id": "svc-orders",
 	}
 	setManifestLabels(doc, labels)
@@ -125,6 +125,38 @@ func TestSetWorkloadTemplateLabelsKeepsMetadataAndTemplateInSync(t *testing.T) {
 		if metadata[key] != value || template[key] != value {
 			t.Fatalf("label %s was not synchronized: metadata=%v template=%v", key, metadata[key], template[key])
 		}
+	}
+}
+
+func TestServiceLabelsDoNotRewriteDeploymentSelectorLabels(t *testing.T) {
+	doc := map[string]any{
+		"kind": "Deployment",
+		"metadata": map[string]any{"labels": map[string]any{
+			"app.kubernetes.io/name": "prometheus", "app.kubernetes.io/instance": "prometheus",
+		}},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{
+				"app.kubernetes.io/name": "prometheus", "app.kubernetes.io/instance": "prometheus",
+			}},
+			"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{
+				"app.kubernetes.io/name": "prometheus", "app.kubernetes.io/instance": "prometheus",
+			}}},
+		},
+	}
+	labels := map[string]string{"clustara.io/service-name": "prometheus-server"}
+	setManifestLabels(doc, labels)
+	if !setWorkloadTemplateLabels(doc, labels) {
+		t.Fatal("Deployment Pod template should support Clustara identity propagation")
+	}
+	selector := doc["spec"].(map[string]any)["selector"].(map[string]any)["matchLabels"].(map[string]any)
+	template := doc["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["labels"].(map[string]any)
+	for key, value := range selector {
+		if template[key] != value {
+			t.Fatalf("selector label %s=%v no longer matches Pod template %v", key, value, template[key])
+		}
+	}
+	if template["clustara.io/service-name"] != "prometheus-server" {
+		t.Fatalf("Clustara service label missing: %v", template)
 	}
 }
 
@@ -152,5 +184,9 @@ func TestServiceWorkloadRelatedUsesLabelsAndNaming(t *testing.T) {
 	}
 	if serviceWorkloadRelated(root, store.K8sInventoryItem{Kind: "Pod", Name: "unrelated"}) {
 		t.Fatal("unrelated Pod must not be associated")
+	}
+	clustaraRoot := store.K8sInventoryItem{Kind: "Deployment", Name: "api", Labels: map[string]string{"clustara.io/service-name": "payments"}}
+	if !serviceWorkloadRelated(clustaraRoot, store.K8sInventoryItem{Kind: "Pod", Name: "random", Labels: map[string]string{"clustara.io/service-name": "payments"}}) {
+		t.Fatal("Clustara service label should associate related resources")
 	}
 }

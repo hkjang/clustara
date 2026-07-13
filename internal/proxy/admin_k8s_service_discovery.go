@@ -61,7 +61,11 @@ func (s *Server) handleServiceDiscoveryLabel(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	wanted := map[string]string{"app.kubernetes.io/name": in.ServiceName, "app.kubernetes.io/instance": in.ServiceName}
+	// app.kubernetes.io/name and app.kubernetes.io/instance frequently participate in an
+	// immutable workload selector and are commonly owned by Helm. Rewriting them can make
+	// spec.selector no longer match spec.template.labels. Keep those application labels intact
+	// and add only Clustara-owned identity labels.
+	wanted := map[string]string{"clustara.io/service-name": in.ServiceName}
 	if in.ServiceInstanceID != "" {
 		wanted["clustara.io/service-instance-id"] = in.ServiceInstanceID
 	}
@@ -84,7 +88,7 @@ func (s *Server) handleServiceDiscoveryLabel(w http.ResponseWriter, r *http.Requ
 	result, err := s.prepareK8sManifestChangeRequest(r.Context(), adminID(r), manifestChangeCreateInput{
 		ClusterID: in.ClusterID, Namespace: item.Namespace, Kind: item.Kind, APIVersion: item.APIVersion, Name: item.Name,
 		Operation: "update", AfterYAML: mustManifestYAML(doc), Reason: "서비스 자동 발견 라벨 연결: " + in.ServiceName,
-		IdempotencyKey: fmt.Sprintf("service-label:%s:%s:%s:%s:%s:%s:%t", in.ClusterID, item.Namespace, item.Kind, item.Name, in.ServiceName, in.ServiceInstanceID, in.PropagateTemplate),
+		IdempotencyKey: fmt.Sprintf("service-label:v2:%s:%s:%s:%s:%s:%s:%t", in.ClusterID, item.Namespace, item.Kind, item.Name, in.ServiceName, in.ServiceInstanceID, in.PropagateTemplate),
 	})
 	if err != nil {
 		writeManifestChangeCreateError(w, err)
@@ -222,6 +226,7 @@ func scoreServiceInventoryMatch(instance store.K8sServiceInstance, item store.K8
 		matched bool
 	}{
 		{100, "clustara service instance ID 라벨 일치", labels["clustara.io/service-instance-id"] == instance.ID},
+		{97, "clustara service name 라벨 일치", strings.EqualFold(labels["clustara.io/service-name"], instance.Name)},
 		{95, "app.kubernetes.io/instance 라벨 일치", strings.EqualFold(labels["app.kubernetes.io/instance"], instance.Name)},
 		{85, "app.kubernetes.io/name 라벨 일치", strings.EqualFold(labels["app.kubernetes.io/name"], instance.Name)},
 		{80, "app 라벨 일치", strings.EqualFold(labels["app"], instance.Name)},
@@ -244,7 +249,7 @@ func serviceWorkloadRelated(root, item store.K8sInventoryItem) bool {
 		return false
 	}
 	rootLabels := root.Labels
-	for _, key := range []string{"app.kubernetes.io/instance", "app.kubernetes.io/name", "app"} {
+	for _, key := range []string{"clustara.io/service-instance-id", "clustara.io/service-name", "app.kubernetes.io/instance", "app.kubernetes.io/name", "app"} {
 		if value := strings.TrimSpace(rootLabels[key]); value != "" && item.Labels[key] == value {
 			return true
 		}

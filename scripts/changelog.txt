@@ -1,3 +1,6 @@
+v0.9.141:
+- **Selector-Safe Service Labels (v0.9.141)**: 서비스 자동 발견 라벨 연결이 Helm과 Deployment selector가 소유한 `app.kubernetes.io/name`·`app.kubernetes.io/instance`를 서비스 이름으로 덮어써 Pod template과 selector가 불일치하던 문제를 수정했습니다. 이제 기존 app 라벨은 연결 신호로만 읽고 `clustara.io/service-name`과 선택적인 `clustara.io/service-instance-id`만 추가합니다. 기존 실패 요청이 idempotency로 재사용되지 않도록 요청 키를 v2로 분리하고 Clustara 라벨 기반 연결 신뢰도와 관련 리소스 탐지를 추가했습니다. Manifest Change 목록에는 server dry-run의 selector 불일치 원인과 기존 라벨을 보존한 새 요청 생성 안내를 바로 표시하며 Prometheus 형태의 selector 보존 회귀 테스트를 포함합니다.
+
 v0.9.140:
 - **MCP Operations & Service Label Workflow (v0.9.140)**: Clustara 전체 OpenAPI operation을 LLM이 검색할 수 있는 `gateway_search_api_catalog`과 API catalog·coverage·operator guide 리소스를 추가하고, Node/Pod CPU·Memory·GPU 조회 및 권한형 Kubernetes Manifest Change 생성→검증→승인→SSA Apply→사후검증 도구를 `/mcp/gateway`에 연결했습니다. 읽기는 `admin:read`, YAML 변경은 `admin:write`, MCP Tool Scope·거버넌스 승인·Secret payload 차단·drift guard를 그대로 적용합니다. 사용자 메뉴의 `🤖 MCP 사용 가이드`를 OpenAPI 다운로드 위에 노출하고 권한 내비게이션 레지스트리에 등록했습니다. 서비스 자동 발견 화면에는 연결 신뢰도·유형 분류 가이드와 표준 app/Clustara 라벨 변경 요청 생성 기능을 추가했으며, 기존 Manifest Change Studio 승인 흐름을 재사용해 라벨 충돌과 Pod template 롤아웃 영향을 사전 안내합니다.
 
