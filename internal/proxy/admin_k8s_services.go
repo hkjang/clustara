@@ -390,7 +390,11 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 			writeOpenAIError(w, 500, err.Error(), "server_error", "service_instances_failed")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"instances": rows, "total": len(rows)})
+		matches, candidates := s.discoverServicePlatform(r.Context(), rows, r.URL.Query().Get("cluster_id"))
+		if claims, ok := s.currentAccessClaims(r); ok && !hasScope(claims.Scopes, "service:catalog:manage") && claims.Role != "ops_admin" && claims.Role != "service_admin" {
+			candidates = nil
+		}
+		writeJSON(w, 200, map[string]any{"instances": rows, "total": len(rows), "discovery": map[string]any{"matches": matches, "candidates": candidates, "candidate_count": len(candidates)}})
 		return
 	}
 	if r.Method != http.MethodPost {

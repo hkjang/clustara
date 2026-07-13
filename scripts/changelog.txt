@@ -1,3 +1,6 @@
+v0.9.139:
+- **Intelligent Existing Service Discovery (v0.9.139)**: 서비스 자동 발견 기능을 신설해 Kubernetes 인벤토리의 명시적 Clustara ID, 표준 app 라벨, 워크로드·Pod 이름 관계를 신뢰도 순으로 평가합니다. 등록 서비스에는 자동 연결 수준·근거·리소스 수를 표시하고, 미등록 Deployment·StatefulSet·DaemonSet·Job·CronJob은 유형 추천과 토폴로지 검토가 가능한 후보로 제공합니다. Namespace 단독 매칭과 무승인 자동 등록을 피하고 권한별 후보 노출을 제한하며, reconcile도 동일한 매칭 기준을 사용합니다.
+
 v0.9.138:
 - **Predictive Incident & Node Monitoring Enhancements (v0.9.138)**: 예측형 인시던트 분석(`predictive_incident.go`)을 신설해 노드·Pod 메트릭 추세에서 장애 발생을 선행 탐지하고 자동으로 인시던트를 생성합니다. 노드 모니터링(`admin_k8s_node_monitoring.go`)에 CPU/Memory 실사용 추세 기반의 임계치 예상 경보와 Pod 분산 분석을 추가하고, 리소스 그래프(`resource_graph.go`)에서 블라스트 레디우스 계산 정확도를 개선했습니다. 인시던트 상세에 예측 근거(메트릭 추세·임계치 예상 시점) UI를 연동하고, 노드 모니터링 테스트와 docs를 갱신했습니다.
 

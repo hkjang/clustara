@@ -74,9 +74,8 @@ func (s *Server) reconcileServiceInstance(ctx context.Context, in store.K8sServi
 	}
 	result.Endpoints = uniqueServiceEndpoints(result.Endpoints)
 	for _, it := range all {
-		labels := it.Labels
-		related := labels["app.kubernetes.io/name"] == in.Name || labels["app"] == in.Name || strings.HasPrefix(it.Name, in.Name+"-") || strings.HasPrefix(it.Name, "data-"+in.Name+"-")
-		if !related {
+		score, _ := scoreServiceInventoryMatch(in, it)
+		if score < 50 {
 			continue
 		}
 		key := serviceResourceKey(it.Kind, it.Namespace, it.Name)

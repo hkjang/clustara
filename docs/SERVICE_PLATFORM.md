@@ -2,6 +2,12 @@
 
 Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중심 서비스 인스턴스로 관리하는 상위 추상화 계층입니다. 실제 배포 실행기나 승인 엔진을 새로 만들지 않고 기존 Application Stack, Stack Apply, Action Center, 보안 정책, Resource Graph를 재사용합니다.
 
+## 지능형 기존 서비스 발견
+
+서비스 플랫폼은 Clustara에서 새로 생성한 인스턴스뿐 아니라 이미 클러스터에서 운영 중인 워크로드도 인벤토리 수집 결과로 식별합니다. 연결 신뢰도는 `clustara.io/service-instance-id`, `app.kubernetes.io/instance`, `app.kubernetes.io/name`, `app`, workload·Pod 이름 prefix 순으로 계산하며 Namespace 일치만으로는 자동 귀속하지 않습니다. 등록 서비스에는 `자동 연결 확정`, `자동 연결 높음`, `연결 추천`, `수집 연결 없음`과 근거·연결 리소스 수를 표시합니다.
+
+Deployment, StatefulSet, DaemonSet, Job, CronJob 중 등록 서비스에 귀속되지 않은 워크로드는 **서비스 홈**과 **전체 서비스**의 `지능형 수집 서비스 후보`에 표시합니다. 관련 Pod·PVC·Service는 표준 app 라벨과 이름 관계로 묶고 이미지·이름을 통해 data-analysis, database, application 유형을 추천합니다. 추천 후보는 오탐 방지를 위해 자동 등록하지 않으며 운영자가 토폴로지와 근거를 검토한 뒤 등록합니다. 권한 범위를 벗어난 사용자는 미등록 후보를 조회할 수 없습니다.
+
 서비스 플랫폼 폼을 추가하거나 변경할 때는 [Admin UI 디자인 규칙](ADMIN_UI_DESIGN.md)의 공통 필드 구조, 간격, 필수·선택 표시, 버튼 순서와 리뷰 체크리스트를 적용합니다.
 
 ## 현재 구현 범위 (v0.9.135)
