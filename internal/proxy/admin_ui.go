@@ -10068,6 +10068,10 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s 운영 홈: 위험 TOP5 / 장애후보 TOP10 / 최근변경 TOP10 (섹션 7) ----------
+    function k8sHomeGuideHTML() {
+      return '<div class="card-body"><div class="banner"><strong>운영 홈은 “지금 무엇을 먼저 볼지” 결정하는 출발점입니다.</strong> 자동 조치보다 근거·영향·승인 흐름을 먼저 확인합니다.</div><div class="grid2" style="margin-top:10px"><div><h3>1. 데이터 신뢰도</h3><p class="muted">최신 수집 시각·Agent stale·watch lag를 먼저 확인합니다. 오래된 데이터로 장애를 판단하지 마세요.</p></div><div><h3>2. 우선순위</h3><p class="muted">심각 장애 후보 → 위험 클러스터 → 최근 변경 → 용량·비용 순으로 상관관계를 확인합니다.</p></div><div><h3>3. 증거 이동</h3><p class="muted">대상의 Pod 상세·타임라인·Diff·장애 워룸으로 이동해 Event, Log, Metric, 변경을 함께 보세요.</p></div><div><h3>4. 안전한 조치</h3><p class="muted">YAML·scale·cordon/drain은 영향도를 미리 확인하고 기존 승인 흐름으로 실행합니다.</p></div></div><div class="toolbar" style="margin-top:12px"><a class="button" href="#/k8s-incidents">장애 워룸</a><a class="button secondary" href="#/k8s-timeline">변경 타임라인</a><a class="button secondary" href="#/k8s-capacity">용량·자동확장</a><a class="button secondary" href="#/work-calendar">전체 업무 캘린더</a></div></div>';
+    }
+    window.openK8sHomeGuide = () => openModal('운영 홈 활용 가이드', k8sHomeGuideHTML(), null, { wide: true });
     async function renderK8sHome(params) {
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 홈', '<div class="empty">불러오는 중...</div>');
@@ -10105,6 +10109,7 @@ const adminHTML = `<!doctype html>
         '<span class="muted">' + escapeHTML(maxLag) + '</span>' +
         '<button type="button" class="secondary" style="margin-left:auto" onclick="route()">새로고침</button>' +
         '<button type="button" class="secondary" onclick="location.hash=\'#/k8s-collector\'">수집 상태</button>' +
+		'<button type="button" class="secondary" onclick="openK8sHomeGuide()">운영 홈 가이드</button>' +
         '</div>';
 
       const riskRows = (d.clusters_at_risk || []).length ? (d.clusters_at_risk || []).map(c =>
@@ -10130,13 +10135,18 @@ const adminHTML = `<!doctype html>
         '<td><a href="' + escapeAttr(tlHref(c)) + '">Diff</a> · ' + k8sYamlChangeLink(c.cluster_id, c.kind, c.namespace, c.name, 'YAML') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">최근 변경 없음.</td></tr>';
 
+      const criticalFailures=(d.failure_candidates||[]).filter(x=>x.severity==='critical'||x.severity==='high').length;
+      const staleAgents=Number(agents.stale||0), priorityTone=criticalFailures||staleAgents?'error':((d.clusters_at_risk||[]).length?'warn':'');
+      const priorityTitle=staleAgents?'수집 Agent '+fmt(staleAgents)+'개가 stale 상태입니다.':(criticalFailures?'우선 확인할 중대 장애 후보가 '+fmt(criticalFailures)+'건 있습니다.':'즉시 조치가 필요한 중대 신호는 없습니다.');
+      const quickOps='<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0"><a class="card" href="#/k8s-incidents" style="margin:0;padding:12px;text-decoration:none"><strong>장애 파악</strong><div class="muted" style="font-size:11px;margin-top:4px">워룸·RCA·복구 판정</div></a><a class="card" href="#/k8s-timeline" style="margin:0;padding:12px;text-decoration:none"><strong>변경 추적</strong><div class="muted" style="font-size:11px;margin-top:4px">Revision·Event·Diff</div></a><a class="card" href="#/k8s-capacity" style="margin:0;padding:12px;text-decoration:none"><strong>용량 점검</strong><div class="muted" style="font-size:11px;margin-top:4px">HPA·소진 예측·시뮬레이션</div></a><a class="card" href="#/k8s-actions" style="margin:0;padding:12px;text-decoration:none"><strong>승인·조치</strong><div class="muted" style="font-size:11px;margin-top:4px">대기 작업·안전 검토</div></a></div>';
+
       view.innerHTML =
-        section('K8s 운영 홈', freshnessMeta + '<div class="kpis">' +
+        section('K8s 운영 홈', freshnessMeta + '<div class="banner '+priorityTone+'" style="margin:8px 0"><strong>'+priorityTitle+'</strong> '+(staleAgents?'<a href="#/k8s-collector">수집 상태 확인</a>':(criticalFailures?'<a href="#/k8s-incidents">장애 워룸 열기</a>':'<span class="muted">최근 변경과 용량 추세를 정기적으로 확인하세요.</span>'))+'</div><div class="kpis">' +
           kpi('위험 클러스터', fmt((d.clusters_at_risk || []).length)) +
           kpi('장애 후보', fmt((d.failure_candidates || []).length)) +
           kpi('최근 변경', fmt((d.recent_changes || []).length)) +
           kpi('Inventory', fmt(freshness.inventory_items || 0)) +
-          kpi('Agent', escapeHTML(agentText)) + '</div>') +
+          kpi('Agent', escapeHTML(agentText)) + '</div>'+quickOps) +
         renderWorkspaceCard(wsResp, clusterList, wsClusterId) +
         renderExposureCard(expResp) +
         renderRuntimeSecurityCard(secResp) +
@@ -11041,19 +11051,21 @@ const adminHTML = `<!doctype html>
           '<div style="font-size:11px;margin-top:8px">' + k8sNodePredictionHTML(n.prediction) + '</div></div>';
       }).join('') + '</div>';
     }
-    function k8sGPUOperationsHTML(response, selectedCluster) {
+    function k8sGPUPriceKey(model) { const v=String(model||'').toLowerCase(); if(v.includes('b300'))return'b300';if(v.includes('b200'))return'b200';if(v.includes('h200'))return'h200';if(v.includes('h100'))return'h100';if(v.includes('l40s')||v.includes('l40-s'))return'l40s';return'unknown'; }
+    function k8sGPUOperationsHTML(response, selectedCluster, costConfig) {
       const won = (v) => '₩' + fmt(Math.round(v || 0));
       const r = (response || {}).report || {};
       const s = r.summary || {};
       const policy = r.alert_policy || {};
+      const costPrices=((costConfig||{}).prices)||{}, modelPrices=costPrices.gpu_model_hourly_usd||{}, usdKRW=Number(costPrices.usd_krw||1400);
       if (!(s.devices > 0)) {
         return card('GPU Operations', '<div class="card-body"><div class="banner warn"><strong>GPU 장치 실사용 지표가 없습니다.</strong><br>GPU 할당량은 위 노드 표에서 계속 확인할 수 있습니다. 장치·MIG·워크로드·XID/ECC 관측을 사용하려면 Prometheus에 DCGM Exporter를 연결하고 Kubernetes 매핑을 활성화하세요.</div></div>');
       }
-      const nodeRows = (r.nodes || []).map(n => '<tr><td><strong>' + escapeHTML(n.node || '-') + '</strong><div class="muted" style="font-size:10px">' + escapeHTML(n.cluster_id || '-') + '</div></td>' +
-        '<td>' + escapeHTML((n.models || []).join(', ') || 'model label 없음') + '<div class="muted" style="font-size:10px">GPU ' + fmt(n.devices || 0) + ' · MIG ' + fmt(n.mig_instances || 0) + '</div></td>' +
+      const nodeRows = (r.nodes || []).map(n => { const models=n.models||[], key=k8sGPUPriceKey(models[0]), hourly=Number(modelPrices[key]||0), monthly=hourly*730*usdKRW*Number(n.devices||0); return '<tr><td><strong>' + escapeHTML(n.node || '-') + '</strong><div class="muted" style="font-size:10px">' + escapeHTML(n.cluster_id || '-') + '</div></td>' +
+        '<td>' + escapeHTML(models.join(', ') || 'model label 없음') + '<div class="muted" style="font-size:10px">GPU ' + fmt(n.devices || 0) + ' · MIG ' + fmt(n.mig_instances || 0) + '</div>'+(hourly?'<div style="font-size:10px"><span class="status">'+escapeHTML(key.toUpperCase())+' $'+hourly.toFixed(2)+'/h</span> · 월 '+won(monthly)+'</div>':'<div class="muted" style="font-size:10px">단가 매핑 없음 · generic fallback</div>')+'</td>' +
         '<td>' + Number(n.utilization_pct || 0).toFixed(1) + '%' + k8sNodeMeter(n.utilization_pct || 0) + '<div class="muted" style="font-size:9px">SM ' + Number(n.sm_active_pct || 0).toFixed(1) + ' · Tensor ' + Number(n.tensor_active_pct || 0).toFixed(1) + ' · DRAM ' + Number(n.dram_active_pct || 0).toFixed(1) + '</div></td>' +
         '<td>' + opsBytes(n.vram_used_bytes || 0) + ' / ' + opsBytes(n.vram_total_bytes || 0) + '</td><td>' + Number(n.temperature_c || 0).toFixed(0) + '°C<div class="muted" style="font-size:10px">' + Number(n.power_watts || 0).toFixed(0) + ' W</div></td>' +
-        '<td><span class="status ' + (n.health === 'critical' ? 'error' : '') + '">' + escapeHTML(n.health || 'unknown') + '</span></td></tr>').join('');
+        '<td><span class="status ' + (n.health === 'critical' ? 'error' : '') + '">' + escapeHTML(n.health || 'unknown') + '</span></td></tr>'; }).join('');
       const workloadRows = (r.workloads || []).slice(0, 100).map(w => '<tr><td>' + escapeHTML((w.namespace || '-') + '/' + (w.pod || '-')) + '<div class="muted" style="font-size:10px">' + escapeHTML(w.container || '-') + '</div></td>' +
         '<td>' + escapeHTML(w.service || '-') + '<div class="muted" style="font-size:10px">' + escapeHTML(w.model_server || 'generic') + '</div></td><td>' + fmt(w.gpu_devices || 0) + ' / req ' + fmt(w.gpu_request || 0) + '</td>' +
         '<td>' + Number(w.current_utilization_pct || 0).toFixed(1) + '%' + k8sNodeMeter(w.current_utilization_pct || 0) + '<div class="muted" style="font-size:9px">avg ' + Number(w.average_utilization_pct || 0).toFixed(1) + '%</div></td>' +
@@ -11098,15 +11110,16 @@ const adminHTML = `<!doctype html>
       const autoRefresh = !params || params.get('refresh') !== '0';
       if (window.__k8sNodeRefreshTimer) clearTimeout(window.__k8sNodeRefreshTimer);
       view.innerHTML = section('노드 관리', '<div class="empty">불러오는 중...</div>');
-      let clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp;
+      let clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp, costCfgResp;
       try {
-        [clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp] = await Promise.all([
+        [clusters, nodesResp, podsResp, capResp, monitorResp, gpuOpsResp, costCfgResp] = await Promise.all([
           api('/admin/k8s/clusters'),
           api('/admin/k8s/inventory?kind=Node&limit=500' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/inventory?kind=Pod&limit=5000' + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/capacity' + (clusterId ? '?cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ report: {} })),
           api('/admin/k8s/nodes/monitoring?window=' + encodeURIComponent(windowName) + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')),
           api('/admin/k8s/gpu/operations?window=' + encodeURIComponent(windowName) + (clusterId ? '&cluster_id=' + encodeURIComponent(clusterId) : '')).catch(() => ({ report: {} })),
+          api('/admin/k8s/cost/config').catch(() => ({prices:{}})),
         ]);
       } catch (e) {
         view.innerHTML = section('노드 관리', '<div class="card-body"><p class="muted">' + escapeHTML(e.message) + '</p></div>');
@@ -11177,7 +11190,7 @@ const adminHTML = `<!doctype html>
           '<div class="node-monitor-note" style="margin-top:10px"><span class="status">실사용: metrics.k8s.io</span><span class="pill">GPU 할당: Node/Pod spec</span><span class="pill">GPU 실사용: DCGM Exporter</span><span class="pill">원시 표본 보존 '+fmt((((monitorResp||{}).collection||{}).retention_days)||30)+'일</span>'+(uxAllowed('runtimesettings')?'<a href="#/settings/runtime"><code>보존기간 설정</code></a>':'')+'<span class="muted" style="font-size:11px">마지막 분석 ' + ago(report.generated_at) + ' · 장애 시점 단정이 아닌 90% 임계치 도달 선행 경보입니다.</span></div>') +
         card('장애 위험 레이더', '<div class="card-body">' + k8sNodeRiskCards(monitorNodes) + '</div>') +
         card('노드 실사용 · 추세', '<div class="card-body node-monitor-table"><table><thead><tr><th>상태 / 위험</th><th>노드</th><th>CPU 실사용</th><th>Memory 실사용</th><th>GPU</th><th>추세</th><th>임계치 예상</th><th>운영 작업</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
-        k8sGPUOperationsHTML(gpuOpsResp, clusterId) +
+        k8sGPUOperationsHTML(gpuOpsResp, clusterId, costCfgResp) +
         card('노드 Bin Packing', '<div class="card-body"><table><thead><tr><th>노드</th><th>Pod</th><th>요청/가용 CPU</th><th>요청률</th></tr></thead><tbody>' + packRows + '</tbody></table></div>');
       if (autoRefresh) {
         window.__k8sNodeRefreshTimer = setTimeout(() => {
@@ -14735,6 +14748,14 @@ const adminHTML = `<!doctype html>
       const color = sev === 'critical' ? 'error' : (sev === 'warning' ? 'warn' : '');
       return '<span class="status ' + color + '" style="font-size:10px">' + escapeHTML(sev) + '</span>';
     }
+    function k8sCapacityGuideHTML() {
+      return '<div class="card-body"><div class="banner"><strong>용량 관리는 사용률 하나가 아니라 수요·예비율·확장 한계·스케줄링 가능성을 함께 판단합니다.</strong></div><div class="grid2" style="margin-top:10px"><div><h3>HPA 현황</h3><p class="muted"><code>desired=max</code>가 지속되면 확장 한계입니다. 메트릭 오류·request 미설정도 함께 확인하세요.</p></div><div><h3>할당 효율</h3><p class="muted">과소 할당은 OOM·throttling, 과다 할당은 bin packing·비용을 악화시킵니다. Advisor 권장은 실행 전 부하 패턴을 검토하세요.</p></div><div><h3>소진 예측</h3><p class="muted">7일 이내는 즉시 확장 검토, 30일 이내는 증설·재배치 계획 대상으로 분류합니다. 표본이 부족하면 예측보다 수집 보완이 먼저입니다.</p></div><div><h3>Replica 시뮬레이션</h3><p class="muted">변경 전 CPU·Memory request 증가와 노드 수용 가능성을 비교합니다. 시뮬레이션은 apply하지 않습니다.</p></div></div><div class="banner warn" style="margin-top:10px">HPA·request·limit 변경은 서비스 SLO와 PodDisruptionBudget, 클러스터 autoscaler 정책을 함께 검토하고 YAML 승인 흐름으로 진행하세요.</div></div>';
+    }
+    window.openK8sCapacityGuide = () => openModal('용량·자동확장 운영 가이드', k8sCapacityGuideHTML(), null, { wide: true });
+    function capacityMeter(value, tone) {
+      const pct=Math.max(0,Math.min(100,Number(value||0)));
+      return '<div style="height:8px;background:var(--surface-2);border-radius:999px;overflow:hidden;margin-top:5px"><div style="height:100%;width:'+pct+'%;background:'+(tone==='error'?'var(--bad)':(tone==='warn'?'var(--warn)':'var(--accent)'))+'"></div></div>';
+    }
     function renderResourceAdvisorCard(advisor, clusterId) {
       if (!clusterId) {
         return card('Resource Request Advisor (CLU-REQ-06)', '<div class="card-body"><p class="muted" style="font-size:12px">클러스터를 선택하면 OOMKilled·Pending·throttling 증상 기반 request/limit 권장값을 표시합니다.</p></div>');
@@ -14813,13 +14834,19 @@ const adminHTML = `<!doctype html>
 
       const atMax = (r.hpas || []).filter(h => h.at_max).length;
       const under = (r.allocation || []).filter(a => a.issue === 'under_provisioned').length;
+      const over=(r.allocation||[]).filter(a=>a.issue==='over_provisioned').length;
+      const nearFull=(r.projections||[]).filter(p=>p.days_to_full>=0&&p.days_to_full<=30).length;
+      const hpaVisual=(r.hpas||[]).slice(0,8).map(h=>{const pct=Number(h.max_replicas)>0?Number(h.desired_replicas||0)/Number(h.max_replicas)*100:0,tone=h.at_max?'error':(pct>=80?'warn':'');return '<div style="padding:10px;border:1px solid var(--line);border-radius:10px"><div style="display:flex;justify-content:space-between;gap:8px"><strong>'+escapeHTML((h.namespace||'-')+'/'+h.name)+'</strong><span class="status '+tone+'">'+fmt(h.desired_replicas||0)+' / '+fmt(h.max_replicas||0)+'</span></div>'+capacityMeter(pct,tone)+'<div class="muted" style="font-size:10px;margin-top:5px">target '+escapeHTML(h.target_kind+'/'+h.target_name)+' · min '+fmt(h.min_replicas||0)+'</div></div>';}).join('')||'<div class="empty">HPA가 없습니다.</div>';
+      const nodeVisual=(r.node_packing||[]).slice().sort((a,b)=>Number(b.cpu_request_pct||0)-Number(a.cpu_request_pct||0)).slice(0,8).map(n=>{const pct=Number(n.cpu_request_pct||0),tone=pct>=90?'error':(pct>=70?'warn':'');return '<div style="padding:10px;border:1px solid var(--line);border-radius:10px"><div style="display:flex;justify-content:space-between"><strong>'+escapeHTML(n.node||'-')+'</strong><span class="status '+tone+'">'+fmt(pct)+'%</span></div>'+capacityMeter(pct,tone)+'<div class="muted" style="font-size:10px;margin-top:5px">'+fmt(n.pods||0)+' Pods · '+fmt(n.requested_cpu_m||0)+'m / '+fmt(n.allocatable_cpu_m||0)+'m</div></div>';}).join('')||'<div class="empty">노드 할당 데이터가 없습니다.</div>';
+      const workloadOptions=[...new Map((r.allocation||[]).map(a=>[(a.kind||'Pod')+'|'+(a.namespace||'')+'|'+(a.name||''),a])).values()];
+      const workloadDatalist=workloadOptions.map(a=>'<option value="'+escapeAttr((a.kind||'Pod')+'|'+(a.namespace||'')+'|'+(a.name||''))+'">').join('');
       view.innerHTML =
-        section('K8s 용량·자동확장', '<div class="kpis">' +
+        section('K8s 용량·자동확장', '<div class="toolbar" style="padding:0 0 10px;border:0"><select id="k8scap-cluster" onchange="k8sCapGo()">' + clusterOpts + '</select><button type="button" class="secondary" onclick="openK8sCapacityGuide()">기능별 운영 가이드</button><a class="button secondary" href="#/k8s-nodes">노드 추세</a><a class="button secondary" href="#/k8s-actions">승인 작업</a><span class="muted" style="margin-left:auto;font-size:11px">' + escapeHTML(data.note || '') + '</span></div><div class="kpis">' +
           kpi('HPA', fmt((r.hpas || []).length)) +
           kpi('확장 한계', fmt(atMax)) +
           kpi('과소 할당', fmt(under)) +
-          kpi('과다 할당', fmt((r.allocation || []).filter(a => a.issue === 'over_provisioned').length)) + '</div>') +
-        card('필터', '<div class="card-body"><select id="k8scap-cluster" onchange="k8sCapGo()">' + clusterOpts + '</select> <span class="muted" style="font-size:12px">' + escapeHTML(data.note || '') + '</span></div>') +
+          kpi('과다 할당', fmt(over)) + kpi('30일 내 소진',fmt(nearFull)) + '</div><div class="banner '+(atMax||nearFull?'warn':'')+'" style="margin-top:10px"><strong>'+(atMax?'확장 한계 HPA '+fmt(atMax)+'건을 먼저 확인하세요.':(nearFull?'30일 내 용량 소진 예상 노드가 '+fmt(nearFull)+'개입니다.':'즉시 증설이 필요한 신호는 없습니다.'))+'</strong></div>') +
+        card('확장·노드 수용력 요약', '<div class="card-body"><div class="grid2"><div><h3>HPA desired / max</h3><div style="display:grid;gap:7px">'+hpaVisual+'</div></div><div><h3>노드 CPU request 점유율</h3><div style="display:grid;gap:7px">'+nodeVisual+'</div></div></div></div>') +
         card('HPA 현황 (SCALE-01/02)', '<div class="card-body"><table><thead><tr><th>HPA</th><th>대상</th><th>min~max</th><th>current→desired</th><th>상태</th></tr></thead><tbody>' + hpaRows + '</tbody></table></div>') +
         card('할당 효율 (SCALE-03/04)', '<div class="card-body"><table><thead><tr><th>구분</th><th>Pod</th><th>CPU 사용/요청</th><th>권고</th></tr></thead><tbody>' + allocRows + '</tbody></table></div>') +
         renderResourceAdvisorCard(advisor, clusterId) +
@@ -14834,11 +14861,12 @@ const adminHTML = `<!doctype html>
           return card('노드 용량 예측 (SCALE-05)', '<div class="card-body"><table><thead><tr><th>노드</th><th>현재/가용 CPU</th><th>증가율</th><th>소진 예상</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
         card('Replica 시뮬레이션 (SCALE-06)',
-          '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
-          '<input id="sim-kind" placeholder="kind (예: Deployment)" style="min-width:140px">' +
-          '<input id="sim-ns" placeholder="namespace" style="min-width:120px">' +
-          '<input id="sim-name" placeholder="워크로드 이름" style="min-width:160px">' +
-          '<input id="sim-replicas" type="number" placeholder="목표 replica" style="width:120px">' +
+          '<div class="card-body"><div class="banner" style="margin-bottom:10px">대상을 선택하거나 직접 입력한 뒤 목표 replica의 request 변화를 미리 계산합니다. 실제 scale은 수행하지 않습니다.</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">' +
+          '<label>수집 워크로드<input id="sim-workload" list="sim-workload-options" placeholder="Kind|namespace|name" onchange="k8sSimPick(this.value)" style="display:block;min-width:250px"><datalist id="sim-workload-options">'+workloadDatalist+'</datalist></label>'+
+          '<label>Kind<input id="sim-kind" placeholder="예: Deployment" style="display:block;min-width:140px"></label>' +
+          '<label>Namespace<input id="sim-ns" placeholder="namespace" style="display:block;min-width:120px"></label>' +
+          '<label>워크로드<input id="sim-name" placeholder="이름" style="display:block;min-width:160px"></label>' +
+          '<label>목표 replica<input id="sim-replicas" type="number" min="0" placeholder="예: 5" style="display:block;width:120px"></label>' +
           '<button type="button" onclick="k8sSimScale()">시뮬레이션</button></div>' +
           '<div id="sim-out" class="muted" style="font-size:12px;margin-top:6px"></div></div>') +
         gpuCard;
@@ -14856,6 +14884,7 @@ const adminHTML = `<!doctype html>
           ' · 총 요청 CPU ' + fmt(s.total_cpu_m) + 'm (Δ' + fmt(s.delta_cpu_m) + 'm), Mem ' + fmt(s.total_mem_gb) + 'GB (Δ' + fmt(s.delta_mem_gb) + 'GB)';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
+    window.k8sSimPick = (value) => { const p=String(value||'').split('|'); if(p.length!==3)return; document.getElementById('sim-kind').value=p[0];document.getElementById('sim-ns').value=p[1];document.getElementById('sim-name').value=p[2]; };
     window.k8sCapGo = () => {
       const cl = document.getElementById('k8scap-cluster').value;
       location.hash = '#/k8s-capacity' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : '');
@@ -15664,6 +15693,8 @@ const adminHTML = `<!doctype html>
       const r = data.report || {};
       const forecast = data.forecast || {};
       const prices = (cfg && cfg.prices) || {};
+      const gpuCatalog = (cfg && cfg.gpu_price_catalog) || {};
+      const gpuModelPrices = prices.gpu_model_hourly_usd || {};
       const automation = (cfg && cfg.automation) || {};
       const won = (v) => fmt(Math.round(v || 0));
       const lineTable = (title, lines) => {
@@ -15681,14 +15712,16 @@ const adminHTML = `<!doctype html>
       const previousDaily=dailySeries.length>1?dailySeries[dailySeries.length-2].value:0, currentDaily=dailySeries.length?dailySeries[dailySeries.length-1].value:Number(r.total_monthly_krw||0), deltaPct=previousDaily?((currentDaily-previousDaily)/previousDaily*100):0;
       const savings=Number((recs&&recs.total_monthly_savings_krw)||0), optimized=Math.max(0,Number(r.total_monthly_krw||0)-savings), confidence=Number(forecast.confidence_score||0), confidenceClass=confidence>=80?'':(confidence>=50?'warn':'error');
       const visualization=card('비용 추세·구성 분석','<div class="card-body"><div class="cost-viz-grid"><div><div class="cost-period-tabs" role="tablist" aria-label="비용 그래프 기간"><button type="button" data-period="hourly" onclick="k8sCostSelectPeriod(\'hourly\')">24시간 환산</button><button type="button" class="active" data-period="daily" onclick="k8sCostSelectPeriod(\'daily\')">최근 30일</button><button type="button" data-period="monthly" onclick="k8sCostSelectPeriod(\'monthly\')">최근 12개월</button></div><div id="k8s-cost-chart-host">'+k8sCostChartSVG(dailySeries,'daily')+'</div><p id="k8s-cost-chart-note" class="muted" style="font-size:11px">일별 스냅샷 시점의 월 환산 추정 비용입니다. 하루 한 번 이상 자동 기록해야 연속 추세가 형성됩니다.</p></div><div><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h3 style="margin:0">Namespace 비용 비중</h3><span class="status">TOP '+fmt(Math.min(8,nsLines.length))+'</span></div>'+topNS+'<p class="muted" style="font-size:11px">막대는 현재 월 추정치 기준 상대 비중입니다.</p></div></div><div class="cost-insight-strip"><div class="cost-insight"><span>시간당 환산</span><strong>'+won(hourlyRate)+' KRW</strong></div><div class="cost-insight"><span>전일 스냅샷 대비</span><strong style="color:'+(deltaPct>0?'var(--bad)':(deltaPct<0?'#16a34a':'inherit'))+'">'+(deltaPct>0?'+':'')+fmt(Math.round(deltaPct*10)/10)+'%</strong></div><div class="cost-insight"><span>Rightsizing 후 예상</span><strong>'+won(optimized)+' KRW</strong></div><div class="cost-insight"><span>추정 신뢰도</span><strong><span class="status '+confidenceClass+'">'+fmt(confidence)+' · '+escapeHTML(forecast.confidence_level||'low')+'</span></strong></div></div></div>');
-      const modelDetails=card('추정 모델·신뢰도','<div class="card-body"><div class="kpis">'+kpi('Request 기준',won(forecast.baseline_monthly_krw||r.total_monthly_krw)+' KRW')+kpi('실사용 조정',won(forecast.usage_adjusted_monthly_krw)+' KRW')+kpi('Metric Coverage',fmt(forecast.metric_coverage_pct||0)+'%')+kpi('Request Coverage',fmt(forecast.request_coverage_pct||0)+'%')+'</div><div class="kv" style="margin-top:10px">'+row('CPU 비용',won(forecast.cpu_cost_monthly_krw)+' KRW')+row('Memory 비용',won(forecast.memory_cost_monthly_krw)+' KRW')+row('GPU 비용',won(forecast.gpu_cost_monthly_krw)+' KRW')+row('Persistent Volume 비용',won(forecast.storage_cost_monthly_krw)+' KRW')+row('관측 Pod',fmt(forecast.metric_covered_pods||0)+' / 비용 산정 '+fmt(forecast.costed_pods||0)+' · 전체 '+fmt(forecast.total_pods||0))+row('미산정 Pod',fmt(forecast.uncosted_pods||0)+'개 · request 미설정')+row('계산 방식',escapeHTML(forecast.method||'resource request baseline'))+'</div><div class="banner warn" style="margin-top:10px">GPU는 <code>nvidia.com/gpu</code> request, Disk는 PVC storage request 기준입니다. 네트워크 egress·LoadBalancer·StorageClass별 차등·라이선스·약정 할인은 별도 비용입니다. CPU·Memory 실사용 조정치는 '+fmt(forecast.headroom_pct||30)+'% 안정성 여유를 적용합니다.</div></div>');
+      const gpuBreakdown=Object.values(forecast.gpu_models||{}).sort((a,b)=>Number(b.monthly_krw||0)-Number(a.monthly_krw||0));
+      const gpuBreakdownHTML=gpuBreakdown.length?'<table style="margin-top:10px"><thead><tr><th>GPU 모델</th><th>요청 개수</th><th>USD/GPU·시간</th><th>월 환산 KRW</th></tr></thead><tbody>'+gpuBreakdown.map(x=>'<tr><td><strong>'+escapeHTML(String(x.model||'unknown').toUpperCase())+'</strong></td><td>'+fmt(x.units||0)+'</td><td>'+(Number(x.hourly_usd||0)>0?'$'+fmt(x.hourly_usd):'미확인 모델 fallback')+'</td><td>'+won(x.monthly_krw)+' KRW</td></tr>').join('')+'</tbody></table>':'';
+      const modelDetails=card('추정 모델·신뢰도','<div class="card-body"><div class="kpis">'+kpi('Request 기준',won(forecast.baseline_monthly_krw||r.total_monthly_krw)+' KRW')+kpi('실사용 조정',won(forecast.usage_adjusted_monthly_krw)+' KRW')+kpi('Metric Coverage',fmt(forecast.metric_coverage_pct||0)+'%')+kpi('Request Coverage',fmt(forecast.request_coverage_pct||0)+'%')+'</div><div class="kv" style="margin-top:10px">'+row('CPU 비용',won(forecast.cpu_cost_monthly_krw)+' KRW')+row('Memory 비용',won(forecast.memory_cost_monthly_krw)+' KRW')+row('GPU 비용',won(forecast.gpu_cost_monthly_krw)+' KRW')+row('Persistent Volume 비용',won(forecast.storage_cost_monthly_krw)+' KRW')+row('관측 Pod',fmt(forecast.metric_covered_pods||0)+' / 비용 산정 '+fmt(forecast.costed_pods||0)+' · 전체 '+fmt(forecast.total_pods||0))+row('미산정 Pod',fmt(forecast.uncosted_pods||0)+'개 · request 미설정')+row('계산 방식',escapeHTML(forecast.method||'resource request baseline'))+'</div>'+gpuBreakdownHTML+'<div class="banner warn" style="margin-top:10px">노드 관리에서 수집한 GPU 모델을 Pod의 <code>spec.nodeName</code>으로 매핑하고, <code>nvidia.com/gpu</code> request 개수에 모델별 단가를 적용합니다. 모델을 알 수 없을 때만 기본 GPU fallback 단가를 사용합니다. Disk는 PVC request 기준이며 네트워크·라이선스·약정 할인은 별도입니다.</div></div>');
 
       view.innerHTML =
         section('K8s 비용', '<div class="kpis">' +
           kpi('월 추정 총비용', won(r.total_monthly_krw) + ' KRW') +
           kpi('CPU 단가', won(prices.cpu_core_monthly_krw) + '/core') +
           kpi('Mem 단가', won(prices.mem_gb_monthly_krw) + '/GB') +
-          kpi('GPU 단가', won(prices.gpu_unit_monthly_krw) + '/GPU') +
+          kpi('미확인 GPU fallback', won(prices.gpu_unit_monthly_krw) + '/GPU') +
           kpi('Disk 단가', won(prices.storage_gb_monthly_krw) + '/GB') +
           kpi('절감 가능', won(savings) + ' KRW') + '</div>') +
         visualization + modelDetails +
@@ -15701,6 +15734,7 @@ const adminHTML = `<!doctype html>
           '<input id="cost-storage" type="number" value="' + escapeAttr(String(prices.storage_gb_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/Disk GB·월</span>' +
           '<button type="button" onclick="k8sCostSave()">단가 저장</button> ' +
           '<button type="button" class="secondary" onclick="k8sCostSnapshot()">지금 스냅샷 기록</button></div>' +
+          '<div class="banner" style="margin-top:10px"><strong>GPU 모델별 단가 · 노드 장비 매핑</strong><div class="muted" style="font-size:11px;margin:5px 0 9px">노드 관리의 GPU product label/DCGM 수집값을 사용합니다. 공개 참고가는 실제 약정·클라우드·서버 구성에 맞게 반드시 조정하세요.</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end"><label>USD/KRW<input id="cost-usd-krw" type="number" min="1" value="'+escapeAttr(String(prices.usd_krw||1400))+'" style="display:block;width:110px"></label>'+['l40s','h100','h200','b200','b300'].map(m=>'<label>'+m.toUpperCase()+' USD/h<input id="cost-gpu-'+m+'" type="number" min="0.01" step="0.01" value="'+escapeAttr(String(gpuModelPrices[m]||0))+'" style="display:block;width:105px"></label>').join('')+'</div><div class="muted" style="font-size:10px;margin-top:8px">참고: <a href="'+escapeAttr(gpuCatalog.source_url||'https://www.runpod.io/pricing')+'" target="_blank" rel="noopener">'+escapeHTML(gpuCatalog.provider||'RunPod public pricing reference')+'</a> · 확인 '+escapeHTML(gpuCatalog.checked_at||'-')+' · 월 730시간 환산</div></div>'+
           '<div class="banner" style="margin-top:10px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><strong>자동 스냅샷</strong><label><input id="cost-snapshot-enabled" type="checkbox" '+(automation.enabled!==false?'checked':'')+'> 사용</label><select id="cost-snapshot-interval"><option value="21600" '+(Number(automation.interval_seconds)===21600?'selected':'')+'>6시간</option><option value="43200" '+(Number(automation.interval_seconds)===43200?'selected':'')+'>12시간</option><option value="86400" '+(Number(automation.interval_seconds||86400)===86400?'selected':'')+'>매일</option><option value="604800" '+(Number(automation.interval_seconds)===604800?'selected':'')+'>매주</option></select><button type="button" class="secondary" onclick="k8sCostSave()">자동화 저장</button><span class="status '+(automation.last_error?'error':'')+'">'+(automation.last_error?'오류':'정상')+'</span></div><div class="muted" style="font-size:11px;margin-top:6px">최근 성공 '+escapeHTML(automation.last_success||'아직 없음')+' · 다음 실행 '+escapeHTML(automation.next_run||'서버 시작 후 자동 결정')+(automation.last_error?' · '+escapeHTML(automation.last_error):'')+' · 같은 날 재실행은 upsert되어 중복되지 않습니다.</div></div>'+
           '<div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div><div id="cost-msg" class="muted" style="font-size:11px"></div></div>') +
         (function () {
@@ -15739,6 +15773,8 @@ const adminHTML = `<!doctype html>
           mem_gb_monthly_krw: parseFloat(document.getElementById('cost-mem').value) || 0,
           gpu_unit_monthly_krw: parseFloat(document.getElementById('cost-gpu').value) || 0,
           storage_gb_monthly_krw: parseFloat(document.getElementById('cost-storage').value) || 0,
+          usd_krw: parseFloat(document.getElementById('cost-usd-krw').value) || 0,
+          gpu_model_hourly_usd: ['l40s','h100','h200','b200','b300'].reduce((out,m)=>{ out[m]=parseFloat(document.getElementById('cost-gpu-'+m).value)||0; return out; },{}),
           snapshot_enabled: !!document.getElementById('cost-snapshot-enabled').checked,
           snapshot_interval_seconds: parseInt(document.getElementById('cost-snapshot-interval').value,10) || 86400 }) });
         await renderK8sCost(new URLSearchParams(location.hash.split('?')[1] || ''));
@@ -22233,7 +22269,7 @@ const adminHTML = `<!doctype html>
 	  let data;
 	  try { data = await api('/admin/work-calendar?' + apiQ.toString()); }
 	  catch (e) { view.innerHTML = section('전체 업무 캘린더', '<div class="card-body"><p class="muted">전체 업무를 불러올 수 없습니다(admin:read 필요). 상세: ' + escapeHTML(e.message) + '</p></div>'); return; }
-	  const events = data.events || [], options = data.options || {}, byDate = {};
+	  const events = data.events || [], timelineEvents = data.timeline_events || [], options = data.options || {}, byDate = {};
 	  events.forEach(ev => { const k = ev.date || ''; (byDate[k] = byDate[k] || []).push(ev); });
 	  const optionHTML = (values, selected, empty) => '<option value="">' + empty + '</option>' + (values || []).map(v => '<option value="' + escapeAttr(v) + '"' + (v === selected ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
 	  const first = new Date(cursor.year, cursor.month, 1), start = new Date(cursor.year, cursor.month, 1 - first.getDay()), todayKey = myCalendarDateKey(new Date()), cells = [];
@@ -22245,9 +22281,12 @@ const adminHTML = `<!doctype html>
 	  const actorText = ev => [...new Set(Object.keys(ev.actors || {}).sort().map(role => (ev.actor_names || {})[role] || ev.actors[role]).filter(Boolean))].join(', ');
 	  const actorOptionHTML = '<option value="">전체 담당자</option>' + (data.actor_options || []).map(a => '<option value="' + escapeAttr(a.value || '') + '"' + ((a.value || '') === filters.actor ? ' selected' : '') + '>' + escapeHTML(a.label || a.value || '-') + '</option>').join('');
 	  const rows = events.slice(0, 500).map(ev => '<tr><td class="muted">' + escapeHTML(ev.date || '-') + '</td><td><span class="status ' + (ev.lane === 'attention' ? 'error' : (ev.lane === 'approval' ? 'warn' : '')) + '">' + escapeHTML(myCalendarLaneLabel(ev.lane)) + '</span></td><td>' + escapeHTML(ev.kind || '-') + '</td><td><a href="' + escapeAttr(ev.href || '#/k8s-actions') + '">' + escapeHTML(ev.title || '-') + '</a><div class="muted" style="font-size:11px">' + escapeHTML(ev.description || '') + '</div></td><td>' + escapeHTML(ev.cluster_id || '-') + '<div class="muted">' + escapeHTML(ev.namespace || '-') + '</div></td><td>' + (actorText(ev) ? '<strong style="font-size:11px">' + escapeHTML(actorText(ev)) + '</strong>' : '<span class="muted">담당자 미지정</span>') + '</td><td>' + escapeHTML(ev.status || '-') + '</td><td>' + escapeHTML(ev.sla_status || '-') + '</td></tr>').join('') || '<tr><td colspan="8" class="muted">조건에 맞는 업무가 없습니다.</td></tr>';
+	  const monthPrefix=cursor.year+'-'+String(cursor.month+1).padStart(2,'0'), monthTimeline=timelineEvents.filter(ev=>String(ev.date||'').startsWith(monthPrefix));
+	  const timelineSummary=monthTimeline.reduce((out,ev)=>{out[ev.category]=(out[ev.category]||0)+1;if(ev.severity==='warning')out.warning=(out.warning||0)+1;return out;},{});
+	  const timelineRows=monthTimeline.slice(0,200).map(ev=>'<div style="display:grid;grid-template-columns:72px 10px minmax(0,1fr);gap:10px;align-items:start;padding:9px 0;border-bottom:1px solid var(--line)"><time class="muted" style="font-size:11px">'+escapeHTML(String(ev.at||'').slice(5,16).replace('T',' '))+'</time><span style="width:9px;height:9px;border-radius:50%;margin-top:3px;background:'+(ev.severity==='warning'?'var(--bad)':(ev.category==='image_changed'?'var(--accent)':'var(--ok)'))+'"></span><div><a href="'+escapeAttr(ev.href||'#/k8s-timeline')+'"><strong>'+escapeHTML(ev.title||'-')+'</strong></a> <span class="status '+(ev.severity==='warning'?'error':'')+'" style="font-size:9px">'+escapeHTML(ev.category==='image_changed'?'이미지 변경':(ev.category==='resource_created'?'새 리소스':'K8s 이벤트'))+'</span><div class="muted" style="font-size:11px;margin-top:3px">'+escapeHTML((ev.namespace?ev.namespace+'/':'')+(ev.name||'-'))+' · '+escapeHTML(ev.description||'')+'</div></div></div>').join('')||'<div class="empty">선택한 월에 수집된 주요 운영 이벤트가 없습니다.</div>';
 	  const summary = data.summary || {}, prev = new Date(cursor.year, cursor.month - 1, 1), next = new Date(cursor.year, cursor.month + 1, 1);
 	  const filterBar = '<div class="toolbar" style="gap:6px;flex-wrap:wrap"><select id="ac-cluster">' + optionHTML(options.clusters, filters.cluster_id, '전체 클러스터') + '</select><select id="ac-namespace">' + optionHTML(options.namespaces, filters.namespace, '전체 namespace') + '</select><select id="ac-kind">' + optionHTML(options.kinds, filters.kind, '전체 유형') + '</select><select id="ac-lane">' + optionHTML(['attention','approval','ready','verify','prepare','done'], filters.lane, '전체 단계') + '</select><select id="ac-actor">' + actorOptionHTML + '</select><input id="ac-q" value="' + escapeAttr(filters.q) + '" placeholder="업무·대상·상태 검색" onkeydown="if(event.key===\'Enter\')applyAdminCalendarFilters()"><button type="button" onclick="applyAdminCalendarFilters()">조회</button><a class="button secondary" href="#/work-calendar">초기화</a></div>';
-	  view.innerHTML = section('전체 업무 캘린더', '<div class="card-body">' + filterBar + '<div class="toolbar" style="padding:10px 0;border:0"><a class="button secondary" href="' + adminCalendarHref({year:prev.getFullYear(),month:prev.getMonth()}, filters) + '">이전</a><strong>' + cursor.year + '년 ' + (cursor.month + 1) + '월</strong><a class="button secondary" href="' + adminCalendarHref({year:next.getFullYear(),month:next.getMonth()}, filters) + '">다음</a><span class="muted">전체 운영 업무 · 최근 ' + fmt(data.window_days || 0) + '일</span></div><div class="kpis">' + kpi('전체', fmt(summary.total || 0)) + kpi('확인 필요', fmt(summary.attention || 0)) + kpi('승인 대기', fmt(summary.approval || 0)) + kpi('실행/검증', fmt((summary.ready || 0) + (summary.verify || 0))) + kpi('SLA 주의', fmt(summary.sla || 0)) + '</div><div class="personal-calendar" style="margin-top:12px">' + cells.join('') + '</div></div>') + card('전체 업무 목록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">최대 500건 표시 · 업무명을 선택하면 원본 승인/변경/실행 화면으로 이동합니다.</div><div style="overflow:auto"><table><thead><tr><th>날짜</th><th>단계</th><th>유형</th><th>업무</th><th>클러스터/NS</th><th>담당자 이력</th><th>상태</th><th>SLA</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>');
+	  view.innerHTML = section('전체 업무 캘린더', '<div class="card-body">' + filterBar + '<div class="toolbar" style="padding:10px 0;border:0"><a class="button secondary" href="' + adminCalendarHref({year:prev.getFullYear(),month:prev.getMonth()}, filters) + '">이전</a><strong>' + cursor.year + '년 ' + (cursor.month + 1) + '월</strong><a class="button secondary" href="' + adminCalendarHref({year:next.getFullYear(),month:next.getMonth()}, filters) + '">다음</a><span class="muted">전체 운영 업무 · 최근 ' + fmt(data.window_days || 0) + '일</span></div><div class="kpis">' + kpi('전체', fmt(summary.total || 0)) + kpi('확인 필요', fmt(summary.attention || 0)) + kpi('승인 대기', fmt(summary.approval || 0)) + kpi('실행/검증', fmt((summary.ready || 0) + (summary.verify || 0))) + kpi('SLA 주의', fmt(summary.sla || 0)) + '</div><div class="personal-calendar" style="margin-top:12px">' + cells.join('') + '</div></div>') + card('주요 운영 이벤트 타임라인', '<div class="card-body"><div class="kpis" style="margin-bottom:8px">'+kpi('현재 월',fmt(monthTimeline.length))+kpi('이미지 변경',fmt(timelineSummary.image_changed||0))+kpi('새 리소스',fmt(timelineSummary.resource_created||0))+kpi('Warning',fmt(timelineSummary.warning||0))+'</div><p class="muted" style="font-size:11px">Pod·Deployment 등의 새 생성, 컨테이너 이미지 버전 변경, 주요 Kubernetes Warning을 날짜별로 묶어 표시합니다.</p>'+timelineRows+'</div>') + card('전체 업무 목록', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">최대 500건 표시 · 업무명을 선택하면 원본 승인/변경/실행 화면으로 이동합니다.</div><div style="overflow:auto"><table><thead><tr><th>날짜</th><th>단계</th><th>유형</th><th>업무</th><th>클러스터/NS</th><th>담당자 이력</th><th>상태</th><th>SLA</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>');
 	}
 
     async function renderMyIntegrations(params) {

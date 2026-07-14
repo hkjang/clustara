@@ -78,6 +78,7 @@ func TestK8sCostVisualizationUXContract(t *testing.T) {
 		`Metric Coverage`, `Request Coverage`, `k8sCostChartSVG`, `k8sCostSelectPeriod`,
 		`실제 시간별 청구액이 아닙니다`,
 		`자동 스냅샷`, `snapshot_interval_seconds`, `GPU 비용`, `Persistent Volume 비용`,
+		`gpu_model_hourly_usd`, `cost-gpu-`, `노드 관리에서 수집한 GPU 모델`, `k8sGPUPriceKey`,
 	} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("cost dashboard is missing visualization contract %q", marker)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"clustara/internal/analyzer"
@@ -103,6 +104,26 @@ func (s *Server) costContext(ctx context.Context, clusterID string) ([]store.K8s
 	if err != nil {
 		return nil, analyzer.CostPrices{}, nil, nil, nil, err
 	}
+	if samples, sampleErr := s.db.ListK8sGPUSamples(ctx, store.K8sGPUSampleFilter{ClusterID: clusterID, Limit: 10000}); sampleErr == nil {
+		latestModel := map[string]string{}
+		for _, sample := range samples {
+			key := sample.ClusterID + "|" + sample.NodeName
+			if sample.NodeName != "" && sample.GPUModel != "" && latestModel[key] == "" {
+				latestModel[key] = sample.GPUModel
+			}
+		}
+		for i := range items {
+			if items[i].Kind != "Node" {
+				continue
+			}
+			if items[i].Labels == nil {
+				items[i].Labels = map[string]string{}
+			}
+			if items[i].Labels["nvidia.com/gpu.product"] == "" {
+				items[i].Labels["nvidia.com/gpu.product"] = latestModel[items[i].ClusterID+"|"+items[i].Name]
+			}
+		}
+	}
 	owners, _ := s.db.ListK8sNamespaceOwnership(ctx, clusterID, "")
 	nsTeam, nsCC := map[string]string{}, map[string]string{}
 	for _, o := range owners {
@@ -140,6 +161,17 @@ func (s *Server) costContext(ctx context.Context, clusterID string) ([]store.K8s
 			prices.GPUUnitMonthlyKRW = f
 		}
 	}
+	if v := s.flagValue(ctx, "k8s_cost_usd_krw"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			prices.USDKRW = f
+		}
+	}
+	if v := s.flagValue(ctx, "k8s_cost_gpu_model_hourly_usd"); v != "" {
+		var modelPrices map[string]float64
+		if json.Unmarshal([]byte(v), &modelPrices) == nil && len(modelPrices) > 0 {
+			prices.GPUModelHourlyUSD = modelPrices
+		}
+	}
 	return items, prices, nsTeam, nsCC, clusterGroup, nil
 }
 
@@ -165,7 +197,7 @@ func (s *Server) handleK8sCost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report":   report,
 		"forecast": forecast,
-		"note":     "기준 비용은 resource request × 단가, 실사용 조정치는 최신 CPU·Memory usage에 안정성 headroom 30%를 적용합니다. 스토리지·네트워크·라이선스·클라우드 할인은 포함하지 않은 운영 추정치입니다.",
+		"note":     "기준 비용은 CPU·Memory·PVC request와 노드 관리에서 수집한 GPU 모델별 단가로 계산합니다. 네트워크·LoadBalancer·라이선스·약정 할인은 별도인 운영 추정치입니다.",
 	})
 }
 
@@ -326,15 +358,17 @@ func (s *Server) handleK8sCostConfig(w http.ResponseWriter, r *http.Request) {
 		if last, parseErr := time.Parse(time.RFC3339Nano, lastSuccess); parseErr == nil {
 			nextRun = last.Add(time.Duration(interval) * time.Second).Format(time.RFC3339Nano)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"prices": prices, "automation": map[string]any{"enabled": s.monitoringBool(r.Context(), k8sCostSnapshotEnabledFlag, true), "interval_seconds": interval, "last_run": s.flagValue(r.Context(), k8sCostSnapshotLastRunFlag), "last_success": lastSuccess, "last_error": s.flagValue(r.Context(), k8sCostSnapshotLastErrFlag), "next_run": nextRun, "idempotent": true}})
+		writeJSON(w, http.StatusOK, map[string]any{"prices": prices, "gpu_price_catalog": map[string]any{"provider": "RunPod public pricing reference", "source_url": "https://www.runpod.io/pricing", "checked_at": "2026-07-14", "basis": "representative public USD per GPU-hour; override with contracted rate", "hours_per_month": 730}, "automation": map[string]any{"enabled": s.monitoringBool(r.Context(), k8sCostSnapshotEnabledFlag, true), "interval_seconds": interval, "last_run": s.flagValue(r.Context(), k8sCostSnapshotLastRunFlag), "last_success": lastSuccess, "last_error": s.flagValue(r.Context(), k8sCostSnapshotLastErrFlag), "next_run": nextRun, "idempotent": true}})
 	case http.MethodPost:
 		var p struct {
-			CPUCoreMonthlyKRW   *float64 `json:"cpu_core_monthly_krw"`
-			MemGBMonthlyKRW     *float64 `json:"mem_gb_monthly_krw"`
-			StorageGBMonthlyKRW *float64 `json:"storage_gb_monthly_krw"`
-			GPUUnitMonthlyKRW   *float64 `json:"gpu_unit_monthly_krw"`
-			SnapshotEnabled     *bool    `json:"snapshot_enabled"`
-			SnapshotInterval    *int     `json:"snapshot_interval_seconds"`
+			CPUCoreMonthlyKRW   *float64           `json:"cpu_core_monthly_krw"`
+			MemGBMonthlyKRW     *float64           `json:"mem_gb_monthly_krw"`
+			StorageGBMonthlyKRW *float64           `json:"storage_gb_monthly_krw"`
+			GPUUnitMonthlyKRW   *float64           `json:"gpu_unit_monthly_krw"`
+			USDKRW              *float64           `json:"usd_krw"`
+			GPUModelHourlyUSD   map[string]float64 `json:"gpu_model_hourly_usd"`
+			SnapshotEnabled     *bool              `json:"snapshot_enabled"`
+			SnapshotInterval    *int               `json:"snapshot_interval_seconds"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -363,6 +397,30 @@ func (s *Server) handleK8sCostConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.GPUUnitMonthlyKRW != nil {
 			if err := set("k8s_cost_gpu_krw", *p.GPUUnitMonthlyKRW); err != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
+				return
+			}
+		}
+		if p.USDKRW != nil {
+			if *p.USDKRW <= 0 {
+				writeOpenAIError(w, http.StatusBadRequest, "usd_krw must be positive", "invalid_request_error", "invalid_price")
+				return
+			}
+			if err := set("k8s_cost_usd_krw", *p.USDKRW); err != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
+				return
+			}
+		}
+		if len(p.GPUModelHourlyUSD) > 0 {
+			allowed := map[string]bool{"l40s": true, "h100": true, "h200": true, "b200": true, "b300": true}
+			for model, price := range p.GPUModelHourlyUSD {
+				if !allowed[strings.ToLower(model)] || price <= 0 {
+					writeOpenAIError(w, http.StatusBadRequest, "GPU model prices require l40s/h100/h200/b200/b300 with positive values", "invalid_request_error", "invalid_gpu_price")
+					return
+				}
+			}
+			raw, _ := json.Marshal(p.GPUModelHourlyUSD)
+			if err := s.db.SetFlag(r.Context(), store.RuntimeFlag{Key: "k8s_cost_gpu_model_hourly_usd", Value: string(raw), UpdatedAt: time.Now().UTC(), UpdatedBy: adminID(r)}); err != nil {
 				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
 				return
 			}

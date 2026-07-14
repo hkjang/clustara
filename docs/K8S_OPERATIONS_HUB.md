@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.148** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.149** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.148)
+## 기능 상태 (v0.9.149)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -23,6 +23,7 @@
 | 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |
 | 연결성(Service/Ingress/PVC) · Rollout/Job · 용량(HPA·할당·packing·GPU·예측·시뮬) | ✅ |
+| Capacity & Operations Home UX — HPA desired/max·노드 request 점유율 시각화, 30일 내 소진·확장 한계 우선 알림, 선택형 Replica 시뮬레이션, 기능별 모달 가이드, 운영 홈 중대 신호·빠른 작업 동선 | ✅ |
 | 보안·정책(Pod Security·RBAC·RBAC Diff·이미지·Secret·NetworkPolicy·TLS·감사이상·정책센터) | ✅ |
 | **액션 승인 + 실클러스터 executor**(scale/rollout restart/cordon/uncordon/delete pod) | ✅ |
 | 비용(FinOps) · 비용 증가 추세 · Mattermost 알림 · AI 분석 · 운영 홈 · 리포트 센터 | ✅ |
@@ -36,7 +37,7 @@
 | Personal Workspace UX — 로그아웃 메뉴 위와 상단 `내 영역` 메뉴에서 내 홈, 업무 캘린더, 개인 키, 나의 외부연동, 개인화 설정을 제공하고 `/me/work-calendar`로 나와 관련된 운영 업무를 날짜별 집계 | ✅ (v0.9.113) |
 | Manifest Change Risk Explain & Verification Sync — K8s Action 및 Manifest 변경 요청에 필드/정책 기반 위험도 사유(Reason) 설명 모달을 연동하고, 검증 완료 시 백그라운드 수집 주기 격차(timing gap)로 인한 대기 상태에 대해 passed_pending_observation으로 자동 정합 | ✅ (v0.9.114) |
 | Manifest Change Live API Verification — 백그라운드 인벤토리 수집 주기 딜레이를 우회하도록 API 서버에 실시간 직접 읽기(ResourceGetter)를 연동해 timing gap 오탐을 최소화하고, Job과 Pod warning 관계 매핑 및 상세 판정 사유(execution_failed, verified_with_warning, observation_pending 등) UI 연동 | ✅ (v0.9.115) |
-| Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하는 통합 운영 캘린더 제공 | ✅ (v0.9.116) |
+| Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하고, Pod·워크로드 새 생성·이미지 버전 변경·주요 Warning을 별도 일별 운영 이벤트 타임라인으로 제공 | ✅ (v0.9.116) |
 | Reasoning Agent Stream & Calendar Names — Ollama 등 추론형 모델의 생각 과정(thinking) 스트리밍 토글 렌더링을 보강하고, 전체 업무 캘린더의 담당자 ID(UUID/Email)를 실시간 사용자 디렉토리(User Directory)와 결합해 인체공학적인 담당자 실명으로 매핑 표시 | ✅ (v0.9.118) |
 | Manifest Studio Secret Guard & Policy UX — Manifest 생성/변경 화면에 data/stringData 페이로드 탐지 및 저장 차단(Secret 안전 경로 유도 모달)을 추가하고, 정책 센터에 각 규칙 유형(Rule Type)의 해설 카탈로그(Help UI) 및 정책 토글 스위치 제공 | ✅ (v0.9.119) |
 | Node & GPU Operations Monitoring — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.120) |
@@ -96,7 +97,7 @@
 | Service Impact Home — 워크로드 중심 카드(Pod 헬스 + Service/Ingress 노출 + HPA + 최근 변경 + 미해결 incident)로 서비스 blast radius를 위험 순으로 표시(`/admin/k8s/service-impact`, CLU-REQ-07) | ✅ (v0.9.18) |
 | Adaptive Collection Policy — agent 생존에 더해 클러스터 우선순위(label priority)·미해결 incident·watch 등록을 반영해 수집 주기 자동 조정(incident 시 강제 단축, 하한 15s, `/admin/k8s/collect-config` cadences, CLU-REQ-04) | ✅ (v0.9.19) |
 | Collection Cost Guard — 클러스터별 수집 저장 footprint(행 수×테이블별 평균 크기) 추정 + 수집 주기 기반 월 증가 예측 + 예산 초과 경고(`/admin/k8s/collection-cost`, CLU-REQ-11) | ✅ (v0.9.20) |
-| FinOps 비용 시각화 — 24시간 환산·30일 일별·12개월 월별 추세, Namespace 비용 비중, Rightsizing 후 시나리오, CPU·Memory·GPU request와 PVC Disk 비용, request/usage coverage 기반 추정 신뢰도, 기본 24시간 자동 스냅샷 | ✅ |
+| FinOps 비용 시각화 — 24시간 환산·30일 일별·12개월 월별 추세, Namespace 비용 비중, Rightsizing 후 시나리오, CPU·Memory·PVC Disk·노드 수집 GPU 모델별 비용, request/usage coverage 기반 추정 신뢰도, 기본 24시간 자동 스냅샷 | ✅ |
 | Release Quality Gate 2.0 — AppVersion↔changelog↔문서 헤더/기능 상태 일치, changelog 중복·정렬·자기 버전 언급을 `go test`에서 강제하는 영구 게이트(CLU-REQ-13) | ✅ (v0.9.21) |
 | Domain Module Map — proxy/store 점진 분리를 위한 목표 도메인 경계·파일 매핑·추출 순서 정의(`docs/ARCHITECTURE_MODULES.md`, CLU-REQ-12) | ✅ (v0.9.22) |
 | K8s API Discovery + Schema Registry — aggregated discovery(`/apis`·`/api`)와 `/openapi/v3` root를 수집해 클러스터별 API resource 카탈로그·OpenAPI 문서 인덱스 캐싱(동적 리소스 인식·CRD 인식 토대, `/admin/k8s/discovery`, `/clusters/{id}/discover`, CLU-DISC-01/02/04/05/13) | ✅ (v0.9.23) |
@@ -433,6 +434,8 @@ Pod 실사용량은 Metrics Server 표본과 Prometheus/Thanos의 kubelet/cAdvis
 노드·Pod 메트릭 수집 직후 예방 Incident 스캔을 실행합니다. 노드 위험 점수와 24시간 내 자원 임계치 예측, Pod CPU·메모리 limit의 연속 90% 초과, 최근 증가 추세상 24시간 내 limit 도달, DCGM GPU 98% 포화 또는 85°C 이상을 설명 가능한 근거와 함께 `predictive:` Incident로 묶습니다. 같은 신호는 하나의 Incident를 갱신해 추적하며 신호가 사라지면 자동으로 해결 이력을 남깁니다. 장애 워룸은 예방 관찰과 실제 발생을 구분하고 즉시 확인, 사전 대비, 복구 판정 기준을 조건별로 제공합니다. 자동 조치는 실행하지 않으며 scale, limit 변경, cordon/drain 같은 변경은 기존 승인 흐름을 따릅니다.
 
 GPU 할당 현황은 Node의 `nvidia.com/gpu`·`amd.com/gpu`·`intel.com/gpu` allocatable과 Pod request로 항상 계산합니다. 실제 H100/H200/L40S 장치 관측에는 Prometheus와 NVIDIA DCGM Exporter가 필요합니다.
+
+비용 추정은 노드 관리가 수집한 `nvidia.com/gpu.product` 라벨을 우선하고, 라벨이 없으면 최신 DCGM `GPUModel`로 보완합니다. Pod의 `spec.nodeName`을 해당 노드와 연결해 L40S/H100/H200/B200/B300별 USD/GPU·시간 단가를 적용하며, 모델을 확인할 수 없을 때만 일반 GPU 월 단가로 fallback합니다. 공개 참고 단가·USD/KRW·모델별 단가는 **비용 → 단가 설정**에서 실제 약정가로 변경할 수 있습니다.
 
 1. DCGM Exporter를 GPU 노드 DaemonSet으로 설치합니다.
 2. 런타임 설정의 `dcgm_counters_csv` 또는 `deploy/k8s/dcgm-exporter-counters.csv`를 collector 파일로 마운트합니다.

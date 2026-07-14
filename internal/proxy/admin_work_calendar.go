@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,23 @@ type adminCalendarEvent struct {
 type adminCalendarActorOption struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+}
+
+type adminCalendarTimelineEvent struct {
+	ID          string `json:"id"`
+	At          string `json:"at"`
+	Date        string `json:"date"`
+	Category    string `json:"category"`
+	Severity    string `json:"severity"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	ClusterID   string `json:"cluster_id"`
+	Namespace   string `json:"namespace"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	ImageSet    string `json:"image_set,omitempty"`
+	Previous    string `json:"previous_image_set,omitempty"`
+	Href        string `json:"href"`
 }
 
 // handleAdminWorkCalendar returns the complete operational work calendar across users.
@@ -109,6 +127,7 @@ func (s *Server) handleAdminWorkCalendar(w http.ResponseWriter, r *http.Request)
 	for _, x := range debugs {
 		add(flowItemFromDebugSession(x), map[string]string{"requested": x.RequestedBy, "approved": x.ApprovedBy})
 	}
+	timelineEvents := s.adminWorkCalendarTimeline(r, since, filters, limit)
 
 	sort.SliceStable(events, func(i, j int) bool {
 		if events[i].Date != events[j].Date {
@@ -125,10 +144,100 @@ func (s *Server) handleAdminWorkCalendar(w http.ResponseWriter, r *http.Request)
 	optionPayload := adminCalendarOptions(options)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"events": events, "summary": personalCalendarSummary(adminPersonalEvents(events)),
+		"timeline_events": timelineEvents, "timeline_summary": adminCalendarTimelineSummary(timelineEvents),
 		"options": optionPayload, "actor_options": adminCalendarActorOptions(options["actors"], actorDirectory),
 		"filters": filters, "window_days": windowDays,
 		"generated_at": time.Now().UTC().Format(time.RFC3339Nano),
 	})
+}
+
+func (s *Server) adminWorkCalendarTimeline(r *http.Request, since time.Time, filters map[string]string, limit int) []adminCalendarTimelineEvent {
+	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: filters["cluster_id"], Namespace: filters["namespace"], Limit: limit})
+	result := make([]adminCalendarTimelineEvent, 0, len(revisions))
+	previousImage := map[string]string{}
+	// Revisions are newest-first. Walk backwards first so image transitions retain the prior image.
+	for i := len(revisions) - 1; i >= 0; i-- {
+		rev := revisions[i]
+		at, err := time.Parse(time.RFC3339Nano, firstNonEmpty(rev.ObservedAt, rev.CreatedAt))
+		if err != nil || !adminTimelineDimensionMatches(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name, filters) {
+			continue
+		}
+		key := strings.Join([]string{rev.ClusterID, rev.Namespace, rev.Kind, rev.Name}, "|")
+		oldImage := previousImage[key]
+		created := strings.EqualFold(rev.ChangeKind, "created")
+		imageChanged := rev.ImageSet != "" && oldImage != "" && rev.ImageSet != oldImage
+		previousImage[key] = rev.ImageSet
+		if at.Before(since) || (!created && !imageChanged) {
+			continue
+		}
+		title, category, detail := rev.Kind+" 새로 생성", "resource_created", rev.Name+"이(가) 새로 관측됨"
+		if imageChanged {
+			title, category = rev.Kind+" 이미지 버전 변경", "image_changed"
+			detail = oldImage + " → " + rev.ImageSet
+		} else if rev.ImageSet != "" {
+			detail += " · 이미지 " + rev.ImageSet
+		}
+		result = append(result, adminCalendarTimelineEvent{ID: rev.ID, At: at.Format(time.RFC3339Nano), Date: at.Format("2006-01-02"), Category: category, Severity: "info", Title: title, Description: detail, ClusterID: rev.ClusterID, Namespace: rev.Namespace, Kind: rev.Kind, Name: rev.Name, ImageSet: rev.ImageSet, Previous: oldImage, Href: adminCalendarTimelineHref(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name)})
+	}
+	events, _ := s.db.ListK8sEvents(r.Context(), filters["cluster_id"], limit)
+	for _, event := range events {
+		at, err := time.Parse(time.RFC3339Nano, firstNonEmpty(event.LastSeen, event.FirstSeen, event.CreatedAt))
+		if err != nil || at.Before(since) || !adminTimelineDimensionMatches(event.ClusterID, event.Namespace, event.InvolvedKind, event.InvolvedName, filters) || !adminCalendarMajorK8sEvent(event) {
+			continue
+		}
+		severity := "warning"
+		if !strings.EqualFold(event.Type, "Warning") {
+			severity = "info"
+		}
+		result = append(result, adminCalendarTimelineEvent{ID: event.ID, At: at.Format(time.RFC3339Nano), Date: at.Format("2006-01-02"), Category: "k8s_event", Severity: severity, Title: event.Reason, Description: event.Message, ClusterID: event.ClusterID, Namespace: event.Namespace, Kind: event.InvolvedKind, Name: event.InvolvedName, Href: adminCalendarTimelineHref(event.ClusterID, event.Namespace, event.InvolvedKind, event.InvolvedName)})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].At > result[j].At })
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
+
+func adminTimelineDimensionMatches(clusterID, namespace, kind, name string, filters map[string]string) bool {
+	if filters["cluster_id"] != "" && clusterID != filters["cluster_id"] {
+		return false
+	}
+	if filters["namespace"] != "" && namespace != filters["namespace"] {
+		return false
+	}
+	if filters["kind"] != "" && !strings.EqualFold(kind, filters["kind"]) {
+		return false
+	}
+	q := filters["q"]
+	return q == "" || strings.Contains(strings.ToLower(strings.Join([]string{clusterID, namespace, kind, name}, " ")), q)
+}
+
+func adminCalendarMajorK8sEvent(event store.K8sEvent) bool {
+	if strings.EqualFold(event.Type, "Warning") {
+		return true
+	}
+	reason := strings.ToLower(event.Reason)
+	for _, signal := range []string{"scalingreplicaset", "successfulcreate", "killing", "evicted", "backoff", "deadlineexceeded"} {
+		if strings.Contains(reason, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func adminCalendarTimelineHref(clusterID, namespace, kind, name string) string {
+	return "#/k8s-timeline?cluster_id=" + url.QueryEscape(clusterID) + "&namespace=" + url.QueryEscape(namespace) + "&kind=" + url.QueryEscape(kind) + "&name=" + url.QueryEscape(name)
+}
+
+func adminCalendarTimelineSummary(events []adminCalendarTimelineEvent) map[string]int {
+	out := map[string]int{"total": len(events)}
+	for _, event := range events {
+		out[event.Category]++
+		if event.Severity == "warning" {
+			out["warning"]++
+		}
+	}
+	return out
 }
 
 func adminCalendarMatches(ev adminCalendarEvent, f map[string]string) bool {

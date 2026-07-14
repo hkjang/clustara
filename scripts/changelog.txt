@@ -1,3 +1,6 @@
+v0.9.149:
+- **GPU Model Cost Mapping, Operational Calendar Timeline & Capacity/Home UX (v0.9.149)**: 노드 관리의 GPU product 라벨과 DCGM GPUModel을 보완 수집하고 Pod `spec.nodeName`을 통해 L40S·H100·H200·B200·B300 모델별 비용으로 매핑하며 USD/KRW·모델별 단가를 설정에서 변경할 수 있게 했습니다. 전체 업무 캘린더에 새 리소스, 이미지 버전 전환, 주요 Kubernetes Warning을 노이즈 필터링한 운영 이벤트 타임라인으로 추가했습니다. 용량·자동확장은 HPA desired/max·노드 request 점유율·30일 내 소진을 시각화하고 선택형 Replica 시뮬레이션과 기능별 가이드를 제공합니다. 운영 홈은 수집 신뢰도·중대 신호를 우선 표시하고 장애·변경·용량·승인 빠른 작업 동선과 모달 가이드를 추가했습니다.
+
 v0.9.148:
 - **Automatic Cost Snapshots & GPU·Disk Total Cost Model (v0.9.148)**: K8s 비용 스냅샷을 수동 중심에서 기본 활성 24시간 백그라운드 자동화로 전환했습니다. 서버 시작 후 실행 여부를 확인하고 모든 등록 클러스터를 개별 순회해 Namespace별 추정 비용을 기록하며 동일 날짜는 upsert해 중복을 방지합니다. UI에서 6시간·12시간·매일·매주 주기, 활성 여부, 최근 성공·다음 실행·오류를 관리하며 수동 기록은 복구용으로 유지합니다. 비용 모델은 CPU·Memory request뿐 아니라 `nvidia.com/gpu` request와 PVC storage request를 포함하고 GPU당·Disk GB당 월 단가를 설정할 수 있습니다. GPU·Disk 비용은 Namespace·팀·클러스터 그룹·비용센터 집계와 스냅샷에 포함되며, CPU·Memory 실사용+30% headroom 시나리오와 공급량 기반 GPU·Disk 비용을 결합해 총괄 추정치를 제공합니다.
 

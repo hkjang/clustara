@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,14 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, rev := range []store.K8sResourceRevision{
+		{ID: "rev-old", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: map[string]any{"image": "registry/api:1.0"}, ImageSet: "registry/api:1.0", ObservedAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)},
+		{ID: "rev-new", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: map[string]any{"image": "registry/api:1.1"}, ImageSet: "registry/api:1.1", ObservedAt: now},
+	} {
+		if _, err := db.RecordK8sRevision(context.Background(), rev); err != nil {
+			t.Fatal(err)
+		}
+	}
 	resp, err := http.Get(proxy.URL + "/admin/work-calendar?window_days=7&cluster_id=cluster-a&actor=alice")
 	if err != nil {
 		t.Fatal(err)
@@ -42,10 +51,11 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 		t.Fatalf("GET /admin/work-calendar = %d", resp.StatusCode)
 	}
 	var out struct {
-		Events       []adminCalendarEvent       `json:"events"`
-		Summary      map[string]int             `json:"summary"`
-		Options      map[string][]string        `json:"options"`
-		ActorOptions []adminCalendarActorOption `json:"actor_options"`
+		Events       []adminCalendarEvent         `json:"events"`
+		Summary      map[string]int               `json:"summary"`
+		Options      map[string][]string          `json:"options"`
+		ActorOptions []adminCalendarActorOption   `json:"actor_options"`
+		Timeline     []adminCalendarTimelineEvent `json:"timeline_events"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
@@ -61,6 +71,35 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 	}
 	if len(out.ActorOptions) != 2 {
 		t.Fatalf("actor options = %+v", out.ActorOptions)
+	}
+	foundImageChange := false
+	for _, event := range out.Timeline {
+		if event.Category == "image_changed" && event.ImageSet == "registry/api:1.1" && event.Previous == "registry/api:1.0" {
+			foundImageChange = true
+		}
+	}
+	if !foundImageChange {
+		t.Fatalf("calendar must include Pod image transition: %+v", out.Timeline)
+	}
+}
+
+func TestAdminCalendarMajorK8sEventNoiseFilter(t *testing.T) {
+	if adminCalendarMajorK8sEvent(store.K8sEvent{Type: "Normal", Reason: "Pulled"}) {
+		t.Fatal("routine image pull must not flood calendar")
+	}
+	if !adminCalendarMajorK8sEvent(store.K8sEvent{Type: "Warning", Reason: "ImagePullBackOff"}) {
+		t.Fatal("warning must be included")
+	}
+	if !adminCalendarMajorK8sEvent(store.K8sEvent{Type: "Normal", Reason: "ScalingReplicaSet"}) {
+		t.Fatal("major scaling event must be included")
+	}
+}
+
+func TestAdminWorkCalendarTimelineUXContract(t *testing.T) {
+	for _, marker := range []string{"주요 운영 이벤트 타임라인", "timeline_events", "이미지 변경", "새 리소스", "K8s 이벤트"} {
+		if !strings.Contains(adminHTML, marker) {
+			t.Fatalf("admin calendar timeline UI missing %q", marker)
+		}
 	}
 }
 

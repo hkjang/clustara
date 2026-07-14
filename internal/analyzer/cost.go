@@ -1,8 +1,10 @@
 package analyzer
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"clustara/internal/store"
 )
@@ -10,14 +12,17 @@ import (
 // CostPrices are the unit prices used to estimate workload cost from resource requests
 // (DW-08 / 비용 대시보드). Kubernetes has no native cost, so this is a request-based model.
 type CostPrices struct {
-	CPUCoreMonthlyKRW   float64 `json:"cpu_core_monthly_krw"`
-	MemGBMonthlyKRW     float64 `json:"mem_gb_monthly_krw"`
-	StorageGBMonthlyKRW float64 `json:"storage_gb_monthly_krw"`
-	GPUUnitMonthlyKRW   float64 `json:"gpu_unit_monthly_krw"`
+	CPUCoreMonthlyKRW   float64            `json:"cpu_core_monthly_krw"`
+	MemGBMonthlyKRW     float64            `json:"mem_gb_monthly_krw"`
+	StorageGBMonthlyKRW float64            `json:"storage_gb_monthly_krw"`
+	GPUUnitMonthlyKRW   float64            `json:"gpu_unit_monthly_krw"`
+	USDKRW              float64            `json:"usd_krw"`
+	GPUModelHourlyUSD   map[string]float64 `json:"gpu_model_hourly_usd"`
 }
 
 // DefaultCostPrices is a conservative starting point; operators override via config.
-var DefaultCostPrices = CostPrices{CPUCoreMonthlyKRW: 30000, MemGBMonthlyKRW: 4000, StorageGBMonthlyKRW: 150, GPUUnitMonthlyKRW: 700000}
+var DefaultGPUModelHourlyUSD = map[string]float64{"l40s": 1.75, "h100": 4.55, "h200": 5.93, "b200": 8.64, "b300": 9.98}
+var DefaultCostPrices = CostPrices{CPUCoreMonthlyKRW: 30000, MemGBMonthlyKRW: 4000, StorageGBMonthlyKRW: 150, GPUUnitMonthlyKRW: 700000, USDKRW: 1400, GPUModelHourlyUSD: DefaultGPUModelHourlyUSD}
 
 type CostLine struct {
 	Key        string  `json:"key"`
@@ -42,22 +47,30 @@ type CostReport struct {
 // UsageAdjustedMonthlyKRW uses the latest observed Pod usage with 30% reliability headroom for
 // covered Pods and keeps request cost for uncovered Pods. It is an operational forecast, not a bill.
 type CostForecast struct {
-	BaselineMonthlyKRW      float64 `json:"baseline_monthly_krw"`
-	UsageAdjustedMonthlyKRW float64 `json:"usage_adjusted_monthly_krw"`
-	CPUCostMonthlyKRW       float64 `json:"cpu_cost_monthly_krw"`
-	MemoryCostMonthlyKRW    float64 `json:"memory_cost_monthly_krw"`
-	StorageCostMonthlyKRW   float64 `json:"storage_cost_monthly_krw"`
-	GPUCostMonthlyKRW       float64 `json:"gpu_cost_monthly_krw"`
-	MetricCoveragePct       float64 `json:"metric_coverage_pct"`
-	RequestCoveragePct      float64 `json:"request_coverage_pct"`
-	ConfidenceScore         int     `json:"confidence_score"`
-	ConfidenceLevel         string  `json:"confidence_level"`
-	TotalPods               int     `json:"total_pods"`
-	CostedPods              int     `json:"costed_pods"`
-	MetricCoveredPods       int     `json:"metric_covered_pods"`
-	UncostedPods            int     `json:"uncosted_pods"`
-	HeadroomPct             int     `json:"headroom_pct"`
-	Method                  string  `json:"method"`
+	BaselineMonthlyKRW      float64                 `json:"baseline_monthly_krw"`
+	UsageAdjustedMonthlyKRW float64                 `json:"usage_adjusted_monthly_krw"`
+	CPUCostMonthlyKRW       float64                 `json:"cpu_cost_monthly_krw"`
+	MemoryCostMonthlyKRW    float64                 `json:"memory_cost_monthly_krw"`
+	StorageCostMonthlyKRW   float64                 `json:"storage_cost_monthly_krw"`
+	GPUCostMonthlyKRW       float64                 `json:"gpu_cost_monthly_krw"`
+	GPUModels               map[string]GPUModelCost `json:"gpu_models"`
+	MetricCoveragePct       float64                 `json:"metric_coverage_pct"`
+	RequestCoveragePct      float64                 `json:"request_coverage_pct"`
+	ConfidenceScore         int                     `json:"confidence_score"`
+	ConfidenceLevel         string                  `json:"confidence_level"`
+	TotalPods               int                     `json:"total_pods"`
+	CostedPods              int                     `json:"costed_pods"`
+	MetricCoveredPods       int                     `json:"metric_covered_pods"`
+	UncostedPods            int                     `json:"uncosted_pods"`
+	HeadroomPct             int                     `json:"headroom_pct"`
+	Method                  string                  `json:"method"`
+}
+
+type GPUModelCost struct {
+	Model      string  `json:"model"`
+	Units      float64 `json:"units"`
+	HourlyUSD  float64 `json:"hourly_usd"`
+	MonthlyKRW float64 `json:"monthly_krw"`
 }
 
 func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetricSample, prices CostPrices) CostForecast {
@@ -72,7 +85,8 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 			latest[key] = sample
 		}
 	}
-	forecast := CostForecast{HeadroomPct: 30, Method: "CPU/Memory/GPU requests + PVC storage baseline; CPU/Memory latest usage with 30% reliability headroom"}
+	forecast := CostForecast{HeadroomPct: 30, Method: "CPU/Memory requests + model-aware GPU hourly price × 730 + PVC storage; CPU/Memory latest usage with 30% reliability headroom", GPUModels: map[string]GPUModelCost{}}
+	nodeModels := gpuNodeModels(items)
 	adjusted := 0.0
 	for _, item := range items {
 		if item.Kind == "PersistentVolumeClaim" {
@@ -89,7 +103,10 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 		reqCPU := float64(podRequestCPU(item.Spec)) / 1000
 		reqMem := float64(podRequestMemBytes(item.Spec)) / float64(1<<30)
 		cpuCost, memCost := reqCPU*prices.CPUCoreMonthlyKRW, reqMem*prices.MemGBMonthlyKRW
-		gpuCost := float64(podRequestGPU(item.Spec)) * prices.GPUUnitMonthlyKRW
+		gpuUnits := float64(podRequestGPU(item.Spec))
+		gpuModel := podGPUModel(item, nodeModels)
+		gpuHourly, gpuMonthlyUnit := gpuModelPrice(prices, gpuModel)
+		gpuCost := gpuUnits * gpuMonthlyUnit
 		requestCost := cpuCost + memCost + gpuCost
 		if requestCost <= 0 {
 			forecast.UncostedPods++
@@ -99,6 +116,11 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 		forecast.CPUCostMonthlyKRW += cpuCost
 		forecast.MemoryCostMonthlyKRW += memCost
 		forecast.GPUCostMonthlyKRW += gpuCost
+		if gpuUnits > 0 {
+			row := forecast.GPUModels[gpuModel]
+			row.Model, row.Units, row.HourlyUSD, row.MonthlyKRW = gpuModel, row.Units+gpuUnits, gpuHourly, row.MonthlyKRW+gpuCost
+			forecast.GPUModels[gpuModel] = row
+		}
 		key := item.ClusterID + "|" + item.Namespace + "|" + item.Name
 		if usage, ok := latest[key]; ok {
 			forecast.MetricCoveredPods++
@@ -113,6 +135,10 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 	forecast.MemoryCostMonthlyKRW = round2(forecast.MemoryCostMonthlyKRW)
 	forecast.StorageCostMonthlyKRW = round2(forecast.StorageCostMonthlyKRW)
 	forecast.GPUCostMonthlyKRW = round2(forecast.GPUCostMonthlyKRW)
+	for key, row := range forecast.GPUModels {
+		row.Units, row.MonthlyKRW = round2(row.Units), round2(row.MonthlyKRW)
+		forecast.GPUModels[key] = row
+	}
 	if forecast.CostedPods > 0 {
 		forecast.MetricCoveragePct = round2(float64(forecast.MetricCoveredPods) / float64(forecast.CostedPods) * 100)
 	}
@@ -164,6 +190,7 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 	}
 
 	total := 0.0
+	nodeModels := gpuNodeModels(items)
 	for _, it := range items {
 		cores, memGB, storageGB, gpu, pods := 0.0, 0.0, 0.0, 0.0, 0
 		switch it.Kind {
@@ -177,7 +204,8 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 		default:
 			continue
 		}
-		krw := cores*prices.CPUCoreMonthlyKRW + memGB*prices.MemGBMonthlyKRW + storageGB*prices.StorageGBMonthlyKRW + gpu*prices.GPUUnitMonthlyKRW
+		_, gpuMonthlyUnit := gpuModelPrice(prices, podGPUModel(it, nodeModels))
+		krw := cores*prices.CPUCoreMonthlyKRW + memGB*prices.MemGBMonthlyKRW + storageGB*prices.StorageGBMonthlyKRW + gpu*gpuMonthlyUnit
 		if krw == 0 {
 			continue // no requests → not costed
 		}
@@ -220,7 +248,79 @@ func normalizedCostPrices(prices CostPrices) CostPrices {
 	if prices.GPUUnitMonthlyKRW <= 0 {
 		prices.GPUUnitMonthlyKRW = DefaultCostPrices.GPUUnitMonthlyKRW
 	}
+	if prices.USDKRW <= 0 {
+		prices.USDKRW = DefaultCostPrices.USDKRW
+	}
+	if len(prices.GPUModelHourlyUSD) == 0 {
+		prices.GPUModelHourlyUSD = map[string]float64{}
+		for key, value := range DefaultGPUModelHourlyUSD {
+			prices.GPUModelHourlyUSD[key] = value
+		}
+	}
 	return prices
+}
+
+func gpuModelPrice(prices CostPrices, model string) (float64, float64) {
+	model = normalizeGPUModel(model)
+	if hourly := prices.GPUModelHourlyUSD[model]; hourly > 0 {
+		return hourly, hourly * 730 * prices.USDKRW
+	}
+	return 0, prices.GPUUnitMonthlyKRW
+}
+
+func gpuNodeModels(items []store.K8sInventoryItem) map[string]string {
+	out := map[string]string{}
+	for _, item := range items {
+		if item.Kind != "Node" {
+			continue
+		}
+		for _, key := range []string{"nvidia.com/gpu.product", "gpu.nvidia.com/model", "accelerator"} {
+			if value := normalizeGPUModel(item.Labels[key]); value != "unknown" {
+				out[item.ClusterID+"|"+item.Name] = value
+				break
+			}
+		}
+	}
+	return out
+}
+
+func podGPUModel(item store.K8sInventoryItem, nodeModels map[string]string) string {
+	for _, key := range []string{"nvidia.com/gpu.product", "gpu.nvidia.com/model", "accelerator"} {
+		if value := normalizeGPUModel(item.Labels[key]); value != "unknown" {
+			return value
+		}
+	}
+	if selector, ok := item.Spec["nodeSelector"].(map[string]any); ok {
+		for _, key := range []string{"nvidia.com/gpu.product", "gpu.nvidia.com/model", "accelerator"} {
+			if value := normalizeGPUModel(fmt.Sprint(selector[key])); value != "unknown" {
+				return value
+			}
+		}
+	}
+	if node := strings.TrimSpace(fmt.Sprint(item.Spec["nodeName"])); node != "" {
+		if model := nodeModels[item.ClusterID+"|"+node]; model != "" {
+			return model
+		}
+	}
+	return "unknown"
+}
+
+func normalizeGPUModel(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.Contains(v, "b300"):
+		return "b300"
+	case strings.Contains(v, "b200"):
+		return "b200"
+	case strings.Contains(v, "h200"):
+		return "h200"
+	case strings.Contains(v, "h100"):
+		return "h100"
+	case strings.Contains(v, "l40s") || strings.Contains(v, "l40-s"):
+		return "l40s"
+	default:
+		return "unknown"
+	}
 }
 
 func pvcStorageBytes(spec map[string]any) float64 {

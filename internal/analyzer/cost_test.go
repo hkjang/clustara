@@ -125,3 +125,29 @@ func TestEstimateCostIncludesGPUAndPersistentVolume(t *testing.T) {
 		t.Fatalf("forecast cost composition mismatch: %+v", forecast)
 	}
 }
+
+func TestGPUCostUsesNodeManagementModelMapping(t *testing.T) {
+	node := store.K8sInventoryItem{Kind: "Node", ClusterID: "c1", Name: "gpu-node-1", Labels: map[string]string{"nvidia.com/gpu.product": "NVIDIA-H100-80GB-HBM3"}}
+	pod := costPod("c1", "ml", "trainer", "0", "0")
+	pod.Spec["nodeName"] = "gpu-node-1"
+	pod.Spec["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["nvidia.com/gpu"] = "2"
+	prices := CostPrices{GPUUnitMonthlyKRW: 123, USDKRW: 1000, GPUModelHourlyUSD: map[string]float64{"h100": 4.55}}
+
+	forecast := BuildCostForecast([]store.K8sInventoryItem{node, pod}, nil, prices)
+	want := 2 * 4.55 * 730 * 1000
+	if forecast.GPUCostMonthlyKRW != want {
+		t.Fatalf("H100 node mapping cost = %v, want %v: %+v", forecast.GPUCostMonthlyKRW, want, forecast)
+	}
+	if row := forecast.GPUModels["h100"]; row.Units != 2 || row.HourlyUSD != 4.55 || row.MonthlyKRW != want {
+		t.Fatalf("H100 breakdown mismatch: %+v", row)
+	}
+}
+
+func TestGPUCostUnknownModelUsesFallback(t *testing.T) {
+	pod := costPod("c1", "ml", "trainer", "0", "0")
+	pod.Spec["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["nvidia.com/gpu"] = "1"
+	forecast := BuildCostForecast([]store.K8sInventoryItem{pod}, nil, CostPrices{GPUUnitMonthlyKRW: 777})
+	if forecast.GPUCostMonthlyKRW != 777 || forecast.GPUModels["unknown"].MonthlyKRW != 777 {
+		t.Fatalf("unknown GPU must use fallback: %+v", forecast)
+	}
+}
