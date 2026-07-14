@@ -1,8 +1,28 @@
 # K8s Operations Hub
 
-> **버전: v0.9.153** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.154** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.153)
+## 기능 상태 (v0.9.154)
+
+### Trivy Scan·SBOM Import 인증
+
+`POST /admin/k8s/security/scans/import`와 `POST /admin/k8s/security/sboms`는 관리자
+access token/`ADMIN_TOKEN` 외에 `security:scan` scope를 가진 API Key 또는 서비스 계정
+Key를 지원합니다. CI에는 관리자 토큰 대신 이 최소 권한 Key를 사용합니다.
+
+```bash
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $CLUSTARA_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$CLUSTARA_URL/admin/k8s/security/scans/import?scanner=trivy&image=$IMAGE" \
+  --data-binary @trivy.json
+```
+
+- `401`: Bearer token 누락, 알 수 없는 Key, 만료·폐기된 Key
+- `403`: 인증은 됐지만 `security:scan` scope 또는 허용 IP가 부족함
+
+SBOM 목록 조회와 다른 관리자 API는 기존 관리자 권한을 계속 요구하며, `security:scan` Key가
+접근할 수 있는 범위는 두 import POST 경로로 제한됩니다.
 
 ### Pod Evidence Search
 

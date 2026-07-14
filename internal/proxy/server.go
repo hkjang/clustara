@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.153"
+const AppVersion = "v0.9.154"
 
 type Server struct {
 	cfg              config.Config
@@ -1987,6 +1987,12 @@ func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 		// Agent ingestion uses a cluster-scoped token validated after decoding the batch.
 		// It must not pass through the interactive administrator authentication gate.
 		if r.URL.Path == "/admin/k8s/agent/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// CI scanners use a narrowly-scoped API key rather than an interactive admin session.
+		// The handlers authenticate security:scan and preserve normal admin access for UI calls.
+		if r.Method == http.MethodPost && (r.URL.Path == "/admin/k8s/security/scans/import" || r.URL.Path == "/admin/k8s/security/sboms") {
 			next.ServeHTTP(w, r)
 			return
 		}

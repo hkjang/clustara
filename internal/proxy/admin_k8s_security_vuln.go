@@ -186,12 +186,11 @@ func (s *Server) handleK8sSecurityScanByID(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleK8sSecurityScansImport(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(r) {
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	if !s.authorizeSecurityArtifactImport(w, r) {
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
@@ -306,11 +305,12 @@ curl --fail-with-body -X POST \
     - apk add --no-cache curl
     - curl --fail-with-body -X POST -H "Authorization: Bearer $CLUSTARA_TOKEN" -H "Content-Type: application/json" "$CLUSTARA_URL` + importPath + `?scanner=trivy&image=$IMAGE" --data-binary @trivy.json`
 	writeJSON(w, http.StatusOK, map[string]any{
-		"import_path":   importPath,
-		"digest_policy": map[string]any{"required": false, "preferred": true, "fallback_prefix": "unresolved:", "note": "digest가 없으면 image/target ref 기반 식별자로 import하지만 admission·SBOM 상관분석에는 실제 digest가 가장 정확합니다."},
-		"templates":     map[string]string{"cli": curlTemplate, "github_actions": githubActions, "gitlab_ci": gitlabCI},
-		"operator":      map[string]any{"source": "trivy-operator", "accepted_kind": "VulnerabilityReport", "method": "VulnerabilityReport JSON을 import endpoint에 그대로 POST", "recommended_interval": "수집 controller 또는 CronJob에서 report resourceVersion 변경 시 전송"},
-		"security":      []string{"토큰은 CI Secret에 저장하고 로그에 출력하지 않습니다.", "--fail-with-body로 import 오류를 파이프라인에서 감지합니다.", "운영 배포 판정에는 가능한 image@sha256 digest를 전달합니다."},
+		"import_path":    importPath,
+		"digest_policy":  map[string]any{"required": false, "preferred": true, "fallback_prefix": "unresolved:", "note": "digest가 없으면 image/target ref 기반 식별자로 import하지만 admission·SBOM 상관분석에는 실제 digest가 가장 정확합니다."},
+		"templates":      map[string]string{"cli": curlTemplate, "github_actions": githubActions, "gitlab_ci": gitlabCI},
+		"operator":       map[string]any{"source": "trivy-operator", "accepted_kind": "VulnerabilityReport", "method": "VulnerabilityReport JSON을 import endpoint에 그대로 POST", "recommended_interval": "수집 controller 또는 CronJob에서 report resourceVersion 변경 시 전송"},
+		"authentication": map[string]any{"bearer_required": true, "api_key_scope": securityArtifactImportScope, "supported": []string{"admin access token", "ADMIN_TOKEN", "API/service-account key with security:scan"}},
+		"security":       []string{"CI에는 관리자 토큰 대신 security:scan scope만 가진 API/service-account key를 사용합니다.", "토큰은 CI Secret에 저장하고 로그에 출력하지 않습니다.", "--fail-with-body로 401(잘못된 키)과 403(scope/IP 부족)을 구분합니다.", "운영 배포 판정에는 가능한 image@sha256 digest를 전달합니다."},
 	})
 }
 
@@ -363,7 +363,11 @@ func securityLooksLikeSBOMArtifact(raw []byte) bool {
 }
 
 func (s *Server) handleK8sSecuritySBOMs(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(r) {
+	if r.Method == http.MethodPost {
+		if !s.authorizeSecurityArtifactImport(w, r) {
+			return
+		}
+	} else if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}

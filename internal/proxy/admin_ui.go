@@ -12853,8 +12853,8 @@ const adminHTML = `<!doctype html>
       const steps = g[2].map((x, i) => '<li><strong>' + (i + 1) + '.</strong> ' + escapeHTML(x) + '</li>').join('');
       const flow = ['CI/Operator 결과 import', '이미지 digest와 SBOM 연결', 'Admission 시뮬레이션', '런타임 이벤트 상관분석', '예외 승인 또는 조치', '감사 증적 보관']
         .map(x => '<span class="pill" style="margin:2px">' + escapeHTML(x) + '</span>').join('');
-      const curlScan = 'curl -X POST "$CLUSTARA/admin/k8s/security/scans/import?cluster_id=prod&scanner=trivy&image_digest=sha256:..." --data-binary @trivy.json';
-      const curlSBOM = 'curl -X POST "$CLUSTARA/admin/k8s/security/sboms?image_digest=sha256:...&generator=syft" --data-binary @sbom.cdx.json';
+      const curlScan = 'curl --fail-with-body -X POST -H "Authorization: Bearer $CLUSTARA_TOKEN" -H "Content-Type: application/json" "$CLUSTARA/admin/k8s/security/scans/import?cluster_id=prod&scanner=trivy&image_digest=sha256:..." --data-binary @trivy.json';
+      const curlSBOM = 'curl --fail-with-body -X POST -H "Authorization: Bearer $CLUSTARA_TOKEN" -H "Content-Type: application/json" "$CLUSTARA/admin/k8s/security/sboms?image_digest=sha256:...&generator=syft" --data-binary @sbom.cdx.json';
       return '<div class="grid2" style="margin-top:0">' +
         '<div class="card-body"><h3>' + escapeHTML(g[0]) + '</h3><p class="muted">' + escapeHTML(g[1]) + '</p><ul style="line-height:1.7;margin:10px 0 0 18px">' + steps + '</ul></div>' +
         '<div class="card-body"><h3>운영 흐름</h3><div style="margin:8px 0">' + flow + '</div><div class="banner warn" style="margin-top:10px">스캐너, kube-bench, Falco 실행은 Clustara 서버가 직접 수행하지 않습니다. CI, agent runner, Operator, 승인된 Job 결과를 import하는 구조로 운영하세요.</div></div>' +
@@ -22990,7 +22990,7 @@ const adminHTML = `<!doctype html>
         'chat:completion': '채팅 완성', 'embeddings:create': '임베딩', 'models:read': '모델 조회',
         'admin:read': '관리 조회', 'admin:write': '관리 변경', 'routing:read': '라우팅 조회',
         'routing:write': '라우팅 변경', 'observability:read': '관측 조회', 'costs:read': '비용 조회',
-        'security:read': '보안 조회', 'mcp:use': 'MCP 사용', 'mcp:admin': 'MCP 관리', 'team:read': '팀 조회',
+        'security:read': '보안 조회', 'security:scan': '보안 스캔·SBOM Import', 'mcp:use': 'MCP 사용', 'mcp:admin': 'MCP 관리', 'team:read': '팀 조회',
       }[scope] || scope;
     }
 
@@ -25575,7 +25575,7 @@ const adminHTML = `<!doctype html>
       await api('/admin/teams', { method: 'POST', body: JSON.stringify({ name }) });
       route();
     }
-	const allApiScopes = ['chat:completion', 'embeddings:create', 'models:read', 'admin:read', 'admin:write', 'routing:read', 'routing:write', 'observability:read', 'costs:read', 'security:read', 'mcp:use', 'mcp:admin', 'service:read', 'service:create', 'service:update', 'service:operate', 'service:delete', 'service:backup', 'service:restore', 'service:credential:read', 'service:credential:rotate', 'service:approve', 'service:catalog:manage'];
+	const allApiScopes = ['chat:completion', 'embeddings:create', 'models:read', 'admin:read', 'admin:write', 'routing:read', 'routing:write', 'observability:read', 'costs:read', 'security:read', 'security:scan', 'mcp:use', 'mcp:admin', 'service:read', 'service:create', 'service:update', 'service:operate', 'service:delete', 'service:backup', 'service:restore', 'service:credential:read', 'service:credential:rotate', 'service:approve', 'service:catalog:manage'];
     let apiKeysCache = {};
     function canHardDeleteKeys() {
       return !authState.enabled || (authState.user && authState.user.role === 'super_admin');

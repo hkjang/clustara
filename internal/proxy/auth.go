@@ -23,7 +23,7 @@ import (
 var allScopes = []string{
 	"chat:completion", "embeddings:create", "models:read",
 	"admin:read", "admin:write", "routing:read", "routing:write",
-	"observability:read", "costs:read", "security:read", "mcp:use", "mcp:admin",
+	"observability:read", "costs:read", "security:read", "security:scan", "mcp:use", "mcp:admin",
 	"team:read",
 	"service:read", "service:create", "service:update", "service:operate", "service:delete",
 	"service:backup", "service:restore", "service:credential:read", "service:credential:rotate", "service:approve", "service:catalog:manage",
@@ -44,7 +44,7 @@ var roleScopes = map[string][]string{
 	// not via a broad admin:write grant).
 	"ops_admin":      {"admin:read", "observability:read", "costs:read", "models:read", "service:read", "service:create", "service:update", "service:operate", "service:delete", "service:backup", "service:restore", "service:credential:read", "service:credential:rotate"},
 	"ai_admin":       {"admin:read", "models:read", "routing:read", "routing:write", "observability:read"},
-	"security_admin": {"admin:read", "security:read"},
+	"security_admin": {"admin:read", "security:read", "security:scan"},
 	"billing_admin":  {"admin:read", "costs:read", "observability:read", "models:read"},
 	"readonly_admin": {"admin:read", "observability:read", "costs:read", "security:read", "service:read"},
 	"service_admin":  {"admin:read", "observability:read", "costs:read", "security:read", "service:read", "service:create", "service:update", "service:operate", "service:delete", "service:backup", "service:restore", "service:credential:read", "service:credential:rotate", "service:approve", "service:catalog:manage"},
