@@ -75,6 +75,11 @@ func DetectRestartStorms(pods []RestartStormPod, opts RestartStormOptions) []Res
 	groups := map[string]*agg{}
 	for _, p := range pods {
 		kind, owner := p.OwnerKind, p.OwnerName
+		// Job/CronJob Pods are finite batch attempts. Container restarts and replacement Pods
+		// are evaluated by Job conditions/backoff/deadline, not service-style RestartStorm.
+		if strings.EqualFold(kind, "Job") || strings.EqualFold(kind, "CronJob") {
+			continue
+		}
 		if strings.TrimSpace(owner) == "" {
 			// No controller → treat each bare pod as its own group (cannot be a storm alone).
 			kind, owner = "Pod", p.Name

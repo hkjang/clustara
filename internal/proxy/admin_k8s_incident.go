@@ -57,9 +57,12 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 	events, _ := s.db.ListK8sEvents(ctx, clusterID, 1000)
 	revisions, _ := s.db.ListK8sRevisions(ctx, store.K8sRevisionFilter{ClusterID: clusterID, Limit: 2000})
 	rca := analyzer.EnrichWithConfigChanges(analyzer.AnalyzeRCA(items, events), revisions, time.Now().UTC(), 24*time.Hour)
+	ownerByPod := k8sPodOwnerIndex(items)
+	rca = filterBatchPodFindings(rca, ownerByPod)
 	drafts := analyzer.BuildIncidents(items, rca, events)
 	metrics, _ := s.db.ListK8sMetricSamplesFiltered(ctx, store.K8sMetricSampleFilter{ClusterID: clusterID, Since: time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano), Limit: 100000})
 	metricDrafts := analyzer.BuildMetricRiskIncidents(items, metrics, events, time.Now().UTC())
+	metricDrafts = filterBatchPodIncidentDrafts(metricDrafts, ownerByPod)
 	drafts = append(drafts, metricDrafts...)
 
 	// Restart storms (POD-RULE-06): a service-wide restart wave opens one workload incident.
@@ -97,6 +100,15 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 		activePredictive[d.Key] = true
 	}
 	_, _ = s.db.ResolveOpenK8sIncidentsByKeyPrefix(ctx, clusterID, "predictive:", activePredictive)
+	// Migration cleanup: older scans could open service-style RestartStorm incidents for
+	// finite Job attempts. Resolve those now that batch outcomes are owned by Job/CronJob rules.
+	if existing, listErr := s.db.ListK8sIncidents(ctx, store.K8sIncidentFilter{ClusterID: clusterID, Status: "open", Limit: 500}); listErr == nil {
+		for _, incident := range existing {
+			if incident.Condition == "RestartStorm" && (strings.EqualFold(incident.Kind, "Job") || strings.EqualFold(incident.Kind, "CronJob")) {
+				_ = s.db.ResolveK8sIncident(ctx, incident.ID)
+			}
+		}
+	}
 	return opened, updated, len(drafts), nil
 }
 

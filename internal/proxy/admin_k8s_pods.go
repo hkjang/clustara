@@ -38,6 +38,8 @@ type k8sPodView struct {
 	QoSClass             string                   `json:"qos_class"`
 	OwnerKind            string                   `json:"owner_kind"`
 	OwnerName            string                   `json:"owner_name"`
+	BatchWorkload        bool                     `json:"batch_workload"`
+	AlertSuppressed      bool                     `json:"operational_alert_suppressed"`
 	Images               []string                 `json:"images"`
 	Age                  string                   `json:"age"`
 	WarningEvents        int                      `json:"warning_events"`
@@ -383,8 +385,8 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(views, func(i, j int) bool { return views[i].HealthScore < views[j].HealthScore })
 	critical, warning, restarts, recentRestarts, historicalRestartPods := 0, 0, 0, 0, 0
 	for _, p := range views {
-		podRisky := p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" ||
-			p.HealthBand == "critical" || p.HealthBand == "warning" || p.RecentRestartCount > 0 || p.RecentWarningEvents > 0
+		podRisky := !p.BatchWorkload && (p.RiskLevel == "critical" || p.RiskLevel == "high" || podStatusRisk(p.Status) == "high" ||
+			p.HealthBand == "critical" || p.HealthBand == "warning" || p.RecentRestartCount > 0 || p.RecentWarningEvents > 0)
 		if podRisky {
 			critical++
 			_ = s.upsertPodBookmark(r, p.ClusterID, p, true, "장애 Pod 자동 북마크", firstNonEmpty(p.RiskLevel, podStatusRisk(p.Status), p.RestartSignal, "risky"))
@@ -1941,6 +1943,8 @@ func podView(item store.K8sInventoryItem, events []store.K8sEvent, includeContai
 		QoSClass:             strAny(status["qosClass"]),
 		OwnerKind:            ownerKind,
 		OwnerName:            ownerName,
+		BatchWorkload:        strings.EqualFold(ownerKind, "Job") || strings.EqualFold(ownerKind, "CronJob"),
+		AlertSuppressed:      strings.EqualFold(ownerKind, "Job") || strings.EqualFold(ownerKind, "CronJob"),
 		Images:               images,
 		Age:                  ageFromTime(firstNonEmpty(strAny(status["startTime"]), item.ObservedAt)),
 		WarningEvents:        countWarningEvents(events, item.Namespace, item.Name),

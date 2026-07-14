@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.149** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.150** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.149)
+## 기능 상태 (v0.9.150)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -24,6 +24,7 @@
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |
 | 연결성(Service/Ingress/PVC) · Rollout/Job · 용량(HPA·할당·packing·GPU·예측·시뮬) | ✅ |
 | Capacity & Operations Home UX — HPA desired/max·노드 request 점유율 시각화, 30일 내 소진·확장 한계 우선 알림, 선택형 Replica 시뮬레이션, 기능별 모달 가이드, 운영 홈 중대 신호·빠른 작업 동선 | ✅ |
+| Risk Noise Governance — Job/CronJob Pod를 서비스형 RestartStorm·일반 Pod 알림에서 제외하고 Job/CronJob 전용 결과로 판정, 운영 홈 위험 목록을 애플리케이션(기본)·K8s/플랫폼·전체 범위로 분리 | ✅ |
 | 보안·정책(Pod Security·RBAC·RBAC Diff·이미지·Secret·NetworkPolicy·TLS·감사이상·정책센터) | ✅ |
 | **액션 승인 + 실클러스터 executor**(scale/rollout restart/cordon/uncordon/delete pod) | ✅ |
 | 비용(FinOps) · 비용 증가 추세 · Mattermost 알림 · AI 분석 · 운영 홈 · 리포트 센터 | ✅ |

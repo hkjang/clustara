@@ -3,6 +3,7 @@ package proxy
 import (
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"clustara/internal/analyzer"
@@ -37,6 +38,11 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 	}
 	events, _ := s.db.ListK8sEvents(r.Context(), "", 1000)
 	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{Limit: 1000})
+	riskScope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("risk_scope")))
+	if riskScope != "all" && riskScope != "system" {
+		riskScope = "application"
+	}
+	ownerByPod := k8sPodOwnerIndex(items)
 
 	rca := analyzer.AnalyzeRCA(items, events)
 	rca = analyzer.EnrichWithConfigChanges(rca, revisions, time.Now().UTC(), 24*time.Hour)
@@ -53,6 +59,9 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 	}
 	failList := []failOut{}
 	for _, f := range failures {
+		if suppressBatchPodRisk(f, ownerByPod) || !k8sRiskScopeMatches(f.Namespace, riskScope) {
+			continue
+		}
 		if len(failList) >= 10 {
 			break
 		}
@@ -62,11 +71,17 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 	// Clusters at risk TOP5 (RCA high/critical + risky inventory + error status).
 	riskScore := map[string]int{}
 	for _, f := range rca {
+		if suppressBatchPodRisk(f, ownerByPod) || !k8sRiskScopeMatches(f.Namespace, riskScope) {
+			continue
+		}
 		if f.Severity == "high" || f.Severity == "critical" {
 			riskScore[f.ClusterID] += 3
 		}
 	}
 	for _, it := range items {
+		if !k8sRiskScopeMatches(it.Namespace, riskScope) || isBatchPodItem(it) {
+			continue
+		}
 		if it.RiskLevel == "high" || it.RiskLevel == "critical" {
 			riskScore[it.ClusterID]++
 		}
@@ -100,7 +115,7 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 	}
 	changes := []changeOut{}
 	for _, rev := range revisions {
-		if rev.ChangeKind != "updated" {
+		if rev.ChangeKind != "updated" || !k8sRiskScopeMatches(rev.Namespace, riskScope) {
 			continue
 		}
 		if len(changes) >= 10 {
@@ -144,6 +159,7 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 		"agents":             agentSummary,
 		"clusters_at_risk":   risks,
 		"failure_candidates": failList,
+		"risk_scope":         riskScope,
 		"recent_changes":     changes,
 		"cost_top":           costTop,
 		"cost_increase":      costIncrease,

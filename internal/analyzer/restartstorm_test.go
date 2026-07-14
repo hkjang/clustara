@@ -98,3 +98,13 @@ func TestDetectRestartStormsIgnoresHistoricalRestarts(t *testing.T) {
 		t.Fatalf("recent restart signals should create storm with recent count: %+v", storms)
 	}
 }
+
+func TestDetectRestartStormsIgnoresBatchPods(t *testing.T) {
+	storms := DetectRestartStorms([]RestartStormPod{
+		{Namespace: "batch", Name: "nightly-1", OwnerKind: "Job", OwnerName: "nightly", RecentRestartCount: 8, RestartRecencyKnown: true, Unhealthy: true},
+		{Namespace: "batch", Name: "nightly-2", OwnerKind: "Job", OwnerName: "nightly", RecentRestartCount: 7, RestartRecencyKnown: true, Unhealthy: true},
+	}, RestartStormOptions{})
+	if len(storms) != 0 {
+		t.Fatalf("finite Job attempts must not create service RestartStorm: %+v", storms)
+	}
+}

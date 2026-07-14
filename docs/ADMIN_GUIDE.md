@@ -63,6 +63,8 @@ JupyterHub 서비스 상세의 **JupyterHub API 설정**에서 서비스 계정 
 
 수집 최신성·Agent stale·중대 장애 후보를 먼저 강조하고, 장애 파악·변경 추적·용량 점검·승인 작업으로 바로 이동하는 빠른 작업 카드를 제공합니다. **운영 홈 가이드** 모달에서 데이터 신뢰도 확인부터 증거 이동, 승인형 조치까지의 권장 순서를 확인할 수 있습니다.
 
+위험 범위는 기본적으로 **애플리케이션**을 표시하며 `kube-system`·`openshift-*`·service mesh·GitOps 등 플랫폼 관리 namespace는 **K8s·플랫폼 관리** 범위로 분리합니다. **모두 표시**로 합쳐 볼 수 있고 Node처럼 클러스터 범위의 중요 신호는 기본 목록에도 유지됩니다. Job/CronJob Pod의 완료·재시도는 RestartStorm·일반 Pod 위험에서 제외하고 Job Condition·backoffLimit·deadline·CronJob missed schedule로 판정합니다.
+
 전 클러스터를 가로질러 **클러스터 위험 TOP5 · 장애 후보 TOP10 · 최근 변경 TOP10 · 비용 TOP10**을 한 화면에 모읍니다. 각 항목에서 해당 리소스의 변경 타임라인/Diff로 딥링크됩니다. 하루 운영을 여기서 시작하세요.
 
 - 위험 점수 = (RCA high/critical ×3) + (위험 인벤토리 수) + (error 상태 클러스터 ×5)

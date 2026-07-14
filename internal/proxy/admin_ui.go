@@ -10076,7 +10076,8 @@ const adminHTML = `<!doctype html>
       const view = document.getElementById('view');
       view.innerHTML = section('K8s 운영 홈', '<div class="empty">불러오는 중...</div>');
       let d, clusterList = [];
-      try { d = await api('/admin/k8s/home'); }
+      const riskScope=(params&&params.get('risk_scope'))||'application';
+      try { d = await api('/admin/k8s/home?risk_scope='+encodeURIComponent(riskScope)); }
       catch (e) { view.innerHTML = section('K8s 운영 홈', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
       try { clusterList = ((await api('/admin/k8s/clusters')).clusters) || []; } catch (_) { clusterList = []; }
       const wsClusterId = (params && params.get('ws_cluster')) || ((clusterList[0] || {}).id || '');
@@ -10109,7 +10110,8 @@ const adminHTML = `<!doctype html>
         '<span class="muted">' + escapeHTML(maxLag) + '</span>' +
         '<button type="button" class="secondary" style="margin-left:auto" onclick="route()">새로고침</button>' +
         '<button type="button" class="secondary" onclick="location.hash=\'#/k8s-collector\'">수집 상태</button>' +
-		'<button type="button" class="secondary" onclick="openK8sHomeGuide()">운영 홈 가이드</button>' +
+        '<button type="button" class="secondary" onclick="openK8sHomeGuide()">운영 홈 가이드</button>' +
+		'<label class="muted" style="margin-left:6px">위험 범위 <select onchange="k8sHomeRiskScope(this.value)" style="margin-left:4px"><option value="application" '+(riskScope==='application'?'selected':'')+'>애플리케이션 (기본)</option><option value="system" '+(riskScope==='system'?'selected':'')+'>K8s·플랫폼 관리</option><option value="all" '+(riskScope==='all'?'selected':'')+'>모두 표시</option></select></label>'+
         '</div>';
 
       const riskRows = (d.clusters_at_risk || []).length ? (d.clusters_at_risk || []).map(c =>
@@ -10176,6 +10178,7 @@ const adminHTML = `<!doctype html>
               '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(d.cost_note || '') + '</div></div>'));
       scheduleK8sHomeRefresh();
     }
+    window.k8sHomeRiskScope = (scope) => { const q=new URLSearchParams(location.hash.split('?')[1]||'');q.set('risk_scope',scope||'application');location.hash='#/k8s-home?'+q.toString(); };
 
     // Workspace Center (CLU-OCP-01): namespace-as-business-unit health overview on the home.
     window.k8sWorkspaceClusterGo = (cid) => { location.hash = '#/k8s-home' + (cid ? '?ws_cluster=' + encodeURIComponent(cid) : ''); };
@@ -10724,7 +10727,7 @@ const adminHTML = `<!doctype html>
         else if (sig === 'unknown') note = '<div class="muted" style="font-size:10px">시각 미확인</div>';
         return fmt(p.restart_count || 0) + note;
       };
-      const riskyPods = ((pods && pods.pods) || []).filter(p => (p.health_band === 'critical' || p.health_band === 'warning' || (p.recent_restart_count || 0) > 0)).slice(0, 20);
+      const riskyPods = ((pods && pods.pods) || []).filter(p => !p.operational_alert_suppressed && (p.health_band === 'critical' || p.health_band === 'warning' || (p.recent_restart_count || 0) > 0)).slice(0, 20);
       const podRows = riskyPods.length ? riskyPods.map(p => {
         const href = '#/k8s-pods?' + new URLSearchParams({ cluster_id: p.cluster_id || cid, namespace: p.namespace || '', pod: p.name || '' }).toString();
         const cls = p.health_band === 'critical' ? 'error' : (p.health_band === 'warning' ? 'warn' : '');
