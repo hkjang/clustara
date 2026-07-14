@@ -16,7 +16,7 @@ metadata:
   namespace: clustara-system
 type: Opaque
 stringData:
-  token: REPLACE_WITH_CLUSTARA_ADMIN_TOKEN
+  token: REPLACE_WITH_CLUSTER_SCOPED_AGENT_TOKEN
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -94,7 +94,7 @@ spec:
       serviceAccountName: clustara-agent
       containers:
         - name: agent
-          image: ghcr.io/hkjang/clustara:v0.4.0
+          image: REPLACE_WITH_CLUSTARA_IMAGE
           imagePullPolicy: IfNotPresent
           command: ["/app/clustara-agent"]
           env:
@@ -105,7 +105,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: CLUSTARA_AGENT_VERSION
-              value: v0.4.0
+              value: REPLACE_WITH_CLUSTARA_VERSION
             - name: CLUSTARA_URL
               value: https://REPLACE_WITH_CLUSTARA_URL
             - name: CLUSTARA_TOKEN

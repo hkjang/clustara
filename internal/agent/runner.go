@@ -38,6 +38,14 @@ type Runner struct {
 	eventsTotal    int64
 	lastError      string
 	lastResourceRV string
+	runtimeConfig  chan RuntimeConfig
+}
+
+// RuntimeConfig is returned by Clustara on heartbeat and takes effect without restarting the Agent.
+type RuntimeConfig struct {
+	BatchIntervalSeconds     int `json:"batch_interval_seconds"`
+	HeartbeatIntervalSeconds int `json:"heartbeat_interval_seconds"`
+	MaxBatchSize             int `json:"max_batch_size"`
 }
 
 type queuedEvent struct {
@@ -83,13 +91,14 @@ func NewRunner(cfg Config) (*Runner, error) {
 		return nil, err
 	}
 	return &Runner{
-		cfg:          cfg,
-		kubeToken:    kubeToken,
-		kubeHTTP:     kubeHTTP,
-		clustaraHTTP: &http.Client{Timeout: cfg.RequestTimeout},
-		targets:      targets,
-		events:       make(chan queuedEvent, cfg.QueueSize),
-		state:        loadState(cfg.StateFile),
+		cfg:           cfg,
+		kubeToken:     kubeToken,
+		kubeHTTP:      kubeHTTP,
+		clustaraHTTP:  &http.Client{Timeout: cfg.RequestTimeout},
+		targets:       targets,
+		events:        make(chan queuedEvent, cfg.QueueSize),
+		state:         loadState(cfg.StateFile),
+		runtimeConfig: make(chan RuntimeConfig, 1),
 	}, nil
 }
 
@@ -260,6 +269,18 @@ func (r *Runner) flushLoop(ctx context.Context) error {
 	pending := make([]queuedEvent, 0, r.cfg.MaxBatchSize)
 	for {
 		select {
+		case next := <-r.runtimeConfig:
+			if next.BatchIntervalSeconds > 0 {
+				r.cfg.BatchInterval = time.Duration(next.BatchIntervalSeconds) * time.Second
+				batchTicker.Reset(r.cfg.BatchInterval)
+			}
+			if next.HeartbeatIntervalSeconds > 0 {
+				r.cfg.HeartbeatInterval = time.Duration(next.HeartbeatIntervalSeconds) * time.Second
+				heartbeatTicker.Reset(r.cfg.HeartbeatInterval)
+			}
+			if next.MaxBatchSize > 0 {
+				r.cfg.MaxBatchSize = next.MaxBatchSize
+			}
 		case ev := <-r.events:
 			pending = append(pending, ev)
 			if len(pending) >= r.cfg.MaxBatchSize {
@@ -402,6 +423,15 @@ func (r *Runner) postBatch(ctx context.Context, batch collector.AgentBatch) erro
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("post Clustara agent batch returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var result struct {
+		RuntimeConfig RuntimeConfig `json:"runtime_config"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err == nil && result.RuntimeConfig.BatchIntervalSeconds > 0 {
+		select {
+		case r.runtimeConfig <- result.RuntimeConfig:
+		default:
+		}
 	}
 	return nil
 }

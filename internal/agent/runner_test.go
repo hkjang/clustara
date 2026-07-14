@@ -26,7 +26,7 @@ func TestConfigFromEnvBuildsAgentEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigFromEnv returned error: %v", err)
 	}
-	if cfg.Endpoint != "http://clustara:9090/admin/k8s/agent/events" {
+	if cfg.Endpoint != "http://clustara:9090/ingest/k8s/agent/events" {
 		t.Fatalf("Endpoint = %q", cfg.Endpoint)
 	}
 	if cfg.BatchInterval != 750*time.Millisecond {

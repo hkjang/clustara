@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.151"
+const AppVersion = "v0.9.152"
 
 type Server struct {
 	cfg              config.Config
@@ -287,7 +287,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/clusters/", s.handleK8sClusterByID)
 	mux.HandleFunc("/admin/k8s/snapshot", s.handleK8sSnapshot)
 	mux.HandleFunc("/admin/k8s/agent/events", s.handleK8sAgentEvents)
+	mux.HandleFunc("/ingest/k8s/agent/events", s.handleK8sAgentEvents)
 	mux.HandleFunc("/admin/k8s/agent/status", s.handleK8sAgentStatus)
+	mux.HandleFunc("/admin/k8s/agent/install-manifest", s.handleK8sAgentInstallManifest)
+	mux.HandleFunc("/admin/k8s/agent/runtime-config", s.handleK8sAgentRuntimeConfig)
 	mux.HandleFunc("/admin/k8s/collect-config", s.handleK8sCollectConfig)
 	mux.HandleFunc("/admin/k8s/collect-bursts", s.handleK8sCollectBursts)
 	mux.HandleFunc("/admin/k8s/freshness", s.handleK8sFreshness)
@@ -1981,6 +1984,12 @@ func (s *Server) authorizeAdmin(r *http.Request) bool {
 // SPA's access-denied screen instead of rendering raw JSON as a document.
 func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Agent ingestion uses a cluster-scoped token validated after decoding the batch.
+		// It must not pass through the interactive administrator authentication gate.
+		if r.URL.Path == "/admin/k8s/agent/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/admin/") || r.URL.Path == "/admin/" {
 			next.ServeHTTP(w, r)
 			return

@@ -76,7 +76,7 @@ func (c *Config) Normalize() error {
 	c.ClustaraToken = strings.TrimSpace(c.ClustaraToken)
 	c.KubeAPIServer = strings.TrimRight(strings.TrimSpace(c.KubeAPIServer), "/")
 	if c.Endpoint == "" && c.ClustaraURL != "" {
-		c.Endpoint = c.ClustaraURL + "/admin/k8s/agent/events"
+		c.Endpoint = c.ClustaraURL + "/ingest/k8s/agent/events"
 	}
 	if c.ClusterID == "" {
 		return fmt.Errorf("CLUSTARA_CLUSTER_ID is required")

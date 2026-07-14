@@ -16913,6 +16913,42 @@ const adminHTML = `<!doctype html>
     };
 
     // ---------- K8s Collector 상태 (Realtime Agent) ----------
+    window.k8sGenerateAgentManifest = async () => {
+      const clusterId = (document.getElementById('agent-install-cluster') || {}).value || '';
+      const clustaraURL = ((document.getElementById('agent-install-url') || {}).value || '').trim();
+      const image = ((document.getElementById('agent-install-image') || {}).value || '').trim();
+      if (!clusterId) { showToast('warn', '클러스터 선택 필요', 'Agent가 수집할 클러스터를 선택하세요.'); return; }
+      if (!clustaraURL) { showToast('warn', 'Ingress URL 필요', 'Agent Pod에서 접근 가능한 Clustara URL을 입력하세요.'); return; }
+      const btn = document.getElementById('agent-install-generate');
+      if (btn) { btn.disabled = true; btn.textContent = '생성 중…'; }
+      try {
+        const d = await api('/admin/k8s/agent/install-manifest', { method: 'POST', body: JSON.stringify({ cluster_id: clusterId, clustara_url: clustaraURL, image: image }) });
+        window.__agentInstallManifest = d.manifest || '';
+        openModal('Clustara Agent 간편 설치',
+          '<div class="card-body"><div class="status">설치 YAML 준비 완료</div>' +
+          '<div class="muted" style="font-size:12px;margin:8px 0">동일 Clustara 릴리즈 이미지의 <code>/app/clustara-agent</code>를 실행합니다. 관리자 토큰 대신 이 클러스터에서만 유효한 수집 전용 토큰이 자동 발급되었습니다.</div>' +
+          '<div class="kv">' + row('클러스터', escapeHTML(d.cluster_id || '')) + row('수집 대상', escapeHTML(d.clustara_url || '')) + row('이미지', '<code>' + escapeHTML(d.image || '') + '</code>') + row('토큰 만료', escapeHTML(d.token_expires_at || '')) + '</div>' +
+          '<div style="display:flex;gap:8px;margin:12px 0"><button type="button" onclick="k8sDownloadAgentManifest()">YAML 다운로드</button><button type="button" class="secondary" onclick="k8sCopyAgentManifest()">YAML 복사</button></div>' +
+          '<div class="callout"><strong>적용</strong><pre>kubectl apply -f clustara-agent.yaml\nkubectl -n clustara-system rollout status deploy/clustara-agent</pre></div>' +
+          '<pre style="white-space:pre;max-height:42vh;overflow:auto">' + escapeHTML(d.manifest || '') + '</pre></div>', null, { wide: true });
+      } catch (e) { showToast('error', 'Agent YAML 생성 실패', e.message); }
+      finally { if (btn) { btn.disabled = false; btn.textContent = '설치 YAML 생성'; } }
+    };
+    window.k8sDownloadAgentManifest = () => downloadBlob(new Blob([window.__agentInstallManifest || ''], { type: 'application/yaml;charset=utf-8' }), 'clustara-agent.yaml');
+    window.k8sCopyAgentManifest = async () => { try { await navigator.clipboard.writeText(window.__agentInstallManifest || ''); showToast('ok', '복사 완료', '설치 YAML을 클립보드에 복사했습니다.'); } catch (e) { showToast('error', '복사 실패', e.message); } };
+    window.k8sLoadAgentRuntimeConfig = async (clusterId) => {
+      const out = document.getElementById('agent-runtime-config');
+      if (!out) return;
+      if (!clusterId) { out.innerHTML = '<span class="muted">클러스터를 선택하면 런타임 설정을 변경할 수 있습니다.</span>'; return; }
+      try {
+        const d = await api('/admin/k8s/agent/runtime-config?cluster_id=' + encodeURIComponent(clusterId)); const c = d.runtime_config || {};
+        out.innerHTML = '<div class="ui-form-grid"><label class="ui-field"><span class="ui-field-label">Batch 전송 주기</span><input id="agent-rt-batch" type="number" min="1" max="60" value="' + escapeAttr(c.batch_interval_seconds || 2) + '"><span class="ui-help">1~60초</span></label><label class="ui-field"><span class="ui-field-label">Heartbeat 주기</span><input id="agent-rt-heartbeat" type="number" min="10" max="300" value="' + escapeAttr(c.heartbeat_interval_seconds || 30) + '"><span class="ui-help">10~300초</span></label><label class="ui-field"><span class="ui-field-label">최대 Batch 크기</span><input id="agent-rt-max" type="number" min="10" max="1000" value="' + escapeAttr(c.max_batch_size || 200) + '"><span class="ui-help">10~1,000 이벤트</span></label></div><div style="margin-top:10px"><button type="button" onclick="k8sSaveAgentRuntimeConfig(\'' + escapeAttr(clusterId) + '\')">런타임 설정 저장</button> <span class="muted" style="font-size:11px">Agent 재시작 없이 다음 heartbeat 응답부터 반영됩니다.</span></div>';
+      } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sSaveAgentRuntimeConfig = async (clusterId) => {
+      try { await api('/admin/k8s/agent/runtime-config?cluster_id=' + encodeURIComponent(clusterId), { method: 'POST', body: JSON.stringify({ batch_interval_seconds: Number(document.getElementById('agent-rt-batch').value), heartbeat_interval_seconds: Number(document.getElementById('agent-rt-heartbeat').value), max_batch_size: Number(document.getElementById('agent-rt-max').value) }) }); showToast('ok', 'Agent 런타임 설정 저장', '다음 heartbeat부터 적용됩니다.'); }
+      catch (e) { showToast('error', '설정 저장 실패', e.message); }
+    };
     async function renderK8sCollector(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -16962,18 +16998,18 @@ const adminHTML = `<!doctype html>
       const sloCard = renderCollectSloCard(slo);
       const costCard = renderCollectionCostCard(cost);
       const discCard = renderDiscoveryCard(disc, clusterId);
-      const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || 'REPLACE_WITH_CLUSTER_ID');
+      const selectedCluster = clusterId || (((clusters.clusters || [])[0] || {}).id || '');
+      const installClusterOpts = (clusters.clusters || []).map(cl => '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === selectedCluster ? ' selected' : '') + '>' + escapeHTML(cl.name) + ' · ' + escapeHTML(cl.id) + '</option>').join('');
       const agentGuide =
         '<div class="card-body">' +
-        '<div class="muted" style="font-size:12px;margin-bottom:8px">agent는 클러스터 내부에서 get/list/watch만 수행하고 Clustara로 delta batch를 보냅니다. 값 치환 전 샘플 매니페스트를 그대로 apply하지 마세요.</div>' +
-        '<table><thead><tr><th>환경</th><th>CLUSTARA_URL</th><th>이미지</th><th>비고</th></tr></thead><tbody>' +
-        '<tr><td>minikube</td><td><code>http://host.minikube.internal:9090</code></td><td><code>clustara:dev</code> + <code>minikube image load</code></td><td class="muted" style="font-size:11px">Clustara가 이 PC에서 실행 중일 때 Pod가 PC로 접근하는 주소입니다. 현재 dev port가 다르면 9090을 바꾸세요.</td></tr>' +
-        '<tr><td>운영망 K8s</td><td><code>https://clustara.example.com</code></td><td>레지스트리에 push된 운영 이미지</td><td class="muted" style="font-size:11px">내부 DNS/Ingress와 Secret 또는 ExternalSecret으로 토큰을 주입하세요.</td></tr>' +
-        '</tbody></table>' +
-        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">' +
-        '<div style="flex:1;min-width:280px"><strong style="font-size:12px">minikube 빠른 적용</strong><pre>docker build -t clustara:dev .\nminikube image load clustara:dev\nCopy-Item deploy/k8s/clustara-agent.yaml deploy/k8s/clustara-agent.local.yaml\n# cluster_id: ' + escapeHTML(selectedCluster) + '\n# image, CLUSTARA_URL, token placeholder 치환 후:\nkubectl apply -f deploy/k8s/clustara-agent.local.yaml</pre></div>' +
-        '<div style="flex:1;min-width:280px"><strong style="font-size:12px">운영망 적용</strong><pre>kubectl create ns clustara-system --dry-run=client -o yaml | kubectl apply -f -\nkubectl -n clustara-system create secret generic clustara-agent-auth --from-literal=token=$CLUSTARA_TOKEN --dry-run=client -o yaml | kubectl apply -f -\n# deploy/k8s/clustara-agent.yaml의 URL/image/cluster_id 치환 후:\nkubectl apply -f deploy/k8s/clustara-agent.yaml</pre></div>' +
-        '</div><div class="muted" style="font-size:11px;margin-top:8px">상세 절차: <code>docs/K8S_AGENT.md</code> · 상태 확인: <code>kubectl -n clustara-system logs deploy/clustara-agent --tail=100</code></div>' +
+        '<div class="callout"><strong>이미지 제공 방식</strong><div class="muted" style="margin-top:4px">Agent는 별도 이미지가 아닙니다. 서버와 같은 <code>ghcr.io/hkjang/clustara:' + escapeHTML('__APP_VERSION__') + '</code> 이미지에 포함되어 있으며 실행 명령만 <code>/app/clustara-agent</code>로 바뀝니다.</div></div>' +
+        '<div class="ui-form-grid" style="margin-top:14px">' +
+        '<label class="ui-field"><span class="ui-field-label">수집할 클러스터</span><select id="agent-install-cluster" onchange="k8sLoadAgentRuntimeConfig(this.value)"><option value="">클러스터 선택</option>' + installClusterOpts + '</select><span class="ui-help">현재 등록된 클러스터 ID가 자동 반영됩니다.</span></label>' +
+        '<label class="ui-field"><span class="ui-field-label">Clustara Ingress URL</span><input id="agent-install-url" type="url" placeholder="https://clustara.example.com" autocomplete="url"><span class="ui-help">Agent Pod에서 접근 가능한 망 내부 또는 중앙 Clustara 주소</span></label>' +
+        '<label class="ui-field"><span class="ui-field-label">Agent 이미지 <span class="ui-optional">선택</span></span><input id="agent-install-image" placeholder="ghcr.io/hkjang/clustara:' + escapeAttr('__APP_VERSION__') + '"><span class="ui-help">비워두면 현재 서버와 동일한 릴리즈 버전을 사용합니다.</span></label>' +
+        '</div><div style="display:flex;gap:8px;align-items:center;margin-top:12px"><button id="agent-install-generate" type="button" onclick="k8sGenerateAgentManifest()">설치 YAML 생성</button><span class="muted" style="font-size:11px">클러스터 ID와 수집 전용 토큰은 자동 반영됩니다.</span></div>' +
+        '<div class="muted" style="font-size:11px;margin-top:10px">필수 조건: 대상 클러스터에서 Ingress DNS·TLS·egress 접근 가능 · 상세 절차: <code>docs/K8S_AGENT.md</code> · 확인: <code>kubectl -n clustara-system logs deploy/clustara-agent --tail=100</code></div>' +
+        '<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px"><strong>Agent 런타임 설정</strong><div id="agent-runtime-config" style="margin-top:10px"><span class="muted">불러오는 중…</span></div></div>' +
         '</div>';
 
       view.innerHTML =
@@ -16989,12 +17025,13 @@ const adminHTML = `<!doctype html>
         card('Agent 설치 가이드', agentGuide) +
         card('실시간 Collector Agent',
           '<div class="card-body"><table><thead><tr><th>상태</th><th>클러스터</th><th>Agent</th><th>버전</th><th>resourceVersion</th><th>watch lag</th><th>수신 이벤트</th><th>재연결</th><th>마지막 수신</th><th>오류</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          '<div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(st.note || '') + ' Agent는 <code>POST /admin/k8s/agent/events</code>로 watch delta(ADDED/MODIFIED/DELETED)와 하트비트를 전송합니다. 미배포 시 주기 수집(snapshot)이 폴백으로 동작합니다.</div></div>') +
+          '<div class="muted" style="font-size:11px;margin-top:6px">' + escapeHTML(st.note || '') + ' Agent는 <code>POST /ingest/k8s/agent/events</code>로 watch delta(ADDED/MODIFIED/DELETED)와 하트비트를 전송합니다. 미배포 시 주기 수집(snapshot)이 폴백으로 동작합니다.</div></div>') +
         card('resourceVersion Checkpoint',
           '<div class="card-body"><table><thead><tr><th>클러스터</th><th>Agent</th><th>Kind</th><th>resourceVersion</th><th>수신</th><th>중복</th><th>갱신</th></tr></thead><tbody>' + offsetRows + '</tbody></table></div>') +
         card('최근 Watch 이벤트',
           '<div class="card-body"><table><thead><tr><th>시간</th><th>Type</th><th>리소스</th><th>resourceVersion</th><th>Agent</th></tr></thead><tbody>' + eventRows + '</tbody></table></div>');
       k8sLoadCollectConfig();
+      k8sLoadAgentRuntimeConfig(selectedCluster);
     }
     // freshnessBadge renders an inventory-freshness pill (CLU-REQ-10 stale warning). It is
     // reused on the collector screen and is exported so other screens can attach a data-trust

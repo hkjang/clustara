@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.151** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.152** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.151)
+## 기능 상태 (v0.9.152)
 
 | 기능 | 상태 |
 | --- | --- |
