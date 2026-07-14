@@ -128,7 +128,7 @@ Pod 목록·상세·로그·로그 분석·증적 번들·Golden Pod Diff·Healt
 
 - **대상**: Deployment, StatefulSet, DaemonSet, Service, Ingress, HPA, PDB, RBAC, NetworkPolicy, CRD 인스턴스 등 인벤토리에 수집된 단일 리소스.
 - **Ops Agent 초안**: 자연어 프롬프트와 현재 선택 대상/YAML을 기반으로 생성·변경 초안, 위험 리뷰, blocker/warning, 체크리스트를 만들 수 있습니다. `초안 + 요청 저장`을 선택한 경우에도 실제 적용은 하지 않고 Manifest Change 원장에 `draft` 요청만 생성합니다.
-- **AI Platform Agent**: 서비스 홈에서 자연어 요구를 내장 서비스 카탈로그와 프로파일로 해석해 멀티 리소스 manifest와 배포 상태 단계를 미리 봅니다. 계획은 읽기 전용이며 명시적인 초안 등록 후에도 Application Stack 검증·승인 전에는 Kubernetes에 적용되지 않습니다.
+- **AI Platform Agent**: 서비스 홈에서 자연어 요구를 내장 서비스 카탈로그와 프로파일로 해석해 멀티 리소스 manifest와 배포 상태 단계를 미리 봅니다. 연결된 Harbor의 Project·Repository·Tag/Digest를 단계적으로 탐색해 기존 이미지를 선택할 수 있고, digest가 있으면 재현 가능한 불변 참조를 우선합니다. 계획은 읽기 전용이며 명시적인 초안 등록 후에도 Application Stack 검증·승인 전에는 Kubernetes에 적용되지 않습니다.
 - **Agent 배포 준비도**: 서비스 상세에서 현재 정책, 클러스터 연결 준비, Server-Side Apply 지원과 Stack revision을 변경 없이 점검하고 차단 사유 또는 승인 필요 사유를 확인합니다.
 - **Agent Server-Side Dry-run**: 준비도 통과 후 Kubernetes API 검증을 실행해 리소스별 성공·오류를 확인합니다. 승인 필요 변경도 Dry-run은 가능하지만 실제 Apply에는 승인이 필요합니다.
 - **검증**: basic schema(apiVersion/kind/name), 정책 팩, server dry-run(`dryRun=All`)을 수행합니다. 정책 Deny 또는 dry-run 실패는 `blocked/failed`로 중단됩니다.

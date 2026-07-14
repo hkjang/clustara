@@ -190,3 +190,34 @@ func TestServiceWorkloadRelatedUsesLabelsAndNaming(t *testing.T) {
 		t.Fatal("Clustara service label should associate related resources")
 	}
 }
+
+func TestIngressIsRelatedThroughBackendServiceSelector(t *testing.T) {
+	root := store.K8sInventoryItem{ClusterID: "c1", Namespace: "prod", Kind: "Deployment", Name: "orders-api", Spec: map[string]any{
+		"template": map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "orders"}}},
+	}}
+	service := store.K8sInventoryItem{ClusterID: "c1", Namespace: "prod", Kind: "Service", Name: "orders-http", Spec: map[string]any{
+		"selector": map[string]any{"app": "orders"},
+	}}
+	ingress := store.K8sInventoryItem{ClusterID: "c1", Namespace: "prod", Kind: "Ingress", Name: "public-orders", Spec: map[string]any{
+		"rules": []any{map[string]any{"host": "orders.example.com", "http": map[string]any{"paths": []any{map[string]any{"path": "/", "backend": map[string]any{"service": map[string]any{"name": "orders-http", "port": map[string]any{"number": 80}}}}}}}},
+	}}
+	reason, ok := serviceInventoryRelation(root, ingress, []store.K8sInventoryItem{root, service, ingress})
+	if !ok || !strings.Contains(reason, "Ingress backend Service") {
+		t.Fatalf("Ingress must join its workload candidate through backend Service selector: ok=%v reason=%q", ok, reason)
+	}
+	backends := ingressBackendServiceNames(ingress)
+	if len(backends) != 1 || backends[0] != "orders-http" {
+		t.Fatalf("unexpected Ingress backends: %v", backends)
+	}
+}
+
+func TestIngressBackendSupportsLegacyAndDefaultBackend(t *testing.T) {
+	ingress := store.K8sInventoryItem{Kind: "Ingress", Spec: map[string]any{
+		"defaultBackend": map[string]any{"service": map[string]any{"name": "fallback"}},
+		"rules":          []any{map[string]any{"http": map[string]any{"paths": []any{map[string]any{"backend": map[string]any{"serviceName": "legacy"}}}}}},
+	}}
+	got := ingressBackendServiceNames(ingress)
+	if strings.Join(got, ",") != "fallback,legacy" {
+		t.Fatalf("unexpected normalized backend names: %v", got)
+	}
+}

@@ -193,6 +193,7 @@ func (s *Server) discoverServicePlatform(ctx context.Context, instances []store.
 
 	candidates := []serviceDiscoveryCandidate{}
 	workloadKinds := map[string]bool{"deployment": true, "statefulset": true, "daemonset": true, "job": true, "cronjob": true}
+	candidateRelated := map[string]bool{}
 	for _, item := range items {
 		if !workloadKinds[strings.ToLower(item.Kind)] || claimed[serviceResourceKey(item.Kind, item.Namespace, item.Name)] {
 			continue
@@ -203,11 +204,31 @@ func (s *Server) discoverServicePlatform(ctx context.Context, instances []store.
 			if related.ClusterID != item.ClusterID || related.Namespace != item.Namespace || claimed[serviceResourceKey(related.Kind, related.Namespace, related.Name)] {
 				continue
 			}
-			if serviceWorkloadRelated(item, related) {
-				candidate.Resources = append(candidate.Resources, serviceDiscoveryResource{Kind: related.Kind, Namespace: related.Namespace, Name: related.Name, Status: related.Status, Score: 75, Reasons: []string{"라벨·owner·이름 관계"}})
+			if relatedBy, ok := serviceInventoryRelation(item, related, items); ok {
+				candidate.Resources = append(candidate.Resources, serviceDiscoveryResource{Kind: related.Kind, Namespace: related.Namespace, Name: related.Name, Status: related.Status, Score: 75, Reasons: []string{relatedBy}})
+				candidateRelated[serviceResourceKey(related.Kind, related.Namespace, related.Name)] = true
+				if strings.EqualFold(related.Kind, "Ingress") {
+					candidate.Reasons = append(candidate.Reasons, "Ingress endpoint: "+related.Name+" → "+strings.Join(ingressBackendServiceNames(related), ", "))
+				}
 			}
 		}
 		candidates = append(candidates, candidate)
+	}
+	// An Ingress is normally an endpoint of a workload candidate, not a second service.
+	// Keep only unclaimed/orphan Ingress resources as reviewable candidates so external
+	// entry points are never silently omitted from service discovery.
+	for _, item := range items {
+		key := serviceResourceKey(item.Kind, item.Namespace, item.Name)
+		if !strings.EqualFold(item.Kind, "Ingress") || claimed[key] || candidateRelated[key] {
+			continue
+		}
+		backends := ingressBackendServiceNames(item)
+		reasons := []string{"수집된 Ingress 외부 진입점", "연결할 워크로드를 찾지 못함"}
+		if len(backends) > 0 {
+			reasons = append(reasons, "backend Service: "+strings.Join(backends, ", "))
+		}
+		candidates = append(candidates, serviceDiscoveryCandidate{ClusterID: item.ClusterID, Namespace: item.Namespace, Kind: item.Kind, Name: item.Name, SuggestedType: "application", Confidence: 60, Reasons: reasons,
+			Resources: []serviceDiscoveryResource{{Kind: item.Kind, Namespace: item.Namespace, Name: item.Name, Status: item.Status, Score: 100, Reasons: []string{"후보 외부 Endpoint"}}}})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Confidence != candidates[j].Confidence {
@@ -256,6 +277,100 @@ func serviceWorkloadRelated(root, item store.K8sInventoryItem) bool {
 	}
 	base := strings.ToLower(root.Name)
 	return strings.HasPrefix(strings.ToLower(item.Name), base+"-") || strings.HasPrefix(strings.ToLower(item.Name), "data-"+base+"-")
+}
+
+func serviceInventoryRelation(root, item store.K8sInventoryItem, inventory []store.K8sInventoryItem) (string, bool) {
+	if serviceWorkloadRelated(root, item) {
+		return "라벨·owner·이름 관계", true
+	}
+	if !strings.EqualFold(item.Kind, "Ingress") {
+		return "", false
+	}
+	for _, backend := range ingressBackendServiceNames(item) {
+		for _, service := range inventory {
+			if service.ClusterID != root.ClusterID || service.Namespace != root.Namespace || !strings.EqualFold(service.Kind, "Service") || service.Name != backend {
+				continue
+			}
+			if serviceWorkloadRelated(root, service) || selectorMatchesWorkload(service.Spec, root) {
+				return "Ingress backend Service·selector 관계", true
+			}
+		}
+	}
+	return "", false
+}
+
+func ingressBackendServiceNames(item store.K8sInventoryItem) []string {
+	if !strings.EqualFold(item.Kind, "Ingress") {
+		return nil
+	}
+	names := map[string]bool{}
+	addBackend := func(backend map[string]any) {
+		if service, ok := backend["service"].(map[string]any); ok {
+			if name := serviceDiscoveryString(service["name"]); name != "" {
+				names[name] = true
+			}
+		}
+		if name := serviceDiscoveryString(backend["serviceName"]); name != "" { // networking.k8s.io/v1beta1
+			names[name] = true
+		}
+	}
+	if backend, ok := item.Spec["defaultBackend"].(map[string]any); ok {
+		addBackend(backend)
+	}
+	if backend, ok := item.Spec["backend"].(map[string]any); ok { // extensions/v1beta1
+		addBackend(backend)
+	}
+	if rules, ok := item.Spec["rules"].([]any); ok {
+		for _, rawRule := range rules {
+			rule, _ := rawRule.(map[string]any)
+			http, _ := rule["http"].(map[string]any)
+			paths, _ := http["paths"].([]any)
+			for _, rawPath := range paths {
+				path, _ := rawPath.(map[string]any)
+				backend, _ := path["backend"].(map[string]any)
+				addBackend(backend)
+			}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func selectorMatchesWorkload(serviceSpec map[string]any, workload store.K8sInventoryItem) bool {
+	selector, ok := serviceSpec["selector"].(map[string]any)
+	if !ok || len(selector) == 0 {
+		return false
+	}
+	labels := map[string]string{}
+	for key, value := range workload.Labels {
+		labels[key] = value
+	}
+	if template, ok := workload.Spec["template"].(map[string]any); ok {
+		if metadata, ok := template["metadata"].(map[string]any); ok {
+			if templateLabels, ok := metadata["labels"].(map[string]any); ok {
+				for key, value := range templateLabels {
+					labels[key] = serviceDiscoveryString(value)
+				}
+			}
+		}
+	}
+	for key, value := range selector {
+		if labels[key] != serviceDiscoveryString(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func serviceDiscoveryString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func inferDiscoveredServiceType(item store.K8sInventoryItem) string {

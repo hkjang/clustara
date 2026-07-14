@@ -6,6 +6,10 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 
 서비스 홈의 **AI Platform Agent**는 “small Redis 캐시를 만들어줘” 같은 자연어 요청을 지원 카탈로그·프로파일·환경 설정으로 해석하고 생성 예정 리소스, 정책 분석, blocker, 운영 주의사항, 리소스 기준과 전체 상태 단계를 보여줍니다. 계획 단계에서는 DB나 클러스터를 변경하지 않으며, 운영자가 명시적으로 **서비스·Stack 초안 등록**을 선택해야 기존 ServiceInstance와 Application Stack 원장에 저장됩니다. 이후 실제 배포는 Stack 검증·승인·Apply·관찰 흐름에서만 진행됩니다.
 
+Harbor Registry가 연결되어 있으면 자연어 빌더에서 Registry → Project → Repository → Tag/Digest 순서로 기존 이미지를 탐색할 수 있습니다. private project는 외부 연동에 암호화 저장된 Harbor/Robot Credential을 선택하며 비밀값은 UI와 API 응답에 노출되지 않습니다. Artifact에 digest가 있으면 `registry/project/repository@sha256:...` 불변 참조를 tag보다 우선해 최종 배포 이미지에 입력하고, 계획 결과에도 이미지와 선택 출처를 표시합니다. Harbor가 연결되지 않은 환경에서는 Registry·Credential 설정 화면으로 이동하는 안내를 제공합니다.
+
+서비스 자동 발견은 Ingress를 외부 진입점 증적으로 포함합니다. `Ingress backend → Service → selector → Workload Pod template` 관계를 따라 Deployment·StatefulSet 등의 서비스 후보에 Ingress를 합치며, 후보 화면에는 Ingress 이름과 backend Service를 연결 근거로 표시합니다. 어떤 수집 워크로드에도 연결되지 않는 고아 Ingress는 누락하지 않고 별도의 `application` 검토 후보로 남깁니다. 따라서 Ingress 하나 때문에 동일 서비스를 중복 등록하지 않으면서도 외부 Endpoint는 서비스 후보에서 확인할 수 있습니다.
+
 초안 등록 API는 계획 결과를 그대로 신뢰하지 않고 렌더링된 Manifest를 현재 정책으로 다시 검사합니다. 계획 이후 정책이 변경되었거나 Deny 규칙이 추가된 경우 저장을 차단하며, 허용된 경우에도 `allow` 또는 `approval_required` 결정과 승인 사유를 응답·서비스 화면에 표시합니다. 따라서 자연어 계획, 초안 저장, 실제 Apply 사이의 각 경계에서 권한과 정책이 다시 적용됩니다.
 
 등록 이후 서비스 상세의 **AI Platform Agent 수명주기**는 별도 추정 상태가 아니라 ServiceInstance 상태, 저장된 정책 결정, Application Stack 상태와 Apply 이력, 최신 Health 증적을 결합합니다. 요청→계획→초안→검증→승인→적용→관찰→완료 단계를 표시하고, 승인 대기·부분 적용·실패·관찰 중 상태에 맞는 다음 운영 조치를 안내합니다.

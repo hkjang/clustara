@@ -1,3 +1,6 @@
+v0.9.146:
+- **Harbor-Aware Natural Language Builder & Ingress Service Discovery (v0.9.146)**: 서비스 홈의 AI Platform Agent에서 연결된 Harbor Registry, 암호화 Credential/Robot, Project, Repository, Tag·Digest를 단계적으로 탐색해 기존 이미지를 최종 배포 이미지로 선택할 수 있도록 개선했습니다. digest가 있으면 불변 `@sha256:` 참조를 우선하고 선택 출처·정책 의미를 계획 결과에 표시하며, Harbor 미연결 시 설정 화면으로 안내합니다. 서비스 자동 발견은 `Ingress backend → Service → selector → Workload Pod template` 관계를 추적해 Ingress를 기존 워크로드 후보의 외부 Endpoint 증적으로 병합하고, 연결되지 않은 고아 Ingress만 별도 검토 후보로 남겨 누락과 중복 등록을 함께 방지합니다.
+
 v0.9.145:
 - **Digest-Optional Trivy Import & Integration Kit (v0.9.145)**: Trivy·Grype·Trivy Operator 취약점 결과에 image digest가 없어도 Import할 수 있도록 개선했습니다. digest가 없으면 이미지·대상 참조 기반 `unresolved:ref:*`, 참조도 없으면 원본 결과 기반 `unresolved:artifact:*` 식별자를 생성해 빈 digest 스캔끼리 덮어쓰는 문제를 방지하고, 응답·Scan Run·취약점 화면에 `digest_verified=false`, 식별 근거와 `digest 미확인`을 표시합니다. 실제 digest 기반 Admission·SBOM 상관분석과는 명확히 구분합니다. 신규 Trivy 연동 가이드 API와 업로드·지속 스캔 화면 모달에서 CLI, GitHub Actions, GitLab CI, Trivy Operator 예제를 제공하고 복사할 수 있습니다.
 
