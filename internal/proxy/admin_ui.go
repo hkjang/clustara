@@ -15664,12 +15664,13 @@ const adminHTML = `<!doctype html>
       const r = data.report || {};
       const forecast = data.forecast || {};
       const prices = (cfg && cfg.prices) || {};
+      const automation = (cfg && cfg.automation) || {};
       const won = (v) => fmt(Math.round(v || 0));
       const lineTable = (title, lines) => {
         const rows = (lines || []).length ? (lines || []).map(l =>
-          '<tr><td>' + escapeHTML(l.key) + '</td><td>' + fmt(l.pods) + '</td><td>' + fmt(l.cpu_cores) + '</td><td>' + fmt(l.mem_gb) + '</td><td>' + won(l.monthly_krw) + '</td></tr>').join('')
-          : '<tr><td colspan="5" class="muted">데이터 없음.</td></tr>';
-        return card(title, '<div class="card-body"><table><thead><tr><th>구분</th><th>Pod</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+          '<tr><td>' + escapeHTML(l.key) + '</td><td>' + fmt(l.pods) + '</td><td>' + fmt(l.cpu_cores) + '</td><td>' + fmt(l.mem_gb) + '</td><td>' + fmt(l.gpu_units||0) + '</td><td>' + fmt(l.storage_gb||0) + '</td><td>' + won(l.monthly_krw) + '</td></tr>').join('')
+          : '<tr><td colspan="7" class="muted">데이터 없음.</td></tr>';
+        return card(title, '<div class="card-body"><table><thead><tr><th>구분</th><th>Pod</th><th>vCPU</th><th>Mem(GB)</th><th>GPU</th><th>Disk(GB)</th><th>월 KRW</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
       };
 
       const dailySeries=((trend&&trend.daily_series)||[]).slice(-30).map(x=>({label:String(x.period||'').slice(5),value:Number(x.monthly_krw||0)}));
@@ -15680,13 +15681,15 @@ const adminHTML = `<!doctype html>
       const previousDaily=dailySeries.length>1?dailySeries[dailySeries.length-2].value:0, currentDaily=dailySeries.length?dailySeries[dailySeries.length-1].value:Number(r.total_monthly_krw||0), deltaPct=previousDaily?((currentDaily-previousDaily)/previousDaily*100):0;
       const savings=Number((recs&&recs.total_monthly_savings_krw)||0), optimized=Math.max(0,Number(r.total_monthly_krw||0)-savings), confidence=Number(forecast.confidence_score||0), confidenceClass=confidence>=80?'':(confidence>=50?'warn':'error');
       const visualization=card('비용 추세·구성 분석','<div class="card-body"><div class="cost-viz-grid"><div><div class="cost-period-tabs" role="tablist" aria-label="비용 그래프 기간"><button type="button" data-period="hourly" onclick="k8sCostSelectPeriod(\'hourly\')">24시간 환산</button><button type="button" class="active" data-period="daily" onclick="k8sCostSelectPeriod(\'daily\')">최근 30일</button><button type="button" data-period="monthly" onclick="k8sCostSelectPeriod(\'monthly\')">최근 12개월</button></div><div id="k8s-cost-chart-host">'+k8sCostChartSVG(dailySeries,'daily')+'</div><p id="k8s-cost-chart-note" class="muted" style="font-size:11px">일별 스냅샷 시점의 월 환산 추정 비용입니다. 하루 한 번 이상 자동 기록해야 연속 추세가 형성됩니다.</p></div><div><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h3 style="margin:0">Namespace 비용 비중</h3><span class="status">TOP '+fmt(Math.min(8,nsLines.length))+'</span></div>'+topNS+'<p class="muted" style="font-size:11px">막대는 현재 월 추정치 기준 상대 비중입니다.</p></div></div><div class="cost-insight-strip"><div class="cost-insight"><span>시간당 환산</span><strong>'+won(hourlyRate)+' KRW</strong></div><div class="cost-insight"><span>전일 스냅샷 대비</span><strong style="color:'+(deltaPct>0?'var(--bad)':(deltaPct<0?'#16a34a':'inherit'))+'">'+(deltaPct>0?'+':'')+fmt(Math.round(deltaPct*10)/10)+'%</strong></div><div class="cost-insight"><span>Rightsizing 후 예상</span><strong>'+won(optimized)+' KRW</strong></div><div class="cost-insight"><span>추정 신뢰도</span><strong><span class="status '+confidenceClass+'">'+fmt(confidence)+' · '+escapeHTML(forecast.confidence_level||'low')+'</span></strong></div></div></div>');
-      const modelDetails=card('추정 모델·신뢰도','<div class="card-body"><div class="kpis">'+kpi('Request 기준',won(forecast.baseline_monthly_krw||r.total_monthly_krw)+' KRW')+kpi('실사용 조정',won(forecast.usage_adjusted_monthly_krw)+' KRW')+kpi('Metric Coverage',fmt(forecast.metric_coverage_pct||0)+'%')+kpi('Request Coverage',fmt(forecast.request_coverage_pct||0)+'%')+'</div><div class="kv" style="margin-top:10px">'+row('CPU 비용',won(forecast.cpu_cost_monthly_krw)+' KRW')+row('Memory 비용',won(forecast.memory_cost_monthly_krw)+' KRW')+row('관측 Pod',fmt(forecast.metric_covered_pods||0)+' / 비용 산정 '+fmt(forecast.costed_pods||0)+' · 전체 '+fmt(forecast.total_pods||0))+row('미산정 Pod',fmt(forecast.uncosted_pods||0)+'개 · request 미설정')+row('계산 방식',escapeHTML(forecast.method||'resource request baseline'))+'</div><div class="banner warn" style="margin-top:10px">스토리지·네트워크 egress·LoadBalancer·GPU 단가·라이선스·약정 할인은 아직 포함하지 않습니다. 실사용 조정치는 최신 CPU·Memory 사용량에 '+fmt(forecast.headroom_pct||30)+'% 안정성 여유를 적용한 시나리오입니다.</div></div>');
+      const modelDetails=card('추정 모델·신뢰도','<div class="card-body"><div class="kpis">'+kpi('Request 기준',won(forecast.baseline_monthly_krw||r.total_monthly_krw)+' KRW')+kpi('실사용 조정',won(forecast.usage_adjusted_monthly_krw)+' KRW')+kpi('Metric Coverage',fmt(forecast.metric_coverage_pct||0)+'%')+kpi('Request Coverage',fmt(forecast.request_coverage_pct||0)+'%')+'</div><div class="kv" style="margin-top:10px">'+row('CPU 비용',won(forecast.cpu_cost_monthly_krw)+' KRW')+row('Memory 비용',won(forecast.memory_cost_monthly_krw)+' KRW')+row('GPU 비용',won(forecast.gpu_cost_monthly_krw)+' KRW')+row('Persistent Volume 비용',won(forecast.storage_cost_monthly_krw)+' KRW')+row('관측 Pod',fmt(forecast.metric_covered_pods||0)+' / 비용 산정 '+fmt(forecast.costed_pods||0)+' · 전체 '+fmt(forecast.total_pods||0))+row('미산정 Pod',fmt(forecast.uncosted_pods||0)+'개 · request 미설정')+row('계산 방식',escapeHTML(forecast.method||'resource request baseline'))+'</div><div class="banner warn" style="margin-top:10px">GPU는 <code>nvidia.com/gpu</code> request, Disk는 PVC storage request 기준입니다. 네트워크 egress·LoadBalancer·StorageClass별 차등·라이선스·약정 할인은 별도 비용입니다. CPU·Memory 실사용 조정치는 '+fmt(forecast.headroom_pct||30)+'% 안정성 여유를 적용합니다.</div></div>');
 
       view.innerHTML =
         section('K8s 비용', '<div class="kpis">' +
           kpi('월 추정 총비용', won(r.total_monthly_krw) + ' KRW') +
           kpi('CPU 단가', won(prices.cpu_core_monthly_krw) + '/core') +
           kpi('Mem 단가', won(prices.mem_gb_monthly_krw) + '/GB') +
+          kpi('GPU 단가', won(prices.gpu_unit_monthly_krw) + '/GPU') +
+          kpi('Disk 단가', won(prices.storage_gb_monthly_krw) + '/GB') +
           kpi('절감 가능', won(savings) + ' KRW') + '</div>') +
         visualization + modelDetails +
         card('단가 설정',
@@ -15694,9 +15697,12 @@ const adminHTML = `<!doctype html>
           '<select id="k8scost-cluster" onchange="k8sCostGo()">' + clusterOpts + '</select>' +
           '<input id="cost-cpu" type="number" value="' + escapeAttr(String(prices.cpu_core_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/vCPU·월</span>' +
           '<input id="cost-mem" type="number" value="' + escapeAttr(String(prices.mem_gb_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/GB·월</span>' +
+          '<input id="cost-gpu" type="number" value="' + escapeAttr(String(prices.gpu_unit_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/GPU·월</span>' +
+          '<input id="cost-storage" type="number" value="' + escapeAttr(String(prices.storage_gb_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/Disk GB·월</span>' +
           '<button type="button" onclick="k8sCostSave()">단가 저장</button> ' +
-          '<button type="button" class="secondary" onclick="k8sCostSnapshot()">일별 스냅샷 기록</button></div>' +
-          '<div class="muted" style="font-size:11px;margin-top:4px">' + escapeHTML(data.note || '') + '</div><div id="cost-msg" class="muted" style="font-size:11px"></div></div>') +
+          '<button type="button" class="secondary" onclick="k8sCostSnapshot()">지금 스냅샷 기록</button></div>' +
+          '<div class="banner" style="margin-top:10px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><strong>자동 스냅샷</strong><label><input id="cost-snapshot-enabled" type="checkbox" '+(automation.enabled!==false?'checked':'')+'> 사용</label><select id="cost-snapshot-interval"><option value="21600" '+(Number(automation.interval_seconds)===21600?'selected':'')+'>6시간</option><option value="43200" '+(Number(automation.interval_seconds)===43200?'selected':'')+'>12시간</option><option value="86400" '+(Number(automation.interval_seconds||86400)===86400?'selected':'')+'>매일</option><option value="604800" '+(Number(automation.interval_seconds)===604800?'selected':'')+'>매주</option></select><button type="button" class="secondary" onclick="k8sCostSave()">자동화 저장</button><span class="status '+(automation.last_error?'error':'')+'">'+(automation.last_error?'오류':'정상')+'</span></div><div class="muted" style="font-size:11px;margin-top:6px">최근 성공 '+escapeHTML(automation.last_success||'아직 없음')+' · 다음 실행 '+escapeHTML(automation.next_run||'서버 시작 후 자동 결정')+(automation.last_error?' · '+escapeHTML(automation.last_error):'')+' · 같은 날 재실행은 upsert되어 중복되지 않습니다.</div></div>'+
+          '<div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div><div id="cost-msg" class="muted" style="font-size:11px"></div></div>') +
         (function () {
           const ts = (trend && trend.trend) || [];
           const up = ts.filter(x => x.delta > 0);
@@ -15730,7 +15736,11 @@ const adminHTML = `<!doctype html>
       try {
         await api('/admin/k8s/cost/config', { method: 'POST', body: JSON.stringify({
           cpu_core_monthly_krw: parseFloat(document.getElementById('cost-cpu').value) || 0,
-          mem_gb_monthly_krw: parseFloat(document.getElementById('cost-mem').value) || 0 }) });
+          mem_gb_monthly_krw: parseFloat(document.getElementById('cost-mem').value) || 0,
+          gpu_unit_monthly_krw: parseFloat(document.getElementById('cost-gpu').value) || 0,
+          storage_gb_monthly_krw: parseFloat(document.getElementById('cost-storage').value) || 0,
+          snapshot_enabled: !!document.getElementById('cost-snapshot-enabled').checked,
+          snapshot_interval_seconds: parseInt(document.getElementById('cost-snapshot-interval').value,10) || 86400 }) });
         await renderK8sCost(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) { alert(e.message); }
     };
@@ -15739,7 +15749,7 @@ const adminHTML = `<!doctype html>
       const cl = document.getElementById('k8scost-cluster').value;
       try {
         const d = await api('/admin/k8s/cost/snapshot' + (cl ? '?cluster_id=' + encodeURIComponent(cl) : ''), { method: 'POST', body: '{}' });
-        if (msg) msg.innerHTML = '<span class="status">스냅샷 ' + fmt(d.recorded) + '건 기록됨 (매일 1회 기록 시 다음날부터 증가율 표시)</span>';
+        if (msg) msg.innerHTML = '<span class="status">스냅샷 ' + fmt(d.recorded) + '건 기록됨 · 자동화 실패 시 수동 복구용 실행</span>';
         await renderK8sCost(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) { if (msg) msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };

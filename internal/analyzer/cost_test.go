@@ -110,3 +110,18 @@ func TestBuildCostForecastSeparatesBaselineAndUsageScenario(t *testing.T) {
 		t.Fatalf("unexpected usage-adjusted forecast: %+v", got)
 	}
 }
+
+func TestEstimateCostIncludesGPUAndPersistentVolume(t *testing.T) {
+	pod := costPod("c1", "ml", "trainer", "1", "1Gi")
+	pod.Spec["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)["requests"].(map[string]any)["nvidia.com/gpu"] = "2"
+	pvc := store.K8sInventoryItem{Kind: "PersistentVolumeClaim", ClusterID: "c1", Namespace: "ml", Name: "models", Spec: map[string]any{"resources": map[string]any{"requests": map[string]any{"storage": "100Gi"}}}}
+	prices := CostPrices{CPUCoreMonthlyKRW: 10000, MemGBMonthlyKRW: 1000, GPUUnitMonthlyKRW: 500000, StorageGBMonthlyKRW: 100}
+	report := EstimateCost([]store.K8sInventoryItem{pod, pvc}, prices, nil, nil, nil)
+	if report.TotalMonthlyKRW != 1021000 || len(report.ByNamespace) != 1 || report.ByNamespace[0].GPUUnits != 2 || report.ByNamespace[0].StorageGB != 100 {
+		t.Fatalf("GPU and PVC costs must be included: %+v", report)
+	}
+	forecast := BuildCostForecast([]store.K8sInventoryItem{pod, pvc}, nil, prices)
+	if forecast.GPUCostMonthlyKRW != 1000000 || forecast.StorageCostMonthlyKRW != 10000 || forecast.BaselineMonthlyKRW != 1021000 {
+		t.Fatalf("forecast cost composition mismatch: %+v", forecast)
+	}
+}

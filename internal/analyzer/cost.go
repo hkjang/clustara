@@ -10,17 +10,21 @@ import (
 // CostPrices are the unit prices used to estimate workload cost from resource requests
 // (DW-08 / 비용 대시보드). Kubernetes has no native cost, so this is a request-based model.
 type CostPrices struct {
-	CPUCoreMonthlyKRW float64 `json:"cpu_core_monthly_krw"`
-	MemGBMonthlyKRW   float64 `json:"mem_gb_monthly_krw"`
+	CPUCoreMonthlyKRW   float64 `json:"cpu_core_monthly_krw"`
+	MemGBMonthlyKRW     float64 `json:"mem_gb_monthly_krw"`
+	StorageGBMonthlyKRW float64 `json:"storage_gb_monthly_krw"`
+	GPUUnitMonthlyKRW   float64 `json:"gpu_unit_monthly_krw"`
 }
 
 // DefaultCostPrices is a conservative starting point; operators override via config.
-var DefaultCostPrices = CostPrices{CPUCoreMonthlyKRW: 30000, MemGBMonthlyKRW: 4000}
+var DefaultCostPrices = CostPrices{CPUCoreMonthlyKRW: 30000, MemGBMonthlyKRW: 4000, StorageGBMonthlyKRW: 150, GPUUnitMonthlyKRW: 700000}
 
 type CostLine struct {
 	Key        string  `json:"key"`
 	CPUCores   float64 `json:"cpu_cores"`
 	MemGB      float64 `json:"mem_gb"`
+	StorageGB  float64 `json:"storage_gb"`
+	GPUUnits   float64 `json:"gpu_units"`
 	Pods       int     `json:"pods"`
 	MonthlyKRW float64 `json:"monthly_krw"`
 }
@@ -42,6 +46,8 @@ type CostForecast struct {
 	UsageAdjustedMonthlyKRW float64 `json:"usage_adjusted_monthly_krw"`
 	CPUCostMonthlyKRW       float64 `json:"cpu_cost_monthly_krw"`
 	MemoryCostMonthlyKRW    float64 `json:"memory_cost_monthly_krw"`
+	StorageCostMonthlyKRW   float64 `json:"storage_cost_monthly_krw"`
+	GPUCostMonthlyKRW       float64 `json:"gpu_cost_monthly_krw"`
 	MetricCoveragePct       float64 `json:"metric_coverage_pct"`
 	RequestCoveragePct      float64 `json:"request_coverage_pct"`
 	ConfidenceScore         int     `json:"confidence_score"`
@@ -55,9 +61,7 @@ type CostForecast struct {
 }
 
 func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetricSample, prices CostPrices) CostForecast {
-	if prices.CPUCoreMonthlyKRW == 0 && prices.MemGBMonthlyKRW == 0 {
-		prices = DefaultCostPrices
-	}
+	prices = normalizedCostPrices(prices)
 	latest := map[string]store.K8sMetricSample{}
 	for _, sample := range metrics { // store returns newest first
 		if sample.ResourceKind != "Pod" {
@@ -68,9 +72,16 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 			latest[key] = sample
 		}
 	}
-	forecast := CostForecast{HeadroomPct: 30, Method: "resource request baseline + latest usage with 30% reliability headroom"}
+	forecast := CostForecast{HeadroomPct: 30, Method: "CPU/Memory/GPU requests + PVC storage baseline; CPU/Memory latest usage with 30% reliability headroom"}
 	adjusted := 0.0
 	for _, item := range items {
+		if item.Kind == "PersistentVolumeClaim" {
+			storageGB := pvcStorageBytes(item.Spec) / float64(1<<30)
+			cost := storageGB * prices.StorageGBMonthlyKRW
+			forecast.StorageCostMonthlyKRW += cost
+			adjusted += cost
+			continue
+		}
 		if item.Kind != "Pod" {
 			continue
 		}
@@ -78,7 +89,8 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 		reqCPU := float64(podRequestCPU(item.Spec)) / 1000
 		reqMem := float64(podRequestMemBytes(item.Spec)) / float64(1<<30)
 		cpuCost, memCost := reqCPU*prices.CPUCoreMonthlyKRW, reqMem*prices.MemGBMonthlyKRW
-		requestCost := cpuCost + memCost
+		gpuCost := float64(podRequestGPU(item.Spec)) * prices.GPUUnitMonthlyKRW
+		requestCost := cpuCost + memCost + gpuCost
 		if requestCost <= 0 {
 			forecast.UncostedPods++
 			continue
@@ -86,18 +98,21 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 		forecast.CostedPods++
 		forecast.CPUCostMonthlyKRW += cpuCost
 		forecast.MemoryCostMonthlyKRW += memCost
+		forecast.GPUCostMonthlyKRW += gpuCost
 		key := item.ClusterID + "|" + item.Namespace + "|" + item.Name
 		if usage, ok := latest[key]; ok {
 			forecast.MetricCoveredPods++
-			adjusted += usage.CPUMillicores/1000*1.3*prices.CPUCoreMonthlyKRW + usage.MemoryBytes/float64(1<<30)*1.3*prices.MemGBMonthlyKRW
+			adjusted += usage.CPUMillicores/1000*1.3*prices.CPUCoreMonthlyKRW + usage.MemoryBytes/float64(1<<30)*1.3*prices.MemGBMonthlyKRW + gpuCost
 		} else {
 			adjusted += requestCost
 		}
 	}
-	forecast.BaselineMonthlyKRW = round2(forecast.CPUCostMonthlyKRW + forecast.MemoryCostMonthlyKRW)
+	forecast.BaselineMonthlyKRW = round2(forecast.CPUCostMonthlyKRW + forecast.MemoryCostMonthlyKRW + forecast.StorageCostMonthlyKRW + forecast.GPUCostMonthlyKRW)
 	forecast.UsageAdjustedMonthlyKRW = round2(adjusted)
 	forecast.CPUCostMonthlyKRW = round2(forecast.CPUCostMonthlyKRW)
 	forecast.MemoryCostMonthlyKRW = round2(forecast.MemoryCostMonthlyKRW)
+	forecast.StorageCostMonthlyKRW = round2(forecast.StorageCostMonthlyKRW)
+	forecast.GPUCostMonthlyKRW = round2(forecast.GPUCostMonthlyKRW)
 	if forecast.CostedPods > 0 {
 		forecast.MetricCoveragePct = round2(float64(forecast.MetricCoveredPods) / float64(forecast.CostedPods) * 100)
 	}
@@ -122,18 +137,16 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 //	nsTeam / nsCostCenter: "<clusterID>|<namespace>" -> value
 //	clusterGroup:          "<clusterID>"            -> group name
 func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsCostCenter, clusterGroup map[string]string) CostReport {
-	if prices.CPUCoreMonthlyKRW == 0 && prices.MemGBMonthlyKRW == 0 {
-		prices = DefaultCostPrices
-	}
+	prices = normalizedCostPrices(prices)
 	type agg struct {
-		cpu, mem, krw float64
-		pods          int
+		cpu, mem, storage, gpu, krw float64
+		pods                        int
 	}
 	ns := map[string]*agg{}
 	team := map[string]*agg{}
 	group := map[string]*agg{}
 	cc := map[string]*agg{}
-	add := func(m map[string]*agg, key string, cores, memGB, krw float64) {
+	add := func(m map[string]*agg, key string, cores, memGB, storageGB, gpu, krw float64, pods int) {
 		if key == "" {
 			key = "(미지정)"
 		}
@@ -144,32 +157,41 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 		}
 		a.cpu += cores
 		a.mem += memGB
+		a.storage += storageGB
+		a.gpu += gpu
 		a.krw += krw
-		a.pods++
+		a.pods += pods
 	}
 
 	total := 0.0
 	for _, it := range items {
-		if it.Kind != "Pod" {
+		cores, memGB, storageGB, gpu, pods := 0.0, 0.0, 0.0, 0.0, 0
+		switch it.Kind {
+		case "Pod":
+			cores = float64(podRequestCPU(it.Spec)) / 1000.0
+			memGB = float64(podRequestMemBytes(it.Spec)) / float64(1<<30)
+			gpu = float64(podRequestGPU(it.Spec))
+			pods = 1
+		case "PersistentVolumeClaim":
+			storageGB = pvcStorageBytes(it.Spec) / float64(1<<30)
+		default:
 			continue
 		}
-		cores := float64(podRequestCPU(it.Spec)) / 1000.0
-		memGB := float64(podRequestMemBytes(it.Spec)) / float64(1<<30)
-		krw := cores*prices.CPUCoreMonthlyKRW + memGB*prices.MemGBMonthlyKRW
+		krw := cores*prices.CPUCoreMonthlyKRW + memGB*prices.MemGBMonthlyKRW + storageGB*prices.StorageGBMonthlyKRW + gpu*prices.GPUUnitMonthlyKRW
 		if krw == 0 {
 			continue // no requests → not costed
 		}
 		total += krw
-		add(ns, it.Namespace, cores, memGB, krw)
-		add(team, nsTeam[it.ClusterID+"|"+it.Namespace], cores, memGB, krw)
-		add(group, clusterGroup[it.ClusterID], cores, memGB, krw)
-		add(cc, nsCostCenter[it.ClusterID+"|"+it.Namespace], cores, memGB, krw)
+		add(ns, it.Namespace, cores, memGB, storageGB, gpu, krw, pods)
+		add(team, nsTeam[it.ClusterID+"|"+it.Namespace], cores, memGB, storageGB, gpu, krw, pods)
+		add(group, clusterGroup[it.ClusterID], cores, memGB, storageGB, gpu, krw, pods)
+		add(cc, nsCostCenter[it.ClusterID+"|"+it.Namespace], cores, memGB, storageGB, gpu, krw, pods)
 	}
 
 	toLines := func(m map[string]*agg) []CostLine {
 		out := []CostLine{}
 		for k, a := range m {
-			out = append(out, CostLine{Key: k, CPUCores: round2(a.cpu), MemGB: round2(a.mem), Pods: a.pods, MonthlyKRW: round2(a.krw)})
+			out = append(out, CostLine{Key: k, CPUCores: round2(a.cpu), MemGB: round2(a.mem), StorageGB: round2(a.storage), GPUUnits: round2(a.gpu), Pods: a.pods, MonthlyKRW: round2(a.krw)})
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].MonthlyKRW > out[j].MonthlyKRW })
 		return out
@@ -183,6 +205,28 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 		ByCostCenter:    toLines(cc),
 		Prices:          prices,
 	}
+}
+
+func normalizedCostPrices(prices CostPrices) CostPrices {
+	if prices.CPUCoreMonthlyKRW <= 0 {
+		prices.CPUCoreMonthlyKRW = DefaultCostPrices.CPUCoreMonthlyKRW
+	}
+	if prices.MemGBMonthlyKRW <= 0 {
+		prices.MemGBMonthlyKRW = DefaultCostPrices.MemGBMonthlyKRW
+	}
+	if prices.StorageGBMonthlyKRW <= 0 {
+		prices.StorageGBMonthlyKRW = DefaultCostPrices.StorageGBMonthlyKRW
+	}
+	if prices.GPUUnitMonthlyKRW <= 0 {
+		prices.GPUUnitMonthlyKRW = DefaultCostPrices.GPUUnitMonthlyKRW
+	}
+	return prices
+}
+
+func pvcStorageBytes(spec map[string]any) float64 {
+	resources, _ := spec["resources"].(map[string]any)
+	requests, _ := resources["requests"].(map[string]any)
+	return float64(qtyMem(requests["storage"]))
 }
 
 func round2(f float64) float64 {

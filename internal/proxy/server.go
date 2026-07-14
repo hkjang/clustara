@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.147"
+const AppVersion = "v0.9.148"
 
 type Server struct {
 	cfg              config.Config
@@ -166,6 +166,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 	go server.k8sReportScheduler()
 	go server.k8sCollectScheduler()
 	go server.k8sNodeMetricScheduler()
+	go server.k8sCostSnapshotScheduler()
 	go server.serviceReconcileScheduler()
 
 	if cfg.Upstream.APIKey != "" {

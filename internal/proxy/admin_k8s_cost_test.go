@@ -1,12 +1,53 @@
 package proxy
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"clustara/internal/store"
 )
+
+func TestK8sCostSnapshotDue(t *testing.T) {
+	now := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC)
+	if !k8sCostSnapshotDue("", now, 24*time.Hour) {
+		t.Fatal("missing history must run immediately")
+	}
+	if k8sCostSnapshotDue(now.Add(-23*time.Hour).Format(time.RFC3339Nano), now, 24*time.Hour) {
+		t.Fatal("snapshot must not run before interval")
+	}
+	if !k8sCostSnapshotDue(now.Add(-24*time.Hour).Format(time.RFC3339Nano), now, 24*time.Hour) {
+		t.Fatal("snapshot must run when interval elapsed")
+	}
+}
+
+func TestRecordK8sCostSnapshotPersistsClusterScopedNamespaceTotals(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.UpsertK8sCluster(ctx, store.K8sCluster{ID: "cost-c1", Name: "cost"}); err != nil {
+		t.Fatal(err)
+	}
+	pod := store.K8sInventoryItem{ID: "cost-pod", ClusterID: "cost-c1", Namespace: "ml", Kind: "Pod", Name: "trainer", Spec: map[string]any{"containers": []any{map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": "1", "memory": "1Gi", "nvidia.com/gpu": "1"}}}}}}
+	pvc := store.K8sInventoryItem{ID: "cost-pvc", ClusterID: "cost-c1", Namespace: "ml", Kind: "PersistentVolumeClaim", Name: "models", Spec: map[string]any{"resources": map[string]any{"requests": map[string]any{"storage": "10Gi"}}}}
+	if err := db.UpsertK8sInventory(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertK8sInventory(ctx, pvc); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	recorded, err := s.recordK8sCostSnapshot(ctx, "cost-c1")
+	if err != nil || recorded != 1 {
+		t.Fatalf("recorded=%d err=%v", recorded, err)
+	}
+	snaps, err := db.ListK8sCostSnapshots(ctx, "cost-c1", "namespace", 10)
+	if err != nil || len(snaps) != 1 || snaps[0].Key != "ml" || snaps[0].MonthlyKRW <= 700000 {
+		t.Fatalf("unexpected snapshots: %+v err=%v", snaps, err)
+	}
+}
 
 func TestBuildK8sCostHistoryAggregatesDailyAndUsesMonthEnd(t *testing.T) {
 	snaps := []store.K8sCostSnapshot{
@@ -36,6 +77,7 @@ func TestK8sCostVisualizationUXContract(t *testing.T) {
 		`Namespace 비용 비중`, `Rightsizing 후 예상`, `추정 모델·신뢰도`,
 		`Metric Coverage`, `Request Coverage`, `k8sCostChartSVG`, `k8sCostSelectPeriod`,
 		`실제 시간별 청구액이 아닙니다`,
+		`자동 스냅샷`, `snapshot_interval_seconds`, `GPU 비용`, `Persistent Volume 비용`,
 	} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("cost dashboard is missing visualization contract %q", marker)

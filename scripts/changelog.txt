@@ -1,3 +1,6 @@
+v0.9.148:
+- **Automatic Cost Snapshots & GPU·Disk Total Cost Model (v0.9.148)**: K8s 비용 스냅샷을 수동 중심에서 기본 활성 24시간 백그라운드 자동화로 전환했습니다. 서버 시작 후 실행 여부를 확인하고 모든 등록 클러스터를 개별 순회해 Namespace별 추정 비용을 기록하며 동일 날짜는 upsert해 중복을 방지합니다. UI에서 6시간·12시간·매일·매주 주기, 활성 여부, 최근 성공·다음 실행·오류를 관리하며 수동 기록은 복구용으로 유지합니다. 비용 모델은 CPU·Memory request뿐 아니라 `nvidia.com/gpu` request와 PVC storage request를 포함하고 GPU당·Disk GB당 월 단가를 설정할 수 있습니다. GPU·Disk 비용은 Namespace·팀·클러스터 그룹·비용센터 집계와 스냅샷에 포함되며, CPU·Memory 실사용+30% headroom 시나리오와 공급량 기반 GPU·Disk 비용을 결합해 총괄 추정치를 제공합니다.
+
 v0.9.147:
 - **Kubernetes FinOps Visual Analytics & Confidence Forecast (v0.9.147)**: K8s 비용 화면을 운영형 시각화 대시보드로 개선해 현재 월 추정치의 24시간 누적 환산, 최근 30일 일별 스냅샷, 최근 12개월 월별 대표 추세와 Namespace 비용 비중 막대를 제공합니다. 전일 대비, 시간당 환산, Rightsizing 절감 후 예상 비용을 한 화면에서 비교하며 그래프별로 실제 청구액과 환산·예측치의 차이를 명시합니다. 추정 모델은 기존 resource request 기준선과 최신 CPU·Memory usage에 30% 안정성 headroom을 적용한 실사용 조정 시나리오를 분리하고 Metric coverage·Request coverage·미산정 Pod를 결합한 신뢰도 점수, CPU/Memory 비용 구성을 제공합니다. 일별 스냅샷은 합산하고 월별 추세는 각 월의 마지막 관측값을 사용합니다.
 
