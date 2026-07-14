@@ -12802,7 +12802,7 @@ const adminHTML = `<!doctype html>
       const rows = (scans || []).map(s =>
         '<tr><td><span class="status ' + securityDecisionClass(s.status) + '" style="font-size:10px">' + escapeHTML(s.status || '-') + '</span></td>' +
         '<td><strong>' + escapeHTML(s.scanner || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(s.source || '-') + ' · ' + escapeHTML(s.scanner_version || '-') + '</div></td>' +
-        '<td style="word-break:break-all">' + escapeHTML(s.target_ref || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(s.image_digest || '-') + '</div></td>' +
+        '<td style="word-break:break-all">' + escapeHTML(s.target_ref || '-') + '<div class="muted" style="font-size:11px">' + (String(s.image_digest||'').startsWith('unresolved:')?'<span class="status warn">digest 미확인</span> ':'')+escapeHTML(s.image_digest || '-') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + ago(s.finished_at || s.created_at) + '</td>' +
         '<td><a href="#/k8s-security-vulnerabilities?image_digest=' + encodeURIComponent(s.image_digest || '') + '">상세</a></td></tr>').join('');
       return rows || '<tr><td colspan="5" class="muted">스캔 실행 이력이 없습니다.</td></tr>';
@@ -12812,7 +12812,7 @@ const adminHTML = `<!doctype html>
         '<tr><td><span class="status ' + securitySeverityClass(v.severity) + '" style="font-size:10px">' + escapeHTML(v.severity || '-') + '</span></td>' +
         '<td><strong>' + escapeHTML(v.cve_id || '-') + '</strong><div class="muted" style="font-size:11px">' + escapeHTML(v.package_name || '-') + ' ' + escapeHTML(v.installed_version || '') + '</div></td>' +
         '<td>' + escapeHTML(v.fixed_version || '-') + '</td>' +
-        '<td style="word-break:break-all">' + escapeHTML(v.image || '-') + '<div class="muted" style="font-size:11px">' + escapeHTML(v.image_digest || '-') + '</div></td>' +
+        '<td style="word-break:break-all">' + escapeHTML(v.image || '-') + '<div class="muted" style="font-size:11px">' + (String(v.image_digest||'').startsWith('unresolved:')?'<span class="status warn">digest 미확인</span> ':'')+escapeHTML(v.image_digest || '-') + '</div></td>' +
         '<td>' + escapeHTML((v.namespace || '-') + '/' + (v.workload_kind || '-') + '/' + (v.workload_name || '-')) + '</td>' +
         '<td class="muted" style="font-size:11px">' + ago(v.last_seen_at) + '</td></tr>').join('');
       return rows || '<tr><td colspan="6" class="muted">취약점 finding이 없습니다.</td></tr>';
@@ -12849,13 +12849,22 @@ const adminHTML = `<!doctype html>
           raw_json: raw
         };
         const res = await api('/admin/k8s/security/scans/import', { method: 'POST', body: JSON.stringify(body) });
-        if (out) out.innerHTML = '<span class="status">imported ' + fmt(res.imported || 0) + '</span>';
-        showToast('ok', '취약점 스캔 import 완료', 'finding ' + fmt(res.imported || 0) + '건');
+        if (out) out.innerHTML = '<span class="status">imported ' + fmt(res.imported || 0) + '</span> <span class="status '+(res.digest_verified?'':'warn')+'">'+(res.digest_verified?'digest 확인':'digest 없음 · 대체 ID')+'</span>'+(res.digest_notice?'<div class="muted">'+escapeHTML(res.digest_notice)+'</div>':'');
+        showToast(res.digest_verified?'ok':'warn', '취약점 스캔 import 완료', 'finding ' + fmt(res.imported || 0) + '건 · '+(res.digest_verified?'digest 연결':'unresolved 식별자 저장'));
         await renderK8sSecurityVulnerabilities(new URLSearchParams(location.hash.split('?')[1] || ''));
       } catch (e) {
         if (out) out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>';
       }
     };
+    window.openTrivyIntegrationGuide = async () => {
+      try {
+        const d=await api('/admin/k8s/security/scans/trivy-integration'), templates=d.templates||{}, policy=d.digest_policy||{}; window.__trivyIntegrationTemplates=templates;
+        const code=(title,key)=>'<details '+(key==='cli'?'open':'')+' style="margin-top:10px"><summary><strong>'+escapeHTML(title)+'</strong></summary><pre style="white-space:pre-wrap;overflow:auto;max-height:300px">'+escapeHTML(templates[key]||'')+'</pre><button type="button" class="secondary" onclick="copyTrivyIntegrationTemplate(\''+key+'\')">복사</button></details>';
+        const security=(d.security||[]).map(x=>'<li>'+escapeHTML(x)+'</li>').join('');
+        openModal('Trivy 취약점 연동 가이드','<div class="card-body"><div class="banner"><strong>Digest 없이도 Import할 수 있습니다.</strong><br>'+escapeHTML(policy.note||'')+'<br><span class="muted">대체 식별자는 <code>'+escapeHTML(policy.fallback_prefix||'unresolved:')+'</code>로 표시되어 실제 digest와 구분됩니다.</span></div><div class="grid2" style="margin-top:12px"><div><h3>권장 연동 흐름</h3><ol><li>CI·승인된 runner·Trivy Operator에서 스캔</li><li>원본 JSON을 Import API로 전송</li><li>Clustara에서 CVE·워크로드 영향도 확인</li><li>가능하면 image@sha256 digest로 SBOM·Admission과 연결</li></ol></div><div><h3>Trivy Operator</h3><p>'+escapeHTML(((d.operator||{}).method)||'VulnerabilityReport JSON 전송')+'</p><p class="muted">'+escapeHTML(((d.operator||{}).recommended_interval)||'')+'</p><ul>'+security+'</ul></div></div>'+code('CLI / Shell','cli')+code('GitHub Actions','github_actions')+code('GitLab CI','gitlab_ci')+'</div>',null,{wide:true});
+      } catch(e) { showToast('error','Trivy 연동 가이드 조회 실패',e.message); }
+    };
+    window.copyTrivyIntegrationTemplate = async key => { const value=((window.__trivyIntegrationTemplates||{})[key]||''); try { await navigator.clipboard.writeText(value); showToast('ok','연동 예제 복사','Secret 값은 CI 보안 변수로 설정하세요.'); } catch(e) { showToast('error','복사 실패',e.message); } };
     window.k8sSecurityUploadSBOM = async () => {
       const out = document.getElementById('sec-sbom-out');
       try {
@@ -13288,12 +13297,12 @@ const adminHTML = `<!doctype html>
         card('취약점 목록', '<div class="card-body"><table><thead><tr><th>Severity</th><th>CVE/Package</th><th>Fixed</th><th>Image</th><th>Workload</th><th>Seen</th></tr></thead><tbody>' + securityVulnRows(images.vulnerabilities || []) + '</tbody></table></div>') +
         card('실행 워크로드 영향도', '<div class="card-body"><table><thead><tr><th>Workload</th><th>Digest</th><th>Critical</th><th>High</th><th>Fixable</th><th>CVE</th></tr></thead><tbody>' + securityWorkloadRows(workloads.workloads || []) + '</tbody></table></div>') +
         '<div class="grid2">' +
-          card('Trivy / Grype JSON Import', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
+          card('Trivy / Grype JSON Import', '<div class="card-body"><div class="banner" style="margin-bottom:10px"><strong>image digest는 선택사항입니다.</strong> 비워도 Import되며 이미지 참조 기반 <code>unresolved:</code> 식별자로 안전하게 분리 저장합니다. Admission·SBOM 정밀 연결에는 실제 digest를 권장합니다. <button type="button" class="secondary" onclick="openTrivyIntegrationGuide()">Trivy 연동 가이드</button></div><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
             '<input id="sec-vuln-cluster" value="' + escapeAttr(clusterId) + '" placeholder="cluster_id">' +
             '<select id="sec-vuln-scanner"><option value="trivy">trivy</option><option value="grype">grype</option></select>' +
             '<input id="sec-vuln-scanner-version" placeholder="scanner version">' +
             '<input id="sec-vuln-image" placeholder="image" value="registry.example.com/app:1.0.0">' +
-            '<input id="sec-vuln-digest" placeholder="sha256:..." value="' + escapeAttr(digest) + '">' +
+            '<input id="sec-vuln-digest" placeholder="image digest (선택) · sha256:..." value="' + escapeAttr(digest) + '">' +
             '<input id="sec-vuln-ns" placeholder="namespace">' +
             '<input id="sec-vuln-wkind" placeholder="workload kind" value="Deployment">' +
             '<input id="sec-vuln-wname" placeholder="workload name">' +
@@ -13360,8 +13369,8 @@ const adminHTML = `<!doctype html>
           '<input id="sec-scan-digest" placeholder="sha256:...">' +
           '<select id="sec-scan-scanner"><option value="trivy">trivy</option><option value="grype">grype</option></select>' +
           '<input id="sec-scan-policy" value="HIGH,CRITICAL" placeholder="severity policy"></div>' +
-          '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityCreateScan()">스캔 요청 생성</button> <span id="sec-scan-out" class="muted" style="font-size:12px"></span></div></div>') +
-        card('Scan Runs / Trivy Operator 수집 상태', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Trivy Operator VulnerabilityReport는 import API에서 source=trivy-operator 형태로 같은 scan run 원장에 적재합니다. 24시간 이상 갱신되지 않은 report는 stale로 운영하세요.</div>' +
+          '<div style="margin-top:6px"><button type="button" onclick="k8sSecurityCreateScan()">스캔 요청 생성</button> <button type="button" class="secondary" onclick="openTrivyIntegrationGuide()">Trivy 연동 가이드</button> <span id="sec-scan-out" class="muted" style="font-size:12px"></span></div></div>') +
+        card('Scan Runs / Trivy Operator 수집 상태', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Trivy Operator VulnerabilityReport는 import API에서 source=trivy-operator 형태로 같은 scan run 원장에 적재합니다. 24시간 이상 갱신되지 않은 report는 stale로 운영하세요. <button type="button" class="secondary" onclick="openTrivyIntegrationGuide()">업로드·연동 가이드</button></div>' +
           '<table><thead><tr><th>상태</th><th>Scanner</th><th>Target</th><th>완료</th><th></th></tr></thead><tbody>' + securityScanRows(scans.scans || []) + '</tbody></table></div>');
     }
 

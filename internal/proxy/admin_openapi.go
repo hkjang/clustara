@@ -505,6 +505,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/security/scans", []string{"get", "post"}, "k8s", "Create scan requests and list vulnerability scan runs", false},
 	{"/admin/k8s/security/scans/{id}", []string{"get"}, "k8s", "Get one scan run with linked vulnerabilities", false},
 	{"/admin/k8s/security/scans/import", []string{"post"}, "k8s", "Import wrapped or raw Trivy, Grype, or Trivy Operator JSON and normalize findings by image digest", false},
+	{"/admin/k8s/security/scans/trivy-integration", []string{"get"}, "k8s", "Get copy-ready Trivy CLI, GitHub Actions, GitLab CI, and Operator import integration guidance", false},
 	{"/admin/k8s/security/sboms", []string{"get", "post"}, "k8s", "Upload and list CycloneDX/SPDX SBOMs linked to image digest", false},
 	{"/admin/k8s/security/exceptions", []string{"get", "post"}, "k8s", "List and create expiring vulnerability or policy exceptions", false},
 	{"/admin/k8s/security/exceptions/{id}/approve", []string{"post"}, "k8s", "Approve a security exception", false},

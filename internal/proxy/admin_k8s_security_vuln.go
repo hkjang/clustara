@@ -225,12 +225,22 @@ func (s *Server) handleK8sSecurityScansImport(w http.ResponseWriter, r *http.Req
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "scan_parse_failed")
 		return
 	}
+	resolvedDigest, digestVerified, digestSource := securityResolveImportDigest(in, norm.ImageDigest, norm.TargetRef, raw)
+	in.ImageDigest = resolvedDigest
+	if norm.Summary == nil {
+		norm.Summary = map[string]any{}
+	}
+	norm.Summary["digest_verified"] = digestVerified
+	norm.Summary["digest_source"] = digestSource
+	if !digestVerified {
+		norm.Summary["digest_notice"] = "원본 결과에 digest가 없어 이미지/대상 참조 기반 unresolved 식별자로 저장했습니다. 배포 차단·SBOM 상관분석에는 실제 digest를 권장합니다."
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	run := store.K8sSecurityScanRun{
 		ID: newID("k8sscan"), ClusterID: in.ClusterID, Source: firstNonEmpty(in.Source, "import"),
 		Scanner: norm.Scanner, ScannerVersion: firstNonEmpty(in.ScannerVersion, norm.ScannerVersion),
 		TargetType: firstNonEmpty(norm.TargetType, "image"), TargetRef: firstNonEmpty(norm.TargetRef, in.Image),
-		ImageDigest: firstNonEmpty(in.ImageDigest, norm.ImageDigest), Status: firstNonEmpty(in.Status, "completed"),
+		ImageDigest: resolvedDigest, Status: firstNonEmpty(in.Status, "completed"),
 		StartedAt: now, FinishedAt: now, RawArtifactRef: "sha256:" + shortHash(string(raw)), Summary: norm.Summary,
 	}
 	if err := s.db.UpsertK8sSecurityScanRun(r.Context(), run); err != nil {
@@ -242,8 +252,66 @@ func (s *Server) handleK8sSecurityScansImport(w http.ResponseWriter, r *http.Req
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "security_vuln_save_failed")
 		return
 	}
-	s.auditAdmin(r, "k8s.security.scan.import", run.ID, auditJSON(map[string]any{"scanner": run.Scanner, "digest": run.ImageDigest, "findings": len(vulns)}))
-	writeJSON(w, http.StatusCreated, map[string]any{"scan": run, "imported": len(vulns), "summary": norm.Summary})
+	s.auditAdmin(r, "k8s.security.scan.import", run.ID, auditJSON(map[string]any{"scanner": run.Scanner, "digest": run.ImageDigest, "digest_verified": digestVerified, "digest_source": digestSource, "findings": len(vulns)}))
+	writeJSON(w, http.StatusCreated, map[string]any{"scan": run, "imported": len(vulns), "summary": norm.Summary, "digest_verified": digestVerified, "digest_source": digestSource, "digest_notice": norm.Summary["digest_notice"]})
+}
+
+func securityResolveImportDigest(in securityScanImportPayload, normalizedDigest, normalizedTargetRef string, raw []byte) (string, bool, string) {
+	if digest := strings.TrimSpace(firstNonEmpty(in.ImageDigest, normalizedDigest)); digest != "" {
+		return digest, true, "scanner_or_request"
+	}
+	identity := strings.TrimSpace(firstNonEmpty(in.Image, in.TargetRef, normalizedTargetRef))
+	if identity != "" {
+		return "unresolved:ref:" + shortHash(identity), false, "image_reference"
+	}
+	return "unresolved:artifact:" + shortHash(string(raw)), false, "artifact_hash"
+}
+
+// GET /admin/k8s/security/scans/trivy-integration provides copy-ready integration templates.
+// Clustara remains an import target; CI, Trivy Operator, or an approved runner executes Trivy.
+func (s *Server) handleK8sSecurityTrivyIntegration(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	importPath := "/admin/k8s/security/scans/import"
+	curlTemplate := `trivy image --format json --output trivy.json "$IMAGE"
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $CLUSTARA_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$CLUSTARA_URL` + importPath + `?cluster_id=$CLUSTER_ID&scanner=trivy&image=$IMAGE" \
+  --data-binary @trivy.json`
+	githubActions := `- name: Scan image with Trivy
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: ${{ env.IMAGE }}
+    format: json
+    output: trivy.json
+- name: Import findings to Clustara
+  env:
+    CLUSTARA_URL: ${{ secrets.CLUSTARA_URL }}
+    CLUSTARA_TOKEN: ${{ secrets.CLUSTARA_TOKEN }}
+  run: |
+    curl --fail-with-body -X POST -H "Authorization: Bearer $CLUSTARA_TOKEN" \
+      -H "Content-Type: application/json" \
+      "$CLUSTARA_URL` + importPath + `?scanner=trivy&image=${IMAGE}" --data-binary @trivy.json`
+	gitlabCI := `trivy_scan:
+  image: aquasec/trivy:latest
+  script:
+    - trivy image --format json --output trivy.json "$IMAGE"
+    - apk add --no-cache curl
+    - curl --fail-with-body -X POST -H "Authorization: Bearer $CLUSTARA_TOKEN" -H "Content-Type: application/json" "$CLUSTARA_URL` + importPath + `?scanner=trivy&image=$IMAGE" --data-binary @trivy.json`
+	writeJSON(w, http.StatusOK, map[string]any{
+		"import_path":   importPath,
+		"digest_policy": map[string]any{"required": false, "preferred": true, "fallback_prefix": "unresolved:", "note": "digest가 없으면 image/target ref 기반 식별자로 import하지만 admission·SBOM 상관분석에는 실제 digest가 가장 정확합니다."},
+		"templates":     map[string]string{"cli": curlTemplate, "github_actions": githubActions, "gitlab_ci": gitlabCI},
+		"operator":      map[string]any{"source": "trivy-operator", "accepted_kind": "VulnerabilityReport", "method": "VulnerabilityReport JSON을 import endpoint에 그대로 POST", "recommended_interval": "수집 controller 또는 CronJob에서 report resourceVersion 변경 시 전송"},
+		"security":      []string{"토큰은 CI Secret에 저장하고 로그에 출력하지 않습니다.", "--fail-with-body로 import 오류를 파이프라인에서 감지합니다.", "운영 배포 판정에는 가능한 image@sha256 digest를 전달합니다."},
+	})
 }
 
 func securityApplyImportRequestDefaults(in *securityScanImportPayload, r *http.Request) {

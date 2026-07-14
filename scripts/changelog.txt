@@ -1,3 +1,6 @@
+v0.9.145:
+- **Digest-Optional Trivy Import & Integration Kit (v0.9.145)**: Trivy·Grype·Trivy Operator 취약점 결과에 image digest가 없어도 Import할 수 있도록 개선했습니다. digest가 없으면 이미지·대상 참조 기반 `unresolved:ref:*`, 참조도 없으면 원본 결과 기반 `unresolved:artifact:*` 식별자를 생성해 빈 digest 스캔끼리 덮어쓰는 문제를 방지하고, 응답·Scan Run·취약점 화면에 `digest_verified=false`, 식별 근거와 `digest 미확인`을 표시합니다. 실제 digest 기반 Admission·SBOM 상관분석과는 명확히 구분합니다. 신규 Trivy 연동 가이드 API와 업로드·지속 스캔 화면 모달에서 CLI, GitHub Actions, GitLab CI, Trivy Operator 예제를 제공하고 복사할 수 있습니다.
+
 v0.9.144:
 - **Node Trend Business Hours Filter (v0.9.144)**: 리소스 관리의 노드 추세 확대 모달에 `업무시간 외 제외` 토글을 추가했습니다. 브라우저 로컬 타임존 기준 평일 09:00 이상 18:00 미만의 CPU·Memory·GPU 표본만 그래프에 표시하고, 기간 버튼을 바꿔도 필터 상태를 유지합니다. 필터 후/전체 표본 수, 적용 타임존과 업무시간 표본 부족 안내를 제공하며 서버의 원본 시계열과 보존 설정은 변경하지 않습니다.
 

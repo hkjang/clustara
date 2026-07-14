@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.144"
+const AppVersion = "v0.9.145"
 
 type Server struct {
 	cfg              config.Config
@@ -356,6 +356,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/security/vuln/images", s.handleK8sSecurityVulnImages)
 	mux.HandleFunc("/admin/k8s/security/vuln/workloads", s.handleK8sSecurityVulnWorkloads)
 	mux.HandleFunc("/admin/k8s/security/scans/import", s.handleK8sSecurityScansImport)
+	mux.HandleFunc("/admin/k8s/security/scans/trivy-integration", s.handleK8sSecurityTrivyIntegration)
 	mux.HandleFunc("/admin/k8s/security/scans/", s.handleK8sSecurityScanByID)
 	mux.HandleFunc("/admin/k8s/security/scans", s.handleK8sSecurityScans)
 	mux.HandleFunc("/admin/k8s/security/sboms", s.handleK8sSecuritySBOMs)

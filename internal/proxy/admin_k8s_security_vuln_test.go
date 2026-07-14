@@ -278,6 +278,69 @@ func TestK8sSecurityImportsTrivyOperatorVulnerabilityReport(t *testing.T) {
 	}
 }
 
+func TestK8sSecurityImportsTrivyWithoutDigestAndProvidesIntegrationGuide(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 8, filepath.Join(t.TempDir(), "k8s-trivy-digestless.ndjson"))
+	logger.Start()
+	defer logger.Stop(t.Context())
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.Routes())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/admin/k8s/security/scans/import", "", map[string]any{
+		"cluster_id": "c-no-digest", "scanner": "trivy", "image": "registry.example.com/api:latest",
+		"raw_json": map[string]any{"ArtifactName": "registry.example.com/api:latest", "Results": []any{map[string]any{
+			"Target": "alpine", "Vulnerabilities": []any{map[string]any{"VulnerabilityID": "CVE-2026-0999", "PkgName": "ssl", "InstalledVersion": "1", "Severity": "HIGH"}},
+		}}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("digestless import status=%d", resp.StatusCode)
+	}
+	var imported struct {
+		Scan           store.K8sSecurityScanRun `json:"scan"`
+		Imported       int                      `json:"imported"`
+		DigestVerified bool                     `json:"digest_verified"`
+		DigestSource   string                   `json:"digest_source"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&imported); err != nil {
+		t.Fatal(err)
+	}
+	if imported.Imported != 1 || imported.DigestVerified || imported.DigestSource != "image_reference" || !strings.HasPrefix(imported.Scan.ImageDigest, "unresolved:ref:") {
+		t.Fatalf("unexpected digestless import: %+v", imported)
+	}
+
+	guideResp, err := http.Get(srv.URL + "/admin/k8s/security/scans/trivy-integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guideResp.Body.Close()
+	var guide struct {
+		Templates    map[string]string `json:"templates"`
+		DigestPolicy struct {
+			Required bool `json:"required"`
+		} `json:"digest_policy"`
+	}
+	if err := json.NewDecoder(guideResp.Body).Decode(&guide); err != nil {
+		t.Fatal(err)
+	}
+	if guideResp.StatusCode != http.StatusOK || guide.DigestPolicy.Required || !strings.Contains(guide.Templates["cli"], "trivy image") || !strings.Contains(guide.Templates["github_actions"], "trivy-action") {
+		t.Fatalf("unexpected integration guide: %+v", guide)
+	}
+}
+
+func TestAdminUIExposesTrivyIntegrationGuideAtImportSurfaces(t *testing.T) {
+	for _, needle := range []string{"openTrivyIntegrationGuide", "Trivy 연동 가이드", "digest는 선택사항입니다", "/admin/k8s/security/scans/trivy-integration", "digest 미확인"} {
+		if !strings.Contains(adminHTML, needle) {
+			t.Fatalf("admin UI missing Trivy integration UX %q", needle)
+		}
+	}
+}
+
 func TestK8sSecurityImportsRawScannerArtifactBody(t *testing.T) {
 	db := openTestStore(t)
 	defer db.Close()

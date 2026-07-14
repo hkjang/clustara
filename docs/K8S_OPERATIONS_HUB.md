@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.144** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.145** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.144)
+## 기능 상태 (v0.9.145)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -299,6 +299,7 @@
 | GET | `/admin/k8s/security/vuln/workloads` | 실행 워크로드 기준 취약 이미지 영향도 집계 |
 | GET/POST | `/admin/k8s/security/scans` | 외부 scanner/agent runner가 처리할 스캔 작업 등록 및 이력 조회 |
 | POST | `/admin/k8s/security/scans/import` | 래퍼 JSON 또는 원본 Trivy/Grype/Trivy Operator JSON 결과를 표준 취약점 원장으로 import |
+| GET | `/admin/k8s/security/scans/trivy-integration` | Trivy CLI·GitHub Actions·GitLab CI·Trivy Operator 연동 템플릿과 digest 선택 정책 조회 |
 | GET/POST | `/admin/k8s/security/sboms` | 래퍼 JSON 또는 원본 CycloneDX/SPDX SBOM 업로드 및 digest별 SBOM 조회 |
 | GET/POST | `/admin/k8s/security/exceptions` | 취약점·이미지·워크로드 예외 요청 생성 및 조회(만료일 필수) |
 | POST | `/admin/k8s/security/exceptions/{id}/approve|revoke` | 보안 예외 승인 또는 폐기 |
