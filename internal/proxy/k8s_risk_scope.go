@@ -14,22 +14,52 @@ type k8sOwnerRef struct {
 
 func k8sPodOwnerIndex(items []store.K8sInventoryItem) map[string]k8sOwnerRef {
 	out := map[string]k8sOwnerRef{}
+	jobsByNamespace := map[string][]store.K8sInventoryItem{}
 	for _, item := range items {
-		if item.Kind != "Pod" {
+		if strings.EqualFold(item.Kind, "Job") {
+			key := item.ClusterID + "|" + item.Namespace
+			jobsByNamespace[key] = append(jobsByNamespace[key], item)
+		}
+	}
+	for _, item := range items {
+		if !strings.EqualFold(item.Kind, "Pod") {
 			continue
 		}
 		kind, name := podOwner(item.Spec)
+		// Some collectors or already-completed/TTL-cleaned Jobs leave a Pod without a usable
+		// ownerReference. Kubernetes' standard job-name/controller-uid labels and generated
+		// Pod-name prefix still let us keep finite attempts out of service RestartStorm rules.
+		if !strings.EqualFold(kind, "Job") {
+			jobName := firstNonEmpty(item.Labels["batch.kubernetes.io/job-name"], item.Labels["job-name"])
+			controllerUID := firstNonEmpty(item.Labels["batch.kubernetes.io/controller-uid"], item.Labels["controller-uid"])
+			if jobName != "" {
+				// The standard label survives even when ttlSecondsAfterFinished has already
+				// removed the Job object from the latest inventory.
+				kind, name = "Job", jobName
+			} else {
+				for _, job := range jobsByNamespace[item.ClusterID+"|"+item.Namespace] {
+					if (controllerUID != "" && controllerUID == job.UID) ||
+						(job.Name != "" && strings.HasPrefix(item.Name, job.Name+"-")) {
+						kind, name = "Job", job.Name
+						break
+					}
+				}
+			}
+		}
 		out[item.ClusterID+"|"+item.Namespace+"|"+item.Name] = k8sOwnerRef{Kind: kind, Name: name}
 	}
 	return out
 }
 
-func isBatchPodItem(item store.K8sInventoryItem) bool {
-	if item.Kind != "Pod" {
+func isBatchWorkloadItem(item store.K8sInventoryItem, owners map[string]k8sOwnerRef) bool {
+	if strings.EqualFold(item.Kind, "Job") || strings.EqualFold(item.Kind, "CronJob") {
+		return true
+	}
+	if !strings.EqualFold(item.Kind, "Pod") {
 		return false
 	}
-	kind, _ := podOwner(item.Spec)
-	return strings.EqualFold(kind, "Job") || strings.EqualFold(kind, "CronJob")
+	owner := owners[item.ClusterID+"|"+item.Namespace+"|"+item.Name]
+	return strings.EqualFold(owner.Kind, "Job") || strings.EqualFold(owner.Kind, "CronJob")
 }
 
 // suppressBatchPodRisk keeps finite batch attempts out of generic service-Pod alarms.
@@ -82,6 +112,16 @@ func filterSuppressedIncidents(incidents []store.K8sIncident, items []store.K8sI
 			owner := owners[incident.ClusterID+"|"+incident.Namespace+"|"+incident.Name]
 			batchStorm = strings.EqualFold(owner.Kind, "Job") || strings.EqualFold(owner.Kind, "CronJob")
 		}
+		if strings.EqualFold(incident.Condition, "RestartStorm") && !batchStorm {
+			for jobKey := range jobs {
+				parts := strings.SplitN(jobKey, "|", 3)
+				if len(parts) == 3 && incident.ClusterID == parts[0] && incident.Namespace == parts[1] &&
+					(incident.Name == parts[2] || strings.HasPrefix(incident.Name, parts[2]+"-")) {
+					batchStorm = true
+					break
+				}
+			}
+		}
 		if batchStorm {
 			suppressed++
 			continue
@@ -89,6 +129,11 @@ func filterSuppressedIncidents(incidents []store.K8sIncident, items []store.K8sI
 		out = append(out, incident)
 	}
 	return out, suppressed
+}
+
+func shouldSuppressIncident(incident store.K8sIncident, items []store.K8sInventoryItem) bool {
+	filtered, _ := filterSuppressedIncidents([]store.K8sIncident{incident}, items)
+	return len(filtered) == 0
 }
 
 func isK8sSystemNamespace(namespace string) bool {
@@ -99,7 +144,7 @@ func isK8sSystemNamespace(namespace string) bool {
 	if ns == "kube-system" || ns == "kube-public" || ns == "kube-node-lease" {
 		return true
 	}
-	for _, prefix := range []string{"openshift-", "cattle-system", "istio-system", "linkerd", "cert-manager", "argocd", "flux-system"} {
+	for _, prefix := range []string{"openshift-", "cattle-system", "istio-system", "linkerd", "cert-manager", "argocd", "flux-system", "gpu-operator", "nvidia-gpu-operator", "tigera-operator", "monitoring"} {
 		if ns == prefix || strings.HasPrefix(ns, prefix) {
 			return true
 		}

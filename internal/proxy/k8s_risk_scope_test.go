@@ -27,11 +27,37 @@ func TestK8sRiskScopeDefaultsToApplicationAndCanSelectSystem(t *testing.T) {
 	if !k8sRiskScopeMatches("kube-system", "system") || !k8sRiskScopeMatches("kube-system", "all") {
 		t.Fatal("system resources must remain explicitly discoverable")
 	}
+	if k8sRiskScopeMatches("gpu-operator", "application") || !k8sRiskScopeMatches("gpu-operator", "system") {
+		t.Fatal("GPU operator resources must be classified as platform-managed")
+	}
 	if !k8sRiskScopeMatches("payments", "application") || k8sRiskScopeMatches("payments", "system") {
 		t.Fatal("application namespace scope mismatch")
 	}
 	if !k8sRiskScopeMatches("", "application") {
 		t.Fatal("cluster-scoped Node/control-plane risks must remain visible")
+	}
+}
+
+func TestBatchPodOwnerInferenceUsesJobLabelsAndNamePrefix(t *testing.T) {
+	items := []store.K8sInventoryItem{
+		{ClusterID: "c1", Namespace: "gpu-operator", Kind: "Job", Name: "nvidia-validator", UID: "job-uid"},
+		{ClusterID: "c1", Namespace: "gpu-operator", Kind: "Pod", Name: "nvidia-validator-abcde", Labels: map[string]string{"batch.kubernetes.io/controller-uid": "job-uid"}},
+	}
+	owners := k8sPodOwnerIndex(items)
+	owner := owners["c1|gpu-operator|nvidia-validator-abcde"]
+	if owner.Kind != "Job" || owner.Name != "nvidia-validator" {
+		t.Fatalf("batch owner should be inferred from standard labels: %+v", owner)
+	}
+	if !isBatchWorkloadItem(items[1], owners) {
+		t.Fatal("inferred Job Pod must be excluded from generic workload risk")
+	}
+}
+
+func TestBatchPodOwnerInferenceSurvivesTTLDeletedJob(t *testing.T) {
+	items := []store.K8sInventoryItem{{ClusterID: "c1", Namespace: "kube-system", Kind: "Pod", Name: "upgrade-check-abcde", Labels: map[string]string{"batch.kubernetes.io/job-name": "upgrade-check"}}}
+	owner := k8sPodOwnerIndex(items)["c1|kube-system|upgrade-check-abcde"]
+	if owner.Kind != "Job" || owner.Name != "upgrade-check" {
+		t.Fatalf("standard Job label must survive missing/TTL-deleted Job inventory: %+v", owner)
 	}
 }
 

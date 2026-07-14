@@ -79,7 +79,7 @@ func (s *Server) handleK8sHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, it := range items {
-		if !k8sRiskScopeMatches(it.Namespace, riskScope) || isBatchPodItem(it) {
+		if !k8sRiskScopeMatches(it.Namespace, riskScope) || isBatchWorkloadItem(it, ownerByPod) {
 			continue
 		}
 		if it.RiskLevel == "high" || it.RiskLevel == "critical" {

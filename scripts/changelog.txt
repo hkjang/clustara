@@ -1,3 +1,6 @@
+v0.9.153:
+- **Pod Evidence Search & Batch/System RestartStorm Hardening (v0.9.153)**: Pod 상세에 안전한 코드·설정 인사이트 검색을 추가했습니다. 운영자는 허용된 애플리케이션 경로와 컨테이너, 고정 검색어, 사유를 선택하며 서버가 고정된 `find`/`grep` 프로그램에 값을 positional argument로 전달해 shell injection을 차단합니다. 파일 크기·결과 수·응답 크기·20초 timeout을 제한하고 `/proc`, `/sys`, `/dev`, Secret mount를 구조적으로 제외하며, 결과는 Secret 마스킹 후 설정·구현·의존성·coverage 인사이트로 분류합니다. 전체 소스 원문은 저장하거나 LLM으로 전송하지 않고 검색어 hash 중심 감사·Pod access 기록만 남깁니다. 함께 Job Pod ownerReference가 누락되거나 TTL로 Job이 먼저 삭제된 경우에도 표준 job-name/controller-uid 라벨과 이름 prefix로 배치 관계를 추론해 일반 RestartStorm과 위험 점수에서 제외했습니다. 장애 워룸에는 애플리케이션·K8s/플랫폼·전체 범위 필터를 추가하고 kube-system, gpu-operator, nvidia-gpu-operator 등을 플랫폼 범위로 분류해 기본 장애 목록의 운영 노이즈를 줄였습니다.
+
 v0.9.152:
 - **Secure One-URL Agent Enrollment & Live Runtime Control (v0.9.152)**: Clustara 서버와 Collector Agent가 별도 이미지가 아니라 동일 릴리즈 이미지의 `/app/clustara`·`/app/clustara-agent` 실행 명령을 공유한다는 배포 모델을 UI와 가이드에 명확히 표시했습니다. Collector 화면에서 등록 클러스터를 선택하고 Agent Pod가 접근할 Clustara Ingress URL만 입력하면 현재 버전 이미지·클러스터 ID·read-only RBAC·클러스터 전용 수집 토큰이 포함된 설치 YAML을 자동 생성하고 복사·다운로드할 수 있습니다. 관리자 토큰을 Agent Secret에 배포하지 않으며, HMAC 서명 토큰은 대상 클러스터와 만료 시각에 바인딩됩니다. 수집 경로를 `/ingest/k8s/agent/events`로 분리하고 기존 경로는 호환 유지했습니다. 클러스터별 batch·heartbeat·최대 batch 크기를 중앙 런타임 설정으로 저장하고 Agent가 heartbeat 응답에서 받아 재시작 없이 적용하도록 했으며 OpenAPI, 샘플 Manifest, 운영 문서와 회귀 테스트를 함께 갱신했습니다.
 

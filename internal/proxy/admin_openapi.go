@@ -564,6 +564,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/pods/{namespace}/{pod}/logs", []string{"get"}, "k8s", "Read masked Pod logs with container, previous, tail, since, and search filters", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/presets", []string{"get"}, "k8s", "List saved log search presets for common runtime stacks and error patterns", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/masking-report", []string{"post"}, "k8s", "Detect sensitive log patterns and preview masking before/after samples", false},
+	{"/admin/k8s/pods/{namespace}/{pod}/evidence-search", []string{"post"}, "k8s", "Safely search allow-listed Pod source/config paths with redaction and structured insights", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/snapshot", []string{"post"}, "k8s", "Pin a masked Pod log snapshot for incident evidence", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/snapshots", []string{"get"}, "k8s", "List pinned masked Pod log snapshots", false},
 	{"/admin/k8s/pods/{namespace}/{pod}/logs/merge", []string{"get"}, "k8s", "Merge masked logs from sibling Pods under the same owner/label workload", false},

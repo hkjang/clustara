@@ -262,6 +262,10 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodActionSafety(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "evidence-search" {
+		s.handleK8sPodEvidenceSearch(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "runbook" {
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")

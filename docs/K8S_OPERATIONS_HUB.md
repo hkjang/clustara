@@ -1,8 +1,20 @@
 # K8s Operations Hub
 
-> **버전: v0.9.152** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.153** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.152)
+## 기능 상태 (v0.9.153)
+
+### Pod Evidence Search
+
+Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않고 `/app`, `/workspace`,
+`/opt/app`, `/srv`, `/usr/src/app` 중 선택한 경로에서 고정 문자열만 검색합니다. 2MiB 이하
+파일, 최대 200결과, 20초 제한을 적용하고 `/proc`, `/sys`, `/dev`, ServiceAccount Secret
+경로는 검색 범위에 포함하지 않습니다. 결과는 Secret 패턴을 마스킹한 뒤 설정·소스·의존성
+근거와 후속 점검 인사이트로 구조화하며, 전체 파일 원문은 저장하거나 LLM에 전달하지 않습니다.
+
+컨테이너에는 `sh`, `find`, `grep`, `head`가 있어야 합니다. distroless 이미지처럼 진단 도구가
+없는 경우 실행 이미지를 변경하지 말고 승인형 Debug Container 또는 연결된 Git/SBOM 분석을
+사용하는 것을 권장합니다. 모든 검색은 검색어 원문 대신 hash와 경로·사유·결과 수를 감사 기록합니다.
 
 | 기능 | 상태 |
 | --- | --- |

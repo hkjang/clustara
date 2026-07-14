@@ -21,6 +21,10 @@ func (s *Server) handleK8sIncidents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
+		riskScope := strings.ToLower(strings.TrimSpace(q.Get("risk_scope")))
+		if riskScope != "all" && riskScope != "system" {
+			riskScope = "application"
+		}
 		status := strings.TrimSpace(q.Get("status"))
 		if status == "" {
 			status = "open"
@@ -39,7 +43,13 @@ func (s *Server) handleK8sIncidents(w http.ResponseWriter, r *http.Request) {
 			items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: q.Get("cluster_id"), Limit: 4000})
 			incs, suppressed = filterSuppressedIncidents(incs, items)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"incidents": incs, "count": len(incs), "suppressed_noise": suppressed, "status_filter": firstNonEmpty(status, "all")})
+		scoped := incs[:0]
+		for _, incident := range incs {
+			if k8sRiskScopeMatches(incident.Namespace, riskScope) {
+				scoped = append(scoped, incident)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"incidents": scoped, "count": len(scoped), "suppressed_noise": suppressed, "status_filter": firstNonEmpty(status, "all"), "risk_scope": riskScope})
 	case http.MethodPost:
 		s.scanK8sIncidents(w, r)
 	default:
@@ -83,6 +93,10 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 			continue
 		}
 		pv := podView(it, events, false)
+		owner := ownerByPod[it.ClusterID+"|"+it.Namespace+"|"+it.Name]
+		if strings.EqualFold(owner.Kind, "Job") || strings.EqualFold(owner.Kind, "CronJob") {
+			continue
+		}
 		stormPods = append(stormPods, analyzer.RestartStormPod{
 			Namespace: pv.Namespace, Name: pv.Name, OwnerKind: pv.OwnerKind, OwnerName: pv.OwnerName,
 			RestartCount: pv.RestartCount, RecentRestartCount: pv.RecentRestartCount, RestartRecencyKnown: true,
@@ -115,7 +129,7 @@ func (s *Server) scanK8sIncidentsForCluster(ctx context.Context, clusterID strin
 	// finite Job attempts. Resolve those now that batch outcomes are owned by Job/CronJob rules.
 	if existing, listErr := s.db.ListK8sIncidents(ctx, store.K8sIncidentFilter{ClusterID: clusterID, Status: "open", Limit: 500}); listErr == nil {
 		for _, incident := range existing {
-			if incident.Condition == "RestartStorm" && (strings.EqualFold(incident.Kind, "Job") || strings.EqualFold(incident.Kind, "CronJob")) {
+			if incident.Condition == "RestartStorm" && shouldSuppressIncident(incident, items) {
 				_ = s.db.ResolveK8sIncident(ctx, incident.ID)
 			}
 		}
