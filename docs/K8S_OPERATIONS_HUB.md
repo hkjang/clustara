@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.141** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.142** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.141)
+## 기능 상태 (v0.9.142)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -18,6 +18,7 @@
 | Service Platform Subnavigation UX — 9개 업무 영역 아이콘·설명·건수, 현재 위치·접근성, 반응형 scroll-snap 탐색 | ✅ (v0.9.133) |
 | Service Subnavigation Controls — overflow 전용 이전·다음 버튼, 경계 상태, 좌우/Home/End 키보드 탐색 | ✅ (v0.9.134) |
 | Service Operations Home — Ready 비율·유형별 정상률·우선 조치 큐·worker 상태와 role-aware 액션 | ✅ (v0.9.135) |
+| AI Platform Agent v1 — 자연어 서비스 요청을 카탈로그·프로파일·멀티 리소스 계획으로 변환하고 기존 ServiceInstance·Application Stack 검증/승인 흐름으로 안전하게 인계 | ✅ |
 | 클러스터 등록(kubeconfig/token AES-GCM 암호화) · 연결 테스트 · 라이브 수집(client-go) | ✅ |
 | 인벤토리(spec+status)·이벤트·메트릭 적재, 리소스 리비전·Diff·타임라인·Manifest 마스킹 | ✅ |
 | RCA 01~10 (probe·DNS·NodePressure·Config 변경·배포 후 오류·latency) | ✅ |
@@ -280,6 +281,7 @@
 | POST | `/admin/k8s/manifest-changes/{id}/approve`, `/reject`, `/apply`, `/verify`, `/rollback` | 승인/반려, 적용 직전 drift guard 통과 후 Server-Side Apply 실행, burst 수집 후 사후 검증, 이전 YAML 기반 롤백 요청 생성. 생성 요청은 대상이 이미 존재하면 적용을 차단하고, 의도한 덮어쓰기는 기존 변경 요청으로 재생성해야 함. 변경 요청의 의도한 덮어쓰기는 `apply` body에 `force_drift=true`와 `note`를 남김 |
 | GET | `/admin/k8s/manifest-changes/{id}/evidence`, `/git-patch` | 변경/생성 증적 Markdown bundle과 Git PR용 pseudo patch export |
 | POST | `/admin/agent/manifest-drafts` | Ops Agent 기반 YAML 생성/변경 초안 작성과 Manifest Change 원장 연결. `create_request=true`일 때만 draft 요청을 저장하며, 검증·승인·적용은 수행하지 않음 |
+| POST | `/admin/k8s/services/agent-plan` | AI Platform Agent 자연어 서비스 계획. 지원 카탈로그·프로파일·멀티 리소스 manifest·정책 blocker·상태 단계를 반환하며 DB 저장이나 Kubernetes 적용은 수행하지 않음 |
 | GET | `/admin/k8s/resource-graph` | 인벤토리 selector/backend/volume/node/HPA 관계 기반 리소스 그래프·blast radius (`cluster_id`,`kind`,`namespace`,`name`,`radius`) |
 | GET | `/admin/k8s/security` | Pod Security 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백 포스처 |
 | GET | `/admin/k8s/capacity` | HPA 현황·확장한계, 과소/과다 할당, 노드 bin-packing, GPU, 노드 용량 예측(SCALE-05) |

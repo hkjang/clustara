@@ -2,6 +2,16 @@
 
 Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중심 서비스 인스턴스로 관리하는 상위 추상화 계층입니다. 실제 배포 실행기나 승인 엔진을 새로 만들지 않고 기존 Application Stack, Stack Apply, Action Center, 보안 정책, Resource Graph를 재사용합니다.
 
+## AI Platform Agent
+
+서비스 홈의 **AI Platform Agent**는 “small Redis 캐시를 만들어줘” 같은 자연어 요청을 지원 카탈로그·프로파일·환경 설정으로 해석하고 생성 예정 리소스, 정책 분석, blocker, 운영 주의사항, 리소스 기준과 전체 상태 단계를 보여줍니다. 계획 단계에서는 DB나 클러스터를 변경하지 않으며, 운영자가 명시적으로 **서비스·Stack 초안 등록**을 선택해야 기존 ServiceInstance와 Application Stack 원장에 저장됩니다. 이후 실제 배포는 Stack 검증·승인·Apply·관찰 흐름에서만 진행됩니다.
+
+초안 등록 API는 계획 결과를 그대로 신뢰하지 않고 렌더링된 Manifest를 현재 정책으로 다시 검사합니다. 계획 이후 정책이 변경되었거나 Deny 규칙이 추가된 경우 저장을 차단하며, 허용된 경우에도 `allow` 또는 `approval_required` 결정과 승인 사유를 응답·서비스 화면에 표시합니다. 따라서 자연어 계획, 초안 저장, 실제 Apply 사이의 각 경계에서 권한과 정책이 다시 적용됩니다.
+
+등록 이후 서비스 상세의 **AI Platform Agent 수명주기**는 별도 추정 상태가 아니라 ServiceInstance 상태, 저장된 정책 결정, Application Stack 상태와 Apply 이력, 최신 Health 증적을 결합합니다. 요청→계획→초안→검증→승인→적용→관찰→완료 단계를 표시하고, 승인 대기·부분 적용·실패·관찰 중 상태에 맞는 다음 운영 조치를 안내합니다.
+
+초기 지원 카탈로그는 PostgreSQL, Redis, Spring Boot, Tomcat, JupyterLab, JupyterHub입니다. 지원하지 않는 Kafka·Ollama 같은 요청은 임의 YAML로 대체하지 않고 `blocked`로 반환하여 템플릿 관리에서 카탈로그를 먼저 등록하도록 안내합니다. 운영 환경은 digest가 고정되지 않은 이미지를 차단하며 Secret 원문과 임의 클러스터 선택을 Agent에 위임하지 않습니다.
+
 ## 지능형 기존 서비스 발견
 
 서비스 플랫폼은 Clustara에서 새로 생성한 인스턴스뿐 아니라 이미 클러스터에서 운영 중인 워크로드도 인벤토리 수집 결과로 식별합니다. 연결 신뢰도는 `clustara.io/service-instance-id`, `app.kubernetes.io/instance`, `app.kubernetes.io/name`, `app`, workload·Pod 이름 prefix 순으로 계산하며 Namespace 일치만으로는 자동 귀속하지 않습니다. 등록 서비스에는 `자동 연결 확정`, `자동 연결 높음`, `연결 추천`, `수집 연결 없음`과 근거·연결 리소스 수를 표시합니다.
@@ -86,6 +96,7 @@ Developer는 카탈로그와 본인 소유 서비스만 볼 수 있습니다. `s
 - `GET /admin/k8s/services/catalogs/{id}/schema`
 - `GET/POST /admin/k8s/services/instances`
 - `POST /admin/k8s/services/instances/draft|validate`
+- `POST /admin/k8s/services/agent-plan`
 - `POST /admin/k8s/services/discovery/label`
 - `GET/DELETE /admin/k8s/services/instances/{id}`
 - `POST /admin/k8s/services/instances/{id}/start|stop|restart|scale`

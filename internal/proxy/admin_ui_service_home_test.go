@@ -27,6 +27,10 @@ func TestServiceHomeOperationsUXContract(t *testing.T) {
 		`Pod template에도 전파`,
 		`기존 서비스 라벨과 충돌합니다`,
 		`selector에 쓰이는 기존 app 라벨을 보존하고 새 요청을 생성하세요`,
+		`AI Platform Agent · 자연어 서비스 빌더`,
+		`/admin/k8s/services/agent-plan`,
+		`서비스·Stack 초안 등록`,
+		`실제 클러스터에는 아직 적용되지 않습니다`,
 	} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("service home is missing operations UX contract %q", marker)

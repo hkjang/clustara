@@ -530,6 +530,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/services/catalogs/{id}/schema", []string{"get"}, "service-platform", "Get the current service input JSON schema", false},
 	{"/admin/k8s/services/instances", []string{"get", "post"}, "service-platform", "List service instances or create an Application Stack-backed instance", false},
 	{"/admin/k8s/services/instances/draft", []string{"post"}, "service-platform", "Render a service instance draft without persistence", false},
+	{"/admin/k8s/services/agent-plan", []string{"post"}, "service-platform", "AI Platform Agent natural-language service plan and safe Stack draft handoff", false},
 	{"/admin/k8s/services/instances/validate", []string{"post"}, "service-platform", "Validate service values, security policy, and generated resources", false},
 	{"/admin/k8s/services/discovery/label", []string{"post"}, "service-platform", "Create an approval-aware Manifest Change that applies standard service identity labels to a discovered resource", false},
 	{"/admin/k8s/services/instances/{id}", []string{"get", "delete"}, "service-platform", "Get a service instance or request safe deletion", false},

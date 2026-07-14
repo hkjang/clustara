@@ -1,3 +1,6 @@
+v0.9.142:
+- **AI Kubernetes Application Platform Agent (v0.9.142)**: 서비스 플랫폼 홈에 자연어 서비스 계획 기능을 추가해 Redis, PostgreSQL, Spring Boot, Tomcat, JupyterLab, JupyterHub 요청을 내장 카탈로그·자원 프로파일·환경 설정과 멀티 리소스 Manifest로 변환합니다. 계획 단계는 읽기 전용이며 지원하지 않는 임의 YAML, 운영환경 tag-only 이미지, 현재 정책 Deny를 차단합니다. 명시적인 초안 등록 시 Manifest를 최신 정책으로 다시 평가해 `allow`·`approval_required`와 승인 사유를 저장·표시하고, 실제 배포는 기존 Application Stack 승인·Server-Side Apply를 유지합니다. 서비스 상세에는 ServiceInstance·정책 결정·Stack Apply 이력·Health 증적을 결합한 요청→계획→초안→검증→승인→적용→관찰→완료 수명주기와 다음 조치를 제공합니다.
+
 v0.9.141:
 - **Selector-Safe Service Labels (v0.9.141)**: 서비스 자동 발견 라벨 연결이 Helm과 Deployment selector가 소유한 `app.kubernetes.io/name`·`app.kubernetes.io/instance`를 서비스 이름으로 덮어써 Pod template과 selector가 불일치하던 문제를 수정했습니다. 이제 기존 app 라벨은 연결 신호로만 읽고 `clustara.io/service-name`과 선택적인 `clustara.io/service-instance-id`만 추가합니다. 기존 실패 요청이 idempotency로 재사용되지 않도록 요청 키를 v2로 분리하고 Clustara 라벨 기반 연결 신뢰도와 관련 리소스 탐지를 추가했습니다. Manifest Change 목록에는 server dry-run의 selector 불일치 원인과 기존 라벨을 보존한 새 요청 생성 안내를 바로 표시하며 Prometheus 형태의 selector 보존 회귀 테스트를 포함합니다.
 

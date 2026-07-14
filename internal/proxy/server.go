@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.141"
+const AppVersion = "v0.9.142"
 
 type Server struct {
 	cfg              config.Config
@@ -380,6 +380,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/services/catalogs", s.handleServiceCatalogs)
 	mux.HandleFunc("/admin/k8s/services/catalogs/", s.handleServiceCatalogByID)
 	mux.HandleFunc("/admin/k8s/services/reconcile", s.handleServiceReconcileWorker)
+	mux.HandleFunc("/admin/k8s/services/agent-plan", s.handlePlatformAgentPlan)
 	mux.HandleFunc("/admin/k8s/services/backups/", s.handleServiceBackupOperation)
 	mux.HandleFunc("/admin/k8s/services/instances/draft", s.handleServiceInstanceSpecial)
 	mux.HandleFunc("/admin/k8s/services/instances/validate", s.handleServiceInstanceSpecial)
@@ -2062,7 +2063,7 @@ func adminRequiredScope(r *http.Request) string {
 		if r.Method == http.MethodDelete {
 			return "service:delete"
 		}
-		if strings.HasSuffix(path, "/draft") || strings.HasSuffix(path, "/validate") || path == "/admin/k8s/services/instances" {
+		if strings.HasSuffix(path, "/draft") || strings.HasSuffix(path, "/validate") || strings.HasSuffix(path, "/agent-plan") || path == "/admin/k8s/services/instances" {
 			return "service:create"
 		}
 		return "service:update"

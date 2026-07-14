@@ -415,6 +415,30 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 422, map[string]any{"valid": false, "errors": errs})
 		return
 	}
+	// Re-evaluate the rendered manifest immediately before persistence. Agent plans and UI
+	// previews are advisory snapshots; policy may have changed between preview and registration.
+	docs, err := decodeManifestDocs(manifest)
+	if err != nil {
+		writeOpenAIError(w, 400, "rendered manifest parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	policies, err := s.db.ListK8sPolicies(r.Context())
+	if err != nil {
+		writeOpenAIError(w, 500, err.Error(), "server_error", "k8s_policies_failed")
+		return
+	}
+	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
+	decision := "allow"
+	if plan.Denied {
+		decision = "deny"
+	} else if plan.RequiresApproval || in.Environment == "production" {
+		decision = "approval_required"
+	}
+	if plan.Denied {
+		s.auditAdmin(r, "k8s.service_instance.create_denied", "", auditJSON(map[string]any{"name": in.Name, "cluster_id": in.ClusterID, "namespace": in.Namespace, "violations": plan.PolicyViolations}))
+		writeJSON(w, http.StatusConflict, map[string]any{"valid": false, "decision": decision, "plan": plan, "errors": []string{"현재 Kubernetes 정책이 서비스 초안 등록을 차단했습니다. 정책 위반을 수정한 뒤 다시 계획하세요."}})
+		return
+	}
 	sum := sha256.Sum256([]byte(manifest))
 	stack, sNew, err := s.db.UpsertK8sStack(r.Context(), store.K8sApplicationStack{Name: in.Name, ClusterID: in.ClusterID, Namespace: in.Namespace, SourceType: "manifest", Manifest: manifest, ManifestHash: hex.EncodeToString(sum[:]), SyncPolicy: "approval", Status: "saved", CreatedBy: adminID(r)}, newID)
 	if err != nil {
@@ -428,10 +452,13 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 	}
 	valJSON, _ := json.Marshal(values)
 	status := "validating"
+	// Service status describes runtime/observation lifecycle. A generic manifest approval is a
+	// Stack-apply concern and must not mask the subsequent collecting/health state.
 	if in.Environment == "production" {
 		status = "pending_approval"
 	}
-	instance := store.K8sServiceInstance{ID: newID("svcinst"), ClusterID: in.ClusterID, Namespace: in.Namespace, CatalogID: cat.ID, VersionID: ver.ID, ProfileID: in.ProfileID, StackID: stack.ID, Name: in.Name, Environment: firstNonEmpty(in.Environment, "development"), Status: status, OwnerID: owner, OwnerTeamID: in.OwnerTeamID, WorkspaceID: in.WorkspaceID, Criticality: firstNonEmpty(in.Criticality, "normal"), ValuesJSON: string(valJSON), PolicyResultJSON: `{"validated":true}`, ExpiresAt: in.ExpiresAt, CostCenter: in.CostCenter, CreatedBy: adminID(r)}
+	policyJSON, _ := json.Marshal(map[string]any{"validated": true, "decision": decision, "plan": plan})
+	instance := store.K8sServiceInstance{ID: newID("svcinst"), ClusterID: in.ClusterID, Namespace: in.Namespace, CatalogID: cat.ID, VersionID: ver.ID, ProfileID: in.ProfileID, StackID: stack.ID, Name: in.Name, Environment: firstNonEmpty(in.Environment, "development"), Status: status, OwnerID: owner, OwnerTeamID: in.OwnerTeamID, WorkspaceID: in.WorkspaceID, Criticality: firstNonEmpty(in.Criticality, "normal"), ValuesJSON: string(valJSON), PolicyResultJSON: string(policyJSON), ExpiresAt: in.ExpiresAt, CostCenter: in.CostCenter, CreatedBy: adminID(r)}
 	if err := s.db.UpsertK8sServiceInstance(r.Context(), instance); err != nil {
 		writeOpenAIError(w, 500, err.Error(), "server_error", "service_instance_save_failed")
 		return
@@ -449,7 +476,7 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	s.auditAdmin(r, "k8s.service_instance.create", "", auditJSON(map[string]string{"id": instance.ID, "stack_id": stack.ID}))
-	writeJSON(w, 201, map[string]any{"instance": instance, "stack": stack, "next": map[string]string{"validate": "/admin/k8s/stacks/validate", "apply": "/admin/k8s/stacks/" + stack.ID + "/apply"}, "approval_required": in.Environment == "production"})
+	writeJSON(w, 201, map[string]any{"instance": instance, "stack": stack, "decision": decision, "plan": plan, "next": map[string]string{"validate": "/admin/k8s/stacks/validate", "apply": "/admin/k8s/stacks/" + stack.ID + "/apply"}, "approval_required": decision == "approval_required"})
 }
 
 func (s *Server) handleServiceInstanceSpecial(w http.ResponseWriter, r *http.Request) {
@@ -508,6 +535,7 @@ func (s *Server) handleServiceInstanceByID(w http.ResponseWriter, r *http.Reques
 		ver, _ := s.db.GetK8sServiceVersion(r.Context(), in.VersionID)
 		ops, _ := s.db.ListK8sServiceOperations(r.Context(), in.ID, 50)
 		stack, _ := s.db.GetK8sStack(r.Context(), in.StackID)
+		stackHistory, _ := s.db.ListK8sStackApplyHistory(r.Context(), in.StackID, 20)
 		credentials := []store.K8sServiceCredential{}
 		if claims, ok := s.currentAccessClaims(r); !ok || hasScope(claims.Scopes, "service:credential:read") || hasScope(claims.Scopes, "service:catalog:manage") || claims.Role == "ops_admin" || claims.Role == "service_admin" {
 			credentials, _ = s.db.ListK8sServiceCredentials(r.Context(), in.ID)
@@ -523,10 +551,12 @@ func (s *Server) handleServiceInstanceByID(w http.ResponseWriter, r *http.Reques
 			components, _ := s.db.ListK8sServiceComponents(r.Context(), in.ID)
 			endpoints, _ := s.db.ListK8sServiceEndpoints(r.Context(), in.ID)
 			snapshot, _ := s.db.LatestK8sServiceHealthSnapshot(r.Context(), in.ID)
-			writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": components, "endpoints": endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": snapshot, "health_stale": true})
+			lifecycle := platformAgentLifecycleFromEvidence(in, stack, stackHistory, snapshot.Status)
+			writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": components, "endpoints": endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": snapshot, "health_stale": true, "agent_lifecycle": lifecycle})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": health.Components, "endpoints": health.Endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": health.Health, "health_stale": false})
+		lifecycle := platformAgentLifecycleFromEvidence(in, stack, stackHistory, health.Health.Status)
+		writeJSON(w, 200, map[string]any{"instance": in, "catalog": cat, "version": ver, "stack": stack, "operations": ops, "components": health.Components, "endpoints": health.Endpoints, "credentials": credentials, "backups": backups, "restores": restores, "jupyter_workspaces": jupyterWorkspaces, "health": health.Health, "health_stale": false, "agent_lifecycle": lifecycle})
 	case http.MethodDelete:
 		s.recordServiceOperation(w, r, in, "delete", map[string]any{"preserve_pvc": true, "require_backup": true})
 	default:
