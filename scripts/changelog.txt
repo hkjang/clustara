@@ -1,3 +1,6 @@
+v0.9.144:
+- **Node Trend Business Hours Filter (v0.9.144)**: 리소스 관리의 노드 추세 확대 모달에 `업무시간 외 제외` 토글을 추가했습니다. 브라우저 로컬 타임존 기준 평일 09:00 이상 18:00 미만의 CPU·Memory·GPU 표본만 그래프에 표시하고, 기간 버튼을 바꿔도 필터 상태를 유지합니다. 필터 후/전체 표본 수, 적용 타임존과 업무시간 표본 부족 안내를 제공하며 서버의 원본 시계열과 보존 설정은 변경하지 않습니다.
+
 v0.9.143:
 - **Agent Deployment Readiness & Long-term Node Trends (v0.9.143)**: 서비스 상세에 AI Platform Agent 배포 준비도 점검을 추가해 최신 정책, 클러스터 연결 준비, Server-Side Apply 지원, Stack revision과 대상 리소스를 변경 없이 확인하고 `ready`·`approval_required`·`blocked`로 안내합니다. 준비도 통과 후 Kubernetes Server-Side Dry-run을 실행해 리소스별 API 검증 결과를 확인할 수 있으며 승인 필요 Stack도 읽기 전용 Dry-run은 허용하되 실제 Apply 승인 게이트는 유지합니다. 노드 관리의 추세 sparkline은 확대 모달로 연결해 10분·30분·1시간·6시간·24시간·7일·1개월·3개월·6개월·12개월·13개월 CPU·Memory·GPU 그래프와 90% 경보선을 제공합니다. 장기 조회는 선택 노드로 한정하고 기간별 bucket을 적용하며, 기본 30일·최대 3,650일 보존 설정과 현재 보존기간 부족 안내 및 런타임 설정 링크를 제공합니다.
 

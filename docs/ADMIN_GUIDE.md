@@ -233,6 +233,7 @@ GitLab, Bitbucket Server, Harbor Registry/Robot, Mattermost 같은 외부 연동
 - 임계치는 화면의 **GPU 알림 정책**에서 온도, VRAM, 저사용률/지속시간, GPU-hour 단가를 저장합니다. XID, DBE ECC, NVLink 오류는 항상 중대 격리 후보이며 자동 cordon/drain하지 않습니다.
 - API: `GET /admin/k8s/nodes/monitoring`, `POST /admin/k8s/node-metrics/collect`, `GET /admin/k8s/gpu/operations`, `GET/POST /admin/k8s/gpu/policy`, `GET /admin/k8s/gpu/dcgm-config`, `POST /admin/settings/test/k8s-monitoring`.
 - 노드 표의 작은 추세 그래프를 선택하면 확대 모달에서 최근 10분·30분·1시간·6시간·24시간·7일·1개월·3개월·6개월·12개월·13개월 CPU·Memory·GPU 사용률과 90% 선행 경보선을 비교할 수 있습니다. 선택 범위보다 원시 표본 보존기간이 짧으면 필요한 보존일과 설정 링크를 안내합니다.
+- 확대 모달의 **업무시간 외 제외**는 브라우저 로컬 타임존 기준 평일 09:00 이상 18:00 미만 표본만 표시합니다. 원본 표본은 삭제하지 않으며 적용 후/전체 표본 수와 사용 타임존을 함께 보여줍니다.
 
 ## 11. 용량·자동확장 (`#/k8s-capacity`)
 

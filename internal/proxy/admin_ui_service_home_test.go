@@ -31,6 +31,8 @@ func TestServiceHomeOperationsUXContract(t *testing.T) {
 		`/admin/k8s/services/agent-plan`,
 		`platformAgentCheckReadiness`,
 		`platformAgentStackDryRun`,
+		`업무시간 외 제외`,
+		`k8sNodeBusinessHourSeries`,
 		`서비스·Stack 초안 등록`,
 		`실제 클러스터에는 아직 적용되지 않습니다`,
 	} {

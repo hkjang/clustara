@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.143** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.144** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.143)
+## 기능 상태 (v0.9.144)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -423,6 +423,8 @@ kubectl create clusterrolebinding clustara-reader `
 `metrics.k8s.io` Node 수집은 인벤토리 reconcile과 분리되어 기본 60초 주기로 동작합니다. 관리자 **설정 → 런타임 설정 → `k8s.monitoring`**에서 `enabled`, `interval_seconds`, `retention_days`를 재시작 없이 조정할 수 있습니다. 원시 Node/GPU 시계열의 기본 보존기간은 30일이고 `k8s.monitoring.retention_days`는 1~3,650일 범위에서 설정할 수 있습니다. Metrics Server가 없거나 RBAC가 거부되면 설정된 Prometheus/Thanos Query API에서 node-exporter의 CPU·메모리 메트릭을 조회하고, 없으면 kubelet/cAdvisor 메트릭으로 한 번 더 폴백합니다. 어느 소스에서도 조회되지 않을 때만 `미수집`으로 표시하며 0%로 오인하지 않습니다. 보존기간을 지난 Node/GPU 표본은 6시간마다 정리됩니다.
 
 노드 관리의 추세 sparkline은 확대 가능한 기간별 그래프로 연결됩니다. 확대 모달은 `10m`, `30m`, `1h`, `6h`, `24h`, `7d`, `30d`, `90d`, `180d`, `365d`, `395d`를 지원하고 기간별 bucket으로 응답 밀도를 조절하며 CPU·Memory·GPU를 동일한 0~100% 축과 90% 경보선으로 표시합니다. 장기 조회는 선택한 단일 노드의 표본만 읽어 전체 fleet 대용량 조회를 방지합니다. 선택 범위보다 현재 보존기간이 짧으면 실제 보존된 구간만 표시하고 필요한 최소 보존일과 설정 링크를 안내하며, 없는 값을 보간하거나 0으로 만들지 않습니다.
+
+**업무시간 외 제외** 토글은 브라우저 로컬 타임존을 기준으로 월요일~금요일 09:00 이상 18:00 미만인 표본만 클라이언트 그래프에 포함합니다. 서버 원시 표본과 보존 정책은 변경하지 않으며, 모달에는 필터 후/전체 표본 수, 적용 타임존과 표본 부족 여부를 표시합니다.
 
 Pod 실사용량은 Metrics Server 표본과 Prometheus/Thanos의 kubelet/cAdvisor CPU·working set 메모리를 사용합니다. DCGM Exporter가 `namespace`, `pod`, `container` 라벨을 제공하면 장치별 GPU 사용률·VRAM·온도를 Pod 단위로 집계합니다. 최신 CPU·메모리·GPU 표본은 **리소스 관리 → Pod 관리** 목록/상세와 **리소스 토폴로지 맵**의 Pod 노드에 함께 표시됩니다. GPU 라벨이 없거나 Pod가 GPU를 사용하지 않는 경우는 CPU·메모리와 별도로 `GPU 미수집/미사용`으로 표시합니다.
 
