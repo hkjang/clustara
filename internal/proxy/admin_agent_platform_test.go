@@ -69,8 +69,9 @@ func TestPlatformAgentBuildsRedisPlanWithoutPersistingOrApplying(t *testing.T) {
 		t.Fatalf("register status=%d body=%s", register.StatusCode, body)
 	}
 	var registered struct {
-		Decision         string `json:"decision"`
-		ApprovalRequired bool   `json:"approval_required"`
+		Decision         string                   `json:"decision"`
+		ApprovalRequired bool                     `json:"approval_required"`
+		Instance         store.K8sServiceInstance `json:"instance"`
 		Plan             struct {
 			Resources []any `json:"resources"`
 		} `json:"plan"`
@@ -80,6 +81,25 @@ func TestPlatformAgentBuildsRedisPlanWithoutPersistingOrApplying(t *testing.T) {
 	}
 	if registered.Decision == "" || len(registered.Plan.Resources) < 3 {
 		t.Fatalf("registration must re-evaluate and expose policy decision: %+v", registered)
+	}
+	readiness := postJSON(t, proxy.URL+"/admin/k8s/services/instances/"+registered.Instance.ID+"/deployment-readiness", "", map[string]any{})
+	defer readiness.Body.Close()
+	if readiness.StatusCode != 200 {
+		body, _ := io.ReadAll(readiness.Body)
+		t.Fatalf("readiness status=%d body=%s", readiness.StatusCode, body)
+	}
+	var readinessBody struct {
+		State          string `json:"state"`
+		ResourceCount  int    `json:"resource_count"`
+		ClientReady    bool   `json:"client_ready"`
+		ApplySupported bool   `json:"server_side_apply_supported"`
+		Safety         string `json:"safety"`
+	}
+	if err := json.NewDecoder(readiness.Body).Decode(&readinessBody); err != nil {
+		t.Fatal(err)
+	}
+	if readinessBody.State == "" || readinessBody.ResourceCount < 3 || !readinessBody.ClientReady || !readinessBody.ApplySupported || !strings.Contains(readinessBody.Safety, "변경하지 않습니다") {
+		t.Fatalf("unexpected readiness: %+v", readinessBody)
 	}
 }
 

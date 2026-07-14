@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"clustara/internal/analyzer"
+	"clustara/internal/kube"
 	"clustara/internal/store"
 )
 
@@ -99,6 +100,71 @@ func platformAgentEvidenceStages(current string) []platformAgentStage {
 		out = append(out, platformAgentStage{State: def.state, Label: def.label, Status: status})
 	}
 	return out
+}
+
+// handlePlatformAgentDeploymentReadiness performs a live-capability preflight without calling
+// Kubernetes Apply. It closes the gap between a policy-valid draft and an actually deployable
+// Stack while preserving the explicit approval/apply boundary.
+func (s *Server) handlePlatformAgentDeploymentReadiness(w http.ResponseWriter, r *http.Request, instance store.K8sServiceInstance) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	stack, err := s.db.GetK8sStack(r.Context(), instance.StackID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusNotFound, "service Application Stack not found", "invalid_request_error", "stack_not_found")
+		return
+	}
+	docs, err := decodeManifestDocs(stack.Manifest)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "stored manifest parse error: "+err.Error(), "invalid_request_error", "manifest_parse_failed")
+		return
+	}
+	policies, err := s.db.ListK8sPolicies(r.Context())
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_policies_failed")
+		return
+	}
+	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
+	blockers, warnings := []string{}, []string{}
+	if plan.Denied {
+		blockers = append(blockers, "현재 정책이 Application Stack Apply를 차단합니다.")
+	}
+	cluster, clusterErr := s.db.GetK8sCluster(r.Context(), instance.ClusterID)
+	clientReady, applySupported := false, false
+	if clusterErr != nil {
+		blockers = append(blockers, "대상 클러스터 설정을 찾을 수 없습니다.")
+	} else if client, clientErr := s.k8sClientForCluster(r.Context(), cluster); clientErr != nil {
+		blockers = append(blockers, "Kubernetes 연결 준비 실패: "+clientErr.Error())
+	} else {
+		clientReady = true
+		_, applySupported = client.(kube.StackApplier)
+		if !applySupported {
+			blockers = append(blockers, "대상 클러스터 클라이언트가 Server-Side Apply를 지원하지 않습니다.")
+		}
+	}
+	if plan.RequiresApproval {
+		warnings = append(warnings, "정책상 운영자 승인이 필요합니다: "+strings.Join(plan.ApprovalReasons, " · "))
+	}
+	history, _ := s.db.ListK8sStackApplyHistory(r.Context(), stack.ID, 20)
+	lifecycle := platformAgentLifecycleFromEvidence(instance, stack, history, "")
+	state := "ready"
+	if len(blockers) > 0 {
+		state = "blocked"
+	} else if plan.RequiresApproval || instance.Environment == "production" {
+		state = "approval_required"
+	}
+	result := map[string]any{
+		"state": state, "ready": state != "blocked", "approval_required": state == "approval_required",
+		"instance_id": instance.ID, "stack_id": stack.ID, "cluster_id": instance.ClusterID,
+		"namespace": instance.Namespace, "revision_no": stack.RevisionNo, "resource_count": len(resolveStackTargets(docs, stack.Namespace)),
+		"client_ready": clientReady, "server_side_apply_supported": applySupported,
+		"plan": plan, "blockers": blockers, "warnings": warnings, "lifecycle": lifecycle,
+		"next":   map[string]string{"stack": "#/k8s-stacks?id=" + stack.ID, "approval": "#/k8s-actions", "observe": "#/services/all?id=" + instance.ID},
+		"safety": "준비도 점검은 Kubernetes 리소스를 변경하지 않습니다. 실제 Apply는 Application Stack 화면에서 별도로 실행해야 합니다.",
+	}
+	s.auditAdmin(r, "k8s.agent.deployment_readiness", instance.ID, auditJSON(map[string]any{"state": state, "stack_id": stack.ID, "resources": len(docs)}))
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handlePlatformAgentPlan converts a natural-language service request into an explainable,

@@ -90,7 +90,10 @@ func (s *Server) handleK8sStackApply(w http.ResponseWriter, r *http.Request, id 
 			"note": "정책 Deny에 걸려 적용을 차단했습니다. 매니페스트를 수정하세요."})
 		return
 	}
-	if plan.RequiresApproval && !in.Confirm {
+	// A Kubernetes server-side Dry-run does not mutate the cluster, so operators must be able to
+	// inspect its API validation result before approval. The approval gate remains mandatory for
+	// the real Apply request.
+	if stackApplyNeedsApproval(plan.RequiresApproval, in.DryRun, in.Confirm) {
 		s.recordStackHistory(r, st, "apply", in.DryRun, "approval_required", 0, 0, nil)
 		writeJSON(w, http.StatusPreconditionRequired, map[string]any{"decision": "approval_required", "plan": plan,
 			"note": "승인 필요 변경이 포함되어 있습니다. confirm=true로 다시 요청하세요."})
@@ -158,6 +161,10 @@ func (s *Server) handleK8sStackApply(w http.ResponseWriter, r *http.Request, id 
 		"stack_id": st.ID, "dry_run": in.DryRun, "status": status,
 		"applied": applied, "failed": failed, "results": results,
 	})
+}
+
+func stackApplyNeedsApproval(requiresApproval, dryRun, confirmed bool) bool {
+	return requiresApproval && !dryRun && !confirmed
 }
 
 // handleK8sStackRollback restores a stack's manifest to a prior revision (roll-forward to old

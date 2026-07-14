@@ -539,6 +539,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/services/instances/{id}/health", []string{"get"}, "service-platform", "Get weighted service health summary", false},
 	{"/admin/k8s/services/instances/{id}/topology", []string{"get"}, "service-platform", "Get service-to-Stack/Resource Graph topology", false},
 	{"/admin/k8s/services/instances/{id}/reconcile", []string{"post"}, "service-platform", "Reconcile Stack resources with observed Kubernetes inventory and persist health evidence", false},
+	{"/admin/k8s/services/instances/{id}/deployment-readiness", []string{"get", "post"}, "service-platform", "Check AI Platform Agent policy, cluster connection, and Server-Side Apply readiness without mutation", false},
 	{"/admin/k8s/services/instances/{id}/endpoints", []string{"get"}, "service-platform", "List derived internal and external service endpoints", false},
 	{"/admin/k8s/services/instances/{id}/credentials", []string{"get", "post"}, "service-platform", "List or update Kubernetes Secret references without returning values", false},
 	{"/admin/k8s/services/instances/{id}/cost", []string{"get"}, "service-platform", "Estimate monthly service cost from observed Pod requests or the selected profile", false},

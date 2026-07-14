@@ -10,6 +10,10 @@ Clustara Service Platform은 여러 Kubernetes 객체를 하나의 사용자 중
 
 등록 이후 서비스 상세의 **AI Platform Agent 수명주기**는 별도 추정 상태가 아니라 ServiceInstance 상태, 저장된 정책 결정, Application Stack 상태와 Apply 이력, 최신 Health 증적을 결합합니다. 요청→계획→초안→검증→승인→적용→관찰→완료 단계를 표시하고, 승인 대기·부분 적용·실패·관찰 중 상태에 맞는 다음 운영 조치를 안내합니다.
 
+서비스 상세의 **Agent 배포 준비도**는 실제 Apply 전에 현재 정책을 다시 분석하고 대상 클러스터 설정, Kubernetes client 준비 여부, Server-Side Apply 지원, Stack revision과 대상 리소스 수를 함께 확인합니다. 이 점검은 Kubernetes를 변경하지 않으며 `ready`, `approval_required`, `blocked`로 결과를 구분해 Application Stack의 Dry-run·승인·Apply 단계로 연결합니다.
+
+준비도가 차단되지 않으면 같은 화면에서 **Server-Side Dry-run**을 실행할 수 있습니다. 승인 필요 Stack도 리소스를 변경하지 않는 Dry-run까지는 허용해 API version, schema, admission, namespace와 리소스별 오류를 먼저 확인하고, 실제 Apply 요청에서만 승인 게이트를 강제합니다. Dry-run 결과는 기존 Stack Apply 이력에 증적으로 남습니다.
+
 초기 지원 카탈로그는 PostgreSQL, Redis, Spring Boot, Tomcat, JupyterLab, JupyterHub입니다. 지원하지 않는 Kafka·Ollama 같은 요청은 임의 YAML로 대체하지 않고 `blocked`로 반환하여 템플릿 관리에서 카탈로그를 먼저 등록하도록 안내합니다. 운영 환경은 digest가 고정되지 않은 이미지를 차단하며 Secret 원문과 임의 클러스터 선택을 Agent에 위임하지 않습니다.
 
 ## 지능형 기존 서비스 발견
@@ -102,6 +106,7 @@ Developer는 카탈로그와 본인 소유 서비스만 볼 수 있습니다. `s
 - `POST /admin/k8s/services/instances/{id}/start|stop|restart|scale`
 - `GET /admin/k8s/services/instances/{id}/health|topology`
 - `POST /admin/k8s/services/instances/{id}/reconcile`
+- `GET/POST /admin/k8s/services/instances/{id}/deployment-readiness`
 - `GET /admin/k8s/services/instances/{id}/endpoints|cost`
 - `GET/POST /admin/k8s/services/instances/{id}/credentials`
 - `GET/POST /admin/k8s/services/instances/{id}/jupyter-config`

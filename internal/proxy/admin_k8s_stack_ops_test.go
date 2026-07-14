@@ -42,3 +42,15 @@ func TestResolveStackTargets(t *testing.T) {
 		t.Fatalf("expected default namespace fallback, got %q", targets[1].Namespace)
 	}
 }
+
+func TestStackApplyApprovalGateAllowsReadOnlyDryRun(t *testing.T) {
+	if stackApplyNeedsApproval(true, true, false) {
+		t.Fatal("approval-required stack must still allow a non-mutating server-side dry-run")
+	}
+	if !stackApplyNeedsApproval(true, false, false) {
+		t.Fatal("real apply must remain blocked until explicitly confirmed")
+	}
+	if stackApplyNeedsApproval(true, false, true) || stackApplyNeedsApproval(false, false, false) {
+		t.Fatal("confirmed or policy-allowed apply must pass the approval gate")
+	}
+}

@@ -48,6 +48,16 @@ func TestNodeMetricAliasesIncludeHostnameAndNodeAddresses(t *testing.T) {
 	}
 }
 
+func TestNodeMonitoringWindowSupportsInteractiveTrendRanges(t *testing.T) {
+	tests := map[string]time.Duration{"10m": 10 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "90d": 90 * 24 * time.Hour, "180d": 180 * 24 * time.Hour, "365d": 365 * 24 * time.Hour, "395d": 395 * 24 * time.Hour}
+	for input, want := range tests {
+		name, window, bucket := nodeMonitoringWindow(input)
+		if name != input || window != want || bucket <= 0 {
+			t.Fatalf("window %s => name=%s window=%s bucket=%s", input, name, window, bucket)
+		}
+	}
+}
+
 func TestMergePodGPUMetricsAggregatesDevices(t *testing.T) {
 	metrics := map[string]store.K8sMetricSample{"prod\x00trainer": {Namespace: "prod", ResourceKind: "Pod", ResourceName: "trainer", CPUMillicores: 750, MemoryBytes: 2 << 30}}
 	mergePodGPUMetrics(metrics, []store.K8sGPUSample{

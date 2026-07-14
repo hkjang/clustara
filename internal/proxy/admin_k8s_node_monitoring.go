@@ -604,6 +604,7 @@ func (s *Server) handleK8sNodeMonitoring(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	clusterID := strings.TrimSpace(r.URL.Query().Get("cluster_id"))
+	nodeName := strings.TrimSpace(r.URL.Query().Get("node"))
 	windowName, window, bucket := nodeMonitoringWindow(r.URL.Query().Get("window"))
 	now := time.Now().UTC()
 	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 10000})
@@ -611,8 +612,12 @@ func (s *Server) handleK8sNodeMonitoring(w http.ResponseWriter, r *http.Request)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
 	}
+	metricLimit := 100000
+	if nodeName != "" {
+		metricLimit = 700000 // 13 months of one-minute samples for one explicitly selected node.
+	}
 	metrics, err := s.db.ListK8sMetricSamplesFiltered(r.Context(), store.K8sMetricSampleFilter{
-		ClusterID: clusterID, ResourceKind: "Node", Since: now.Add(-window).Format(time.RFC3339Nano), Limit: 100000,
+		ClusterID: clusterID, ResourceKind: "Node", ResourceName: nodeName, Since: now.Add(-window).Format(time.RFC3339Nano), Limit: metricLimit,
 	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_node_metrics_failed")
@@ -622,6 +627,17 @@ func (s *Server) handleK8sNodeMonitoring(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_events_failed")
 		return
+	}
+	if nodeName != "" {
+		filtered := make([]store.K8sInventoryItem, 0, len(items))
+		for _, item := range items {
+			if strings.EqualFold(item.Kind, "Node") && item.Name == nodeName {
+				filtered = append(filtered, item)
+			} else if strings.EqualFold(item.Kind, "Pod") && strings.TrimSpace(fmt.Sprint(item.Spec["nodeName"])) == nodeName {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
 	}
 	report := analyzer.AnalyzeNodeMonitoring(items, metrics, events, now, bucket)
 	promURL, _ := s.monitoringPrometheusConfig(r.Context())
@@ -846,12 +862,26 @@ func (s *Server) handleK8sNodeMetricCollect(w http.ResponseWriter, r *http.Reque
 
 func nodeMonitoringWindow(raw string) (string, time.Duration, time.Duration) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "10m":
+		return "10m", 10 * time.Minute, 20 * time.Second
+	case "30m":
+		return "30m", 30 * time.Minute, time.Minute
 	case "1h":
 		return "1h", time.Hour, time.Minute
 	case "24h", "1d":
 		return "24h", 24 * time.Hour, 15 * time.Minute
 	case "7d":
 		return "7d", 7 * 24 * time.Hour, time.Hour
+	case "30d", "1mo":
+		return "30d", 30 * 24 * time.Hour, 6 * time.Hour
+	case "90d", "3mo":
+		return "90d", 90 * 24 * time.Hour, 12 * time.Hour
+	case "180d", "6mo":
+		return "180d", 180 * 24 * time.Hour, 24 * time.Hour
+	case "365d", "12mo":
+		return "365d", 365 * 24 * time.Hour, 24 * time.Hour
+	case "395d", "13mo":
+		return "395d", 395 * 24 * time.Hour, 24 * time.Hour
 	default:
 		return "6h", 6 * time.Hour, 5 * time.Minute
 	}

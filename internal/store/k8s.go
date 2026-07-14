@@ -587,8 +587,8 @@ func (s *SQLStore) ListK8sMetricSamples(ctx context.Context, clusterID string, l
 }
 
 // ListK8sMetricSamplesFiltered returns a focused metric history for monitoring and forecasting.
-// The larger cap is intentional: 24 hours of one-minute samples across a moderate node fleet can
-// exceed the legacy 5,000-row capacity-analysis limit.
+// The larger cap is intentional: focused single-node trend requests can cover 13 months of
+// one-minute samples. Broad fleet callers retain their own lower request limits.
 func (s *SQLStore) ListK8sMetricSamplesFiltered(ctx context.Context, f K8sMetricSampleFilter) ([]K8sMetricSample, error) {
 	query := `SELECT id, cluster_id, namespace, resource_kind, resource_name, cpu_millicores, memory_bytes, storage_bytes, COALESCE(latency_ms, 0),
 		COALESCE(gpu_utilization_pct, 0), COALESCE(gpu_memory_used_bytes, 0), COALESCE(gpu_temperature_c, 0), COALESCE(gpu_observed, 0), observed_at
@@ -611,7 +611,7 @@ func (s *SQLStore) ListK8sMetricSamplesFiltered(ctx context.Context, f K8sMetric
 		args = append(args, strings.TrimSpace(f.Since))
 	}
 	query += ` ORDER BY observed_at DESC LIMIT ?`
-	args = append(args, boundedLimit(f.Limit, 5000, 100000))
+	args = append(args, boundedLimit(f.Limit, 5000, 700000))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
 		return nil, err

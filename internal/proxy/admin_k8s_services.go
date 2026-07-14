@@ -570,6 +570,9 @@ func (s *Server) handleServiceOperation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	switch op {
+	case "deployment-readiness":
+		s.handlePlatformAgentDeploymentReadiness(w, r, in)
+		return
 	case "reconcile":
 		s.handleServiceReconcile(w, r, in)
 		return
