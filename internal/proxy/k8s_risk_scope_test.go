@@ -36,10 +36,22 @@ func TestK8sRiskScopeDefaultsToApplicationAndCanSelectSystem(t *testing.T) {
 }
 
 func TestRiskScopeUXContract(t *testing.T) {
-	for _, marker := range []string{"risk_scope", "애플리케이션 (기본)", "K8s·플랫폼 관리", "모두 표시", "operational_alert_suppressed"} {
+	for _, marker := range []string{"risk_scope", "애플리케이션 (기본)", "K8s·플랫폼 관리", "모두 표시", "operational_alert_suppressed", "해결된 이력 포함", "suppressed_noise"} {
 		if !containsAdminHTML(marker) {
 			t.Fatalf("risk scope UX missing %q", marker)
 		}
+	}
+}
+
+func TestIncidentListSuppressesLegacyBatchRestartStorm(t *testing.T) {
+	items := []store.K8sInventoryItem{{ClusterID: "c1", Namespace: "batch", Kind: "Job", Name: "nightly"}}
+	incidents := []store.K8sIncident{
+		{ID: "noise", ClusterID: "c1", Namespace: "batch", Kind: "Job", Name: "nightly", Condition: "RestartStorm", Status: "resolved"},
+		{ID: "real", ClusterID: "c1", Namespace: "batch", Kind: "Job", Name: "nightly", Condition: "JobFailing", Status: "open"},
+	}
+	got, suppressed := filterSuppressedIncidents(incidents, items)
+	if suppressed != 1 || len(got) != 1 || got[0].ID != "real" {
+		t.Fatalf("legacy batch storm must be hidden while Job failure remains: suppressed=%d incidents=%+v", suppressed, got)
 	}
 }
 

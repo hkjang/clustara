@@ -35,8 +35,9 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 		}
 	}
 	for _, rev := range []store.K8sResourceRevision{
-		{ID: "rev-old", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: map[string]any{"image": "registry/api:1.0"}, ImageSet: "registry/api:1.0", ObservedAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)},
-		{ID: "rev-new", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: map[string]any{"image": "registry/api:1.1"}, ImageSet: "registry/api:1.1", ObservedAt: now},
+		{ID: "rev-old", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: calendarPodSpec("registry/api:1.0", "info"), ImageSet: "registry/api:1.0", ObservedAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)},
+		{ID: "rev-image", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: calendarPodSpec("registry/api:1.1", "info"), ImageSet: "registry/api:1.1", ObservedAt: time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)},
+		{ID: "rev-env", ClusterID: "cluster-a", Namespace: "prod", Kind: "Pod", Name: "api-abc", Spec: calendarPodSpec("registry/api:1.1", "secret-new-value"), ImageSet: "registry/api:1.1", ObservedAt: now},
 	} {
 		if _, err := db.RecordK8sRevision(context.Background(), rev); err != nil {
 			t.Fatal(err)
@@ -72,15 +73,25 @@ func TestAdminWorkCalendarIncludesAllActorsAndFilters(t *testing.T) {
 	if len(out.ActorOptions) != 2 {
 		t.Fatalf("actor options = %+v", out.ActorOptions)
 	}
-	foundImageChange := false
+	foundImageChange, foundEnvChange := false, false
 	for _, event := range out.Timeline {
 		if event.Category == "image_changed" && event.ImageSet == "registry/api:1.1" && event.Previous == "registry/api:1.0" {
 			foundImageChange = true
+		}
+		if event.Category == "env_changed" && event.ChangeCount > 0 && !strings.Contains(event.Description, "secret-new-value") {
+			foundEnvChange = true
 		}
 	}
 	if !foundImageChange {
 		t.Fatalf("calendar must include Pod image transition: %+v", out.Timeline)
 	}
+	if !foundEnvChange {
+		t.Fatalf("calendar must classify env change without leaking its value: %+v", out.Timeline)
+	}
+}
+
+func calendarPodSpec(image, logLevel string) map[string]any {
+	return map[string]any{"containers": []any{map[string]any{"name": "api", "image": image, "env": []any{map[string]any{"name": "LOG_LEVEL", "value": logLevel}}}}}
 }
 
 func TestAdminCalendarMajorK8sEventNoiseFilter(t *testing.T) {
@@ -96,7 +107,7 @@ func TestAdminCalendarMajorK8sEventNoiseFilter(t *testing.T) {
 }
 
 func TestAdminWorkCalendarTimelineUXContract(t *testing.T) {
-	for _, marker := range []string{"주요 운영 이벤트 타임라인", "timeline_events", "이미지 변경", "새 리소스", "K8s 이벤트"} {
+	for _, marker := range []string{"주요 운영 이벤트 타임라인", "timeline_events", "이미지 변경", "환경변수 변경", "Spec 변경", "새 리소스", "K8s 이벤트"} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("admin calendar timeline UI missing %q", marker)
 		}

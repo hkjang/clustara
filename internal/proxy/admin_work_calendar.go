@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -22,20 +24,22 @@ type adminCalendarActorOption struct {
 }
 
 type adminCalendarTimelineEvent struct {
-	ID          string `json:"id"`
-	At          string `json:"at"`
-	Date        string `json:"date"`
-	Category    string `json:"category"`
-	Severity    string `json:"severity"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	ClusterID   string `json:"cluster_id"`
-	Namespace   string `json:"namespace"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	ImageSet    string `json:"image_set,omitempty"`
-	Previous    string `json:"previous_image_set,omitempty"`
-	Href        string `json:"href"`
+	ID          string   `json:"id"`
+	At          string   `json:"at"`
+	Date        string   `json:"date"`
+	Category    string   `json:"category"`
+	Severity    string   `json:"severity"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	ClusterID   string   `json:"cluster_id"`
+	Namespace   string   `json:"namespace"`
+	Kind        string   `json:"kind"`
+	Name        string   `json:"name"`
+	ImageSet    string   `json:"image_set,omitempty"`
+	Previous    string   `json:"previous_image_set,omitempty"`
+	Highlights  []string `json:"highlights,omitempty"`
+	ChangeCount int      `json:"change_count,omitempty"`
+	Href        string   `json:"href"`
 }
 
 // handleAdminWorkCalendar returns the complete operational work calendar across users.
@@ -154,7 +158,7 @@ func (s *Server) handleAdminWorkCalendar(w http.ResponseWriter, r *http.Request)
 func (s *Server) adminWorkCalendarTimeline(r *http.Request, since time.Time, filters map[string]string, limit int) []adminCalendarTimelineEvent {
 	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: filters["cluster_id"], Namespace: filters["namespace"], Limit: limit})
 	result := make([]adminCalendarTimelineEvent, 0, len(revisions))
-	previousImage := map[string]string{}
+	previousRevision := map[string]store.K8sResourceRevision{}
 	// Revisions are newest-first. Walk backwards first so image transitions retain the prior image.
 	for i := len(revisions) - 1; i >= 0; i-- {
 		rev := revisions[i]
@@ -163,21 +167,40 @@ func (s *Server) adminWorkCalendarTimeline(r *http.Request, since time.Time, fil
 			continue
 		}
 		key := strings.Join([]string{rev.ClusterID, rev.Namespace, rev.Kind, rev.Name}, "|")
-		oldImage := previousImage[key]
+		prior, hasPrior := previousRevision[key]
+		oldImage := prior.ImageSet
 		created := strings.EqualFold(rev.ChangeKind, "created")
 		imageChanged := rev.ImageSet != "" && oldImage != "" && rev.ImageSet != oldImage
-		previousImage[key] = rev.ImageSet
-		if at.Before(since) || (!created && !imageChanged) {
+		diff := analyzer.RevisionDiff{}
+		if hasPrior {
+			diff = analyzer.DiffRevisions(prior, rev)
+		}
+		previousRevision[key] = rev
+		specChanged := strings.EqualFold(rev.ChangeKind, "updated") || len(diff.Changes) > 0
+		if at.Before(since) || (!created && !specChanged) {
 			continue
 		}
 		title, category, detail := rev.Kind+" 새로 생성", "resource_created", rev.Name+"이(가) 새로 관측됨"
-		if imageChanged {
+		highlights := append([]string{}, diff.Highlights...)
+		if imageChanged || containsStringValue(highlights, "image") {
 			title, category = rev.Kind+" 이미지 버전 변경", "image_changed"
 			detail = oldImage + " → " + rev.ImageSet
+		} else if containsStringValue(highlights, "env") {
+			title, category = rev.Kind+" 환경변수 변경", "env_changed"
+			detail = adminCalendarSpecChangeSummary(diff)
+		} else if containsStringValue(highlights, "resources") {
+			title, category = rev.Kind+" 리소스 설정 변경", "resources_changed"
+			detail = adminCalendarSpecChangeSummary(diff)
+		} else if containsStringValue(highlights, "replica") {
+			title, category = rev.Kind+" replica 변경", "replica_changed"
+			detail = adminCalendarSpecChangeSummary(diff)
+		} else if specChanged {
+			title, category = rev.Kind+" spec 변경", "spec_changed"
+			detail = adminCalendarSpecChangeSummary(diff)
 		} else if rev.ImageSet != "" {
 			detail += " · 이미지 " + rev.ImageSet
 		}
-		result = append(result, adminCalendarTimelineEvent{ID: rev.ID, At: at.Format(time.RFC3339Nano), Date: at.Format("2006-01-02"), Category: category, Severity: "info", Title: title, Description: detail, ClusterID: rev.ClusterID, Namespace: rev.Namespace, Kind: rev.Kind, Name: rev.Name, ImageSet: rev.ImageSet, Previous: oldImage, Href: adminCalendarTimelineHref(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name)})
+		result = append(result, adminCalendarTimelineEvent{ID: rev.ID, At: at.Format(time.RFC3339Nano), Date: at.Format("2006-01-02"), Category: category, Severity: "info", Title: title, Description: detail, ClusterID: rev.ClusterID, Namespace: rev.Namespace, Kind: rev.Kind, Name: rev.Name, ImageSet: rev.ImageSet, Previous: oldImage, Highlights: highlights, ChangeCount: len(diff.Changes), Href: adminCalendarTimelineHref(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name)})
 	}
 	events, _ := s.db.ListK8sEvents(r.Context(), filters["cluster_id"], limit)
 	for _, event := range events {
@@ -196,6 +219,24 @@ func (s *Server) adminWorkCalendarTimeline(r *http.Request, since time.Time, fil
 		result = result[:limit]
 	}
 	return result
+}
+
+func adminCalendarSpecChangeSummary(diff analyzer.RevisionDiff) string {
+	if len(diff.Changes) == 0 {
+		return "spec revision 변경 감지 · 상세 Diff에서 변경 필드 확인"
+	}
+	labels := map[string]string{"image": "이미지", "env": "환경변수", "resources": "CPU·Memory 리소스", "replica": "replica", "ingress_host": "Ingress host"}
+	parts := []string{}
+	for _, highlight := range diff.Highlights {
+		if label := labels[highlight]; label != "" {
+			parts = append(parts, label)
+		}
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "기타 spec")
+	}
+	// Do not expose old/new env values in the calendar; the masked Diff view owns details.
+	return strings.Join(parts, "·") + " · " + strconv.Itoa(len(diff.Changes)) + "개 필드 변경"
 }
 
 func adminTimelineDimensionMatches(clusterID, namespace, kind, name string, filters map[string]string) bool {

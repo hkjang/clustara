@@ -65,6 +65,8 @@ JupyterHub 서비스 상세의 **JupyterHub API 설정**에서 서비스 계정 
 
 위험 범위는 기본적으로 **애플리케이션**을 표시하며 `kube-system`·`openshift-*`·service mesh·GitOps 등 플랫폼 관리 namespace는 **K8s·플랫폼 관리** 범위로 분리합니다. **모두 표시**로 합쳐 볼 수 있고 Node처럼 클러스터 범위의 중요 신호는 기본 목록에도 유지됩니다. Job/CronJob Pod의 완료·재시도는 RestartStorm·일반 Pod 위험에서 제외하고 Job Condition·backoffLimit·deadline·CronJob missed schedule로 판정합니다.
 
+장애 워룸은 기본으로 `open` 상태만 표시하고 **해결된 이력 포함**을 선택할 때만 이력을 합쳐 보여줍니다. 이전 버전이 남긴 Job/CronJob RestartStorm은 open·resolved 목록 모두에서 기본 숨김 처리하며 실제 `JobFailing`은 유지합니다.
+
 전 클러스터를 가로질러 **클러스터 위험 TOP5 · 장애 후보 TOP10 · 최근 변경 TOP10 · 비용 TOP10**을 한 화면에 모읍니다. 각 항목에서 해당 리소스의 변경 타임라인/Diff로 딥링크됩니다. 하루 운영을 여기서 시작하세요.
 
 - 위험 점수 = (RCA high/critical ×3) + (위험 인벤토리 수) + (error 상태 클러스터 ×5)

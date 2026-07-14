@@ -21,14 +21,25 @@ func (s *Server) handleK8sIncidents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
+		status := strings.TrimSpace(q.Get("status"))
+		if status == "" {
+			status = "open"
+		} else if strings.EqualFold(status, "all") {
+			status = ""
+		}
 		incs, err := s.db.ListK8sIncidents(r.Context(), store.K8sIncidentFilter{
-			ClusterID: q.Get("cluster_id"), Status: q.Get("status"), Limit: intParam(q.Get("limit"), 100),
+			ClusterID: q.Get("cluster_id"), Status: status, Limit: intParam(q.Get("limit"), 100),
 		})
 		if err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_incidents_failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"incidents": incs, "count": len(incs)})
+		suppressed := 0
+		if !strings.EqualFold(q.Get("include_suppressed"), "true") {
+			items, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: q.Get("cluster_id"), Limit: 4000})
+			incs, suppressed = filterSuppressedIncidents(incs, items)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"incidents": incs, "count": len(incs), "suppressed_noise": suppressed, "status_filter": firstNonEmpty(status, "all")})
 	case http.MethodPost:
 		s.scanK8sIncidents(w, r)
 	default:

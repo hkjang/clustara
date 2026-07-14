@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.150** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.151** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.150)
+## 기능 상태 (v0.9.151)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -38,7 +38,7 @@
 | Personal Workspace UX — 로그아웃 메뉴 위와 상단 `내 영역` 메뉴에서 내 홈, 업무 캘린더, 개인 키, 나의 외부연동, 개인화 설정을 제공하고 `/me/work-calendar`로 나와 관련된 운영 업무를 날짜별 집계 | ✅ (v0.9.113) |
 | Manifest Change Risk Explain & Verification Sync — K8s Action 및 Manifest 변경 요청에 필드/정책 기반 위험도 사유(Reason) 설명 모달을 연동하고, 검증 완료 시 백그라운드 수집 주기 격차(timing gap)로 인한 대기 상태에 대해 passed_pending_observation으로 자동 정합 | ✅ (v0.9.114) |
 | Manifest Change Live API Verification — 백그라운드 인벤토리 수집 주기 딜레이를 우회하도록 API 서버에 실시간 직접 읽기(ResourceGetter)를 연동해 timing gap 오탐을 최소화하고, Job과 Pod warning 관계 매핑 및 상세 판정 사유(execution_failed, verified_with_warning, observation_pending 등) UI 연동 | ✅ (v0.9.115) |
-| Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하고, Pod·워크로드 새 생성·이미지 버전 변경·주요 Warning을 별도 일별 운영 이벤트 타임라인으로 제공 | ✅ (v0.9.116) |
+| Admin Work Calendar — 전체 클러스터·네임스페이스·역할 대상 운영 액션/Config/YAML/Exec/Debug 작업을 월별/날짜별 달력과 대규모 목록으로 모니터링하고, 새 리소스·일반 spec·이미지·환경변수·CPU/Memory resource·replica 변경·주요 Warning을 별도 일별 운영 이벤트 타임라인으로 제공하며 환경변수 값은 노출하지 않음 | ✅ (v0.9.116) |
 | Reasoning Agent Stream & Calendar Names — Ollama 등 추론형 모델의 생각 과정(thinking) 스트리밍 토글 렌더링을 보강하고, 전체 업무 캘린더의 담당자 ID(UUID/Email)를 실시간 사용자 디렉토리(User Directory)와 결합해 인체공학적인 담당자 실명으로 매핑 표시 | ✅ (v0.9.118) |
 | Manifest Studio Secret Guard & Policy UX — Manifest 생성/변경 화면에 data/stringData 페이로드 탐지 및 저장 차단(Secret 안전 경로 유도 모달)을 추가하고, 정책 센터에 각 규칙 유형(Rule Type)의 해설 카탈로그(Help UI) 및 정책 토글 스위치 제공 | ✅ (v0.9.119) |
 | Node & GPU Operations Monitoring — 60초 CPU/Memory 실사용·추세·장애 선행 경보, GPU/MIG/DCGM 워크로드·낭비·VRAM·XID/ECC/NVLink·비용, 승인형 격리, YAML/타임라인/그래프 딥링크 | ✅ (v0.9.120) |

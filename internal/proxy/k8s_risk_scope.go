@@ -65,6 +65,32 @@ func filterBatchPodIncidentDrafts(drafts []analyzer.IncidentDraft, owners map[st
 	return out
 }
 
+func filterSuppressedIncidents(incidents []store.K8sIncident, items []store.K8sInventoryItem) ([]store.K8sIncident, int) {
+	owners := k8sPodOwnerIndex(items)
+	jobs := map[string]bool{}
+	for _, item := range items {
+		if item.Kind == "Job" || item.Kind == "CronJob" {
+			jobs[item.ClusterID+"|"+item.Namespace+"|"+item.Name] = true
+		}
+	}
+	out := make([]store.K8sIncident, 0, len(incidents))
+	suppressed := 0
+	for _, incident := range incidents {
+		batchStorm := strings.EqualFold(incident.Condition, "RestartStorm") && (strings.EqualFold(incident.Kind, "Job") || strings.EqualFold(incident.Kind, "CronJob") ||
+			jobs[incident.ClusterID+"|"+incident.Namespace+"|"+incident.Name])
+		if strings.EqualFold(incident.Condition, "RestartStorm") && strings.EqualFold(incident.Kind, "Pod") {
+			owner := owners[incident.ClusterID+"|"+incident.Namespace+"|"+incident.Name]
+			batchStorm = strings.EqualFold(owner.Kind, "Job") || strings.EqualFold(owner.Kind, "CronJob")
+		}
+		if batchStorm {
+			suppressed++
+			continue
+		}
+		out = append(out, incident)
+	}
+	return out, suppressed
+}
+
 func isK8sSystemNamespace(namespace string) bool {
 	ns := strings.ToLower(strings.TrimSpace(namespace))
 	if ns == "" {

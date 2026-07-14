@@ -1,3 +1,6 @@
+v0.9.151:
+- **Incident Active-list Cleanup & Field-aware Calendar Events (v0.9.151)**: 장애 워룸의 기본 목록을 `open` 상태로 한정하고 **해결된 이력 포함** 옵션을 추가했습니다. 이전 버전이 남긴 Job/CronJob RestartStorm은 open·resolved 목록 모두에서 기본 숨김하고 숨김 건수를 표시하며, 실제 `JobFailing`은 유지합니다. 전체 업무 캘린더는 리비전의 필드 Diff를 비교해 일반 spec·이미지·환경변수·CPU/Memory resource·replica·Ingress host 변경을 주요 운영 이벤트로 분류하며, 환경변수는 민감값 대신 변경 필드 건수만 표시합니다.
+
 v0.9.150:
 - **Batch-aware Risk Noise Governance (v0.9.150)**: Job/CronJob이 생성한 유한 실행 Pod를 일반 서비스형 RestartStorm·Pod 위험 집계·자동 장애 북마크·예방 Metric Incident에서 제외하고, Job Failed Condition·backoffLimit·deadline·CronJob 실행/성공 결과로 판정하도록 분리했습니다. 기존 버전이 생성한 Job/CronJob RestartStorm Incident는 다음 스캔에서 자동 종료합니다. 운영 홈 위험 목록은 애플리케이션(기본)·K8s/플랫폼 관리·모두 표시 범위로 분리해 `kube-system`, `openshift-*`, service mesh, GitOps 등 플랫폼 리소스를 필요할 때만 확인할 수 있게 했으며 Node처럼 클러스터 범위의 중요 신호는 기본 목록에 유지합니다.
 
