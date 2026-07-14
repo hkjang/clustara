@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -65,9 +66,12 @@ func (s *Server) handleK8sCost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := analyzer.EstimateCost(items, prices, nsTeam, nsCC, clusterGroup)
+	metrics, _ := s.db.ListK8sMetricSamples(r.Context(), r.URL.Query().Get("cluster_id"), 10000)
+	forecast := analyzer.BuildCostForecast(items, metrics, prices)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"report": report,
-		"note":   "워크로드 resource request × 단가로 추정한 월 비용입니다. 단가는 설정에서 조정하세요.",
+		"report":   report,
+		"forecast": forecast,
+		"note":     "기준 비용은 resource request × 단가, 실사용 조정치는 최신 CPU·Memory usage에 안정성 headroom 30%를 적용합니다. 스토리지·네트워크·라이선스·클라우드 할인은 포함하지 않은 운영 추정치입니다.",
 	})
 }
 
@@ -125,10 +129,10 @@ func (s *Server) handleK8sCostRecommendations(w http.ResponseWriter, r *http.Req
 		total += rec.MonthlySavingsKRW
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recommendations":         recs,
-		"count":                   len(recs),
+		"recommendations":           recs,
+		"count":                     len(recs),
 		"total_monthly_savings_krw": total,
-		"note":                    "request 대비 실사용(usage×1.3) 기준 권장값입니다. down=절감 후보, up=과소할당(증설 권고).",
+		"note":                      "request 대비 실사용(usage×1.3) 기준 권장값입니다. down=절감 후보, up=과소할당(증설 권고).",
 	})
 }
 
@@ -149,10 +153,55 @@ func (s *Server) handleK8sCostTrend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trend := analyzer.ComputeCostTrend(snaps)
+	daily, monthly := buildK8sCostHistory(snaps)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"trend": trend,
-		"note":  "일별 비용 스냅샷(POST /admin/k8s/cost/snapshot)을 누적해 산출합니다. 2일 이상 누적되면 증가율이 표시됩니다.",
+		"trend":          trend,
+		"daily_series":   daily,
+		"monthly_series": monthly,
+		"history_days":   len(daily),
+		"note":           "일별 비용 스냅샷을 합산한 월 환산 추정치입니다. 월별 값은 해당 월의 마지막 스냅샷이며 실제 청구액이 아닙니다.",
 	})
+}
+
+type k8sCostHistoryPoint struct {
+	Period     string  `json:"period"`
+	MonthlyKRW float64 `json:"monthly_krw"`
+	DailyKRW   float64 `json:"daily_krw"`
+	HourlyKRW  float64 `json:"hourly_krw"`
+}
+
+func buildK8sCostHistory(snaps []store.K8sCostSnapshot) ([]k8sCostHistoryPoint, []k8sCostHistoryPoint) {
+	dayTotals := map[string]float64{}
+	for _, snap := range snaps {
+		if len(snap.Day) >= 10 {
+			dayTotals[snap.Day[:10]] += snap.MonthlyKRW
+		}
+	}
+	days := make([]string, 0, len(dayTotals))
+	for day := range dayTotals {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	daily := make([]k8sCostHistoryPoint, 0, len(days))
+	monthLatest := map[string]k8sCostHistoryPoint{}
+	for _, day := range days {
+		monthly := dayTotals[day]
+		point := k8sCostHistoryPoint{Period: day, MonthlyKRW: monthly, DailyKRW: monthly / 30.4375, HourlyKRW: monthly / 730}
+		daily = append(daily, point)
+		monthLatest[day[:7]] = point
+	}
+	months := make([]string, 0, len(monthLatest))
+	for month := range monthLatest {
+		months = append(months, month)
+	}
+	sort.Strings(months)
+	monthly := make([]k8sCostHistoryPoint, 0, len(months))
+	for _, month := range months {
+		point := monthLatest[month]
+		point.Period = month
+		monthly = append(monthly, point)
+	}
+	return daily, monthly
 }
 
 // handleK8sCostConfig reads/sets the cost unit prices. GET/POST /admin/k8s/cost/config

@@ -534,6 +534,18 @@ const adminHTML = `<!doctype html>
     .node-spark-button { display:block; padding:3px; border:1px solid transparent; border-radius:8px; background:transparent; color:inherit; cursor:zoom-in; text-align:left; }
     .node-spark-button:hover,.node-spark-button:focus-visible { border-color:var(--accent); background:var(--panel-alt); }
     .node-trend-chart { width:100%; min-height:320px; display:block; border:1px solid var(--line); border-radius:10px; background:var(--panel-alt); }
+    .cost-viz-grid { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(280px,.8fr); gap:14px; }
+    .cost-chart { width:100%; min-height:300px; display:block; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,var(--panel-alt),var(--panel)); }
+    .cost-period-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    .cost-period-tabs button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .cost-share-row { display:grid; grid-template-columns:minmax(90px,1fr) minmax(100px,2fr) auto; gap:8px; align-items:center; margin:9px 0; font-size:12px; }
+    .cost-share-track { height:10px; overflow:hidden; border-radius:999px; background:var(--panel-alt); border:1px solid var(--line); }
+    .cost-share-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,var(--accent),#22c55e); }
+    .cost-insight-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }
+    .cost-insight { padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--panel-alt); }
+    .cost-insight span { display:block; color:var(--muted); font-size:11px; }
+    .cost-insight strong { display:block; margin-top:4px; font-size:16px; }
+    @media (max-width:900px) { .cost-viz-grid { grid-template-columns:1fr; } .cost-insight-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     .node-trend-ranges { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px; }
     .node-monitor-table { overflow:auto; }
     .node-monitor-table table { min-width:1280px; }
@@ -15610,6 +15622,26 @@ const adminHTML = `<!doctype html>
     }
 
     // ---------- K8s 비용 대시보드 (DW-08 / FinOps) ----------
+    function k8sCostChartSVG(points, mode) {
+      const rows=(points||[]).filter(x=>Number.isFinite(Number(x.value))), w=820,h=300,left=68,right=22,top=24,bottom=46,pw=w-left-right,ph=h-top-bottom;
+      if(!rows.length)return '<div class="empty">선택 기간의 비용 스냅샷이 없습니다. 일별 스냅샷을 기록하면 추세가 누적됩니다.</div>';
+      const max=Math.max(1,...rows.map(x=>Number(x.value)||0)), x=i=>left+(rows.length===1?pw/2:i*pw/(rows.length-1)), y=v=>top+ph-(Number(v)||0)/max*ph;
+      const line=rows.map((p,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(p.value).toFixed(1)).join(' '), area=line+' L '+x(rows.length-1).toFixed(1)+' '+(top+ph)+' L '+x(0).toFixed(1)+' '+(top+ph)+' Z';
+      const grids=[0,.25,.5,.75,1].map(v=>{const yy=top+ph*(1-v);return '<line x1="'+left+'" y1="'+yy+'" x2="'+(w-right)+'" y2="'+yy+'" stroke="var(--line)"/><text x="'+(left-8)+'" y="'+(yy+4)+'" text-anchor="end" font-size="10" fill="var(--muted)">'+escapeHTML(fmt(Math.round(max*v)))+'</text>';}).join('');
+      const labelStep=Math.max(1,Math.ceil(rows.length/6)), labels=rows.map((p,i)=>(i%labelStep===0||i===rows.length-1)?'<text x="'+x(i)+'" y="'+(h-18)+'" text-anchor="middle" font-size="10" fill="var(--muted)">'+escapeHTML(p.label)+'</text>':'').join('');
+      const dots=rows.map((p,i)=>'<circle cx="'+x(i)+'" cy="'+y(p.value)+'" r="4" fill="var(--accent)"><title>'+escapeHTML(p.label+' · '+fmt(Math.round(p.value))+' KRW')+'</title></circle>').join('');
+      return '<svg class="cost-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="'+escapeAttr(mode+' 비용 추세')+'"><defs><linearGradient id="costAreaGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".34"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".02"/></linearGradient></defs>'+grids+'<path d="'+area+'" fill="url(#costAreaGradient)"/><path d="'+line+'" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round"/>'+dots+labels+'</svg>';
+    }
+    function k8sCostRenderPeriod(mode) {
+      const state=window.__k8sCostViz||{}, host=document.getElementById('k8s-cost-chart-host'), note=document.getElementById('k8s-cost-chart-note'); if(!host)return;
+      let points=[], text='';
+      if(mode==='hourly'){points=state.hourly||[];text='현재 월 추정치를 730시간으로 환산한 향후 24시간 누적 run-rate입니다. 실제 시간별 청구액이 아닙니다.';}
+      if(mode==='daily'){points=state.daily||[];text='일별 스냅샷 시점의 월 환산 추정 비용입니다. 하루 한 번 이상 자동 기록해야 연속 추세가 형성됩니다.';}
+      if(mode==='monthly'){points=state.monthly||[];text='각 월의 마지막 일별 스냅샷을 대표값으로 사용한 월 추세입니다. 실제 청구서 금액과 구분됩니다.';}
+      host.innerHTML=k8sCostChartSVG(points,mode); if(note)note.textContent=text;
+      document.querySelectorAll('.cost-period-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.period===mode));
+    }
+    window.k8sCostSelectPeriod = mode => k8sCostRenderPeriod(mode);
     async function renderK8sCost(params) {
       const view = document.getElementById('view');
       const clusterId = (params && params.get('cluster_id')) || '';
@@ -15630,6 +15662,7 @@ const adminHTML = `<!doctype html>
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(cl =>
         '<option value="' + escapeAttr(cl.id) + '"' + (cl.id === clusterId ? ' selected' : '') + '>' + escapeHTML(cl.name) + '</option>').join('');
       const r = data.report || {};
+      const forecast = data.forecast || {};
       const prices = (cfg && cfg.prices) || {};
       const won = (v) => fmt(Math.round(v || 0));
       const lineTable = (title, lines) => {
@@ -15639,11 +15672,23 @@ const adminHTML = `<!doctype html>
         return card(title, '<div class="card-body"><table><thead><tr><th>구분</th><th>Pod</th><th>vCPU</th><th>Mem(GB)</th><th>월 KRW</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
       };
 
+      const dailySeries=((trend&&trend.daily_series)||[]).slice(-30).map(x=>({label:String(x.period||'').slice(5),value:Number(x.monthly_krw||0)}));
+      const monthlySeries=((trend&&trend.monthly_series)||[]).slice(-12).map(x=>({label:String(x.period||''),value:Number(x.monthly_krw||0)}));
+      const hourlyRate=Number(r.total_monthly_krw||0)/730, hourlySeries=Array.from({length:25},(_,i)=>({label:(i<10?'0':'')+i+'h',value:hourlyRate*i}));
+      window.__k8sCostViz={hourly:hourlySeries,daily:dailySeries,monthly:monthlySeries};
+      const nsLines=(r.by_namespace||[]), maxNS=Math.max(1,...nsLines.map(x=>Number(x.monthly_krw||0))), topNS=nsLines.slice(0,8).map((x,i)=>'<div class="cost-share-row"><span title="'+escapeAttr(x.key||'-')+'">'+escapeHTML(x.key||'-')+'</span><div class="cost-share-track"><div class="cost-share-fill" style="width:'+Math.max(2,Number(x.monthly_krw||0)/maxNS*100)+'%;opacity:'+(1-i*.07)+'"></div></div><strong>'+won(x.monthly_krw)+'</strong></div>').join('')||'<div class="empty">비용 대상이 없습니다.</div>';
+      const previousDaily=dailySeries.length>1?dailySeries[dailySeries.length-2].value:0, currentDaily=dailySeries.length?dailySeries[dailySeries.length-1].value:Number(r.total_monthly_krw||0), deltaPct=previousDaily?((currentDaily-previousDaily)/previousDaily*100):0;
+      const savings=Number((recs&&recs.total_monthly_savings_krw)||0), optimized=Math.max(0,Number(r.total_monthly_krw||0)-savings), confidence=Number(forecast.confidence_score||0), confidenceClass=confidence>=80?'':(confidence>=50?'warn':'error');
+      const visualization=card('비용 추세·구성 분석','<div class="card-body"><div class="cost-viz-grid"><div><div class="cost-period-tabs" role="tablist" aria-label="비용 그래프 기간"><button type="button" data-period="hourly" onclick="k8sCostSelectPeriod(\'hourly\')">24시간 환산</button><button type="button" class="active" data-period="daily" onclick="k8sCostSelectPeriod(\'daily\')">최근 30일</button><button type="button" data-period="monthly" onclick="k8sCostSelectPeriod(\'monthly\')">최근 12개월</button></div><div id="k8s-cost-chart-host">'+k8sCostChartSVG(dailySeries,'daily')+'</div><p id="k8s-cost-chart-note" class="muted" style="font-size:11px">일별 스냅샷 시점의 월 환산 추정 비용입니다. 하루 한 번 이상 자동 기록해야 연속 추세가 형성됩니다.</p></div><div><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h3 style="margin:0">Namespace 비용 비중</h3><span class="status">TOP '+fmt(Math.min(8,nsLines.length))+'</span></div>'+topNS+'<p class="muted" style="font-size:11px">막대는 현재 월 추정치 기준 상대 비중입니다.</p></div></div><div class="cost-insight-strip"><div class="cost-insight"><span>시간당 환산</span><strong>'+won(hourlyRate)+' KRW</strong></div><div class="cost-insight"><span>전일 스냅샷 대비</span><strong style="color:'+(deltaPct>0?'var(--bad)':(deltaPct<0?'#16a34a':'inherit'))+'">'+(deltaPct>0?'+':'')+fmt(Math.round(deltaPct*10)/10)+'%</strong></div><div class="cost-insight"><span>Rightsizing 후 예상</span><strong>'+won(optimized)+' KRW</strong></div><div class="cost-insight"><span>추정 신뢰도</span><strong><span class="status '+confidenceClass+'">'+fmt(confidence)+' · '+escapeHTML(forecast.confidence_level||'low')+'</span></strong></div></div></div>');
+      const modelDetails=card('추정 모델·신뢰도','<div class="card-body"><div class="kpis">'+kpi('Request 기준',won(forecast.baseline_monthly_krw||r.total_monthly_krw)+' KRW')+kpi('실사용 조정',won(forecast.usage_adjusted_monthly_krw)+' KRW')+kpi('Metric Coverage',fmt(forecast.metric_coverage_pct||0)+'%')+kpi('Request Coverage',fmt(forecast.request_coverage_pct||0)+'%')+'</div><div class="kv" style="margin-top:10px">'+row('CPU 비용',won(forecast.cpu_cost_monthly_krw)+' KRW')+row('Memory 비용',won(forecast.memory_cost_monthly_krw)+' KRW')+row('관측 Pod',fmt(forecast.metric_covered_pods||0)+' / 비용 산정 '+fmt(forecast.costed_pods||0)+' · 전체 '+fmt(forecast.total_pods||0))+row('미산정 Pod',fmt(forecast.uncosted_pods||0)+'개 · request 미설정')+row('계산 방식',escapeHTML(forecast.method||'resource request baseline'))+'</div><div class="banner warn" style="margin-top:10px">스토리지·네트워크 egress·LoadBalancer·GPU 단가·라이선스·약정 할인은 아직 포함하지 않습니다. 실사용 조정치는 최신 CPU·Memory 사용량에 '+fmt(forecast.headroom_pct||30)+'% 안정성 여유를 적용한 시나리오입니다.</div></div>');
+
       view.innerHTML =
         section('K8s 비용', '<div class="kpis">' +
           kpi('월 추정 총비용', won(r.total_monthly_krw) + ' KRW') +
           kpi('CPU 단가', won(prices.cpu_core_monthly_krw) + '/core') +
-          kpi('Mem 단가', won(prices.mem_gb_monthly_krw) + '/GB') + '</div>') +
+          kpi('Mem 단가', won(prices.mem_gb_monthly_krw) + '/GB') +
+          kpi('절감 가능', won(savings) + ' KRW') + '</div>') +
+        visualization + modelDetails +
         card('단가 설정',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
           '<select id="k8scost-cluster" onchange="k8sCostGo()">' + clusterOpts + '</select>' +

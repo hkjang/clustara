@@ -34,6 +34,88 @@ type CostReport struct {
 	Prices          CostPrices `json:"prices"`
 }
 
+// CostForecast separates the request-based allocation baseline from a usage-adjusted scenario.
+// UsageAdjustedMonthlyKRW uses the latest observed Pod usage with 30% reliability headroom for
+// covered Pods and keeps request cost for uncovered Pods. It is an operational forecast, not a bill.
+type CostForecast struct {
+	BaselineMonthlyKRW      float64 `json:"baseline_monthly_krw"`
+	UsageAdjustedMonthlyKRW float64 `json:"usage_adjusted_monthly_krw"`
+	CPUCostMonthlyKRW       float64 `json:"cpu_cost_monthly_krw"`
+	MemoryCostMonthlyKRW    float64 `json:"memory_cost_monthly_krw"`
+	MetricCoveragePct       float64 `json:"metric_coverage_pct"`
+	RequestCoveragePct      float64 `json:"request_coverage_pct"`
+	ConfidenceScore         int     `json:"confidence_score"`
+	ConfidenceLevel         string  `json:"confidence_level"`
+	TotalPods               int     `json:"total_pods"`
+	CostedPods              int     `json:"costed_pods"`
+	MetricCoveredPods       int     `json:"metric_covered_pods"`
+	UncostedPods            int     `json:"uncosted_pods"`
+	HeadroomPct             int     `json:"headroom_pct"`
+	Method                  string  `json:"method"`
+}
+
+func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetricSample, prices CostPrices) CostForecast {
+	if prices.CPUCoreMonthlyKRW == 0 && prices.MemGBMonthlyKRW == 0 {
+		prices = DefaultCostPrices
+	}
+	latest := map[string]store.K8sMetricSample{}
+	for _, sample := range metrics { // store returns newest first
+		if sample.ResourceKind != "Pod" {
+			continue
+		}
+		key := sample.ClusterID + "|" + sample.Namespace + "|" + sample.ResourceName
+		if _, exists := latest[key]; !exists {
+			latest[key] = sample
+		}
+	}
+	forecast := CostForecast{HeadroomPct: 30, Method: "resource request baseline + latest usage with 30% reliability headroom"}
+	adjusted := 0.0
+	for _, item := range items {
+		if item.Kind != "Pod" {
+			continue
+		}
+		forecast.TotalPods++
+		reqCPU := float64(podRequestCPU(item.Spec)) / 1000
+		reqMem := float64(podRequestMemBytes(item.Spec)) / float64(1<<30)
+		cpuCost, memCost := reqCPU*prices.CPUCoreMonthlyKRW, reqMem*prices.MemGBMonthlyKRW
+		requestCost := cpuCost + memCost
+		if requestCost <= 0 {
+			forecast.UncostedPods++
+			continue
+		}
+		forecast.CostedPods++
+		forecast.CPUCostMonthlyKRW += cpuCost
+		forecast.MemoryCostMonthlyKRW += memCost
+		key := item.ClusterID + "|" + item.Namespace + "|" + item.Name
+		if usage, ok := latest[key]; ok {
+			forecast.MetricCoveredPods++
+			adjusted += usage.CPUMillicores/1000*1.3*prices.CPUCoreMonthlyKRW + usage.MemoryBytes/float64(1<<30)*1.3*prices.MemGBMonthlyKRW
+		} else {
+			adjusted += requestCost
+		}
+	}
+	forecast.BaselineMonthlyKRW = round2(forecast.CPUCostMonthlyKRW + forecast.MemoryCostMonthlyKRW)
+	forecast.UsageAdjustedMonthlyKRW = round2(adjusted)
+	forecast.CPUCostMonthlyKRW = round2(forecast.CPUCostMonthlyKRW)
+	forecast.MemoryCostMonthlyKRW = round2(forecast.MemoryCostMonthlyKRW)
+	if forecast.CostedPods > 0 {
+		forecast.MetricCoveragePct = round2(float64(forecast.MetricCoveredPods) / float64(forecast.CostedPods) * 100)
+	}
+	if forecast.TotalPods > 0 {
+		forecast.RequestCoveragePct = round2(float64(forecast.CostedPods) / float64(forecast.TotalPods) * 100)
+	}
+	forecast.ConfidenceScore = int(math.Round(forecast.MetricCoveragePct*0.7 + forecast.RequestCoveragePct*0.3))
+	switch {
+	case forecast.ConfidenceScore >= 80:
+		forecast.ConfidenceLevel = "high"
+	case forecast.ConfidenceScore >= 50:
+		forecast.ConfidenceLevel = "medium"
+	default:
+		forecast.ConfidenceLevel = "low"
+	}
+	return forecast
+}
+
 // EstimateCost estimates monthly cost per Pod from CPU/memory requests and rolls it up by
 // namespace, owning team, cluster group and cost center. The lookup maps are keyed:
 //

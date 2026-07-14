@@ -1,3 +1,6 @@
+v0.9.147:
+- **Kubernetes FinOps Visual Analytics & Confidence Forecast (v0.9.147)**: K8s 비용 화면을 운영형 시각화 대시보드로 개선해 현재 월 추정치의 24시간 누적 환산, 최근 30일 일별 스냅샷, 최근 12개월 월별 대표 추세와 Namespace 비용 비중 막대를 제공합니다. 전일 대비, 시간당 환산, Rightsizing 절감 후 예상 비용을 한 화면에서 비교하며 그래프별로 실제 청구액과 환산·예측치의 차이를 명시합니다. 추정 모델은 기존 resource request 기준선과 최신 CPU·Memory usage에 30% 안정성 headroom을 적용한 실사용 조정 시나리오를 분리하고 Metric coverage·Request coverage·미산정 Pod를 결합한 신뢰도 점수, CPU/Memory 비용 구성을 제공합니다. 일별 스냅샷은 합산하고 월별 추세는 각 월의 마지막 관측값을 사용합니다.
+
 v0.9.146:
 - **Harbor-Aware Natural Language Builder & Ingress Service Discovery (v0.9.146)**: 서비스 홈의 AI Platform Agent에서 연결된 Harbor Registry, 암호화 Credential/Robot, Project, Repository, Tag·Digest를 단계적으로 탐색해 기존 이미지를 최종 배포 이미지로 선택할 수 있도록 개선했습니다. digest가 있으면 불변 `@sha256:` 참조를 우선하고 선택 출처·정책 의미를 계획 결과에 표시하며, Harbor 미연결 시 설정 화면으로 안내합니다. 서비스 자동 발견은 `Ingress backend → Service → selector → Workload Pod template` 관계를 추적해 Ingress를 기존 워크로드 후보의 외부 Endpoint 증적으로 병합하고, 연결되지 않은 고아 Ingress만 별도 검토 후보로 남겨 누락과 중복 등록을 함께 방지합니다.
 

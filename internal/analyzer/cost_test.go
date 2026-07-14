@@ -92,3 +92,21 @@ func TestEstimateCostDefaultPrices(t *testing.T) {
 		t.Fatalf("zero prices should fall back to defaults, got %+v", rep.Prices)
 	}
 }
+
+func TestBuildCostForecastSeparatesBaselineAndUsageScenario(t *testing.T) {
+	items := []store.K8sInventoryItem{
+		costPod("c1", "prod", "api", "1", "1Gi"),
+		costPod("c1", "prod", "worker", "1", "1Gi"),
+		{ClusterID: "c1", Namespace: "prod", Kind: "Pod", Name: "missing-requests", Spec: map[string]any{}},
+	}
+	metrics := []store.K8sMetricSample{{ClusterID: "c1", Namespace: "prod", ResourceKind: "Pod", ResourceName: "api", CPUMillicores: 500, MemoryBytes: 512 << 20}}
+	prices := CostPrices{CPUCoreMonthlyKRW: 10000, MemGBMonthlyKRW: 1000}
+	got := BuildCostForecast(items, metrics, prices)
+	if got.BaselineMonthlyKRW != 22000 || got.CostedPods != 2 || got.UncostedPods != 1 || got.MetricCoveredPods != 1 {
+		t.Fatalf("unexpected baseline coverage forecast: %+v", got)
+	}
+	// api usage scenario: (0.5 CPU + 0.5 GiB) * 1.3, worker falls back to requests.
+	if got.UsageAdjustedMonthlyKRW != 18150 || got.MetricCoveragePct != 50 || got.RequestCoveragePct < 66 || got.ConfidenceLevel != "medium" {
+		t.Fatalf("unexpected usage-adjusted forecast: %+v", got)
+	}
+}

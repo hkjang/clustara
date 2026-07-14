@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.146** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.147** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.146)
+## 기능 상태 (v0.9.147)
 
 | 기능 | 상태 |
 | --- | --- |
@@ -96,6 +96,7 @@
 | Service Impact Home — 워크로드 중심 카드(Pod 헬스 + Service/Ingress 노출 + HPA + 최근 변경 + 미해결 incident)로 서비스 blast radius를 위험 순으로 표시(`/admin/k8s/service-impact`, CLU-REQ-07) | ✅ (v0.9.18) |
 | Adaptive Collection Policy — agent 생존에 더해 클러스터 우선순위(label priority)·미해결 incident·watch 등록을 반영해 수집 주기 자동 조정(incident 시 강제 단축, 하한 15s, `/admin/k8s/collect-config` cadences, CLU-REQ-04) | ✅ (v0.9.19) |
 | Collection Cost Guard — 클러스터별 수집 저장 footprint(행 수×테이블별 평균 크기) 추정 + 수집 주기 기반 월 증가 예측 + 예산 초과 경고(`/admin/k8s/collection-cost`, CLU-REQ-11) | ✅ (v0.9.20) |
+| FinOps 비용 시각화 — 24시간 환산·30일 일별·12개월 월별 추세, Namespace 비용 비중, Rightsizing 후 시나리오, request/usage coverage 기반 추정 신뢰도 | ✅ (v0.9.147) |
 | Release Quality Gate 2.0 — AppVersion↔changelog↔문서 헤더/기능 상태 일치, changelog 중복·정렬·자기 버전 언급을 `go test`에서 강제하는 영구 게이트(CLU-REQ-13) | ✅ (v0.9.21) |
 | Domain Module Map — proxy/store 점진 분리를 위한 목표 도메인 경계·파일 매핑·추출 순서 정의(`docs/ARCHITECTURE_MODULES.md`, CLU-REQ-12) | ✅ (v0.9.22) |
 | K8s API Discovery + Schema Registry — aggregated discovery(`/apis`·`/api`)와 `/openapi/v3` root를 수집해 클러스터별 API resource 카탈로그·OpenAPI 문서 인덱스 캐싱(동적 리소스 인식·CRD 인식 토대, `/admin/k8s/discovery`, `/clusters/{id}/discover`, CLU-DISC-01/02/04/05/13) | ✅ (v0.9.23) |
