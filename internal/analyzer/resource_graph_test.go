@@ -13,11 +13,13 @@ func TestBuildResourceGraphLinksIngressServicePodPVCAndNode(t *testing.T) {
 			Spec: map[string]any{
 				"rules": []any{
 					map[string]any{
+						"host": "web.example.com",
 						"http": map[string]any{
 							"paths": []any{
 								map[string]any{
+									"path": "/api",
 									"backend": map[string]any{
-										"service": map[string]any{"name": "web"},
+										"service": map[string]any{"name": "web", "port": map[string]any{"number": float64(80)}},
 									},
 								},
 							},
@@ -26,7 +28,10 @@ func TestBuildResourceGraphLinksIngressServicePodPVCAndNode(t *testing.T) {
 				},
 			},
 		},
-		{ClusterID: "c1", Kind: "Service", Namespace: "default", Name: "web", Spec: map[string]any{"selector": map[string]any{"app": "web"}}},
+		{ClusterID: "c1", Kind: "Service", Namespace: "default", Name: "web", Spec: map[string]any{
+			"selector": map[string]any{"app": "web"},
+			"ports":    []any{map[string]any{"name": "http", "port": float64(80), "targetPort": "http-app", "nodePort": float64(30080), "protocol": "TCP"}},
+		}},
 		{ClusterID: "c1", Kind: "Deployment", Namespace: "default", Name: "web", Spec: map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}}},
 		{ClusterID: "c1", Kind: "Pod", Namespace: "default", Name: "web-123", Labels: map[string]string{"app": "web"}, RiskLevel: "high", Spec: map[string]any{
 			"nodeName": "node-1",
@@ -52,6 +57,31 @@ func TestBuildResourceGraphLinksIngressServicePodPVCAndNode(t *testing.T) {
 	if len(g.Impact.Teams) != 1 || g.Impact.Teams[0] != "platform" {
 		t.Fatalf("teams wrong: %+v", g.Impact.Teams)
 	}
+	assertGraphNodePorts(t, g.Nodes, "Ingress", []string{"web.example.com/api → web:80"})
+	assertGraphNodePorts(t, g.Nodes, "Service", []string{"http: 80/TCP → target http-app · nodePort 30080"})
+	for _, edge := range g.Edges {
+		if edge.Relation == "routes_to" && edge.Reason != "Ingress backend web.example.com/api → web:80" {
+			t.Fatalf("ingress edge should expose backend port, got %q", edge.Reason)
+		}
+	}
+}
+
+func assertGraphNodePorts(t *testing.T, nodes []ResourceGraphNode, kind string, want []string) {
+	t.Helper()
+	for _, node := range nodes {
+		if node.Kind == kind {
+			if len(node.Ports) != len(want) {
+				t.Fatalf("%s ports = %+v, want %+v", kind, node.Ports, want)
+			}
+			for i := range want {
+				if node.Ports[i] != want[i] {
+					t.Fatalf("%s ports = %+v, want %+v", kind, node.Ports, want)
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s node", kind)
 }
 
 func TestBuildResourceGraphDefaultViewExcludesIsolatedRBACNoise(t *testing.T) {

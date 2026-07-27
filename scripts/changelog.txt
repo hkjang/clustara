@@ -1,3 +1,6 @@
+v0.9.157:
+- **Port-Aware Kubernetes Resource Graph (v0.9.157)**: 리소스 그래프 API와 토폴로지 화면에 Ingress host/path/backend Service 포트, Service `port`·`targetPort`·`nodePort`·protocol·appProtocol, Pod와 Deployment·StatefulSet·DaemonSet·ReplicaSet·Job·CronJob의 containerPort·hostPort를 표시합니다. 숫자와 이름 기반 포트를 모두 보존하고 Service `targetPort`가 생략되면 `port` 기본값을 명시하며, 구형 Ingress `serviceName`·`servicePort` 스냅샷도 지원합니다. Ingress→Service 관계 근거에는 실제 라우팅 host/path와 backend 포트를 포함하고 토폴로지 노드·툴팁·노드 상세 카드에서 전체 포트 매핑을 확인할 수 있습니다.
+
 v0.9.156:
 - **Policy-Gated Rollout Ledger, Automatic Deployment Rollback & Evidence UX (v0.9.156)**: 정상 워크로드 즉시 롤아웃을 `rollout:view/request/execute/approve/rollback/force/policy-admin` 전용 권한으로 분리하고, 최고 관리자는 차단 항목이 없는 요청을 즉시 실행할 수 있도록 유지하면서 일반 요청자는 `rollout:execute`, 승인 실행자는 `rollout:approve`와 `rollout:execute`를 모두 갖도록 강제했습니다. 동일 `cluster_id + resource_uid`의 활성 롤아웃을 DB partial unique index로 단일화해 동시 요청 경합을 차단하고, 요청·Pod 교체·완료·실패·롤백 상태를 append-only 이벤트 원장에 저장합니다. 실행 전 Deployment Pod Template을 보존하고 실패 또는 시간 초과 시 Kubernetes strategic merge patch로 자동 복원하며, StatefulSet·DaemonSet은 안전 정책상 `manual_required`로 남깁니다. 진행 화면은 Pod 전환, 상태 이벤트, 자동 롤백 결과와 증적 JSON 다운로드를 함께 제공하고, Mattermost `k8s_rollout` 범주로 승인 대기·실행 시작·성공·실패·롤백 결과를 전송합니다.
 

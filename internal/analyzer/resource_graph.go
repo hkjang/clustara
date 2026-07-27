@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -8,25 +9,26 @@ import (
 )
 
 type ResourceGraphNode struct {
-	ID                 string  `json:"id"`
-	ClusterID          string  `json:"cluster_id"`
-	Kind               string  `json:"kind"`
-	Namespace          string  `json:"namespace"`
-	Name               string  `json:"name"`
-	Label              string  `json:"label"`
-	Status             string  `json:"status"`
-	RiskLevel          string  `json:"risk_level"`
-	Team               string  `json:"team"`
-	Service            string  `json:"service"`
-	Criticality        string  `json:"criticality"`
-	CostCenter         string  `json:"cost_center"`
-	Focus              bool    `json:"focus"`
-	CPUMillicores      float64 `json:"cpu_millicores,omitempty"`
-	MemoryBytes        float64 `json:"memory_bytes,omitempty"`
-	GPUUtilizationPct  float64 `json:"gpu_utilization_pct,omitempty"`
-	GPUMemoryUsedBytes float64 `json:"gpu_memory_used_bytes,omitempty"`
-	GPUObserved        bool    `json:"gpu_observed,omitempty"`
-	MetricsObservedAt  string  `json:"metrics_observed_at,omitempty"`
+	ID                 string   `json:"id"`
+	ClusterID          string   `json:"cluster_id"`
+	Kind               string   `json:"kind"`
+	Namespace          string   `json:"namespace"`
+	Name               string   `json:"name"`
+	Label              string   `json:"label"`
+	Status             string   `json:"status"`
+	RiskLevel          string   `json:"risk_level"`
+	Team               string   `json:"team"`
+	Service            string   `json:"service"`
+	Criticality        string   `json:"criticality"`
+	CostCenter         string   `json:"cost_center"`
+	Focus              bool     `json:"focus"`
+	CPUMillicores      float64  `json:"cpu_millicores,omitempty"`
+	MemoryBytes        float64  `json:"memory_bytes,omitempty"`
+	GPUUtilizationPct  float64  `json:"gpu_utilization_pct,omitempty"`
+	GPUMemoryUsedBytes float64  `json:"gpu_memory_used_bytes,omitempty"`
+	GPUObserved        bool     `json:"gpu_observed,omitempty"`
+	MetricsObservedAt  string   `json:"metrics_observed_at,omitempty"`
+	Ports              []string `json:"ports,omitempty"`
 }
 
 type ResourceGraphEdge struct {
@@ -92,6 +94,7 @@ func BuildResourceGraph(items []store.K8sInventoryItem, owners []store.K8sNamesp
 			ID: id, ClusterID: it.ClusterID, Kind: it.Kind, Namespace: it.Namespace, Name: it.Name,
 			Label: graphLabel(it.Kind, it.Namespace, it.Name), Status: it.Status, RiskLevel: it.RiskLevel,
 			Team: owner.Team, Service: owner.ServiceName, Criticality: owner.Criticality, CostCenter: owner.CostCenter,
+			Ports: graphPortDetails(it),
 		}
 		itemByKey[id] = it
 		itemsByKind[it.Kind] = append(itemsByKind[it.Kind], it)
@@ -148,8 +151,19 @@ func BuildResourceGraph(items []store.K8sInventoryItem, owners []store.K8sNamesp
 	// Ingress backend -> Service.
 	for _, ing := range itemsByKind["Ingress"] {
 		from := graphNodeID(ing.ClusterID, "Ingress", ing.Namespace, ing.Name)
-		for _, svcName := range ingressServiceNames(ing.Spec) {
-			addEdge(from, graphNodeID(ing.ClusterID, "Service", ing.Namespace, svcName), "routes_to", "Ingress backend service")
+		for _, backend := range ingressBackends(ing.Spec) {
+			reason := "Ingress backend"
+			if backend.Host != "" {
+				reason += " " + backend.Host
+			}
+			if backend.Path != "" {
+				reason += backend.Path
+			}
+			reason += " → " + backend.Service
+			if backend.Port != "" {
+				reason += ":" + backend.Port
+			}
+			addEdge(from, graphNodeID(ing.ClusterID, "Service", ing.Namespace, backend.Service), "routes_to", reason)
 		}
 	}
 
@@ -199,21 +213,172 @@ func graphLabel(kind, namespace, name string) string {
 	return namespace + "/" + kind + "/" + name
 }
 
-func ingressServiceNames(spec map[string]any) []string {
-	out := map[string]bool{}
-	addBackend := func(backend map[string]any) {
-		if name := str(asAnyMap(backend["service"])["name"]); name != "" {
-			out[name] = true
+type ingressGraphBackend struct {
+	Host, Path, Service, Port string
+}
+
+func ingressBackends(spec map[string]any) []ingressGraphBackend {
+	out := []ingressGraphBackend{}
+	seen := map[string]bool{}
+	addBackend := func(host, path string, backend map[string]any) {
+		svc := asAnyMap(backend["service"])
+		name := str(svc["name"])
+		// Keep older extensions/v1beta1 and networking.k8s.io/v1beta1 snapshots useful.
+		if name == "" {
+			name = str(backend["serviceName"])
+		}
+		if name == "" {
+			return
+		}
+		portSpec := asAnyMap(svc["port"])
+		port := valueString(portSpec["number"])
+		if port == "" {
+			port = str(portSpec["name"])
+		}
+		if port == "" {
+			port = valueString(backend["servicePort"])
+		}
+		key := host + "|" + path + "|" + name + "|" + port
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, ingressGraphBackend{Host: host, Path: path, Service: name, Port: port})
 		}
 	}
-	addBackend(asAnyMap(spec["defaultBackend"]))
+	addBackend("", "", asAnyMap(spec["defaultBackend"]))
 	for _, rawRule := range asAnySlice(spec["rules"]) {
-		http := asAnyMap(asAnyMap(rawRule)["http"])
+		rule := asAnyMap(rawRule)
+		host := str(rule["host"])
+		http := asAnyMap(rule["http"])
 		for _, rawPath := range asAnySlice(http["paths"]) {
-			addBackend(asAnyMap(asAnyMap(rawPath)["backend"]))
+			path := asAnyMap(rawPath)
+			addBackend(host, str(path["path"]), asAnyMap(path["backend"]))
 		}
 	}
-	return sortedKeys(out)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Host+out[i].Path+out[i].Service+out[i].Port < out[j].Host+out[j].Path+out[j].Service+out[j].Port
+	})
+	return out
+}
+
+func graphPortDetails(it store.K8sInventoryItem) []string {
+	ports := []string{}
+	switch it.Kind {
+	case "Ingress":
+		for _, b := range ingressBackends(it.Spec) {
+			route := b.Host
+			if route == "" {
+				route = "*"
+			}
+			if b.Path != "" {
+				route += b.Path
+			}
+			port := b.Service
+			if b.Port != "" {
+				port += ":" + b.Port
+			}
+			ports = append(ports, route+" → "+port)
+		}
+	case "Service":
+		for _, raw := range asAnySlice(it.Spec["ports"]) {
+			p := asAnyMap(raw)
+			servicePort := valueString(p["port"])
+			if servicePort == "" {
+				continue
+			}
+			label := str(p["name"])
+			if label != "" {
+				label += ": "
+			}
+			label += servicePort
+			protocol := str(p["protocol"])
+			if protocol == "" {
+				protocol = "TCP"
+			}
+			if label != "" {
+				label += "/" + protocol
+			}
+			target := valueString(p["targetPort"])
+			if target == "" {
+				target = servicePort + " (default)"
+			}
+			label += " → target " + target
+			if nodePort := valueString(p["nodePort"]); nodePort != "" {
+				label += " · nodePort " + nodePort
+			}
+			if appProtocol := str(p["appProtocol"]); appProtocol != "" {
+				label += " · " + appProtocol
+			}
+			if strings.TrimSpace(label) != "" {
+				ports = append(ports, label)
+			}
+		}
+	case "Pod":
+		ports = append(ports, containerPortDetails(it.Spec)...)
+	case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job":
+		ports = append(ports, containerPortDetails(asAnyMap(asAnyMap(it.Spec["template"])["spec"]))...)
+	case "CronJob":
+		jobSpec := asAnyMap(asAnyMap(it.Spec["jobTemplate"])["spec"])
+		ports = append(ports, containerPortDetails(asAnyMap(asAnyMap(jobSpec["template"])["spec"]))...)
+	}
+	return ports
+}
+
+func containerPortDetails(spec map[string]any) []string {
+	out := []string{}
+	for _, field := range []string{"initContainers", "containers", "ephemeralContainers"} {
+		for _, rawContainer := range asAnySlice(spec[field]) {
+			container := asAnyMap(rawContainer)
+			for _, rawPort := range asAnySlice(container["ports"]) {
+				p := asAnyMap(rawPort)
+				port := valueString(p["containerPort"])
+				if port == "" {
+					continue
+				}
+				label := str(container["name"])
+				if name := str(p["name"]); name != "" {
+					if label != "" {
+						label += "/"
+					}
+					label += name
+				}
+				if label != "" {
+					label += ": "
+				}
+				protocol := str(p["protocol"])
+				if protocol == "" {
+					protocol = "TCP"
+				}
+				label += port + "/" + protocol
+				if hostPort := valueString(p["hostPort"]); hostPort != "" {
+					label += " · hostPort " + hostPort
+				}
+				out = append(out, label)
+			}
+		}
+	}
+	return out
+}
+
+func valueString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch n := v.(type) {
+	case string:
+		return n
+	case float64:
+		return fmt.Sprintf("%g", n)
+	case float32:
+		return fmt.Sprintf("%g", n)
+	case int:
+		return fmt.Sprintf("%d", n)
+	case int32:
+		return fmt.Sprintf("%d", n)
+	case int64:
+		return fmt.Sprintf("%d", n)
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 func podPVCNames(spec map[string]any) []string {

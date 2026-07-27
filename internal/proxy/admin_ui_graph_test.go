@@ -13,6 +13,8 @@ func TestAdminUIIncludesResourceGraphTopologyCanvas(t *testing.T) {
 		"k8sGraphModalLink",
 		"토폴로지 맵",
 		"클릭하면 해당 리소스로 포커스 이동",
+		"portSummary",
+		"<strong>Ports</strong>",
 	} {
 		if !strings.Contains(adminHTML, want) {
 			t.Fatalf("admin UI should include resource graph topology marker %q", want)

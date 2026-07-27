@@ -12001,6 +12001,7 @@ const adminHTML = `<!doctype html>
             (n.team ? '<span class="pill">' + escapeHTML(n.team) + '</span>' : '') +
             (n.service ? '<span class="pill">' + escapeHTML(n.service) + '</span>' : '') +
           '</div>' +
+          ((n.ports || []).length ? '<div class="muted" style="margin-top:7px;font-size:11px;line-height:1.45"><strong>Ports</strong><br>' + n.ports.map(p => escapeHTML(p)).join('<br>') + '</div>' : '') +
           '<div style="margin-top:7px;font-size:12px">' + k8sYamlChangeLink(n.cluster_id, n.kind, n.namespace, n.name, 'YAML 변경') + '</div>' +
         '</div>').join('') + '</div>' +
         (((g && g.nodes) || []).length > nodes.length ? '<p class="muted" style="font-size:12px;margin:8px 0 0">상위 ' + nodes.length + '개만 표시했습니다.</p>' : '');
@@ -12125,7 +12126,7 @@ const adminHTML = `<!doctype html>
         if (risk) return risk;
         return k8sGraphNodeTitle(a).localeCompare(k8sGraphNodeTitle(b));
       }));
-      const nodeW = 178, nodeH = 72, colGap = 230, rowGap = 104, padX = 34, padY = 56;
+      const nodeW = 210, nodeH = 88, colGap = 270, rowGap = 120, padX = 34, padY = 56;
       let maxRows = 1;
       const pos = {};
       layers.forEach((layer, layerIdx) => {
@@ -12157,6 +12158,7 @@ const adminHTML = `<!doctype html>
         const p = pos[n.id];
         const riskClass = k8sSeverityClass(n.risk_level || '');
         const usage = String(n.kind || '').toLowerCase() === 'pod' && n.metrics_observed_at ? ('CPU ' + fmt(Math.round(n.cpu_millicores || 0)) + 'm / MEM ' + fmt(Math.round((n.memory_bytes || 0) / 1024 / 1024)) + 'Mi' + (n.gpu_observed ? ' / GPU ' + fmt(Math.round(n.gpu_utilization_pct || 0)) + '%' : '')) : '';
+        const portSummary = (n.ports || []).length ? ('Ports ' + (n.ports || []).join(' | ')) : '';
         const meta = [usage || n.namespace || '-', usage ? n.namespace : n.status || '', usage ? '' : n.team || n.service || ''].filter(Boolean).join(' · ');
         return '<a ' + k8sGraphNodeAnchorAttrs(n, radius || '2', !!modalMode) + '>' +
           '<g class="resource-graph-svg-node">' +
@@ -12164,8 +12166,9 @@ const adminHTML = `<!doctype html>
             '<circle class="rg-risk ' + riskClass + '" cx="' + (p.x + 14) + '" cy="' + (p.y + 16) + '" r="5"></circle>' +
             '<text class="rg-node-kind" x="' + (p.x + 26) + '" y="' + (p.y + 20) + '">' + escapeHTML(n.kind || '-') + (n.focus ? ' · FOCUS' : '') + '</text>' +
             '<text class="rg-node-name" x="' + (p.x + 14) + '" y="' + (p.y + 42) + '">' + escapeHTML(k8sGraphShortText(n.name || '-', 23)) + '</text>' +
-            '<text class="rg-node-meta" x="' + (p.x + 14) + '" y="' + (p.y + 61) + '">' + escapeHTML(k8sGraphShortText(meta, 28)) + '</text>' +
-            '<title>' + escapeHTML(k8sGraphNodeTitle(n) + (usage ? ' · ' + usage + (n.gpu_observed ? ' · VRAM ' + Math.round((n.gpu_memory_used_bytes || 0) / 1024 / 1024) + 'Mi' : '') : '')) + '</title>' +
+            '<text class="rg-node-meta" x="' + (p.x + 14) + '" y="' + (p.y + 61) + '">' + escapeHTML(k8sGraphShortText(meta, 33)) + '</text>' +
+            (portSummary ? '<text class="rg-node-meta" x="' + (p.x + 14) + '" y="' + (p.y + 79) + '">' + escapeHTML(k8sGraphShortText(portSummary, 36)) + '</text>' : '') +
+            '<title>' + escapeHTML(k8sGraphNodeTitle(n) + (usage ? ' · ' + usage + (n.gpu_observed ? ' · VRAM ' + Math.round((n.gpu_memory_used_bytes || 0) / 1024 / 1024) + 'Mi' : '') : '') + (portSummary ? ' · ' + portSummary : '')) + '</title>' +
           '</g></a>';
       }).join('');
       const omitted = allNodes.length > visibleNodes.length ? '<span class="pill">노드 ' + fmt(allNodes.length - visibleNodes.length) + '개는 표에서만 표시</span>' : '';
