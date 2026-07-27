@@ -60,6 +60,7 @@ var menuRegistry = []menuItem{
 	{ID: "ops.k8s_devtools", Label: "개발자 도구", Path: "#/k8s-devtools", Tab: "k8s-devtools", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_auth", Label: "인증·권한", Path: "#/k8s-auth", Tab: "k8s-auth", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_pods", Label: "Pod 관리", Path: "#/k8s-pods", Tab: "k8s-pods", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
+	{ID: "ops.k8s_terminal", Label: "웹 터미널", Path: "#/k8s-terminal", Tab: "k8s-terminal", Group: "ops", Scopes: []string{"admin:write"}, DataScope: "all"},
 	{ID: "ops.k8s_nodes", Label: "노드 관리", Path: "#/k8s-nodes", Tab: "k8s-nodes", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.k8s_developer", Label: "개발자 뷰", Path: "#/k8s-developer", Tab: "k8s-developer", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},
 	{ID: "ops.service_catalog", Label: "서비스 디렉터리", Path: "#/service-catalog", Tab: "service-catalog", Group: "ops", Scopes: []string{"admin:read"}, DataScope: "all"},

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // PodCommandExecutor is the non-interactive Pod exec surface used by Clustara's
@@ -26,6 +27,70 @@ import (
 type PodCommandExecutor interface {
 	PodExec(ctx context.Context, namespace, pod string, opts PodExecOptions) (PodExecResult, error)
 }
+
+// PodTerminalExecutor opens an interactive TTY stream to a Pod. The caller is
+// responsible for applying authorization, approval, duration, and audit policy.
+type PodTerminalExecutor interface {
+	OpenPodTerminal(ctx context.Context, namespace, pod string, opts PodTerminalOptions) (*PodTerminalStream, error)
+}
+
+type PodTerminalOptions struct {
+	Container string
+	Shell     string
+}
+
+type PodTerminalStream struct {
+	conn net.Conn
+	br   *bufio.Reader
+	mu   sync.Mutex
+}
+
+func (s *PodTerminalStream) SendInput(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeWebSocketFrame(s.conn, 0x2, append([]byte{0}, data...))
+}
+
+func (s *PodTerminalStream) Resize(cols, rows uint16) error {
+	if cols == 0 || rows == 0 {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]uint16{"Width": cols, "Height": rows})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeWebSocketFrame(s.conn, 0x2, append([]byte{4}, payload...))
+}
+
+// Receive returns one Kubernetes remotecommand channel payload. stdout is
+// channel 1, stderr channel 2, and channel 3 carries terminal status.
+func (s *PodTerminalStream) Receive() (byte, []byte, error) {
+	for {
+		op, payload, err := readWebSocketFrame(s.br)
+		if err != nil {
+			return 0, nil, err
+		}
+		switch op {
+		case 0x8:
+			return 0, nil, io.EOF
+		case 0x9:
+			s.mu.Lock()
+			err = writeWebSocketFrame(s.conn, 0xA, payload)
+			s.mu.Unlock()
+			if err != nil {
+				return 0, nil, err
+			}
+		case 0x1, 0x2:
+			if len(payload) > 0 {
+				return payload[0], payload[1:], nil
+			}
+		}
+	}
+}
+
+func (s *PodTerminalStream) Close() error { return s.conn.Close() }
 
 type PodExecOptions struct {
 	Container  string
@@ -58,6 +123,35 @@ func (c *HTTPClient) PodExec(ctx context.Context, namespace, pod string, opts Po
 		}
 	}
 	return c.podExecHTTP(ctx, namespace, pod, opts)
+}
+
+func (c *HTTPClient) OpenPodTerminal(ctx context.Context, namespace, pod string, opts PodTerminalOptions) (*PodTerminalStream, error) {
+	shell := strings.TrimSpace(opts.Shell)
+	if shell != "/bin/sh" && shell != "/bin/bash" && shell != "sh" && shell != "bash" {
+		return nil, fmt.Errorf("unsupported shell %q", shell)
+	}
+	u, _, err := c.podExecURL(namespace, pod, PodExecOptions{Container: opts.Container, CommandArg: []string{shell}})
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("stdin", "true")
+	q.Set("stdout", "true")
+	q.Set("stderr", "false")
+	q.Set("tty", "true")
+	u.RawQuery = q.Encode()
+	if u.Scheme == "https" {
+		u.Scheme = "wss"
+	} else if u.Scheme == "http" {
+		u.Scheme = "ws"
+	} else {
+		return nil, fmt.Errorf("unsupported exec scheme %q", u.Scheme)
+	}
+	conn, br, err := c.openExecWebSocket(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return &PodTerminalStream{conn: conn, br: br}, nil
 }
 
 func podExecArgs(opts PodExecOptions) ([]string, error) {

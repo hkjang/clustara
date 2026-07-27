@@ -6,6 +6,7 @@ const adminHTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clustara</title>
+  <link rel="stylesheet" href="/admin/assets/xterm/xterm.css">
   <style>
     :root[data-theme="light"], :root {
       color-scheme: light;
@@ -836,6 +837,9 @@ const adminHTML = `<!doctype html>
       #quick-access-results, #quick-access-resource-results, #quick-access-action-queue { max-height: 240px; }
     }
     #quick-pin-current.pinned { border-color: var(--accent); color: var(--accent); }
+    .terminal-shell { min-height: 520px; height: calc(100dvh - 330px); background:#0b1020; border:1px solid var(--line-strong); border-radius:8px; padding:8px; overflow:hidden; }
+    .terminal-shell .xterm { height:100%; }
+    .terminal-shell .xterm-viewport { overflow-y:auto !important; }
     .ux-context {
       display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
       margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line);
@@ -965,6 +969,7 @@ const adminHTML = `<!doctype html>
           <a href="#/k8s-devtools" data-tab="k8s-devtools">개발자 도구</a>
           <a href="#/k8s-auth" data-tab="k8s-auth">인증·권한</a>
           <a href="#/k8s-pods" data-tab="k8s-pods">Pod 관리</a>
+          <a href="#/k8s-terminal" data-tab="k8s-terminal">웹 터미널</a>
           <a href="#/k8s-nodes" data-tab="k8s-nodes">노드 관리</a>
           <a href="#/k8s-developer" data-tab="k8s-developer">개발자 뷰</a>
 		  <a href="#/service-catalog" data-tab="service-catalog">서비스 디렉터리</a>
@@ -1182,6 +1187,7 @@ const adminHTML = `<!doctype html>
 	<datalist id="ux-k8s-namespace-options"></datalist>
 	<datalist id="ux-k8s-kind-options"></datalist>
 
+  <script src="/admin/assets/xterm/xterm.js"></script>
   <script>
     // ---------- theme ----------
     function applyTheme(theme) {
@@ -1887,6 +1893,7 @@ const adminHTML = `<!doctype html>
       { tab: 'k8s-devtools', href: '#/k8s-devtools', label: '개발자 도구', group: '리소스', tags: 'servicemonitor podmonitor prometheusrule helm kustomization certificate tekton' },
       { tab: 'k8s-auth', href: '#/k8s-auth', label: '인증·권한', group: '리소스', tags: 'serviceaccount role rolebinding clusterrole rbac auth csr scc' },
       { tab: 'k8s-pods', href: '#/k8s-pods', label: 'Pod 관리', group: '리소스', tags: 'pod logs exec restart crashloop' },
+      { tab: 'k8s-terminal', href: '#/k8s-terminal', label: '웹 터미널', group: '리소스', tags: 'xterm terminal shell bash sh pod exec interactive tty' },
       { tab: 'k8s-nodes', href: '#/k8s-nodes', label: '노드 관리', group: '리소스', tags: 'node pressure cordon capacity' },
       { tab: 'k8s-developer', href: '#/k8s-developer', label: '개발자 뷰', group: '리소스', tags: 'developer request self service' },
       { tab: 'service-catalog', href: '#/service-catalog', label: '서비스 카탈로그', group: '리소스', tags: 'service catalog owner repo runtime scorecard developer platform' },
@@ -3169,6 +3176,7 @@ const adminHTML = `<!doctype html>
           case 'k8s-devtools': await renderK8sResourceCategory(params, 'devtools'); break;
           case 'k8s-auth': await renderK8sResourceCategory(params, 'auth'); break;
           case 'k8s-pods': await renderK8sPods(params); break;
+          case 'k8s-terminal': await renderK8sTerminal(params); break;
           case 'k8s-nodes': await renderK8sNodes(params); break;
           case 'k8s-developer': await renderK8sDeveloper(params); break;
           case 'service-catalog': await renderServiceCatalog(params); break;
@@ -9613,7 +9621,7 @@ const adminHTML = `<!doctype html>
 	  const nsOpts = '<option value="">전체 namespace</option>' + namespaces.map(v => '<option value="' + escapeAttr(v) + '"' + (v === ns ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
       const kindOpts = '<option value="">전체 Kind</option>' + (cat.kinds || []).map(k => '<option value="' + escapeAttr(k) + '"' + (k === kind ? ' selected' : '') + '>' + escapeHTML(k) + '</option>').join('');
       const riskOpts = ['critical', 'high', 'medium', 'low'].map(r => '<option value="' + r + '"' + (r === risk ? ' selected' : '') + '>' + r + '</option>').join('');
-      return '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(170px,1fr) minmax(150px,1fr) minmax(150px,1fr) minmax(120px,1fr) minmax(220px,2fr) auto auto">' +
+      return '<div class="card-body"><div class="inline-form" style="grid-template-columns:minmax(170px,1fr) minmax(150px,1fr) minmax(150px,1fr) minmax(120px,1fr) minmax(220px,2fr) auto auto auto">' +
 		'<select id="res-cluster">' + clusterOpts + '</select>' +
 		'<select id="res-ns">' + nsOpts + '</select>' +
         '<select id="res-kind">' + kindOpts + '</select>' +
@@ -9621,6 +9629,7 @@ const adminHTML = `<!doctype html>
         '<input id="res-q" value="' + escapeAttr(q) + '" placeholder="이름, label, image, apiVersion 검색" onkeydown="if(event.key===\'Enter\')k8sResourceCategoryGo(\'' + escapeAttr(cat.tab) + '\')">' +
         '<button type="button" onclick="k8sResourceCategoryGo(\'' + escapeAttr(cat.tab) + '\')">검색</button>' +
         '<button type="button" class="secondary" onclick="k8sResourceCategoryReset(\'' + escapeAttr(cat.tab) + '\')">초기화</button>' +
+		'<button type="button" class="secondary" onclick="openNamespaceRolloutFromFilter()">Namespace 롤아웃</button>' +
         '</div></div>';
     }
     window.k8sResourceCategoryGo = (tab) => {
@@ -9653,7 +9662,7 @@ const adminHTML = `<!doctype html>
         const ns = it.namespace || '-';
         const kindKey = k8sResourceKindKey(it.kind);
         const actions = [
-          ['deployment', 'statefulset', 'daemonset'].includes(kindKey) ? '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(it.cluster_id || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.namespace || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.kind || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.name || '')) + '\')">롤아웃</button>' : '',
+          ['deployment', 'statefulset', 'daemonset', 'pod'].includes(kindKey) ? '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(it.cluster_id || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.namespace || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.kind || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.name || '')) + '\')">' + (kindKey === 'pod' ? '소유 워크로드 롤아웃' : '롤아웃') + '</button>' : '',
           k8sYamlChangeLink(it.cluster_id, it.kind, it.namespace, it.name, 'YAML'),
           '<a href="' + escapeAttr(k8sResourceTimelineHref(it)) + '">이력</a>',
           kindKey === 'pod' ? k8sPodLink(it.cluster_id, it.namespace, it.name, 'Pod 상세') : '',
@@ -9674,14 +9683,42 @@ const adminHTML = `<!doctype html>
       const target = { clusterId: decodeURIComponent(cluster || ''), namespace: decodeURIComponent(ns || ''), kind: decodeURIComponent(kind || ''), name: decodeURIComponent(name || '') };
       try {
         const d = await api('/api/v1/workloads/rollout/precheck', { method: 'POST', body: JSON.stringify(target) });
-        const p = d.precheck || {}, checks = (p.checks || []).map(x => '<tr><td><span class="status ' + (x.status === 'blocked' ? 'error' : (x.status === 'warning' ? 'warn' : '')) + '">' + escapeHTML(x.status || '-') + '</span></td><td>' + escapeHTML(x.code || '-') + '</td><td>' + escapeHTML(x.message || '-') + '</td></tr>').join('');
+        const p = d.precheck || {}, resolved = d.target || target, checks = (p.checks || []).map(x => '<tr><td><span class="status ' + (x.status === 'blocked' ? 'error' : (x.status === 'warning' ? 'warn' : '')) + '">' + escapeHTML(x.status || '-') + '</span></td><td>' + escapeHTML(x.code || '-') + '</td><td>' + escapeHTML(x.message || '-') + '</td></tr>').join('');
         openModal('워크로드 즉시 롤아웃',
-          '<div class="card-body"><div class="kpis">' + kpi('대상', escapeHTML(target.kind + '/' + target.name)) + kpi('Ready', fmt(p.ready || 0) + '/' + fmt(p.desired || 0)) + kpi('전략', escapeHTML(p.strategy || '-')) + kpi('위험', escapeHTML(p.risk_level || '-')) + '</div>' +
+          '<div class="card-body"><div class="kpis">' + kpi('요청 기준', escapeHTML(target.kind + '/' + target.name)) + kpi('실제 대상', escapeHTML((resolved.kind || '-') + '/' + (resolved.name || '-'))) + kpi('Ready', fmt(p.ready || 0) + '/' + fmt(p.desired || 0)) + kpi('위험', escapeHTML(p.risk_level || '-')) + '</div>' +
           '<table><thead><tr><th>판정</th><th>검사</th><th>설명</th></tr></thead><tbody>' + checks + '</tbody></table>' +
           '<div class="ui-form" style="margin-top:12px"><label>롤아웃 사유<input id="rollout-reason" placeholder="필수: 재기동 사유"></label><label>변경 티켓<input id="rollout-ticket" placeholder="CHG-..."></label><label>제한시간(초)<input id="rollout-timeout" type="number" value="600" min="60"></label><label><input id="rollout-auto-rollback" type="checkbox"> Deployment 실패 시 이전 Pod Template 자동 롤백</label></div>' +
           (p.super_admin_direct && p.requires_approval ? '<div class="banner warn" style="margin-top:10px">최고 관리자 권한으로 일반 승인 단계를 생략하고 즉시 실행할 수 있습니다. 차단 판정은 우회되지 않으며 실행 감사에 기록됩니다.</div>' : '') +
           '<div style="display:flex;gap:8px;margin-top:12px"><button type="button"' + (p.allowed ? '' : ' disabled') + ' onclick="submitWorkloadRollout(\'' + escapeAttr(cluster) + '\',\'' + escapeAttr(ns) + '\',\'' + escapeAttr(kind) + '\',\'' + escapeAttr(name) + '\')">' + (p.requires_approval && !p.super_admin_direct ? '승인 요청' : '즉시 실행') + '</button><a class="button secondary" href="#/k8s-actions">Action Center</a></div></div>', null, { wide: true });
       } catch (e) { showToast('error', '롤아웃 사전검사 실패', e.message); }
+    };
+    window.openNamespaceRolloutFromFilter = () => {
+      const cluster = safeInputValue('res-cluster', '').trim(), ns = safeInputValue('res-ns', '').trim();
+      if (!cluster || !ns) { showToast('warn', '범위 선택 필요', '클러스터와 Namespace를 모두 선택하세요.'); return; }
+      openNamespaceRollout(encodeURIComponent(cluster), encodeURIComponent(ns));
+    };
+    window.openNamespaceRollout = async (cluster, ns) => {
+      const target = { clusterId: decodeURIComponent(cluster || ''), namespace: decodeURIComponent(ns || '') };
+      try {
+        const d = await api('/api/v1/namespaces/rollout/precheck', { method: 'POST', body: JSON.stringify(target) });
+        const rows = (d.targets || []).map(x => { const t=x.target||{}, p=x.precheck||{}; return '<tr><td><strong>' + escapeHTML((t.kind||'-') + '/' + (t.name||'-')) + '</strong></td><td>' + fmt(p.ready||0) + '/' + fmt(p.desired||0) + '</td><td><span class="status ' + (p.allowed ? '' : 'error') + '">' + (p.allowed ? '통과' : '차단') + '</span></td><td>' + escapeHTML((p.blockers||[]).join(' · ') || (p.warnings||[]).join(' · ') || '-') + '</td></tr>'; }).join('');
+        window.__namespaceRolloutTargets = d.targets || [];
+        openModal('Namespace 일괄 롤아웃', '<div class="card-body"><div class="banner warn">Namespace의 지원 워크로드 ' + fmt(d.target_count||0) + '개를 각각 독립된 감사·승인 원장으로 요청합니다. 하나라도 사전검사에서 차단되면 전체 실행할 수 없습니다.</div><table><thead><tr><th>대상</th><th>Ready</th><th>판정</th><th>근거</th></tr></thead><tbody>' + rows + '</tbody></table><div class="ui-form" style="margin-top:12px"><label>롤아웃 사유<input id="ns-rollout-reason" placeholder="필수: 일괄 재기동 사유"></label><label>변경 티켓<input id="ns-rollout-ticket" placeholder="CHG-..."></label><label>확인 입력<input id="ns-rollout-confirm" placeholder="' + escapeAttr(target.namespace) + '"></label></div><div style="display:flex;gap:8px;margin-top:12px"><button type="button"' + (d.allowed ? '' : ' disabled') + ' onclick="submitNamespaceRollout(\'' + escapeAttr(cluster) + '\',\'' + escapeAttr(ns) + '\')">' + fmt(d.target_count||0) + '개 롤아웃 요청</button><a class="button secondary" href="#/k8s-actions">Action Center</a></div></div>', null, { wide:true });
+      } catch(e) { showToast('error', 'Namespace 사전검사 실패', e.message); }
+    };
+    window.submitNamespaceRollout = async (cluster, ns) => {
+      const namespace = decodeURIComponent(ns||''), reason = safeInputValue('ns-rollout-reason','').trim(), confirm = safeInputValue('ns-rollout-confirm','').trim();
+      if (!reason) { showToast('warn','사유 필요','롤아웃 사유를 입력하세요.'); return; }
+      if (confirm !== namespace) { showToast('warn','확인 불일치','Namespace 이름을 정확히 입력하세요.'); return; }
+      const targets = window.__namespaceRolloutTargets || [], ticketNo = safeInputValue('ns-rollout-ticket','').trim(), completed=[];
+      try {
+        for (const row of targets) {
+          const t=row.target||{};
+          const d=await api('/api/v1/workloads/rollout',{method:'POST',body:JSON.stringify({clusterId:decodeURIComponent(cluster||''),namespace,kind:t.kind,name:t.name,reason,ticketNo,executionMode:'IMMEDIATE',timeoutSeconds:600})});
+          completed.push(d.rollout||{});
+        }
+        showToast('ok','Namespace 롤아웃 요청 완료',fmt(completed.length)+'개 요청이 생성되었습니다.'); closeModal(); location.hash='#/k8s-actions';
+      } catch(e) { showToast('error','Namespace 롤아웃 일부 실패',fmt(completed.length)+'개 생성 후 중단: '+e.message); }
     };
     window.submitWorkloadRollout = async (cluster, ns, kind, name) => {
       const reason = safeInputValue('rollout-reason', '').trim();
@@ -11382,8 +11419,7 @@ const adminHTML = `<!doctype html>
       const events = (d.events || []).length ? (d.events || []).map(e => '<tr><td>' + escapeHTML(e.type || '-') + '</td><td>' + escapeHTML(e.reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td><td>' + fmt(e.count || 0) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.last_seen || e.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">이벤트가 없습니다.</td></tr>';
       const metrics = (d.metrics || []).length ? (d.metrics || []).map(m => '<tr><td>' + fmt(Math.round(m.cpu_millicores || 0)) + 'm</td><td>' + fmt(Math.round((m.memory_bytes || 0) / 1024 / 1024)) + 'Mi</td><td>' + (m.gpu_observed ? fmt(Math.round(m.gpu_utilization_pct || 0)) + '%' : '<span class="muted">-</span>') + '</td><td>' + (m.gpu_observed ? fmt(Math.round((m.gpu_memory_used_bytes || 0) / 1024 / 1024)) + 'Mi' : '<span class="muted">-</span>') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(m.observed_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">최근 메트릭이 없습니다.</td></tr>';
       const logAudits = (d.log_queries || []).length ? (d.log_queries || []).map(q => '<tr><td>' + escapeHTML(q.stream ? 'stream' : (q.previous ? 'previous' : 'current')) + '</td><td>' + escapeHTML(q.container || '-') + '</td><td>' + fmt(q.tail_lines || 0) + '</td><td>' + escapeHTML(q.query || '-') + '</td><td>' + fmt(q.line_count || 0) + '</td><td>' + fmt(q.error_count || 0) + '</td><td>' + escapeHTML(q.requested_by || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(q.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="8" class="muted">최근 로그 조회 이력이 없습니다.</td></tr>';
-      const ownerRollout = ['Deployment','StatefulSet','DaemonSet'].includes(p.owner_kind) && p.owner_name
-        ? '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(clusterId || '')) + '\',\'' + escapeAttr(encodeURIComponent(ns || '')) + '\',\'' + escapeAttr(encodeURIComponent(p.owner_kind)) + '\',\'' + escapeAttr(encodeURIComponent(p.owner_name)) + '\')">소유 워크로드 롤아웃</button>' : '';
+      const ownerRollout = '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(clusterId || '')) + '\',\'' + escapeAttr(encodeURIComponent(ns || '')) + '\',\'Pod\',\'' + escapeAttr(encodeURIComponent(p.name || pod)) + '\')">이 Pod 기준 롤아웃</button>';
       view.innerHTML =
         section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Health', fmt(p.health_score || 0) + (p.primary_symptom && p.primary_symptom !== 'Healthy' ? ' · ' + escapeHTML(p.primary_symptom) : '')) + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0) + (p.restart_signal === 'recent' ? ' · 최근 ' + fmt(p.recent_restart_count || 0) : (p.restart_signal === 'historical' ? ' · 과거 누적' : ''))) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
         (function () {
@@ -11398,7 +11434,7 @@ const adminHTML = `<!doctype html>
             (watch ? '<div style="font-size:11px;color:var(--muted);margin-bottom:2px">참고 신호</div><ul style="margin:0;padding-left:16px">' + watch + '</ul>' : '') +
             '</div>');
         })() +
-        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a>' + k8sGraphModalButton(clusterId || '', 'Pod', ns, pod, '영향도 그래프', '2') + '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a>' + ownerRollout + '<button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
+        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-terminal?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, pod: pod }).toString() + '">웹 터미널</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a>' + k8sGraphModalButton(clusterId || '', 'Pod', ns, pod, '영향도 그래프', '2') + '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a>' + ownerRollout + '<button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
@@ -14198,6 +14234,147 @@ const adminHTML = `<!doctype html>
         showToast('error', 'Manifest Change 초안 실패', e.message);
       }
     };
+
+    // ---------- 관리자용 오프라인 xterm.js Pod 터미널 ----------
+    let k8sTerminalInventory = [];
+    let k8sTerminalSocket = null;
+    let k8sTerminalInstance = null;
+    function k8sTerminalPodKey(item) { return [item.cluster_id || '', item.namespace || '', item.name || ''].join('|'); }
+    function k8sTerminalSelectedPod() {
+      const key = (document.getElementById('k8stty-pod') || {}).value || '';
+      return k8sTerminalInventory.find(item => k8sTerminalPodKey(item) === key) || null;
+    }
+    function k8sTerminalRefreshPods() {
+      const cluster = (document.getElementById('k8stty-cluster') || {}).value || '';
+      const podSelect = document.getElementById('k8stty-pod');
+      if (!podSelect) return;
+      const rows = k8sTerminalInventory.filter(item => !cluster || item.cluster_id === cluster);
+      podSelect.innerHTML = '<option value="">Pod 선택</option>' + rows.map(item => '<option value="' + escapeAttr(k8sTerminalPodKey(item)) + '">' + escapeHTML((item.namespace || '-') + '/' + (item.name || '-') + ' · ' + (item.status || '-')) + '</option>').join('');
+      k8sTerminalRefreshContainers();
+    }
+    function k8sTerminalRefreshContainers() {
+      const item = k8sTerminalSelectedPod();
+      const select = document.getElementById('k8stty-container');
+      if (!select) return;
+      const spec = (item && item.spec) || {};
+      const containers = [].concat(spec.containers || [], spec.initContainers || [], spec.ephemeralContainers || []);
+      select.innerHTML = containers.length ? containers.map(c => '<option value="' + escapeAttr(c.name || '') + '">' + escapeHTML(c.name || '-') + '</option>').join('') : '<option value="">기본 컨테이너</option>';
+    }
+    async function renderK8sTerminal(params) {
+      const view = document.getElementById('view');
+      view.innerHTML = section('관리자 웹 터미널', '<div class="empty">Pod와 터미널 세션을 불러오는 중...</div>');
+      let clusters, inventory, sessions;
+      try {
+        [clusters, inventory, sessions] = await Promise.all([
+          api('/admin/k8s/clusters'),
+          api('/admin/k8s/inventory?kind=Pod&limit=10000'),
+          api('/admin/k8s/exec/sessions?limit=50')
+        ]);
+      } catch (e) {
+        view.innerHTML = section('관리자 웹 터미널', '<div class="banner error">' + escapeHTML(e.message) + '</div>');
+        return;
+      }
+      k8sTerminalInventory = inventory.items || [];
+      const clusterId = (params && params.get('cluster_id')) || '';
+      const targetNamespace = (params && params.get('namespace')) || '';
+      const targetPod = (params && params.get('pod')) || '';
+      const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
+      const ttySessions = (sessions.sessions || []).filter(s => ['/bin/sh', '/bin/bash', 'sh', 'bash'].includes(s.command));
+      const sessionRows = ttySessions.length ? ttySessions.map(s => {
+        const actions = s.status === 'pending_approval'
+          ? '<button type="button" onclick="k8sTerminalApproveAndConnect(\'' + escapeAttr(s.id) + '\')">승인 후 연결</button>'
+          : (s.status === 'ready' ? '<button type="button" onclick="k8sTerminalConnect(\'' + escapeAttr(s.id) + '\')">연결</button>' : '<span class="muted">종료됨</span>');
+        return '<tr><td><span class="status ' + (s.status === 'failed' || s.status === 'denied' || s.status === 'rejected' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '')) + '">' + escapeHTML(s.status || '-') + '</span></td><td>' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + '</td><td>' + escapeHTML(s.container || '-') + '</td><td><code>' + escapeHTML(s.command || '-') + '</code></td><td>' + escapeHTML(s.requested_by || '-') + '</td><td>' + actions + '</td></tr>';
+      }).join('') : '<tr><td colspan="6" class="muted">대화형 셸 세션 이력이 없습니다.</td></tr>';
+      view.innerHTML =
+        section('관리자 웹 터미널', '<div class="banner warn"><strong>관리자 전용 Full TTY</strong> · 브라우저와 Pod 간 입력·출력은 Clustara 서버가 중계합니다. 세션은 항상 정책 평가와 승인을 거치며 제한 시간 종료, 접속·종료 감사, 마스킹된 출력 표본을 남깁니다. 비밀번호 등 원시 키 입력은 저장하지 않습니다. xterm.js 6.0.0은 서버에 내장되어 외부 CDN에 접속하지 않습니다.</div>') +
+        card('새 터미널 세션', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;align-items:end">' +
+          '<label>클러스터<select id="k8stty-cluster" onchange="k8sTerminalRefreshPods()">' + clusterOpts + '</select></label>' +
+          '<label>Pod<select id="k8stty-pod" onchange="k8sTerminalRefreshContainers()"></select></label>' +
+          '<label>Container<select id="k8stty-container"></select></label>' +
+          '<label>Shell<select id="k8stty-shell"><option value="/bin/sh">/bin/sh</option><option value="/bin/bash">/bin/bash</option></select></label>' +
+          '<label>정책 역할<select id="k8stty-role"><option value="operator">operator</option><option value="admin">admin</option><option value="*">*</option></select></label>' +
+          '<label>접속 사유<input id="k8stty-reason" placeholder="장애 진단, 설정 확인 등"></label>' +
+          '<button type="button" onclick="k8sTerminalRequest()">정책 평가 및 세션 요청</button></div><div id="k8stty-status" style="margin-top:8px"></div></div>') +
+        card('터미널', '<div class="card-body"><div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span id="k8stty-connection" class="status warn">연결 안 됨</span><button type="button" class="secondary" onclick="k8sTerminalDisconnect()">연결 종료</button><span class="muted">Ctrl/Cmd+V 붙여넣기 지원 · 브라우저를 벗어나면 세션이 종료됩니다.</span></div><div id="k8stty-terminal" class="terminal-shell"></div></div>') +
+        card('최근 대화형 세션', '<div class="card-body"><table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Shell</th><th>요청자</th><th></th></tr></thead><tbody>' + sessionRows + '</tbody></table><p class="muted" style="font-size:11px">Full TTY는 정확한 후속 명령을 사전 검사할 수 없어 정책 설정과 관계없이 승인 단계를 유지합니다. 정책은 운영 설정 → Terminal Policy Builder에서 관리합니다.</p></div>');
+      k8sTerminalRefreshPods();
+      if (targetPod) {
+        const selected = k8sTerminalInventory.find(item => (!clusterId || item.cluster_id === clusterId) && item.namespace === targetNamespace && item.name === targetPod);
+        const podSelect = document.getElementById('k8stty-pod');
+        if (selected && podSelect) { podSelect.value = k8sTerminalPodKey(selected); k8sTerminalRefreshContainers(); }
+      }
+    }
+    window.k8sTerminalRefreshPods = k8sTerminalRefreshPods;
+    window.k8sTerminalRefreshContainers = k8sTerminalRefreshContainers;
+    window.k8sTerminalRequest = async () => {
+      const item = k8sTerminalSelectedPod();
+      const status = document.getElementById('k8stty-status');
+      if (!item) { status.innerHTML = '<span class="status error">Pod를 선택하세요.</span>'; return; }
+      const reason = (document.getElementById('k8stty-reason').value || '').trim();
+      if (!reason) { status.innerHTML = '<span class="status error">감사 기록을 위한 접속 사유를 입력하세요.</span>'; return; }
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(item.namespace || '') + '/' + encodeURIComponent(item.name || '') + '/exec/sessions?cluster_id=' + encodeURIComponent(item.cluster_id || ''), { method:'POST', body:JSON.stringify({
+          cluster_id:item.cluster_id || '', container:(document.getElementById('k8stty-container').value || ''), command:document.getElementById('k8stty-shell').value,
+          role:document.getElementById('k8stty-role').value, reason:reason
+        }) });
+        const s = d.session || {};
+        if (s.status === 'ready') return k8sTerminalConnect(s.id);
+        if (s.status === 'pending_approval') {
+          status.innerHTML = '<span class="status warn">승인 대기</span> ' + escapeHTML(s.id || '') + ' <button type="button" onclick="k8sTerminalApproveAndConnect(\'' + escapeAttr(s.id || '') + '\')">관리자 승인 후 연결</button>';
+        } else {
+          status.innerHTML = '<span class="status error">차단됨</span> ' + escapeHTML(((d.policy_result || {}).reason) || s.reason || '터미널 정책을 확인하세요.');
+        }
+      } catch (e) { status.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sTerminalApproveAndConnect = async (id) => {
+      const note = prompt('Full TTY 관리자 승인 메모:', '관리자 대화형 진단 승인') || '';
+      try {
+        await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/approve', { method:'POST', body:JSON.stringify({ note }) });
+        await k8sTerminalConnect(id);
+      } catch (e) { showToast('error', '터미널 승인/연결 실패', e.message); }
+    };
+    function k8sTerminalFit() {
+      if (!k8sTerminalInstance) return;
+      const host = document.getElementById('k8stty-terminal');
+      if (!host) return;
+      const cols = Math.max(40, Math.floor((host.clientWidth - 20) / 8.4));
+      const rows = Math.max(12, Math.floor((host.clientHeight - 20) / 18));
+      k8sTerminalInstance.resize(cols, rows);
+      if (k8sTerminalSocket && k8sTerminalSocket.readyState === WebSocket.OPEN) k8sTerminalSocket.send(JSON.stringify({ type:'resize', cols, rows }));
+    }
+    window.k8sTerminalConnect = async (id) => {
+      k8sTerminalDisconnect();
+      const status = document.getElementById('k8stty-status');
+      try {
+        const auth = await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/ticket', { method:'POST', body:'{}' });
+        const host = document.getElementById('k8stty-terminal');
+        if (!host || typeof Terminal === 'undefined') throw new Error('내장 xterm.js를 불러오지 못했습니다.');
+        host.innerHTML = '';
+        k8sTerminalInstance = new Terminal({ cursorBlink:true, convertEol:true, scrollback:5000, fontFamily:'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize:14, theme:{ background:'#0b1020', foreground:'#e5edf8', cursor:'#60a5fa' } });
+        k8sTerminalInstance.open(host);
+        k8sTerminalFit();
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        k8sTerminalSocket = new WebSocket(scheme + '//' + location.host + '/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/stream?ticket=' + encodeURIComponent(auth.ticket || ''));
+        k8sTerminalSocket.binaryType = 'arraybuffer';
+        k8sTerminalInstance.onData(data => { if (k8sTerminalSocket && k8sTerminalSocket.readyState === WebSocket.OPEN) k8sTerminalSocket.send(JSON.stringify({ type:'input', data })); });
+        k8sTerminalSocket.onopen = () => { document.getElementById('k8stty-connection').className = 'status'; document.getElementById('k8stty-connection').textContent = '연결됨'; k8sTerminalFit(); k8sTerminalInstance.focus(); };
+        k8sTerminalSocket.onmessage = event => {
+          if (event.data instanceof ArrayBuffer) { k8sTerminalInstance.write(new Uint8Array(event.data)); return; }
+          try { const msg = JSON.parse(event.data); if (msg.type === 'error') k8sTerminalInstance.writeln('\r\n[Clustara] ' + msg.data); if (msg.type === 'status' && msg.data !== 'connected') k8sTerminalInstance.writeln('\r\n[세션 ' + msg.data + ']'); } catch { k8sTerminalInstance.write(String(event.data || '')); }
+        };
+        k8sTerminalSocket.onclose = () => { const el=document.getElementById('k8stty-connection'); if(el){el.className='status warn';el.textContent='연결 종료';} };
+        k8sTerminalSocket.onerror = () => { if(status) status.innerHTML='<span class="status error">WebSocket 터미널 연결에 실패했습니다.</span>'; };
+      } catch (e) { if (status) status.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+    };
+    window.k8sTerminalDisconnect = () => {
+      if (k8sTerminalSocket) { try { if(k8sTerminalSocket.readyState === WebSocket.OPEN) k8sTerminalSocket.send(JSON.stringify({type:'close'})); k8sTerminalSocket.close(1000, 'user closed'); } catch {} }
+      k8sTerminalSocket = null;
+      if (k8sTerminalInstance) { try { k8sTerminalInstance.dispose(); } catch {} }
+      k8sTerminalInstance = null;
+    };
+    window.addEventListener('resize', k8sTerminalFit);
+    window.addEventListener('hashchange', () => { if (!String(location.hash || '').startsWith('#/k8s-terminal')) k8sTerminalDisconnect(); });
 
     // ---------- K8s 운영 설정 센터 (단가 + 알림 통합) ----------
     async function renderK8sSettings(params) {

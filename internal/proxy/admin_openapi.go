@@ -73,6 +73,7 @@ var apiEndpoints = []apiEndpoint{
 
 	// ---- admin UI ----
 	{"/admin", []string{"get"}, "admin", "Admin dashboard (HTML)", false},
+	{"/admin/assets/xterm/", []string{"get"}, "admin", "Embedded offline xterm.js assets", true},
 
 	// ---- admin: core analytics ----
 	{"/admin/stats", []string{"get"}, "admin", "Summary stats", false},
@@ -578,6 +579,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/pod-lifecycles/{pod_uid}", []string{"get"}, "k8s", "Read a retained Pod lifecycle directly by immutable Kubernetes UID", false},
 	{"/api/v1/workloads/rollout/precheck", []string{"post"}, "k8s", "Preflight a safe rolling restart using workload, Pod, PDB, PVC, Node, Event and inventory evidence", false},
 	{"/api/v1/workloads/rollout", []string{"post"}, "k8s", "Request or immediately execute a policy-gated workload rollout restart", false},
+	{"/api/v1/namespaces/rollout/precheck", []string{"post"}, "k8s", "Preflight all rollout-capable workloads in a namespace before an administrator batch rollout", false},
 	{"/api/v1/rollouts/{id}", []string{"get"}, "k8s", "Read and reconcile rollout progress and Pod replacement evidence", false},
 	{"/api/v1/rollouts/{id}/stream", []string{"get"}, "k8s", "Stream rollout progress over SSE until completion or failure", false},
 	{"/api/v1/rollouts/{id}/evidence", []string{"get"}, "k8s", "Download the durable rollout, state-event, rollback, and Pod-transition evidence bundle as JSON", false},
@@ -594,6 +596,8 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/exec/sessions/{id}", []string{"get"}, "k8s", "Get one Pod exec session with policy result, decision trail, and replay/audit output sample", false},
 	{"/admin/k8s/exec/sessions/{id}/export", []string{"get"}, "k8s", "Download a Markdown audit report for one Pod exec session replay", false},
 	{"/admin/k8s/exec/sessions/{id}/{command}", []string{"post"}, "k8s", "Approve, reject, or execute a policy-gated Pod exec session request", false},
+	{"/admin/k8s/exec/sessions/{id}/ticket", []string{"post"}, "k8s", "Issue a 30-second one-use browser WebSocket ticket for an approved full-TTY shell session", false},
+	{"/admin/k8s/exec/sessions/{id}/stream", []string{"get"}, "k8s", "Upgrade to an interactive xterm.js Pod terminal WebSocket using a one-use ticket", false},
 	{"/admin/k8s/pod-bookmarks", []string{"get", "post"}, "k8s", "List/create manual and automatic Pod bookmarks", false},
 	{"/admin/k8s/pod-bookmarks/{id}", []string{"delete"}, "k8s", "Delete one Pod bookmark", false},
 	{"/admin/k8s/pod-accesses", []string{"get"}, "k8s", "List recent Pod detail/log/terminal/debug access history", false},

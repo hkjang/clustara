@@ -1,3 +1,6 @@
+v0.9.159:
+- **Offline Admin Pod Terminal & Scoped Safe Rollouts (v0.9.159)**: 관리자 전용 Pod 터미널을 오프라인 환경에서도 사용할 수 있도록 xterm.js 6.0.0 자산을 제품에 내장하고, 단기 연결 티켓과 WebSocket 기반 Kubernetes exec 스트림으로 `/bin/sh`·`/bin/bash` 양방향 명령, 터미널 크기 변경, 종료 상태를 전달합니다. 기존 관리자 인증과 클러스터 접근 정책을 재사용하며 터미널 연결·종료를 감사 기록으로 남깁니다. 안전 롤아웃은 Pod 선택 시 controller owner를 추적하고 ReplicaSet을 Deployment까지 해석해 실제 워크로드를 대상으로 실행하며, 단독 Pod·Job 소유 Pod는 차단합니다. Namespace 일괄 롤아웃은 최대 100개의 Deployment·StatefulSet·DaemonSet을 전체 사전검사하고 하나라도 차단되면 실행을 막으며, Namespace 재입력 확인과 워크로드별 독립 승인·감사·롤백 원장을 적용합니다.
+
 v0.9.158:
 - **Viewport-Safe Quick Access & Major Resource Search (v0.9.158)**: 빠른 이동 패널을 뷰포트 높이 안에 고정하고 패널 전체 세로 스크롤과 모바일 단일 열 레이아웃을 적용해, 고정·처리 대기·최근 방문·리소스 섹션이 많아져도 화면 아래가 잘리지 않도록 개선했습니다. Pod·Deployment·StatefulSet·DaemonSet·ReplicaSet·Service·Ingress·Job·CronJob·HPA·PVC·Node를 전체 인벤토리에서 우선 검색하고 서버 Fleet 검색 결과와 중복 없이 병합하며, 정확한 이름과 prefix 일치를 우선 정렬합니다. 파드·디플로이먼트·스테이트풀셋·워크로드 등 한글 Kind 별칭도 지원하고 최대 12개의 주요 리소스를 즉시 표시합니다.
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +47,11 @@ type rolloutPrecheck struct {
 	SuperAdminDirect bool           `json:"super_admin_direct"`
 }
 
+type namespaceRolloutTarget struct {
+	Target   store.K8sInventoryItem `json:"target"`
+	Precheck rolloutPrecheck        `json:"precheck"`
+}
+
 func (s *Server) handleWorkloadRolloutPrecheck(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -68,7 +74,68 @@ func (s *Server) handleWorkloadRolloutPrecheck(w http.ResponseWriter, r *http.Re
 		s.writeRolloutLookupError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"target": target, "precheck": check})
+	writeJSON(w, http.StatusOK, map[string]any{"target": target, "precheck": check, "requested_target": in})
+}
+
+func (s *Server) handleNamespaceRolloutPrecheck(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	if !s.requireRolloutScope(w, r, "rollout:view") {
+		return
+	}
+	var in rolloutRequestInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
+		return
+	}
+	in.ClusterID, in.Namespace = strings.TrimSpace(in.ClusterID), strings.TrimSpace(in.Namespace)
+	if in.ClusterID == "" || in.Namespace == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "clusterId and namespace are required", "invalid_request_error", "namespace_rollout_scope_required")
+		return
+	}
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: in.ClusterID, Namespace: in.Namespace, Limit: 10000})
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "namespace_rollout_lookup_failed")
+		return
+	}
+	targets := make([]store.K8sInventoryItem, 0)
+	for _, item := range items {
+		if canonicalRolloutKind(item.Kind) != "" {
+			targets = append(targets, item)
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Kind == targets[j].Kind {
+			return targets[i].Name < targets[j].Name
+		}
+		return targets[i].Kind < targets[j].Kind
+	})
+	if len(targets) == 0 {
+		writeOpenAIError(w, http.StatusNotFound, "no rollout-capable workloads in namespace", "not_found_error", "namespace_rollout_targets_not_found")
+		return
+	}
+	if len(targets) > 100 {
+		writeOpenAIError(w, http.StatusConflict, "namespace rollout is limited to 100 workloads", "invalid_request_error", "namespace_rollout_target_limit")
+		return
+	}
+	results := make([]namespaceRolloutTarget, 0, len(targets))
+	allowed := true
+	for _, target := range targets {
+		check, resolved, checkErr := s.rolloutPrecheck(r, rolloutRequestInput{ClusterID: in.ClusterID, Namespace: in.Namespace, Kind: target.Kind, Name: target.Name})
+		if checkErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, checkErr.Error(), "server_error", "namespace_rollout_precheck_failed")
+			return
+		}
+		allowed = allowed && check.Allowed
+		results = append(results, namespaceRolloutTarget{Target: resolved, Precheck: check})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cluster_id": in.ClusterID, "namespace": in.Namespace, "allowed": allowed, "target_count": len(results), "targets": results})
 }
 
 func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +175,10 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "rollout precheck blocked", "precheck": check})
 		return
 	}
+	// A Pod request is deliberately executed against its owning rollout-capable
+	// controller. Persist the resolved identity so audit, locking and rollback all
+	// refer to the resource that Kubernetes actually restarts.
+	in.Namespace, in.Kind, in.Name = target.Namespace, target.Kind, target.Name
 	existing, _ := s.db.ListK8sRolloutActions(r.Context(), in.ClusterID, target.UID, 20)
 	for _, x := range existing {
 		if rolloutActive(x.Status) {
@@ -292,6 +363,13 @@ func (s *Server) handleResourceRollouts(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) rolloutPrecheck(r *http.Request, in rolloutRequestInput) (rolloutPrecheck, store.K8sInventoryItem, error) {
 	var out rolloutPrecheck
+	if strings.EqualFold(strings.TrimSpace(in.Kind), "pod") || strings.EqualFold(strings.TrimSpace(in.Kind), "pods") {
+		resolved, err := s.resolvePodRolloutTarget(r, in)
+		if err != nil {
+			return out, store.K8sInventoryItem{}, err
+		}
+		in.Namespace, in.Kind, in.Name = resolved.Namespace, resolved.Kind, resolved.Name
+	}
 	kind := canonicalRolloutKind(in.Kind)
 	if kind == "" {
 		return out, store.K8sInventoryItem{}, fmt.Errorf("unsupported rollout kind")
@@ -381,6 +459,26 @@ func (s *Server) rolloutPrecheck(r *http.Request, in rolloutRequestInput) (rollo
 	out.Allowed = len(out.Blockers) == 0
 	out.SuperAdminDirect = s.rolloutSuperAdmin(r) && out.Allowed
 	return out, target, nil
+}
+
+func (s *Server) resolvePodRolloutTarget(r *http.Request, in rolloutRequestInput) (store.K8sInventoryItem, error) {
+	pod, err := s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, "Pod", in.Namespace, in.Name)
+	if err != nil {
+		return store.K8sInventoryItem{}, err
+	}
+	kind, name := podOwner(pod.Spec)
+	if strings.EqualFold(kind, "ReplicaSet") {
+		rs, rsErr := s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, "ReplicaSet", in.Namespace, name)
+		if rsErr != nil {
+			return store.K8sInventoryItem{}, fmt.Errorf("Pod owner ReplicaSet %q could not be resolved: %w", name, rsErr)
+		}
+		kind, name = podOwner(rs.Spec)
+	}
+	kind = canonicalRolloutKind(kind)
+	if kind == "" || strings.TrimSpace(name) == "" {
+		return store.K8sInventoryItem{}, fmt.Errorf("Pod %s/%s is not owned by a Deployment, StatefulSet, or DaemonSet", in.Namespace, in.Name)
+	}
+	return s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, kind, in.Namespace, name)
 }
 
 func (s *Server) rolloutSuperAdmin(r *http.Request) bool {

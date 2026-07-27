@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.158"
+const AppVersion = "v0.9.159"
 
 type Server struct {
 	cfg              config.Config
@@ -44,6 +44,7 @@ type Server struct {
 	retention        *store.RetentionWorker
 	killState        atomicKillState
 	loggedRequests   sync.Map
+	terminalTickets  sync.Map
 	mcpPolicy        atomic.Pointer[mcpPolicySnapshot]
 	routingRules     atomic.Pointer[routingRulesSnapshot]
 	knowledge        atomic.Pointer[knowledgeSnapshot]
@@ -328,6 +329,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/pod-lifecycles/", s.handleK8sPodLifecycleByUID)
 	mux.HandleFunc("/api/v1/workloads/rollout/precheck", s.handleWorkloadRolloutPrecheck)
 	mux.HandleFunc("/api/v1/workloads/rollout", s.handleWorkloadRollout)
+	mux.HandleFunc("/api/v1/namespaces/rollout/precheck", s.handleNamespaceRolloutPrecheck)
 	mux.HandleFunc("/api/v1/rollouts/", s.handleRolloutByID)
 	mux.HandleFunc("/api/v1/resources/", s.handleResourceRollouts)
 	mux.HandleFunc("/admin/k8s/inventory", s.handleK8sInventory)
@@ -421,6 +423,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/k8s/latency/config", s.handleK8sLatencyConfig)
 	mux.HandleFunc("/admin/k8s/exec/sessions", s.handleK8sExecSessions)
 	mux.HandleFunc("/admin/k8s/exec/sessions/", s.handleK8sExecSessionByID)
+	mux.HandleFunc("/admin/assets/xterm/", s.handleAdminTerminalAsset)
 	mux.HandleFunc("/admin/k8s/pod-bookmarks", s.handleK8sPodBookmarks)
 	mux.HandleFunc("/admin/k8s/pod-bookmarks/", s.handleK8sPodBookmarkByID)
 	mux.HandleFunc("/admin/k8s/pod-watches", s.handleK8sPodWatches)

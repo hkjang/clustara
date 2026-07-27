@@ -22,16 +22,16 @@ type terminalPolicyEvalRequest struct {
 }
 
 type terminalPolicyEvalResult struct {
-	Allowed           bool     `json:"allowed"`
-	RequireApproval   bool     `json:"require_approval"`
-	AuditEnabled      bool     `json:"audit_enabled"`
-	MaxSessionMinutes int      `json:"max_session_minutes"`
-	RiskLevel         string   `json:"risk_level"`
-	Reason            string   `json:"reason"`
-	MatchedPolicies   []string `json:"matched_policies"`
-	MatchedRules      []string `json:"matched_rules"`
+	Allowed           bool                          `json:"allowed"`
+	RequireApproval   bool                          `json:"require_approval"`
+	AuditEnabled      bool                          `json:"audit_enabled"`
+	MaxSessionMinutes int                           `json:"max_session_minutes"`
+	RiskLevel         string                        `json:"risk_level"`
+	Reason            string                        `json:"reason"`
+	MatchedPolicies   []string                      `json:"matched_policies"`
+	MatchedRules      []string                      `json:"matched_rules"`
 	CommandRisk       []analyzer.CommandRiskFinding `json:"command_risk_findings,omitempty"`
-	AccessMode        string   `json:"access_mode"` // read_only | guided | full_tty
+	AccessMode        string                        `json:"access_mode"` // read_only | guided | full_tty
 }
 
 func (s *Server) handleK8sTerminalPolicies(w http.ResponseWriter, r *http.Request) {
@@ -389,9 +389,10 @@ func builtinTerminalDenylist() []string {
 
 func terminalCommandPresets() map[string][]string {
 	return map[string][]string{
-		"read_only": []string{"ls", "pwd", "cat", "head", "tail", "grep", "env", "printenv", "ps", "df", "du", "date", "id", "whoami"},
-		"network":   []string{"curl", "wget", "nslookup", "dig", "nc", "netstat", "ss"},
-		"runtime":   []string{"ps", "top", "free", "df", "du", "jcmd", "jstack"},
+		"read_only":         []string{"ls", "pwd", "cat", "head", "tail", "grep", "env", "printenv", "ps", "df", "du", "date", "id", "whoami"},
+		"network":           []string{"curl", "wget", "nslookup", "dig", "nc", "netstat", "ss"},
+		"runtime":           []string{"ps", "top", "free", "df", "du", "jcmd", "jstack"},
+		"interactive_shell": []string{"/bin/sh", "/bin/bash", "sh", "bash"},
 	}
 }
 
@@ -427,25 +428,31 @@ func terminalPolicyTemplates() []terminalPolicyTemplate {
 		{
 			Key: "read_only_all", Name: "운영 읽기 전용 (전체 네임스페이스)",
 			Description: "모든 네임스페이스에서 읽기 전용 진단 명령만 허용. 승인 필요, 세션 10분.",
-			Role: "*", NamespacePattern: "*",
+			Role:        "*", NamespacePattern: "*",
 			CommandAllowlist: merge("read_only"), RequireApproval: true, MaxSessionMinutes: 10,
 		},
 		{
 			Key: "network_diag", Name: "네트워크 진단",
 			Description: "읽기 명령 + DNS·연결성 진단(curl·dig·nslookup·nc·ss). 승인 필요, 세션 15분.",
-			Role: "*", NamespacePattern: "*",
+			Role:        "*", NamespacePattern: "*",
 			CommandAllowlist: merge("read_only", "network"), RequireApproval: true, MaxSessionMinutes: 15,
 		},
 		{
 			Key: "runtime_diag", Name: "런타임·JVM 진단",
 			Description: "읽기 명령 + 프로세스·메모리·JVM 스택 덤프(top·free·jstack·jcmd). 승인 필요, 세션 15분.",
-			Role: "*", NamespacePattern: "*",
+			Role:        "*", NamespacePattern: "*",
 			CommandAllowlist: merge("read_only", "runtime"), RequireApproval: true, MaxSessionMinutes: 15,
+		},
+		{
+			Key: "admin_full_tty", Name: "관리자 대화형 셸 (Full TTY)",
+			Description: "xterm.js 웹 터미널에서 /bin/sh 또는 /bin/bash를 사용합니다. 모든 접속은 관리자 승인과 감사 저장이 필수이며 세션은 10분으로 제한됩니다.",
+			Role:        "operator", NamespacePattern: "*",
+			CommandAllowlist: merge("interactive_shell"), RequireApproval: true, MaxSessionMinutes: 10,
 		},
 		{
 			Key: "nonprod_relaxed", Name: "비프로덕션 자유 진단 (dev/staging)",
 			Description: "읽기+네트워크+런타임 명령을 비프로덕션 네임스페이스에서 허용. 승인 불필요, 세션 30분. (적용 시 namespace를 dev-* / staging-* 등으로 조정하세요.)",
-			Role: "*", NamespacePattern: "dev-*",
+			Role:        "*", NamespacePattern: "dev-*",
 			CommandAllowlist: merge("read_only", "network", "runtime"), RequireApproval: false, MaxSessionMinutes: 30,
 		},
 	}

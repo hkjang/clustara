@@ -28,11 +28,12 @@ func (s *Server) handleK8sExecSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeAdmin(r) {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/exec/sessions/"), "/"), "/")
+	streamAuthorized := len(parts) == 2 && parts[1] == "stream" && s.consumeTerminalTicket(parts[0], r.URL.Query().Get("ticket"))
+	if !streamAuthorized && !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return
 	}
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/exec/sessions/"), "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "session id required", "invalid_request_error", "bad_exec_session_path")
 		return
@@ -61,6 +62,18 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 	}
 	command, _ := url.PathUnescape(parts[1])
 	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "stream" {
+		s.streamK8sPodTerminal(w, r, sess)
+		return
+	}
+	if command == "ticket" {
+		if r.Method != http.MethodPost {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.issueTerminalTicket(w, r, sess)
+		return
+	}
 	if command == "export" {
 		if r.Method != http.MethodGet {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
