@@ -1,3 +1,6 @@
+v0.9.160:
+- **Super Admin Direct Terminal & Simplified Policy UX (v0.9.160)**: 웹 터미널의 역할을 사용자가 입력하는 방식을 제거하고 인증된 access token 역할을 권한 판정의 기준으로 사용합니다. `super_admin`은 별도 정책 생성이나 자기 승인 없이 내장 기본 정책으로 `/bin/sh`·`/bin/bash` Full TTY에 즉시 접속할 수 있으며, 15분 제한·전체 감사·1회성 WebSocket 티켓은 강제됩니다. Pod 상세에서 웹 터미널로 이동하면 클러스터와 Pod가 자동 선택되고 접속 사유 기본값과 3단계 안내를 제공하며, 정책 화면은 최고 관리자 기본 정책·일반 관리자 예외 정책·기본 차단을 구분해 표시합니다. 일반 `admin`용 Full TTY 템플릿의 role 매칭을 바로잡고 직접 규칙 편집과 시뮬레이션은 고급 기능으로 분리했습니다.
+
 v0.9.159:
 - **Offline Admin Pod Terminal & Scoped Safe Rollouts (v0.9.159)**: 관리자 전용 Pod 터미널을 오프라인 환경에서도 사용할 수 있도록 xterm.js 6.0.0 자산을 제품에 내장하고, 단기 연결 티켓과 WebSocket 기반 Kubernetes exec 스트림으로 `/bin/sh`·`/bin/bash` 양방향 명령, 터미널 크기 변경, 종료 상태를 전달합니다. 기존 관리자 인증과 클러스터 접근 정책을 재사용하며 터미널 연결·종료를 감사 기록으로 남깁니다. 안전 롤아웃은 Pod 선택 시 controller owner를 추적하고 ReplicaSet을 Deployment까지 해석해 실제 워크로드를 대상으로 실행하며, 단독 Pod·Job 소유 Pod는 차단합니다. Namespace 일괄 롤아웃은 최대 100개의 Deployment·StatefulSet·DaemonSet을 전체 사전검사하고 하나라도 차단되면 실행을 막으며, Namespace 재입력 확인과 워크로드별 독립 승인·감사·롤백 원장을 적용합니다.
 

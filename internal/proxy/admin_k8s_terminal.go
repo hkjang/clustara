@@ -275,6 +275,27 @@ func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sT
 	return result
 }
 
+// applySuperAdminTerminalDefault is the built-in break-glass policy for the
+// highest administrator. It removes the policy/bootstrap and self-approval
+// deadlock, but is deliberately limited to starting an interactive shell. The
+// session remains time-bounded and fully audited; authorization still comes
+// from the authenticated access token, never from this policy alone.
+func applySuperAdminTerminalDefault(req terminalPolicyEvalRequest, result terminalPolicyEvalResult) terminalPolicyEvalResult {
+	if !strings.EqualFold(req.Role, "super_admin") || !isInteractiveShell(req.Command) {
+		return result
+	}
+	result.Allowed = true
+	result.RequireApproval = false
+	result.AuditEnabled = true
+	result.MaxSessionMinutes = 15
+	result.RiskLevel = "high"
+	result.Reason = "최고 관리자 기본 정책: 대화형 셸 즉시 접속 · 15분 제한 · 전체 감사"
+	result.MatchedPolicies = uniqueStrings(append(result.MatchedPolicies, "builtin:super_admin_full_tty"))
+	result.MatchedRules = uniqueStrings(append(result.MatchedRules, "allow:authenticated-super-admin-shell"))
+	result.AccessMode = analyzer.TermModeFullTTY
+	return result
+}
+
 func terminalPolicyScopeMatches(req terminalPolicyEvalRequest, p store.K8sTerminalPolicy) bool {
 	role := strings.ToLower(strings.TrimSpace(p.Role))
 	if role != "" && role != "*" && role != req.Role {
@@ -445,8 +466,8 @@ func terminalPolicyTemplates() []terminalPolicyTemplate {
 		},
 		{
 			Key: "admin_full_tty", Name: "관리자 대화형 셸 (Full TTY)",
-			Description: "xterm.js 웹 터미널에서 /bin/sh 또는 /bin/bash를 사용합니다. 모든 접속은 관리자 승인과 감사 저장이 필수이며 세션은 10분으로 제한됩니다.",
-			Role:        "operator", NamespacePattern: "*",
+			Description: "admin 역할이 xterm.js 웹 터미널에서 /bin/sh 또는 /bin/bash를 사용합니다. 승인을 거치고 감사를 저장하며 세션은 10분으로 제한됩니다. super_admin은 별도 내장 정책으로 즉시 접속합니다.",
+			Role:        "admin", NamespacePattern: "*",
 			CommandAllowlist: merge("interactive_shell"), RequireApproval: true, MaxSessionMinutes: 10,
 		},
 		{

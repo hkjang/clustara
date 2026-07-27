@@ -422,6 +422,11 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		clusterID, item = resolvedClusterID, found
 	}
 	role := strings.ToLower(strings.TrimSpace(firstNonEmpty(in.Role, "viewer")))
+	// Authenticated identity is authoritative. The request field remains only for
+	// legacy ADMIN_TOKEN mode and backwards-compatible policy simulations.
+	if claims, ok := s.currentAccessClaims(r); ok {
+		role = strings.ToLower(strings.TrimSpace(claims.Role))
+	}
 	container := strings.TrimSpace(firstNonEmpty(in.Container, defaultContainerName(item)))
 	labels := mergePodLabels(item.Labels, in.PodLabels)
 	policies, err := s.db.ListK8sTerminalPolicies(r.Context(), store.K8sTerminalPolicyFilter{Role: role, ClusterID: clusterID, Enabled: "true", Limit: 500})
@@ -437,6 +442,9 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		PodLabels: labels,
 		Command:   command,
 	}, policies)
+	result = applySuperAdminTerminalDefault(terminalPolicyEvalRequest{
+		Role: role, ClusterID: clusterID, Namespace: namespace, Pod: pod, PodLabels: labels, Command: command,
+	}, result)
 	status := "denied"
 	nextAction := "blocked"
 	if result.Allowed && result.RequireApproval {

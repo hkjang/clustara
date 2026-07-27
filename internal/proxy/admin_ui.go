@@ -14278,6 +14278,8 @@ const adminHTML = `<!doctype html>
       const clusterId = (params && params.get('cluster_id')) || '';
       const targetNamespace = (params && params.get('namespace')) || '';
       const targetPod = (params && params.get('pod')) || '';
+	  const terminalRole = String(((authState.user || {}).role) || (!authState.enabled ? 'super_admin' : 'viewer')).toLowerCase();
+	  const superAdminTerminal = terminalRole === 'super_admin';
       const clusterOpts = '<option value="">전체 클러스터</option>' + (clusters.clusters || []).map(c => '<option value="' + escapeAttr(c.id || '') + '"' + (c.id === clusterId ? ' selected' : '') + '>' + escapeHTML(c.name || c.id) + '</option>').join('');
       const ttySessions = (sessions.sessions || []).filter(s => ['/bin/sh', '/bin/bash', 'sh', 'bash'].includes(s.command));
       const sessionRows = ttySessions.length ? ttySessions.map(s => {
@@ -14287,17 +14289,18 @@ const adminHTML = `<!doctype html>
         return '<tr><td><span class="status ' + (s.status === 'failed' || s.status === 'denied' || s.status === 'rejected' ? 'error' : (s.status === 'pending_approval' ? 'warn' : '')) + '">' + escapeHTML(s.status || '-') + '</span></td><td>' + escapeHTML((s.namespace || '-') + '/' + (s.pod || '-')) + '</td><td>' + escapeHTML(s.container || '-') + '</td><td><code>' + escapeHTML(s.command || '-') + '</code></td><td>' + escapeHTML(s.requested_by || '-') + '</td><td>' + actions + '</td></tr>';
       }).join('') : '<tr><td colspan="6" class="muted">대화형 셸 세션 이력이 없습니다.</td></tr>';
       view.innerHTML =
-        section('관리자 웹 터미널', '<div class="banner warn"><strong>관리자 전용 Full TTY</strong> · 브라우저와 Pod 간 입력·출력은 Clustara 서버가 중계합니다. 세션은 항상 정책 평가와 승인을 거치며 제한 시간 종료, 접속·종료 감사, 마스킹된 출력 표본을 남깁니다. 비밀번호 등 원시 키 입력은 저장하지 않습니다. xterm.js 6.0.0은 서버에 내장되어 외부 CDN에 접속하지 않습니다.</div>') +
+        section('관리자 웹 터미널', '<div class="banner ' + (superAdminTerminal ? '' : 'warn') + '"><strong>' + (superAdminTerminal ? '최고 관리자 즉시 접속 가능' : '정책 기반 관리자 접속') + '</strong> · ' + (superAdminTerminal ? 'Pod와 셸을 고른 뒤 접속하면 됩니다. 별도 정책 생성이나 자기 승인이 필요 없으며 15분 제한과 전체 감사가 자동 적용됩니다.' : '활성 정책이 접속 범위를 허용하면 승인 요청이 생성됩니다.') + ' xterm.js는 서버에 내장되어 외부망을 사용하지 않습니다.</div>') +
+        card('접속 방법', '<div class="card-body"><div class="kpis">' + kpi('1', 'Pod 선택') + kpi('2', '접속 사유 확인') + kpi('3', superAdminTerminal ? '바로 연결' : '승인 후 연결') + '</div><p class="muted" style="margin:8px 0 0">Pod 상세 화면의 <strong>웹 터미널</strong> 버튼으로 들어오면 클러스터와 Pod가 자동 선택됩니다.</p></div>') +
         card('새 터미널 세션', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;align-items:end">' +
           '<label>클러스터<select id="k8stty-cluster" onchange="k8sTerminalRefreshPods()">' + clusterOpts + '</select></label>' +
           '<label>Pod<select id="k8stty-pod" onchange="k8sTerminalRefreshContainers()"></select></label>' +
           '<label>Container<select id="k8stty-container"></select></label>' +
           '<label>Shell<select id="k8stty-shell"><option value="/bin/sh">/bin/sh</option><option value="/bin/bash">/bin/bash</option></select></label>' +
-          '<label>정책 역할<select id="k8stty-role"><option value="operator">operator</option><option value="admin">admin</option><option value="*">*</option></select></label>' +
-          '<label>접속 사유<input id="k8stty-reason" placeholder="장애 진단, 설정 확인 등"></label>' +
-          '<button type="button" onclick="k8sTerminalRequest()">정책 평가 및 세션 요청</button></div><div id="k8stty-status" style="margin-top:8px"></div></div>') +
+          '<label>권한<span style="display:block;padding:9px 10px;border:1px solid var(--border);border-radius:6px"><strong>' + escapeHTML(terminalRole) + '</strong> · 자동 판별</span></label>' +
+          '<label>접속 사유<input id="k8stty-reason" value="대화형 장애 진단" placeholder="장애 진단, 설정 확인 등"></label>' +
+          '<button type="button" onclick="k8sTerminalRequest()">' + (superAdminTerminal ? '터미널 접속' : '접속 요청') + '</button></div><div id="k8stty-status" style="margin-top:8px"></div></div>') +
         card('터미널', '<div class="card-body"><div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span id="k8stty-connection" class="status warn">연결 안 됨</span><button type="button" class="secondary" onclick="k8sTerminalDisconnect()">연결 종료</button><span class="muted">Ctrl/Cmd+V 붙여넣기 지원 · 브라우저를 벗어나면 세션이 종료됩니다.</span></div><div id="k8stty-terminal" class="terminal-shell"></div></div>') +
-        card('최근 대화형 세션', '<div class="card-body"><table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Shell</th><th>요청자</th><th></th></tr></thead><tbody>' + sessionRows + '</tbody></table><p class="muted" style="font-size:11px">Full TTY는 정확한 후속 명령을 사전 검사할 수 없어 정책 설정과 관계없이 승인 단계를 유지합니다. 정책은 운영 설정 → Terminal Policy Builder에서 관리합니다.</p></div>');
+        card('최근 대화형 세션', '<div class="card-body"><table><thead><tr><th>상태</th><th>Pod</th><th>Container</th><th>Shell</th><th>요청자</th><th></th></tr></thead><tbody>' + sessionRows + '</tbody></table><p class="muted" style="font-size:11px">최고 관리자는 내장 기본 정책으로 즉시 접속하며, 그 외 역할은 운영 설정의 예외 정책과 승인을 따릅니다.</p></div>');
       k8sTerminalRefreshPods();
       if (targetPod) {
         const selected = k8sTerminalInventory.find(item => (!clusterId || item.cluster_id === clusterId) && item.namespace === targetNamespace && item.name === targetPod);
@@ -14316,7 +14319,7 @@ const adminHTML = `<!doctype html>
       try {
         const d = await api('/admin/k8s/pods/' + encodeURIComponent(item.namespace || '') + '/' + encodeURIComponent(item.name || '') + '/exec/sessions?cluster_id=' + encodeURIComponent(item.cluster_id || ''), { method:'POST', body:JSON.stringify({
           cluster_id:item.cluster_id || '', container:(document.getElementById('k8stty-container').value || ''), command:document.getElementById('k8stty-shell').value,
-          role:document.getElementById('k8stty-role').value, reason:reason
+          role:String(((authState.user || {}).role) || (!authState.enabled ? 'super_admin' : 'viewer')), reason:reason
         }) });
         const s = d.session || {};
         if (s.status === 'ready') return k8sTerminalConnect(s.id);
@@ -14467,8 +14470,8 @@ const adminHTML = `<!doctype html>
           (mm.slash_token_set ? '<span class="pill">토큰 설정됨</span>' : '<span class="muted" style="font-size:11px">미설정 — ChatOps 비활성</span>') +
           '</div>' +
           '<div class="muted" style="font-size:11px;margin-top:6px">지원 명령: <code>incidents</code> · <code>rca [namespace]</code> · <code>slo [목표] [일수]</code> · <code>cost</code> · <code>help</code></div></div>') +
-        card('Terminal Policy Builder',
-          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod exec/web terminal은 아직 별도 실행 권한으로 분리됩니다. 이 정책은 role·cluster·namespace·label·명령 패턴 기준으로 접속 전 허용/승인/감사를 판정합니다.</div>' +
+        card('터미널 접근 정책',
+		  '<div class="card-body"><div class="resource-insight-grid"><div class="resource-insight"><strong>super_admin</strong><p>내장 정책으로 셸 즉시 접속 · 15분 · 전체 감사</p></div><div class="resource-insight"><strong>admin 및 운영 역할</strong><p>활성 예외 정책의 범위와 승인 규칙 적용</p></div><div class="resource-insight"><strong>기본 동작</strong><p>매칭 정책이 없으면 차단</p></div></div><div class="muted" style="font-size:11px;margin:10px 0 8px">아래 목록은 기본 동작을 넓히는 예외 정책입니다. 대부분은 <a href="#/k8s-policy">정책 센터의 권장 템플릿</a>만으로 설정할 수 있습니다.</div>' +
           '<table><thead><tr><th>상태</th><th>정책</th><th>Role</th><th>Cluster</th><th>Namespace</th><th>Selector</th><th>Allow</th><th>승인</th><th>시간</th><th></th></tr></thead><tbody>' + terminalRows + '</tbody></table></div>') +
         card('Exec 세션 승인함',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 상세의 터미널 요청은 여기서 승인 또는 반려합니다. 승인된 세션은 <code>ready</code> 상태가 되며, 단일 제한 명령 실행 후 <code>completed</code> 또는 <code>failed</code>로 닫힙니다.</div>' +
@@ -14476,7 +14479,7 @@ const adminHTML = `<!doctype html>
         card('Debug Container 승인함',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Ephemeral debug container 요청은 여기서 승인 또는 반려합니다. 승인 후에는 <code>ready</code> 상태가 되며, 실제 주입은 허용 이미지·manifest preview를 확인한 뒤 별도 운영 절차로 진행합니다.</div>' +
           '<table><thead><tr><th>상태</th><th>Pod</th><th>Target</th><th>Debug Image</th><th>사유/템플릿</th><th>요청자</th><th></th></tr></thead><tbody>' + debugRows + '</tbody></table><div id="debug-session-detail" style="margin-top:10px"></div></div>') +
-        card('터미널 정책 추가',
+        card('고급: 터미널 예외 정책 직접 추가',
           '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
           '<input id="tp-name" placeholder="정책 이름" value="운영 읽기 전용">' +
           '<select id="tp-role">' + roleOpts + '</select>' +
@@ -14489,7 +14492,7 @@ const adminHTML = `<!doctype html>
           '<div class="grid2" style="margin-top:0"><div><div class="muted" style="font-size:11px;margin-bottom:4px">허용 명령 패턴</div><textarea id="tp-allow" rows="8" style="width:100%">' + escapeHTML(presetReadOnly) + '</textarea></div>' +
           '<div><div class="muted" style="font-size:11px;margin-bottom:4px">차단 명령 패턴</div><textarea id="tp-deny" rows="8" style="width:100%">' + escapeHTML(defaultDeny) + '</textarea></div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><label style="font-size:12px"><input id="tp-audit" type="checkbox" checked> 감사 저장</label><label style="font-size:12px"><input id="tp-enabled" type="checkbox" checked> 활성</label><button type="button" onclick="k8sTerminalPolicySave()">저장</button></div></div>') +
-        card('터미널 정책 평가',
+        card('고급: 터미널 정책 시뮬레이션',
           '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:8px">' +
           '<select id="tpe-role">' + roleOpts + '</select><input id="tpe-cluster" placeholder="cluster_id"><input id="tpe-ns" placeholder="namespace" value="prod-api"><input id="tpe-pod" placeholder="pod" value="api-1">' +
           '<input id="tpe-labels" placeholder=\'labels JSON 예: {"app":"api"}\' style="grid-column:span 2" value=\'{"app":"api"}\'><input id="tpe-command" placeholder="명령" value="ls /app" style="grid-column:span 2"></div>' +
@@ -14755,11 +14758,11 @@ const adminHTML = `<!doctype html>
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
       view.innerHTML =
-		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + sectionLead('<strong>판정 원칙:</strong> Admission 정책은 위반한 활성 규칙 중 가장 강한 효과가 적용됩니다. <strong>Deny</strong>는 차단, <strong>Warn</strong>은 허용+경고, <strong>Audit</strong>은 허용+기록입니다. Pod exec는 별도 터미널 정책이며 매칭 정책이 없으면 기본 차단됩니다.', '⚖') + '<div class="kpis">' + kpi('Deny', fmt(denyCount)) + kpi('Warn', fmt(warnCount)) + kpi('Audit', fmt(auditCount)) + kpi('중지', fmt(disabledCount)) + kpi('미적용 검사', fmt(uncovered)) + kpi('현재 위반', fmt((comp.violations || []).length)) + '</div>') +
+		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + sectionLead('<strong>판정 원칙:</strong> Admission 정책은 위반한 활성 규칙 중 가장 강한 효과가 적용됩니다. <strong>Deny</strong>는 차단, <strong>Warn</strong>은 허용+경고, <strong>Audit</strong>은 허용+기록입니다. 터미널은 super_admin에게 감사 가능한 15분 기본 접속을 제공하고, 다른 역할만 별도 예외 정책을 적용합니다.', '⚖') + '<div class="kpis">' + kpi('Deny', fmt(denyCount)) + kpi('Warn', fmt(warnCount)) + kpi('Audit', fmt(auditCount)) + kpi('중지', fmt(disabledCount)) + kpi('미적용 검사', fmt(uncovered)) + kpi('현재 위반', fmt((comp.violations || []).length)) + '</div>') +
 		card('현재 허용·경고·차단 범위', '<div class="card-body"><div class="resource-insight-grid"><div class="resource-insight"><strong><span class="status error">Deny</span> 배포 차단</strong><p>위반 시 Manifest 검증과 Admission 요청을 통과할 수 없습니다. 원인 수정 또는 승인된 좁은 범위 예외가 필요합니다.</p></div><div class="resource-insight"><strong><span class="status warn">Warn</span> 허용 + 주의</strong><p>요청은 진행할 수 있지만 운영자가 위험을 확인하고 후속 조치나 승인 여부를 판단해야 합니다.</p></div><div class="resource-insight"><strong><span class="status">Audit</span> 허용 + 기록</strong><p>차단하지 않고 위반 증적만 남깁니다. 신규 정책을 관찰 모드로 도입할 때 적합합니다.</p></div></div>' + sectionLead('<strong>플랫폼 불변 가드:</strong> Secret <code>data/stringData</code> 원문 저장은 정책 action이나 승인으로 허용할 수 없습니다. 메타데이터만 이 화면 계열에서 관리하고 값은 Config Change Control·ExternalSecret·SealedSecret·Secret Manager 경로를 사용하세요.', '🔐', 'warn') + '</div>') +
 		card('Effective Policy Matrix', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">현재 저장된 활성 정책을 기준으로 계산합니다. 같은 검사에 정책이 여러 개면 Deny → Warn → Audit 순으로 가장 강한 효과를 표시합니다.</div>' + k8sPolicyMatrixHTML(data.policies || [], data.available_rule_types || []) + '</div>') +
         card('터미널 정책 템플릿 (Pod exec)',
-          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">Pod 터미널(exec)은 기본 거부입니다 — 매칭되는 활성 정책이 없으면 차단됩니다. 아래 템플릿을 적용하면 해당 스코프의 정책이 즉시 활성화됩니다. cluster_id·namespace는 적용 전 조정하세요. 세부 편집·삭제·평가는 <a href="#/k8s-settings">운영 설정</a>의 Terminal Policy Builder에서 합니다.</div>' +
+          '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px"><strong>super_admin은 설정할 필요가 없습니다.</strong> 아래 템플릿은 admin·운영 역할에 접근 범위를 추가할 때만 사용합니다. 원하는 용도를 고르고 cluster·namespace 범위를 확인한 뒤 적용하세요. 세부 편집·삭제는 <a href="#/k8s-settings">운영 설정</a>에서 합니다.</div>' +
           tmplCards + '<div id="tmpl-msg" class="muted" style="font-size:12px;margin-top:4px"></div></div>') +
         card('터미널 정책 평가 (시뮬레이션)',
           '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">실제 exec 전에 role·cluster·namespace·label·명령으로 허용/승인/차단 판정을 미리 확인합니다. 템플릿 적용 후 여기서 바로 테스트하세요.</div>' +

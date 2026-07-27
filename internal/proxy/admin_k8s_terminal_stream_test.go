@@ -54,7 +54,7 @@ func TestFullTTYPolicyTemplateAllowsOnlyApprovedShellEntry(t *testing.T) {
 		if !template.RequireApproval || template.MaxSessionMinutes <= 0 || !terminalAllowlistMatches(template.CommandAllowlist, "/bin/bash") {
 			t.Fatalf("unsafe full TTY template: %+v", template)
 		}
-		result := evaluateTerminalPolicy(terminalPolicyEvalRequest{Role: "operator", Namespace: "default", Command: "/bin/bash"}, []store.K8sTerminalPolicy{{
+		result := evaluateTerminalPolicy(terminalPolicyEvalRequest{Role: template.Role, Namespace: "default", Command: "/bin/bash"}, []store.K8sTerminalPolicy{{
 			ID: "full-tty", Role: template.Role, NamespacePattern: template.NamespacePattern, CommandAllowlist: template.CommandAllowlist,
 			RequireApproval: template.RequireApproval, AuditEnabled: true, MaxSessionMinutes: template.MaxSessionMinutes, Enabled: true,
 		}})
@@ -64,5 +64,21 @@ func TestFullTTYPolicyTemplateAllowsOnlyApprovedShellEntry(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("admin full TTY policy template missing")
+	}
+}
+
+func TestSuperAdminHasAuditedPolicyFreeInteractiveTerminal(t *testing.T) {
+	req := terminalPolicyEvalRequest{Role: "super_admin", ClusterID: "prod", Namespace: "default", Pod: "api-1", Command: "/bin/bash"}
+	result := applySuperAdminTerminalDefault(req, evaluateTerminalPolicy(req, nil))
+	if !result.Allowed || result.RequireApproval || !result.AuditEnabled || result.MaxSessionMinutes != 15 || result.AccessMode != "full_tty" {
+		t.Fatalf("super admin terminal default is not usable and audited: %+v", result)
+	}
+	if len(result.MatchedPolicies) != 1 || result.MatchedPolicies[0] != "builtin:super_admin_full_tty" {
+		t.Fatalf("built-in policy evidence missing: %+v", result)
+	}
+	viewerReq := terminalPolicyEvalRequest{Role: "viewer", Namespace: "default", Command: "/bin/bash"}
+	viewer := applySuperAdminTerminalDefault(viewerReq, evaluateTerminalPolicy(viewerReq, nil))
+	if viewer.Allowed {
+		t.Fatal("built-in terminal default must not apply to non-super-admin roles")
 	}
 }
