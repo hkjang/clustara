@@ -466,16 +466,18 @@ func inventoryFromObject(kind, apiVersion string, obj map[string]any) store.K8sI
 		}
 	}
 	return store.K8sInventoryItem{
-		Kind:         kind,
-		Namespace:    str(meta["namespace"]),
-		Name:         str(meta["name"]),
-		UID:          str(meta["uid"]),
-		APIVersion:   firstNonEmpty(str(obj["apiVersion"]), apiVersion),
-		Status:       status,
-		Spec:         spec,
-		StatusObject: asMap(obj["status"]),
-		Labels:       stringMap(meta["labels"]),
-		Annotations:  stringMap(meta["annotations"]),
+		Kind:              kind,
+		Namespace:         str(meta["namespace"]),
+		Name:              str(meta["name"]),
+		UID:               str(meta["uid"]),
+		APIVersion:        firstNonEmpty(str(obj["apiVersion"]), apiVersion),
+		Status:            status,
+		Spec:              spec,
+		StatusObject:      asMap(obj["status"]),
+		Labels:            stringMap(meta["labels"]),
+		Annotations:       stringMap(meta["annotations"]),
+		CreationTimestamp: str(meta["creationTimestamp"]),
+		DeletionTimestamp: str(meta["deletionTimestamp"]),
 	}
 }
 
@@ -493,16 +495,22 @@ func eventFromObject(obj map[string]any) store.K8sEvent {
 	meta := asMap(obj["metadata"])
 	involved := asMap(obj["involvedObject"])
 	return store.K8sEvent{
-		Namespace:    firstNonEmpty(str(involved["namespace"]), str(meta["namespace"])),
-		InvolvedKind: str(involved["kind"]),
-		InvolvedName: str(involved["name"]),
-		Reason:       str(obj["reason"]),
-		Type:         str(obj["type"]),
-		Message:      str(obj["message"]),
-		Count:        intValue(obj["count"]),
-		Source:       sourceName(obj["source"], obj["reportingComponent"]),
-		FirstSeen:    firstNonEmpty(str(obj["firstTimestamp"]), str(obj["eventTime"]), str(meta["creationTimestamp"])),
-		LastSeen:     firstNonEmpty(str(obj["lastTimestamp"]), str(obj["eventTime"]), str(meta["creationTimestamp"])),
+		EventUID:            str(meta["uid"]),
+		InvolvedObjectUID:   str(involved["uid"]),
+		Namespace:           firstNonEmpty(str(involved["namespace"]), str(meta["namespace"])),
+		InvolvedKind:        str(involved["kind"]),
+		InvolvedName:        str(involved["name"]),
+		Reason:              str(obj["reason"]),
+		Type:                str(obj["type"]),
+		Message:             str(obj["message"]),
+		Count:               intValue(obj["count"]),
+		Source:              sourceName(obj["source"], obj["reportingComponent"]),
+		ReportingController: str(obj["reportingController"]),
+		ReportingInstance:   str(obj["reportingInstance"]),
+		EventTime:           str(obj["eventTime"]),
+		SeriesLastObserved:  str(asMap(obj["series"])["lastObservedTime"]),
+		FirstSeen:           firstNonEmpty(str(obj["firstTimestamp"]), str(obj["eventTime"]), str(meta["creationTimestamp"])),
+		LastSeen:            firstNonEmpty(str(obj["lastTimestamp"]), str(obj["eventTime"]), str(meta["creationTimestamp"])),
 	}
 }
 

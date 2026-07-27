@@ -64,6 +64,24 @@ func TestExecutorRolloutRestart(t *testing.T) {
 	}
 }
 
+func TestExecutorRolloutRestartCarriesAuditAnnotations(t *testing.T) {
+	var cap capturedReq
+	srv := executorTestServer(t, &cap)
+	defer srv.Close()
+	c := newExecClient(t, srv.URL)
+	err := c.RolloutRestartWithMetadata(context.Background(), "Deployment", "prod", "api", RolloutRestartMetadata{
+		RestartedAt: "2026-07-27T06:45:30Z", RestartedBy: "user-1", ActionID: "action-1", Reason: "config refresh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"clustara.io/restartedAt", "kubectl.kubernetes.io/restartedAt", "clustara.io/restartedBy", "clustara.io/actionId", "clustara.io/reason", "action-1", "user-1"} {
+		if !strings.Contains(cap.body, want) {
+			t.Fatalf("patch missing %q: %s", want, cap.body)
+		}
+	}
+}
+
 func TestExecutorAcceptsWorkloadKindAliases(t *testing.T) {
 	tests := []struct {
 		kind string

@@ -30,6 +30,7 @@ func DefaultInventoryTargets() []ResourceTarget {
 		{Path: "/apis/batch/v1/jobs", Kind: "Job", APIVersion: "batch/v1"},
 		{Path: "/apis/batch/v1/cronjobs", Kind: "CronJob", APIVersion: "batch/v1", Optional: true},
 		{Path: "/apis/autoscaling/v2/horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler", APIVersion: "autoscaling/v2", Optional: true},
+		{Path: "/apis/policy/v1/poddisruptionbudgets", Kind: "PodDisruptionBudget", APIVersion: "policy/v1", Optional: true},
 		{Path: "/apis/rbac.authorization.k8s.io/v1/roles", Kind: "Role", APIVersion: "rbac.authorization.k8s.io/v1", Optional: true},
 		{Path: "/apis/rbac.authorization.k8s.io/v1/clusterroles", Kind: "ClusterRole", APIVersion: "rbac.authorization.k8s.io/v1", Optional: true},
 		{Path: "/apis/rbac.authorization.k8s.io/v1/rolebindings", Kind: "RoleBinding", APIVersion: "rbac.authorization.k8s.io/v1", Optional: true},

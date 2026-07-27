@@ -70,6 +70,9 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
 			return result, err
 		}
+		if err := db.ObservePodLifecycle(ctx, item); err != nil {
+			return result, err
+		}
 		result.Resources++
 		// Append a revision when the normalized spec changed since the last observation.
 		// This is the history backbone for Resource Diff and the Deployment Timeline.
@@ -91,7 +94,7 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 		analyzedResources = append(analyzedResources, item)
 	}
 	if snap.FullSync {
-		deleted, err := pruneMissingInventory(ctx, db, snap.ClusterID, fullSyncKinds, present)
+		deleted, err := pruneMissingInventory(ctx, db, snap.ClusterID, fullSyncKinds, present, snap.ObservedAt)
 		if err != nil {
 			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
 			return result, err
@@ -108,6 +111,9 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 		event.FirstSeen = first(event.FirstSeen, event.LastSeen)
 		if err := db.InsertK8sEvent(ctx, event); err != nil {
 			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
+			return result, err
+		}
+		if err := db.UpsertK8sEventHistory(ctx, event); err != nil {
 			return result, err
 		}
 		result.Events++
@@ -145,7 +151,7 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 	return result, nil
 }
 
-func pruneMissingInventory(ctx context.Context, db *store.SQLStore, clusterID string, kinds map[string]bool, present map[string]bool) (int, error) {
+func pruneMissingInventory(ctx context.Context, db *store.SQLStore, clusterID string, kinds map[string]bool, present map[string]bool, observedAt string) (int, error) {
 	if len(kinds) == 0 {
 		return 0, nil
 	}
@@ -158,6 +164,11 @@ func pruneMissingInventory(ctx context.Context, db *store.SQLStore, clusterID st
 		for _, item := range existing {
 			if present[inventoryIdentity(item.Kind, item.Namespace, item.Name)] {
 				continue
+			}
+			if strings.EqualFold(item.Kind, "Pod") {
+				if err := db.MarkPodDeleted(ctx, clusterID, item.UID, observedAt, "missing_detection"); err != nil {
+					return deleted, err
+				}
 			}
 			if err := db.DeleteK8sInventoryItem(ctx, clusterID, item.Kind, item.Namespace, item.Name); err != nil {
 				return deleted, err

@@ -1922,11 +1922,15 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			status_json TEXT NOT NULL DEFAULT '{}',
 			labels_json TEXT NOT NULL DEFAULT '{}',
 			annotations_json TEXT NOT NULL DEFAULT '{}',
+			creation_timestamp TEXT NOT NULL DEFAULT '',
+			deletion_timestamp TEXT NOT NULL DEFAULT '',
 			observed_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_inventory_identity ON k8s_inventory(cluster_id, kind, namespace, name)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_inventory_cluster_kind ON k8s_inventory(cluster_id, kind)`,
+		`ALTER TABLE k8s_inventory ADD COLUMN creation_timestamp TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_inventory ADD COLUMN deletion_timestamp TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS k8s_events (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL,
@@ -2042,6 +2046,33 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		`ALTER TABLE k8s_action_requests ADD COLUMN command_hash TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_action_requests_cluster_status ON k8s_action_requests(cluster_id, status, created_at)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_action_requests_idempotency ON k8s_action_requests(idempotency_key) WHERE idempotency_key <> ''`,
+		`CREATE TABLE IF NOT EXISTS k8s_rollout_actions (
+			id TEXT PRIMARY KEY, action_request_id TEXT NOT NULL DEFAULT '', cluster_id TEXT NOT NULL, namespace TEXT NOT NULL,
+			resource_kind TEXT NOT NULL, resource_name TEXT NOT NULL, resource_uid TEXT NOT NULL DEFAULT '',
+			requested_by TEXT NOT NULL DEFAULT '', requested_at TEXT NOT NULL, approved_by TEXT NOT NULL DEFAULT '',
+			approved_at TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '', completed_at TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL, ticket_no TEXT NOT NULL DEFAULT '', execution_mode TEXT NOT NULL DEFAULT 'IMMEDIATE',
+			status TEXT NOT NULL, risk_level TEXT NOT NULL DEFAULT 'medium', previous_revision TEXT NOT NULL DEFAULT '',
+			target_revision TEXT NOT NULL DEFAULT '', previous_spec_hash TEXT NOT NULL DEFAULT '', target_spec_hash TEXT NOT NULL DEFAULT '',
+			auto_rollback INTEGER NOT NULL DEFAULT 0, timeout_seconds INTEGER NOT NULL DEFAULT 600,
+			failure_reason TEXT NOT NULL DEFAULT '', duration_ms INTEGER NOT NULL DEFAULT 0,
+			desired_replicas INTEGER NOT NULL DEFAULT 0, updated_replicas INTEGER NOT NULL DEFAULT 0,
+			ready_replicas INTEGER NOT NULL DEFAULT 0, available_replicas INTEGER NOT NULL DEFAULT 0,
+			unavailable_replicas INTEGER NOT NULL DEFAULT 0, precheck_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_rollout_action_request ON k8s_rollout_actions(action_request_id) WHERE action_request_id <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_target ON k8s_rollout_actions(cluster_id, resource_uid, requested_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_status ON k8s_rollout_actions(status, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_rollout_pod_transitions (
+			id TEXT PRIMARY KEY, action_id TEXT NOT NULL, pod_uid TEXT NOT NULL, pod_name TEXT NOT NULL DEFAULT '',
+			node_name TEXT NOT NULL DEFAULT '', revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',
+			scheduled_at TEXT NOT NULL DEFAULT '', container_started_at TEXT NOT NULL DEFAULT '', ready_at TEXT NOT NULL DEFAULT '',
+			terminating_at TEXT NOT NULL DEFAULT '', deleted_at TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '',
+			failure_reason TEXT NOT NULL DEFAULT '', observed_at TEXT NOT NULL,
+			UNIQUE(action_id, pod_uid)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_pods_action ON k8s_rollout_pod_transitions(action_id, observed_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_config_change_requests (
 			id TEXT PRIMARY KEY,
 			cluster_id TEXT NOT NULL,
@@ -2939,6 +2970,72 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE(version_id, revision)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_service_template_revisions_version ON k8s_service_template_revisions(version_id, revision)`,
+		`CREATE TABLE IF NOT EXISTS k8s_pod_lifecycles (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, namespace TEXT NOT NULL, pod_name TEXT NOT NULL,
+			owner_kind TEXT NOT NULL DEFAULT '', owner_name TEXT NOT NULL DEFAULT '', owner_uid TEXT NOT NULL DEFAULT '',
+			workload_key TEXT NOT NULL DEFAULT '', node_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+			first_observed_at TEXT NOT NULL, scheduled_at TEXT NOT NULL DEFAULT '', initialized_at TEXT NOT NULL DEFAULT '',
+			containers_ready_at TEXT NOT NULL DEFAULT '', ready_at TEXT NOT NULL DEFAULT '', deletion_requested_at TEXT NOT NULL DEFAULT '',
+			terminated_at TEXT NOT NULL DEFAULT '', deleted_observed_at TEXT NOT NULL DEFAULT '', last_observed_at TEXT NOT NULL,
+			final_phase TEXT NOT NULL DEFAULT '', final_reason TEXT NOT NULL DEFAULT '', final_message TEXT NOT NULL DEFAULT '',
+			current_state TEXT NOT NULL DEFAULT '', total_lifetime_ms INTEGER NOT NULL DEFAULT 0, ready_duration_ms INTEGER NOT NULL DEFAULT 0,
+			degraded_duration_ms INTEGER NOT NULL DEFAULT 0, failure_duration_ms INTEGER NOT NULL DEFAULT 0,
+			current_snapshot_hash TEXT NOT NULL DEFAULT '', created_record_at TEXT NOT NULL, updated_record_at TEXT NOT NULL,
+			UNIQUE(cluster_id, pod_uid)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_lifecycle_lookup ON k8s_pod_lifecycles(cluster_id, namespace, pod_name, last_observed_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_pod_state_transitions (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, sequence_no INTEGER NOT NULL,
+			transition_at TEXT NOT NULL, observed_at TEXT NOT NULL, source TEXT NOT NULL, previous_state TEXT NOT NULL DEFAULT '',
+			current_state TEXT NOT NULL, phase TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+			severity TEXT NOT NULL DEFAULT '', event_uid TEXT NOT NULL DEFAULT '', snapshot_hash TEXT NOT NULL DEFAULT '',
+			UNIQUE(cluster_id, pod_uid, sequence_no)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_transitions_time ON k8s_pod_state_transitions(cluster_id, pod_uid, transition_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_pod_condition_transitions (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, condition_type TEXT NOT NULL,
+			previous_status TEXT NOT NULL DEFAULT '', current_status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '', transition_at TEXT NOT NULL, observed_at TEXT NOT NULL,
+			UNIQUE(cluster_id, pod_uid, condition_type, transition_at, current_status)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_condition_time ON k8s_pod_condition_transitions(cluster_id, pod_uid, transition_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_container_lifecycles (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, container_name TEXT NOT NULL,
+			container_type TEXT NOT NULL, restart_no INTEGER NOT NULL, container_id TEXT NOT NULL DEFAULT '', image TEXT NOT NULL DEFAULT '',
+			image_id TEXT NOT NULL DEFAULT '', first_observed_at TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT '',
+			ready_at TEXT NOT NULL DEFAULT '', finished_at TEXT NOT NULL DEFAULT '', exit_code INTEGER, signal INTEGER,
+			termination_reason TEXT NOT NULL DEFAULT '', termination_message TEXT NOT NULL DEFAULT '', waiting_reason TEXT NOT NULL DEFAULT '',
+			waiting_message TEXT NOT NULL DEFAULT '', restart_count INTEGER NOT NULL DEFAULT 0, ready INTEGER NOT NULL DEFAULT 0,
+			started INTEGER NOT NULL DEFAULT 0, last_observed_at TEXT NOT NULL,
+			UNIQUE(cluster_id, pod_uid, container_name, container_type, restart_no)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_container_lifecycle_pod ON k8s_container_lifecycles(cluster_id, pod_uid, started_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_container_state_transitions (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, container_name TEXT NOT NULL,
+			container_type TEXT NOT NULL, restart_no INTEGER NOT NULL, property TEXT NOT NULL,
+			previous_value TEXT NOT NULL DEFAULT '', current_value TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '', transition_at TEXT NOT NULL, observed_at TEXT NOT NULL,
+			UNIQUE(cluster_id, pod_uid, container_name, container_type, restart_no, property, transition_at, current_value)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_container_transition_time ON k8s_container_state_transitions(cluster_id, pod_uid, transition_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_pod_failure_intervals (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, pod_uid TEXT NOT NULL, failure_category TEXT NOT NULL,
+			failure_reason TEXT NOT NULL DEFAULT '', failure_message TEXT NOT NULL DEFAULT '', failure_started_at TEXT NOT NULL,
+			failure_ended_at TEXT NOT NULL DEFAULT '', failure_duration_ms INTEGER NOT NULL DEFAULT 0,
+			failure_source TEXT NOT NULL, failure_confidence REAL NOT NULL DEFAULT 1,
+			UNIQUE(cluster_id, pod_uid, failure_category, failure_started_at)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_failure_time ON k8s_pod_failure_intervals(cluster_id, pod_uid, failure_started_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_event_history (
+			id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL, event_uid TEXT NOT NULL, involved_object_uid TEXT NOT NULL DEFAULT '',
+			involved_object_kind TEXT NOT NULL DEFAULT '', namespace TEXT NOT NULL DEFAULT '', object_name TEXT NOT NULL DEFAULT '',
+			event_type TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+			reporting_controller TEXT NOT NULL DEFAULT '', reporting_instance TEXT NOT NULL DEFAULT '', event_time TEXT NOT NULL DEFAULT '',
+			first_timestamp TEXT NOT NULL DEFAULT '', last_timestamp TEXT NOT NULL DEFAULT '', series_last_observed TEXT NOT NULL DEFAULT '',
+			occurrence_count INTEGER NOT NULL DEFAULT 1, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL,
+			UNIQUE(cluster_id, event_uid)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_event_history_object ON k8s_event_history(cluster_id, involved_object_uid, last_observed_at)`,
 	}
 
 	for _, statement := range statements {

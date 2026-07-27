@@ -40,22 +40,24 @@ type K8sClusterCredential struct {
 }
 
 type K8sInventoryItem struct {
-	ID           string            `json:"id"`
-	ClusterID    string            `json:"cluster_id"`
-	Kind         string            `json:"kind"`
-	Namespace    string            `json:"namespace"`
-	Name         string            `json:"name"`
-	UID          string            `json:"uid"`
-	APIVersion   string            `json:"api_version"`
-	Status       string            `json:"status"`
-	HealthScore  int               `json:"health_score"`
-	RiskLevel    string            `json:"risk_level"`
-	Spec         map[string]any    `json:"spec"`
-	StatusObject map[string]any    `json:"status_object"` // raw .status (rollout/job/node conditions); kept out of Spec so it never churns the revision hash
-	Labels       map[string]string `json:"labels"`
-	Annotations  map[string]string `json:"annotations"`
-	ObservedAt   string            `json:"observed_at"`
-	UpdatedAt    string            `json:"updated_at"`
+	ID                string            `json:"id"`
+	ClusterID         string            `json:"cluster_id"`
+	Kind              string            `json:"kind"`
+	Namespace         string            `json:"namespace"`
+	Name              string            `json:"name"`
+	UID               string            `json:"uid"`
+	APIVersion        string            `json:"api_version"`
+	Status            string            `json:"status"`
+	HealthScore       int               `json:"health_score"`
+	RiskLevel         string            `json:"risk_level"`
+	Spec              map[string]any    `json:"spec"`
+	StatusObject      map[string]any    `json:"status_object"` // raw .status (rollout/job/node conditions); kept out of Spec so it never churns the revision hash
+	Labels            map[string]string `json:"labels"`
+	Annotations       map[string]string `json:"annotations"`
+	CreationTimestamp string            `json:"creation_timestamp,omitempty"`
+	DeletionTimestamp string            `json:"deletion_timestamp,omitempty"`
+	ObservedAt        string            `json:"observed_at"`
+	UpdatedAt         string            `json:"updated_at"`
 }
 
 type K8sInventoryFilter struct {
@@ -67,19 +69,25 @@ type K8sInventoryFilter struct {
 }
 
 type K8sEvent struct {
-	ID           string `json:"id"`
-	ClusterID    string `json:"cluster_id"`
-	Namespace    string `json:"namespace"`
-	InvolvedKind string `json:"involved_kind"`
-	InvolvedName string `json:"involved_name"`
-	Reason       string `json:"reason"`
-	Type         string `json:"type"`
-	Message      string `json:"message"`
-	Count        int    `json:"count"`
-	Source       string `json:"source"`
-	FirstSeen    string `json:"first_seen"`
-	LastSeen     string `json:"last_seen"`
-	CreatedAt    string `json:"created_at"`
+	ID                  string `json:"id"`
+	ClusterID           string `json:"cluster_id"`
+	Namespace           string `json:"namespace"`
+	InvolvedKind        string `json:"involved_kind"`
+	InvolvedName        string `json:"involved_name"`
+	Reason              string `json:"reason"`
+	Type                string `json:"type"`
+	Message             string `json:"message"`
+	Count               int    `json:"count"`
+	Source              string `json:"source"`
+	FirstSeen           string `json:"first_seen"`
+	LastSeen            string `json:"last_seen"`
+	CreatedAt           string `json:"created_at"`
+	EventUID            string `json:"event_uid,omitempty"`
+	InvolvedObjectUID   string `json:"involved_object_uid,omitempty"`
+	ReportingController string `json:"reporting_controller,omitempty"`
+	ReportingInstance   string `json:"reporting_instance,omitempty"`
+	EventTime           string `json:"event_time,omitempty"`
+	SeriesLastObserved  string `json:"series_last_observed,omitempty"`
 }
 
 type K8sMetricSample struct {
@@ -360,6 +368,12 @@ func (s *SQLStore) DeleteK8sCluster(ctx context.Context, id string) error {
 		}
 	}
 
+	if _, err := tx.ExecContext(ctx, s.bind(`DELETE FROM k8s_rollout_pod_transitions WHERE action_id IN
+		(SELECT id FROM k8s_rollout_actions WHERE cluster_id = ?)`), id); err != nil &&
+		!strings.Contains(err.Error(), "no such table") && !strings.Contains(err.Error(), "doesn't exist") {
+		return err
+	}
+
 	tables := []string{
 		"k8s_clusters",
 		"k8s_cluster_credentials",
@@ -378,6 +392,14 @@ func (s *SQLStore) DeleteK8sCluster(ctx context.Context, id string) error {
 		"k8s_resource_revisions",
 		"k8s_incidents",
 		"k8s_action_requests",
+		"k8s_rollout_actions",
+		"k8s_pod_lifecycles",
+		"k8s_pod_state_transitions",
+		"k8s_pod_condition_transitions",
+		"k8s_container_lifecycles",
+		"k8s_container_state_transitions",
+		"k8s_pod_failure_intervals",
+		"k8s_event_history",
 		"k8s_config_change_requests",
 		"k8s_manifest_change_requests",
 		"harbor_project_mappings",
@@ -419,8 +441,8 @@ func (s *SQLStore) UpsertK8sInventory(ctx context.Context, item K8sInventoryItem
 		item.RiskLevel = "low"
 	}
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_inventory
-		(id, cluster_id, kind, namespace, name, uid, api_version, status, health_score, risk_level, spec_json, status_json, labels_json, annotations_json, observed_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, cluster_id, kind, namespace, name, uid, api_version, status, health_score, risk_level, spec_json, status_json, labels_json, annotations_json, creation_timestamp, deletion_timestamp, observed_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(cluster_id, kind, namespace, name) DO UPDATE SET
 			uid = excluded.uid,
 			api_version = excluded.api_version,
@@ -431,18 +453,20 @@ func (s *SQLStore) UpsertK8sInventory(ctx context.Context, item K8sInventoryItem
 			status_json = excluded.status_json,
 			labels_json = excluded.labels_json,
 			annotations_json = excluded.annotations_json,
+			creation_timestamp = excluded.creation_timestamp,
+			deletion_timestamp = excluded.deletion_timestamp,
 			observed_at = excluded.observed_at,
 			updated_at = excluded.updated_at`),
 		item.ID, item.ClusterID, item.Kind, item.Namespace, item.Name, item.UID, item.APIVersion,
 		item.Status, item.HealthScore, item.RiskLevel, encodeAnyMap(item.Spec), encodeAnyMap(item.StatusObject), encodeStringMap(item.Labels),
-		encodeStringMap(item.Annotations), item.ObservedAt, item.UpdatedAt)
+		encodeStringMap(item.Annotations), item.CreationTimestamp, item.DeletionTimestamp, item.ObservedAt, item.UpdatedAt)
 	return err
 }
 
 func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) ([]K8sInventoryItem, error) {
 	query := `SELECT id, cluster_id, kind, namespace, name, COALESCE(uid, ''), COALESCE(api_version, ''),
 		COALESCE(status, ''), health_score, risk_level, COALESCE(spec_json, '{}'), COALESCE(status_json, '{}'), COALESCE(labels_json, '{}'),
-		COALESCE(annotations_json, '{}'), observed_at, updated_at FROM k8s_inventory WHERE 1=1`
+		COALESCE(annotations_json, '{}'), COALESCE(creation_timestamp,''), COALESCE(deletion_timestamp,''), observed_at, updated_at FROM k8s_inventory WHERE 1=1`
 	args := []any{}
 	if f.ClusterID != "" {
 		query += ` AND cluster_id = ?`
@@ -481,7 +505,7 @@ func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) (
 // ListK8sInventoryIdentities returns inventory identities for reconciliation without the
 // normal UI/API list cap.
 func (s *SQLStore) ListK8sInventoryIdentities(ctx context.Context, clusterID, kind string) ([]K8sInventoryItem, error) {
-	query := `SELECT cluster_id, kind, namespace, name FROM k8s_inventory WHERE cluster_id = ?`
+	query := `SELECT cluster_id, kind, namespace, name, COALESCE(uid,'') FROM k8s_inventory WHERE cluster_id = ?`
 	args := []any{clusterID}
 	if strings.TrimSpace(kind) != "" {
 		query += ` AND lower(kind) = lower(?)`
@@ -496,7 +520,7 @@ func (s *SQLStore) ListK8sInventoryIdentities(ctx context.Context, clusterID, ki
 	out := []K8sInventoryItem{}
 	for rows.Next() {
 		var item K8sInventoryItem
-		if err := rows.Scan(&item.ClusterID, &item.Kind, &item.Namespace, &item.Name); err != nil {
+		if err := rows.Scan(&item.ClusterID, &item.Kind, &item.Namespace, &item.Name, &item.UID); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -509,7 +533,8 @@ func (s *SQLStore) ListK8sInventoryIdentities(ctx context.Context, clusterID, ki
 func (s *SQLStore) GetK8sInventoryItem(ctx context.Context, clusterID, kind, namespace, name string) (K8sInventoryItem, error) {
 	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id, cluster_id, kind, namespace, name, COALESCE(uid, ''),
 		COALESCE(api_version, ''), COALESCE(status, ''), health_score, risk_level, COALESCE(spec_json, '{}'),
-		COALESCE(status_json, '{}'), COALESCE(labels_json, '{}'), COALESCE(annotations_json, '{}'), observed_at, updated_at
+		COALESCE(status_json, '{}'), COALESCE(labels_json, '{}'), COALESCE(annotations_json, '{}'),
+		COALESCE(creation_timestamp,''), COALESCE(deletion_timestamp,''), observed_at, updated_at
 		FROM k8s_inventory WHERE cluster_id = ? AND lower(kind) = lower(?) AND namespace = ? AND name = ?`),
 		clusterID, kind, namespace, name)
 	item, err := scanK8sInventory(row)
@@ -884,7 +909,7 @@ func scanK8sInventory(rows k8sClusterScanner) (K8sInventoryItem, error) {
 	var spec, statusObj, labels, annotations string
 	if err := rows.Scan(&item.ID, &item.ClusterID, &item.Kind, &item.Namespace, &item.Name, &item.UID,
 		&item.APIVersion, &item.Status, &item.HealthScore, &item.RiskLevel, &spec, &statusObj, &labels, &annotations,
-		&item.ObservedAt, &item.UpdatedAt); err != nil {
+		&item.CreationTimestamp, &item.DeletionTimestamp, &item.ObservedAt, &item.UpdatedAt); err != nil {
 		return K8sInventoryItem{}, err
 	}
 	item.Spec = decodeAnyMap(spec)

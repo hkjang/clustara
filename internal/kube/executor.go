@@ -3,6 +3,7 @@ package kube
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,17 @@ type Executor interface {
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
 	SetCordon(ctx context.Context, node string, unschedulable bool) error
 	DeletePod(ctx context.Context, namespace, name string) error
+}
+
+type RolloutRestartMetadata struct {
+	RestartedAt string
+	RestartedBy string
+	ActionID    string
+	Reason      string
+}
+
+type DetailedRolloutExecutor interface {
+	RolloutRestartWithMetadata(ctx context.Context, kind, namespace, name string, meta RolloutRestartMetadata) error
 }
 
 func workloadResourcePlural(kind string) (string, bool) {
@@ -107,13 +119,36 @@ func (c *HTTPClient) Scale(ctx context.Context, kind, namespace, name string, re
 }
 
 func (c *HTTPClient) RolloutRestart(ctx context.Context, kind, namespace, name string) error {
+	return c.RolloutRestartWithMetadata(ctx, kind, namespace, name, RolloutRestartMetadata{})
+}
+
+func (c *HTTPClient) RolloutRestartWithMetadata(ctx context.Context, kind, namespace, name string, meta RolloutRestartMetadata) error {
 	plural, ok := workloadResourcePlural(kind)
 	if !ok {
 		return unsupportedWorkloadKindError("rollout restart", kind)
 	}
 	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, plural, name)
-	ts := time.Now().UTC().Format(time.RFC3339)
-	body := []byte(fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"clustara.io/restartedAt":%q}}}}}`, ts))
+	ts := strings.TrimSpace(meta.RestartedAt)
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	annotations := map[string]string{
+		"clustara.io/restartedAt":           ts,
+		"kubectl.kubernetes.io/restartedAt": ts,
+	}
+	if v := strings.TrimSpace(meta.RestartedBy); v != "" {
+		annotations["clustara.io/restartedBy"] = v
+	}
+	if v := strings.TrimSpace(meta.ActionID); v != "" {
+		annotations["clustara.io/actionId"] = v
+	}
+	if v := strings.TrimSpace(meta.Reason); v != "" {
+		annotations["clustara.io/reason"] = v
+	}
+	body, err := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"annotations": annotations}}}})
+	if err != nil {
+		return err
+	}
 	return c.write(ctx, http.MethodPatch, path, "application/strategic-merge-patch+json", body)
 }
 

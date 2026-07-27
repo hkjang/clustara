@@ -126,6 +126,11 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 		seenByKind[item.Kind]++
 		switch eventType {
 		case AgentDeleted:
+			if strings.EqualFold(item.Kind, "Pod") {
+				if err := db.MarkPodDeleted(ctx, batch.ClusterID, item.UID, first(item.ObservedAt, batch.ObservedAt), "watch_tombstone"); err != nil {
+					return result, err
+				}
+			}
 			if err := db.DeleteK8sInventoryItem(ctx, batch.ClusterID, item.Kind, item.Namespace, item.Name); err != nil {
 				return result, err
 			}
@@ -135,6 +140,9 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 			item.ObservedAt = first(item.ObservedAt, batch.ObservedAt)
 			analyzer.ScoreResource(&item)
 			if err := db.UpsertK8sInventory(ctx, item); err != nil {
+				return result, err
+			}
+			if err := db.ObservePodLifecycle(ctx, item); err != nil {
 				return result, err
 			}
 			result.Upserted++
@@ -165,6 +173,9 @@ func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, 
 		event.LastSeen = first(event.LastSeen, batch.ObservedAt)
 		event.FirstSeen = first(event.FirstSeen, event.LastSeen)
 		if err := db.InsertK8sEvent(ctx, event); err != nil {
+			return result, err
+		}
+		if err := db.UpsertK8sEventHistory(ctx, event); err != nil {
 			return result, err
 		}
 		result.Events++

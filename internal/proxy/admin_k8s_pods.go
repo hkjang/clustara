@@ -246,6 +246,14 @@ func (s *Server) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 		s.handleK8sPodHealthReplay(w, r, namespace, pod)
 		return
 	}
+	if parts[2] == "lifecycle" {
+		if r.Method != http.MethodGet {
+			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+			return
+		}
+		s.handleK8sPodLifecycle(w, r, namespace, pod)
+		return
+	}
 	if parts[2] == "bookmark" {
 		if r.Method != http.MethodPost {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
@@ -746,6 +754,80 @@ func (s *Server) handleK8sPodHealthReplay(w http.ResponseWriter, r *http.Request
 		"entries":        filtered,
 		"summary":        podReplaySummary(filtered),
 	})
+}
+
+// handleK8sPodLifecycle serves the durable UID-based ledger. Unlike Health Replay it does not
+// require a current inventory row, so deleted Pods remain queryable by name or pod_uid.
+func (s *Server) handleK8sPodLifecycle(w http.ResponseWriter, r *http.Request, namespace, pod string) {
+	clusterID := strings.TrimSpace(r.URL.Query().Get("cluster_id"))
+	if clusterID == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id is required", "invalid_request_error", "cluster_id_required")
+		return
+	}
+	lifecycle, err := s.db.GetK8sPodLifecycleByName(r.Context(), clusterID, namespace, pod, strings.TrimSpace(r.URL.Query().Get("pod_uid")))
+	if err == store.ErrNotFound {
+		writeOpenAIError(w, http.StatusNotFound, "pod lifecycle not found", "not_found_error", "k8s_pod_lifecycle_not_found")
+		return
+	}
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_lifecycle_failed")
+		return
+	}
+	transitions, err := s.db.ListK8sPodTransitions(r.Context(), clusterID, lifecycle.PodUID, boundedInt(r.URL.Query().Get("limit"), 200, 10, 1000))
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_lifecycle_transitions_failed")
+		return
+	}
+	containers, err := s.db.ListK8sContainerLifecycles(r.Context(), clusterID, lifecycle.PodUID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_container_lifecycles_failed")
+		return
+	}
+	conditions, err := s.db.ListK8sPodConditionTransitions(r.Context(), clusterID, lifecycle.PodUID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_condition_transitions_failed")
+		return
+	}
+	containerTransitions, err := s.db.ListK8sContainerStateTransitions(r.Context(), clusterID, lifecycle.PodUID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_container_state_transitions_failed")
+		return
+	}
+	failures, err := s.db.ListK8sPodFailureIntervals(r.Context(), clusterID, lifecycle.PodUID, lifecycle.LastObservedAt)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_failure_intervals_failed")
+		return
+	}
+	events, err := s.db.ListK8sEventHistoryByObjectUID(r.Context(), clusterID, lifecycle.PodUID, boundedInt(r.URL.Query().Get("limit"), 200, 10, 1000))
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_pod_event_history_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id": clusterID, "namespace": lifecycle.Namespace, "pod": lifecycle.PodName, "pod_uid": lifecycle.PodUID,
+		"lifecycle": lifecycle, "transitions": transitions, "conditions": conditions, "containers": containers,
+		"container_transitions": containerTransitions, "failures": failures, "events": events,
+	})
+}
+
+func (s *Server) handleK8sPodLifecycleByUID(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	uid, _ := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/pod-lifecycles/"), "/"))
+	if uid == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "pod_uid is required", "invalid_request_error", "pod_uid_required")
+		return
+	}
+	q := r.URL.Query()
+	q.Set("pod_uid", uid)
+	r.URL.RawQuery = q.Encode()
+	s.handleK8sPodLifecycle(w, r, "", "")
 }
 
 // friendlyPodLogError rewrites the apiserver's raw 400 for "previous" log

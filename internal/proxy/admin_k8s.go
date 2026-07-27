@@ -829,7 +829,15 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 			execErr = exec.Scale(ctx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
 		}
 	case "rollout_restart":
-		execErr = exec.RolloutRestart(ctx, act.ResourceKind, act.Namespace, act.ResourceName)
+		if detailed, ok := client.(kube.DetailedRolloutExecutor); ok {
+			execErr = detailed.RolloutRestartWithMetadata(ctx, act.ResourceKind, act.Namespace, act.ResourceName, kube.RolloutRestartMetadata{
+				RestartedBy: actor,
+				ActionID:    act.ID,
+				Reason:      strings.TrimSpace(k8sActionString(act.Parameters["reason"])),
+			})
+		} else {
+			execErr = exec.RolloutRestart(ctx, act.ResourceKind, act.Namespace, act.ResourceName)
+		}
 	case "cordon":
 		execErr = exec.SetCordon(ctx, act.ResourceName, true)
 	case "uncordon":
@@ -850,6 +858,21 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 	}
 	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, resultStatus, resultMsg)
+	if strings.EqualFold(act.Action, "rollout_restart") {
+		if rollout, lookupErr := s.db.GetK8sRolloutByActionRequest(ctx, act.ID); lookupErr == nil {
+			now := time.Now().UTC()
+			rollout.ApprovedBy, rollout.ApprovedAt = act.ApprovedBy, act.ApprovedAt
+			if rollout.StartedAt == "" {
+				rollout.StartedAt = now.Format(time.RFC3339Nano)
+			}
+			if execErr != nil {
+				rollout.Status, rollout.FailureReason, rollout.CompletedAt = "failed", execErr.Error(), now.Format(time.RFC3339Nano)
+			} else {
+				rollout.Status = "monitoring"
+			}
+			_ = s.db.UpdateK8sRolloutProgress(ctx, rollout)
+		}
+	}
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
 	}

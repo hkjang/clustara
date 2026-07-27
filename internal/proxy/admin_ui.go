@@ -9603,6 +9603,7 @@ const adminHTML = `<!doctype html>
         const ns = it.namespace || '-';
         const kindKey = k8sResourceKindKey(it.kind);
         const actions = [
+          ['deployment', 'statefulset', 'daemonset'].includes(kindKey) ? '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(it.cluster_id || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.namespace || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.kind || '')) + '\',\'' + escapeAttr(encodeURIComponent(it.name || '')) + '\')">롤아웃</button>' : '',
           k8sYamlChangeLink(it.cluster_id, it.kind, it.namespace, it.name, 'YAML'),
           '<a href="' + escapeAttr(k8sResourceTimelineHref(it)) + '">이력</a>',
           kindKey === 'pod' ? k8sPodLink(it.cluster_id, it.namespace, it.name, 'Pod 상세') : '',
@@ -9619,6 +9620,44 @@ const adminHTML = `<!doctype html>
           '<td>' + actions + '</td></tr>';
       }).join('');
     }
+    window.openWorkloadRollout = async (cluster, ns, kind, name) => {
+      const target = { clusterId: decodeURIComponent(cluster || ''), namespace: decodeURIComponent(ns || ''), kind: decodeURIComponent(kind || ''), name: decodeURIComponent(name || '') };
+      try {
+        const d = await api('/api/v1/workloads/rollout/precheck', { method: 'POST', body: JSON.stringify(target) });
+        const p = d.precheck || {}, checks = (p.checks || []).map(x => '<tr><td><span class="status ' + (x.status === 'blocked' ? 'error' : (x.status === 'warning' ? 'warn' : '')) + '">' + escapeHTML(x.status || '-') + '</span></td><td>' + escapeHTML(x.code || '-') + '</td><td>' + escapeHTML(x.message || '-') + '</td></tr>').join('');
+        openModal('워크로드 즉시 롤아웃',
+          '<div class="card-body"><div class="kpis">' + kpi('대상', escapeHTML(target.kind + '/' + target.name)) + kpi('Ready', fmt(p.ready || 0) + '/' + fmt(p.desired || 0)) + kpi('전략', escapeHTML(p.strategy || '-')) + kpi('위험', escapeHTML(p.risk_level || '-')) + '</div>' +
+          '<table><thead><tr><th>판정</th><th>검사</th><th>설명</th></tr></thead><tbody>' + checks + '</tbody></table>' +
+          '<div class="ui-form" style="margin-top:12px"><label>롤아웃 사유<input id="rollout-reason" placeholder="필수: 재기동 사유"></label><label>변경 티켓<input id="rollout-ticket" placeholder="CHG-..."></label><label>제한시간(초)<input id="rollout-timeout" type="number" value="600" min="60"></label><label><input id="rollout-auto-rollback" type="checkbox"> Deployment 실패 시 자동 롤백 요청 기록</label></div>' +
+          (p.super_admin_direct && p.requires_approval ? '<div class="banner warn" style="margin-top:10px">최고 관리자 권한으로 일반 승인 단계를 생략하고 즉시 실행할 수 있습니다. 차단 판정은 우회되지 않으며 실행 감사에 기록됩니다.</div>' : '') +
+          '<div style="display:flex;gap:8px;margin-top:12px"><button type="button"' + (p.allowed ? '' : ' disabled') + ' onclick="submitWorkloadRollout(\'' + escapeAttr(cluster) + '\',\'' + escapeAttr(ns) + '\',\'' + escapeAttr(kind) + '\',\'' + escapeAttr(name) + '\')">' + (p.requires_approval && !p.super_admin_direct ? '승인 요청' : '즉시 실행') + '</button><a class="button secondary" href="#/k8s-actions">Action Center</a></div></div>', null, { wide: true });
+      } catch (e) { showToast('error', '롤아웃 사전검사 실패', e.message); }
+    };
+    window.submitWorkloadRollout = async (cluster, ns, kind, name) => {
+      const reason = safeInputValue('rollout-reason', '').trim();
+      if (!reason) { showToast('warn', '사유 필요', '롤아웃 사유를 입력하세요.'); return; }
+      const payload = { clusterId: decodeURIComponent(cluster || ''), namespace: decodeURIComponent(ns || ''), kind: decodeURIComponent(kind || ''), name: decodeURIComponent(name || ''), reason, ticketNo: safeInputValue('rollout-ticket', '').trim(), executionMode: 'IMMEDIATE', timeoutSeconds: Number(safeInputValue('rollout-timeout', '600')) || 600, autoRollback: !!((document.getElementById('rollout-auto-rollback') || {}).checked) };
+      try {
+        const d = await api('/api/v1/workloads/rollout', { method: 'POST', body: JSON.stringify(payload) }), roll = d.rollout || {};
+        showToast('ok', roll.status === 'approval_required' ? '롤아웃 승인 요청 생성' : '롤아웃 실행 시작', roll.id || '');
+        if (roll.status === 'approval_required') { closeModal(); location.hash = '#/k8s-actions'; return; }
+        showWorkloadRolloutProgress(roll.id);
+      } catch (e) { showToast('error', '롤아웃 요청 실패', e.message); }
+    };
+    window.showWorkloadRolloutProgress = async (id) => {
+      if (!id) return;
+      const render = d => {
+        const r = d.rollout || {}, pods = d.pods || [], pct = d.progress_percent || 0;
+        const rows = pods.map(p => '<tr><td>' + escapeHTML(p.pod_name || '-') + '</td><td>' + escapeHTML(p.revision || '-') + '</td><td>' + escapeHTML(p.node_name || '-') + '</td><td>' + escapeHTML(p.created_at || '-') + '</td><td>' + escapeHTML(p.ready_at || '-') + '</td><td>' + escapeHTML(p.failure_reason || p.result || '-') + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">신규 Pod 관측 대기 중</td></tr>';
+        openModal('롤아웃 진행 상태', '<div class="card-body"><div class="kpis">' + kpi('상태', escapeHTML(r.status || '-')) + kpi('진행률', fmt(pct) + '%') + kpi('Updated', fmt(r.updated_replicas || 0) + '/' + fmt(r.desired_replicas || 0)) + kpi('Ready', fmt(r.ready_replicas || 0) + '/' + fmt(r.desired_replicas || 0)) + kpi('Unavailable', fmt(r.unavailable_replicas || 0)) + '</div><div class="resource-health-strip"><span class="resource-health-good" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></span></div><table><thead><tr><th>Pod</th><th>Revision</th><th>Node</th><th>생성</th><th>Ready</th><th>결과</th></tr></thead><tbody>' + rows + '</tbody></table><div style="display:flex;gap:8px;margin-top:12px"><a class="button secondary" href="#/k8s-actions">Action Center</a><button type="button" class="secondary" onclick="showWorkloadRolloutProgress(\'' + escapeAttr(id) + '\')">새로고침</button></div></div>', null, { wide: true });
+        return ['succeeded','failed','timed_out','rejected'].includes(r.status);
+      };
+      try {
+        const d = await api('/api/v1/rollouts/' + encodeURIComponent(id));
+        const done = render(d);
+        if (!done) setTimeout(async () => { if (document.getElementById('modal-backdrop') && !document.getElementById('modal-backdrop').classList.contains('hidden')) await showWorkloadRolloutProgress(id); }, 2000);
+      } catch (e) { showToast('error', '롤아웃 상태 조회 실패', e.message); }
+    };
     function k8sResourceKindBreakdown(items) {
       const counts = {};
       items.forEach(it => { counts[it.kind || '-'] = (counts[it.kind || '-'] || 0) + 1; });
@@ -11291,6 +11330,8 @@ const adminHTML = `<!doctype html>
       const events = (d.events || []).length ? (d.events || []).map(e => '<tr><td>' + escapeHTML(e.type || '-') + '</td><td>' + escapeHTML(e.reason || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.message || '') + '</td><td>' + fmt(e.count || 0) + '</td><td class="muted" style="font-size:11px">' + escapeHTML(e.last_seen || e.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">이벤트가 없습니다.</td></tr>';
       const metrics = (d.metrics || []).length ? (d.metrics || []).map(m => '<tr><td>' + fmt(Math.round(m.cpu_millicores || 0)) + 'm</td><td>' + fmt(Math.round((m.memory_bytes || 0) / 1024 / 1024)) + 'Mi</td><td>' + (m.gpu_observed ? fmt(Math.round(m.gpu_utilization_pct || 0)) + '%' : '<span class="muted">-</span>') + '</td><td>' + (m.gpu_observed ? fmt(Math.round((m.gpu_memory_used_bytes || 0) / 1024 / 1024)) + 'Mi' : '<span class="muted">-</span>') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(m.observed_at || '') + '</td></tr>').join('') : '<tr><td colspan="5" class="muted">최근 메트릭이 없습니다.</td></tr>';
       const logAudits = (d.log_queries || []).length ? (d.log_queries || []).map(q => '<tr><td>' + escapeHTML(q.stream ? 'stream' : (q.previous ? 'previous' : 'current')) + '</td><td>' + escapeHTML(q.container || '-') + '</td><td>' + fmt(q.tail_lines || 0) + '</td><td>' + escapeHTML(q.query || '-') + '</td><td>' + fmt(q.line_count || 0) + '</td><td>' + fmt(q.error_count || 0) + '</td><td>' + escapeHTML(q.requested_by || '-') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(q.created_at || '') + '</td></tr>').join('') : '<tr><td colspan="8" class="muted">최근 로그 조회 이력이 없습니다.</td></tr>';
+      const ownerRollout = ['Deployment','StatefulSet','DaemonSet'].includes(p.owner_kind) && p.owner_name
+        ? '<button type="button" class="secondary" onclick="openWorkloadRollout(\'' + escapeAttr(encodeURIComponent(clusterId || '')) + '\',\'' + escapeAttr(encodeURIComponent(ns || '')) + '\',\'' + escapeAttr(encodeURIComponent(p.owner_kind)) + '\',\'' + escapeAttr(encodeURIComponent(p.owner_name)) + '\')">소유 워크로드 롤아웃</button>' : '';
       view.innerHTML =
         section('Pod 상세 · ' + escapeHTML(ns + '/' + pod), '<div class="kpis">' + kpi('Health', fmt(p.health_score || 0) + (p.primary_symptom && p.primary_symptom !== 'Healthy' ? ' · ' + escapeHTML(p.primary_symptom) : '')) + kpi('Phase', escapeHTML(p.phase || p.status || '-')) + kpi('Ready', escapeHTML(p.ready || '-')) + kpi('Restarts', fmt(p.restart_count || 0) + (p.restart_signal === 'recent' ? ' · 최근 ' + fmt(p.recent_restart_count || 0) : (p.restart_signal === 'historical' ? ' · 과거 누적' : ''))) + kpi('Node', escapeHTML(p.node_name || '-')) + '</div>') +
         (function () {
@@ -11305,10 +11346,11 @@ const adminHTML = `<!doctype html>
             (watch ? '<div style="font-size:11px;color:var(--muted);margin-bottom:2px">참고 신호</div><ul style="margin:0;padding-left:16px">' + watch + '</ul>' : '') +
             '</div>');
         })() +
-        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a>' + k8sGraphModalButton(clusterId || '', 'Pod', ns, pod, '영향도 그래프', '2') + '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a><button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
+        card('컨텍스트', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="secondary" href="#/k8s-pods">목록</a><a class="secondary" href="#/k8s-timeline?' + new URLSearchParams({ cluster_id: clusterId || '', namespace: ns, name: pod, kind: 'Pod' }).toString() + '">타임라인</a>' + k8sGraphModalButton(clusterId || '', 'Pod', ns, pod, '영향도 그래프', '2') + '<a class="secondary" href="' + escapeAttr(k8sYamlChangeHref(clusterId || '', 'Pod', ns, pod, true)) + '">YAML 변경</a>' + ownerRollout + '<button type="button" class="secondary" onclick="k8sPodBookmarkFromDetail()">북마크</button><button type="button" class="secondary" onclick="k8sPodActionSafetyFromDetail()">조치 안전성</button><button type="button" class="secondary" onclick="k8sPodRunbookFromDetail()">플레이북</button></div><div id="pod-ops-output" style="margin-top:8px"></div></div>') +
         card('Golden Pod Diff', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadGoldenDiffFromDetail()">정상 Pod 자동 비교</button><input id="pod-golden-name" placeholder="golden pod 직접 지정" style="min-width:180px"><span class="muted" style="font-size:11px">같은 owner/label의 정상 Pod와 image, env, resource, probe, node, restart 차이를 비교합니다.</span></div><div id="pod-golden-diff" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
         card('환경변수 (Env Source Map)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadEnvFromDetail()">환경변수·출처 보기</button><button type="button" class="secondary" onclick="k8sPodLoadEnvTimelineFromDetail()">설정 변경 타임라인</button><span class="muted" style="font-size:11px">선언 env의 출처(literal/ConfigMap/Secret/Downward)만 표시 — Secret 값은 노출하지 않습니다.</span></div><div id="pod-env-map" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div><div id="pod-env-timeline" style="margin-top:8px"></div></div>') +
         card('워크로드 Pod 비교 (Compare Matrix)', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadCompareMatrixFromDetail()">같은 워크로드 Pod 비교</button><span class="muted" style="font-size:11px">같은 owner의 Pod들을 필드 단위로 비교해 다른 값과 소수(outlier) Pod만 표시합니다.</span></div><div id="pod-compare-matrix" class="muted" style="font-size:12px;margin-top:8px">아직 비교하지 않았습니다.</div></div>') +
+        card('Pod Lifecycle Ledger', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadLifecycleFromDetail()">영속 생명주기 보기</button><span class="muted" style="font-size:11px">Pod UID 기준 생성·기동·상태 전이·컨테이너 재시작·삭제 이력을 표시합니다.</span></div><div id="pod-lifecycle-ledger" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('Pod Health Replay', '<div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" onclick="k8sPodLoadHealthReplayFromDetail()">상태 흐름 보기</button><input id="pod-replay-window" value="60" style="width:80px" title="window minutes"><span class="muted" style="font-size:11px">상태, 이벤트, 메트릭, 리비전, 로그 감사, RCA 후보를 시간순으로 재생합니다.</span></div><div id="pod-health-replay" class="muted" style="font-size:12px;margin-top:8px">아직 불러오지 않았습니다.</div></div>') +
         card('컨테이너', '<div class="card-body"><table><thead><tr><th>Container</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th><th>Reason</th><th>StartedAt</th></tr></thead><tbody>' + containers + '</tbody></table></div>') +
         card('이벤트', '<div class="card-body"><table><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Count</th><th>Last</th></tr></thead><tbody>' + events + '</tbody></table></div>') +
@@ -11358,6 +11400,7 @@ const adminHTML = `<!doctype html>
     };
     window.k8sPodLoadGoldenDiffFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadGoldenDiff(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadHealthReplayFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadHealthReplay(c.clusterId, c.ns, c.pod); };
+    window.k8sPodLoadLifecycleFromDetail = () => { const c = podLogContext(); return window.k8sPodLoadLifecycle(c.clusterId, c.ns, c.pod); };
     window.k8sPodLoadEnvFromDetail = async () => {
       const c = podLogContext();
       const out = document.getElementById('pod-env-map');
@@ -11671,6 +11714,31 @@ const adminHTML = `<!doctype html>
           '<tr><td colspan="4" class="muted">표시할 Pod 상태 흐름이 없습니다.</td></tr>';
         out.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:8px">entries ' + fmt(summary.total || 0) + ' · event ' + fmt(byCat.event || 0) + ' · metric ' + fmt(byCat.metric || 0) + ' · revision ' + fmt(byCat.revision || 0) + ' · log ' + fmt(byCat.log || 0) + '</div>' +
           '<table><thead><tr><th>Time</th><th>Severity</th><th>Type</th><th>Detail</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      } catch (e) {
+        out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
+      }
+    };
+    window.k8sPodLoadLifecycle = async (clusterId, ns, pod) => {
+      const out = document.getElementById('pod-lifecycle-ledger');
+      out.innerHTML = '<span class="muted">생명주기 원장을 불러오는 중...</span>';
+      try {
+        const d = await api('/admin/k8s/pods/' + encodeURIComponent(ns) + '/' + encodeURIComponent(pod) + '/lifecycle?cluster_id=' + encodeURIComponent(clusterId || ''));
+        const l = d.lifecycle || {};
+        const duration = ms => ms ? Math.floor(ms / 3600000) + '시간 ' + Math.floor((ms % 3600000) / 60000) + '분 ' + Math.floor((ms % 60000) / 1000) + '초' : '-';
+        const milestones = [['생성',l.created_at],['최초 관측',l.first_observed_at],['스케줄링',l.scheduled_at],['초기화',l.initialized_at],['ContainersReady',l.containers_ready_at],['Ready',l.ready_at],['삭제 요청',l.deletion_requested_at],['종료',l.terminated_at],['삭제 감지',l.deleted_observed_at]];
+        const milestoneRows = milestones.filter(x => x[1]).map(x => '<tr><td>' + escapeHTML(x[0]) + '</td><td>' + escapeHTML(x[1]) + '</td></tr>').join('');
+        const transitions = (d.transitions || []).map(x => '<tr><td class="muted">' + escapeHTML(x.transition_at || '') + '</td><td>' + escapeHTML((x.previous_state || '-') + ' → ' + (x.current_state || '-')) + '</td><td>' + escapeHTML(x.reason || x.source || '') + '</td></tr>').join('');
+        const containers = (d.containers || []).map(x => '<tr><td>' + escapeHTML(x.container_name || '') + '</td><td>' + escapeHTML(x.container_type || '') + '</td><td>' + fmt(x.restart_no || 0) + '</td><td>' + escapeHTML(x.started_at || '-') + '</td><td>' + escapeHTML(x.finished_at || '-') + '</td><td>' + escapeHTML(x.termination_reason || x.waiting_reason || '-') + '</td></tr>').join('');
+        const failures = (d.failures || []).map(x => '<tr><td>' + escapeHTML(x.failure_category || '-') + '</td><td>' + escapeHTML(x.failure_started_at || '-') + '</td><td>' + escapeHTML(x.failure_ended_at || '진행 중') + '</td><td>' + duration(x.failure_duration_ms) + '</td><td>' + escapeHTML((x.failure_source || '-') + ' / ' + Math.round((x.failure_confidence || 0) * 100) + '%') + '</td><td>' + escapeHTML(x.failure_reason || '-') + '</td></tr>').join('');
+        const conditions = (d.conditions || []).map(x => '<tr><td>' + escapeHTML(x.condition_type || '-') + '</td><td>' + escapeHTML((x.previous_status || '-') + ' → ' + (x.current_status || '-')) + '</td><td>' + escapeHTML(x.transition_at || '-') + '</td><td>' + escapeHTML(x.reason || '-') + '</td></tr>').join('');
+        const events = (d.events || []).map(x => '<tr><td>' + escapeHTML(x.event_time || x.last_timestamp || x.last_observed_at || '-') + '</td><td>' + escapeHTML(x.event_type || '-') + '</td><td>' + escapeHTML(x.reason || '-') + '</td><td>' + fmt(x.occurrence_count || 0) + '</td><td>' + escapeHTML(x.message || '-') + '</td></tr>').join('');
+        out.innerHTML = '<div class="kpis" style="margin-bottom:8px">' + kpi('상태', escapeHTML(l.current_state || '-')) + kpi('생존 시간', duration(l.total_lifetime_ms)) + kpi('Ready 시간', duration(l.ready_duration_ms)) + kpi('장애 시간', duration(l.failure_duration_ms)) + kpi('Degraded 시간', duration(l.degraded_duration_ms)) + kpi('Pod UID', escapeHTML(d.pod_uid || '-')) + '</div>' +
+          '<table><thead><tr><th>구분</th><th>시각 (UTC)</th></tr></thead><tbody>' + milestoneRows + '</tbody></table>' +
+          '<h4>상태 전이</h4><table><thead><tr><th>시각</th><th>전이</th><th>원인</th></tr></thead><tbody>' + (transitions || '<tr><td colspan="3" class="muted">없음</td></tr>') + '</tbody></table>' +
+          '<h4>Condition 전이</h4><table><thead><tr><th>Condition</th><th>전이</th><th>시각</th><th>원인</th></tr></thead><tbody>' + (conditions || '<tr><td colspan="4" class="muted">없음</td></tr>') + '</tbody></table>' +
+          '<h4>장애 구간</h4><table><thead><tr><th>분류</th><th>시작</th><th>종료</th><th>누적</th><th>출처/신뢰도</th><th>원인</th></tr></thead><tbody>' + (failures || '<tr><td colspan="6" class="muted">없음</td></tr>') + '</tbody></table>' +
+          '<h4>Kubernetes Event 원장</h4><table><thead><tr><th>시각</th><th>유형</th><th>Reason</th><th>횟수</th><th>메시지</th></tr></thead><tbody>' + (events || '<tr><td colspan="5" class="muted">없음</td></tr>') + '</tbody></table>' +
+          '<h4>컨테이너 실행 세대</h4><table><thead><tr><th>컨테이너</th><th>유형</th><th>재시작</th><th>시작</th><th>종료</th><th>상태/원인</th></tr></thead><tbody>' + (containers || '<tr><td colspan="6" class="muted">없음</td></tr>') + '</tbody></table>';
       } catch (e) {
         out.innerHTML = '<span class="muted">' + escapeHTML(e.message) + '</span>';
       }
