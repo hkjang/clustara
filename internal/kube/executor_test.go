@@ -82,6 +82,30 @@ func TestExecutorRolloutRestartCarriesAuditAnnotations(t *testing.T) {
 	}
 }
 
+func TestExecutorRollbackDeploymentTemplate(t *testing.T) {
+	var cap capturedReq
+	srv := executorTestServer(t, &cap)
+	defer srv.Close()
+	c := newExecClient(t, srv.URL)
+	template := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"app": "api"}},
+		"spec":     map[string]any{"containers": []any{map[string]any{"name": "api", "image": "api:v1"}}},
+	}
+	if err := c.RollbackDeploymentTemplate(context.Background(), "prod", "api", template, RolloutRestartMetadata{
+		RestartedAt: "2026-07-27T07:00:00Z", RestartedBy: "root", ActionID: "rollout-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/apis/apps/v1/namespaces/prod/deployments/api", `"image":"api:v1"`, `"clustara.io/restartedAt":null`, `"clustara.io/rollbackBy":"root"`} {
+		if !strings.Contains(cap.path+" "+cap.body, want) {
+			t.Fatalf("rollback patch missing %q: %+v", want, cap)
+		}
+	}
+	if _, exists := template["metadata"].(map[string]any)["annotations"]; exists {
+		t.Fatal("rollback must not mutate the persisted template snapshot")
+	}
+}
+
 func TestExecutorAcceptsWorkloadKindAliases(t *testing.T) {
 	tests := []struct {
 		kind string

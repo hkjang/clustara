@@ -27,6 +27,7 @@ var allScopes = []string{
 	"team:read",
 	"service:read", "service:create", "service:update", "service:operate", "service:delete",
 	"service:backup", "service:restore", "service:credential:read", "service:credential:rotate", "service:approve", "service:catalog:manage",
+	"rollout:view", "rollout:request", "rollout:execute", "rollout:approve", "rollout:rollback", "rollout:force", "rollout:policy-admin",
 }
 
 var roleScopes = map[string][]string{

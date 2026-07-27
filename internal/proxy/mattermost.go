@@ -15,7 +15,7 @@ import (
 const mattermostSnapshotTTL = 15 * time.Second
 
 // mattermostEventCategories are the notification types operators can toggle.
-var mattermostEventCategories = []string{"cost", "secret", "approval", "provider", "k8s_failure", "k8s_security", "k8s_node"}
+var mattermostEventCategories = []string{"cost", "secret", "approval", "provider", "k8s_failure", "k8s_security", "k8s_node", "k8s_rollout"}
 
 // mattermostSnapshot caches the Mattermost notification config so event hooks on
 // the hot path can short-circuit cheaply when notifications are disabled.

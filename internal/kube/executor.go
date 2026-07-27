@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,10 @@ type RolloutRestartMetadata struct {
 
 type DetailedRolloutExecutor interface {
 	RolloutRestartWithMetadata(ctx context.Context, kind, namespace, name string, meta RolloutRestartMetadata) error
+}
+
+type RolloutRollbackExecutor interface {
+	RollbackDeploymentTemplate(ctx context.Context, namespace, name string, template map[string]any, meta RolloutRestartMetadata) error
 }
 
 func workloadResourcePlural(kind string) (string, bool) {
@@ -150,6 +155,52 @@ func (c *HTTPClient) RolloutRestartWithMetadata(ctx context.Context, kind, names
 		return err
 	}
 	return c.write(ctx, http.MethodPatch, path, "application/strategic-merge-patch+json", body)
+}
+
+func (c *HTTPClient) RollbackDeploymentTemplate(ctx context.Context, namespace, name string, template map[string]any, meta RolloutRestartMetadata) error {
+	if len(template) == 0 {
+		return errors.New("rollback template is empty")
+	}
+	cloned, err := json.Marshal(template)
+	if err != nil {
+		return err
+	}
+	var restored map[string]any
+	if err := json.Unmarshal(cloned, &restored); err != nil {
+		return err
+	}
+	metadata, _ := restored["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+		restored["metadata"] = metadata
+	}
+	annotations, _ := metadata["annotations"].(map[string]any)
+	if annotations == nil {
+		annotations = map[string]any{}
+		metadata["annotations"] = annotations
+	}
+	// Strategic merge retains unspecified map keys. Explicit nulls remove the restart trigger
+	// annotations when the saved template predates this rollout.
+	annotations["clustara.io/restartedAt"] = nil
+	annotations["kubectl.kubernetes.io/restartedAt"] = nil
+	annotations["clustara.io/rollbackAt"] = firstNonEmptyString(meta.RestartedAt, time.Now().UTC().Format(time.RFC3339))
+	annotations["clustara.io/rollbackBy"] = meta.RestartedBy
+	annotations["clustara.io/actionId"] = meta.ActionID
+	body, err := json.Marshal(map[string]any{"spec": map[string]any{"template": restored}})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", namespace, name)
+	return c.write(ctx, http.MethodPatch, path, "application/strategic-merge-patch+json", body)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *HTTPClient) SetCordon(ctx context.Context, node string, unschedulable bool) error {

@@ -580,6 +580,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/api/v1/workloads/rollout", []string{"post"}, "k8s", "Request or immediately execute a policy-gated workload rollout restart", false},
 	{"/api/v1/rollouts/{id}", []string{"get"}, "k8s", "Read and reconcile rollout progress and Pod replacement evidence", false},
 	{"/api/v1/rollouts/{id}/stream", []string{"get"}, "k8s", "Stream rollout progress over SSE until completion or failure", false},
+	{"/api/v1/rollouts/{id}/evidence", []string{"get"}, "k8s", "Download the durable rollout, state-event, rollback, and Pod-transition evidence bundle as JSON", false},
 	{"/api/v1/rollouts/{id}/approve", []string{"post"}, "k8s", "Approve and execute a rollout request", false},
 	{"/api/v1/rollouts/{id}/reject", []string{"post"}, "k8s", "Reject a rollout request", false},
 	{"/api/v1/resources/{uid}/rollouts", []string{"get"}, "k8s", "List retained rollout history for an immutable workload UID", false},

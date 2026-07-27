@@ -7,40 +7,56 @@ import (
 )
 
 type K8sRolloutAction struct {
-	ID                  string         `json:"id"`
-	ActionRequestID     string         `json:"action_request_id"`
-	ClusterID           string         `json:"cluster_id"`
-	Namespace           string         `json:"namespace"`
-	ResourceKind        string         `json:"resource_kind"`
-	ResourceName        string         `json:"resource_name"`
-	ResourceUID         string         `json:"resource_uid"`
-	RequestedBy         string         `json:"requested_by"`
-	RequestedAt         string         `json:"requested_at"`
-	ApprovedBy          string         `json:"approved_by"`
-	ApprovedAt          string         `json:"approved_at"`
-	StartedAt           string         `json:"started_at"`
-	CompletedAt         string         `json:"completed_at"`
-	Reason              string         `json:"reason"`
-	TicketNo            string         `json:"ticket_no"`
-	ExecutionMode       string         `json:"execution_mode"`
-	Status              string         `json:"status"`
-	RiskLevel           string         `json:"risk_level"`
-	PreviousRevision    string         `json:"previous_revision"`
-	TargetRevision      string         `json:"target_revision"`
-	PreviousSpecHash    string         `json:"previous_spec_hash"`
-	TargetSpecHash      string         `json:"target_spec_hash"`
-	AutoRollback        bool           `json:"auto_rollback"`
-	TimeoutSeconds      int            `json:"timeout_seconds"`
-	FailureReason       string         `json:"failure_reason"`
-	DurationMS          int64          `json:"duration_ms"`
-	DesiredReplicas     int            `json:"desired_replicas"`
-	UpdatedReplicas     int            `json:"updated_replicas"`
-	ReadyReplicas       int            `json:"ready_replicas"`
-	AvailableReplicas   int            `json:"available_replicas"`
-	UnavailableReplicas int            `json:"unavailable_replicas"`
-	Precheck            map[string]any `json:"precheck"`
-	CreatedAt           string         `json:"created_at"`
-	UpdatedAt           string         `json:"updated_at"`
+	ID                    string         `json:"id"`
+	ActionRequestID       string         `json:"action_request_id"`
+	ClusterID             string         `json:"cluster_id"`
+	Namespace             string         `json:"namespace"`
+	ResourceKind          string         `json:"resource_kind"`
+	ResourceName          string         `json:"resource_name"`
+	ResourceUID           string         `json:"resource_uid"`
+	RequestedBy           string         `json:"requested_by"`
+	RequestedAt           string         `json:"requested_at"`
+	ApprovedBy            string         `json:"approved_by"`
+	ApprovedAt            string         `json:"approved_at"`
+	StartedAt             string         `json:"started_at"`
+	CompletedAt           string         `json:"completed_at"`
+	Reason                string         `json:"reason"`
+	TicketNo              string         `json:"ticket_no"`
+	ExecutionMode         string         `json:"execution_mode"`
+	Status                string         `json:"status"`
+	RiskLevel             string         `json:"risk_level"`
+	PreviousRevision      string         `json:"previous_revision"`
+	TargetRevision        string         `json:"target_revision"`
+	PreviousSpecHash      string         `json:"previous_spec_hash"`
+	TargetSpecHash        string         `json:"target_spec_hash"`
+	AutoRollback          bool           `json:"auto_rollback"`
+	TimeoutSeconds        int            `json:"timeout_seconds"`
+	FailureReason         string         `json:"failure_reason"`
+	DurationMS            int64          `json:"duration_ms"`
+	DesiredReplicas       int            `json:"desired_replicas"`
+	UpdatedReplicas       int            `json:"updated_replicas"`
+	ReadyReplicas         int            `json:"ready_replicas"`
+	AvailableReplicas     int            `json:"available_replicas"`
+	UnavailableReplicas   int            `json:"unavailable_replicas"`
+	Precheck              map[string]any `json:"precheck"`
+	PreviousTemplate      map[string]any `json:"previous_template"`
+	RollbackStatus        string         `json:"rollback_status"`
+	RollbackStartedAt     string         `json:"rollback_started_at"`
+	RollbackCompletedAt   string         `json:"rollback_completed_at"`
+	RollbackFailureReason string         `json:"rollback_failure_reason"`
+	CreatedAt             string         `json:"created_at"`
+	UpdatedAt             string         `json:"updated_at"`
+}
+
+type K8sRolloutEvent struct {
+	ID         string         `json:"id"`
+	ActionID   string         `json:"action_id"`
+	SequenceNo int64          `json:"sequence_no"`
+	Status     string         `json:"status"`
+	Stage      string         `json:"stage"`
+	Message    string         `json:"message"`
+	Evidence   map[string]any `json:"evidence"`
+	ObservedAt string         `json:"observed_at"`
 }
 
 type K8sRolloutPodTransition struct {
@@ -82,16 +98,19 @@ func (s *SQLStore) InsertK8sRolloutAction(ctx context.Context, a K8sRolloutActio
 		a.TimeoutSeconds = 600
 	}
 	precheck, _ := json.Marshal(a.Precheck)
+	template, _ := json.Marshal(a.PreviousTemplate)
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_rollout_actions
 		(id,action_request_id,cluster_id,namespace,resource_kind,resource_name,resource_uid,requested_by,requested_at,
 		 approved_by,approved_at,started_at,completed_at,reason,ticket_no,execution_mode,status,risk_level,
 		 previous_revision,target_revision,previous_spec_hash,target_spec_hash,auto_rollback,timeout_seconds,failure_reason,
-		 duration_ms,desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+		 duration_ms,desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,
+		 previous_template_json,rollback_status,rollback_started_at,rollback_completed_at,rollback_failure_reason,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
 		a.ID, a.ActionRequestID, a.ClusterID, a.Namespace, a.ResourceKind, a.ResourceName, a.ResourceUID, a.RequestedBy, a.RequestedAt,
 		a.ApprovedBy, a.ApprovedAt, a.StartedAt, a.CompletedAt, a.Reason, a.TicketNo, a.ExecutionMode, a.Status, a.RiskLevel,
 		a.PreviousRevision, a.TargetRevision, a.PreviousSpecHash, a.TargetSpecHash, boolInt(a.AutoRollback), a.TimeoutSeconds, a.FailureReason,
-		a.DurationMS, a.DesiredReplicas, a.UpdatedReplicas, a.ReadyReplicas, a.AvailableReplicas, a.UnavailableReplicas, string(precheck), a.CreatedAt, a.UpdatedAt)
+		a.DurationMS, a.DesiredReplicas, a.UpdatedReplicas, a.ReadyReplicas, a.AvailableReplicas, a.UnavailableReplicas, string(precheck),
+		string(template), a.RollbackStatus, a.RollbackStartedAt, a.RollbackCompletedAt, a.RollbackFailureReason, a.CreatedAt, a.UpdatedAt)
 	return err
 }
 
@@ -99,7 +118,8 @@ func (s *SQLStore) GetK8sRolloutAction(ctx context.Context, id string) (K8sRollo
 	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id,action_request_id,cluster_id,namespace,resource_kind,resource_name,resource_uid,
 		requested_by,requested_at,approved_by,approved_at,started_at,completed_at,reason,ticket_no,execution_mode,status,risk_level,
 		previous_revision,target_revision,previous_spec_hash,target_spec_hash,auto_rollback,timeout_seconds,failure_reason,duration_ms,
-		desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,created_at,updated_at
+		desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,
+		previous_template_json,rollback_status,rollback_started_at,rollback_completed_at,rollback_failure_reason,created_at,updated_at
 		FROM k8s_rollout_actions WHERE id=?`), id)
 	a, err := scanRolloutAction(row)
 	if err == sql.ErrNoRows {
@@ -112,7 +132,8 @@ func (s *SQLStore) GetK8sRolloutByActionRequest(ctx context.Context, id string) 
 	row := s.db.QueryRowContext(ctx, s.bind(`SELECT id,action_request_id,cluster_id,namespace,resource_kind,resource_name,resource_uid,
 		requested_by,requested_at,approved_by,approved_at,started_at,completed_at,reason,ticket_no,execution_mode,status,risk_level,
 		previous_revision,target_revision,previous_spec_hash,target_spec_hash,auto_rollback,timeout_seconds,failure_reason,duration_ms,
-		desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,created_at,updated_at
+		desired_replicas,updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,
+		previous_template_json,rollback_status,rollback_started_at,rollback_completed_at,rollback_failure_reason,created_at,updated_at
 		FROM k8s_rollout_actions WHERE action_request_id=?`), id)
 	a, err := scanRolloutAction(row)
 	if err == sql.ErrNoRows {
@@ -124,9 +145,11 @@ func (s *SQLStore) GetK8sRolloutByActionRequest(ctx context.Context, id string) 
 func (s *SQLStore) UpdateK8sRolloutProgress(ctx context.Context, a K8sRolloutAction) error {
 	_, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_rollout_actions SET status=?,approved_by=?,approved_at=?,started_at=?,
 		completed_at=?,target_revision=?,target_spec_hash=?,failure_reason=?,duration_ms=?,desired_replicas=?,updated_replicas=?,
-		ready_replicas=?,available_replicas=?,unavailable_replicas=?,updated_at=? WHERE id=?`), a.Status, a.ApprovedBy, a.ApprovedAt,
+		ready_replicas=?,available_replicas=?,unavailable_replicas=?,rollback_status=?,rollback_started_at=?,rollback_completed_at=?,
+		rollback_failure_reason=?,updated_at=? WHERE id=?`), a.Status, a.ApprovedBy, a.ApprovedAt,
 		a.StartedAt, a.CompletedAt, a.TargetRevision, a.TargetSpecHash, a.FailureReason, a.DurationMS, a.DesiredReplicas, a.UpdatedReplicas,
-		a.ReadyReplicas, a.AvailableReplicas, a.UnavailableReplicas, nowString(), a.ID)
+		a.ReadyReplicas, a.AvailableReplicas, a.UnavailableReplicas, a.RollbackStatus, a.RollbackStartedAt, a.RollbackCompletedAt,
+		a.RollbackFailureReason, nowString(), a.ID)
 	return err
 }
 
@@ -134,7 +157,8 @@ func (s *SQLStore) ListK8sRolloutActions(ctx context.Context, clusterID, resourc
 	q := `SELECT id,action_request_id,cluster_id,namespace,resource_kind,resource_name,resource_uid,requested_by,requested_at,
 		approved_by,approved_at,started_at,completed_at,reason,ticket_no,execution_mode,status,risk_level,previous_revision,
 		target_revision,previous_spec_hash,target_spec_hash,auto_rollback,timeout_seconds,failure_reason,duration_ms,desired_replicas,
-		updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,created_at,updated_at
+		updated_replicas,ready_replicas,available_replicas,unavailable_replicas,precheck_json,
+		previous_template_json,rollback_status,rollback_started_at,rollback_completed_at,rollback_failure_reason,created_at,updated_at
 		FROM k8s_rollout_actions WHERE 1=1`
 	args := []any{}
 	if clusterID != "" {
@@ -159,6 +183,38 @@ func (s *SQLStore) ListK8sRolloutActions(ctx context.Context, clusterID, resourc
 			return nil, err
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) AppendK8sRolloutEvent(ctx context.Context, e K8sRolloutEvent) error {
+	if e.ObservedAt == "" {
+		e.ObservedAt = nowString()
+	}
+	raw, _ := json.Marshal(e.Evidence)
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_rollout_events
+		(id,action_id,sequence_no,status,stage,message,evidence_json,observed_at)
+		SELECT ?,?,COALESCE(MAX(sequence_no),0)+1,?,?,?,?,? FROM k8s_rollout_events WHERE action_id=?`),
+		e.ID, e.ActionID, e.Status, e.Stage, e.Message, string(raw), e.ObservedAt, e.ActionID)
+	return err
+}
+
+func (s *SQLStore) ListK8sRolloutEvents(ctx context.Context, actionID string) ([]K8sRolloutEvent, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT id,action_id,sequence_no,status,stage,message,evidence_json,observed_at
+		FROM k8s_rollout_events WHERE action_id=? ORDER BY sequence_no`), actionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []K8sRolloutEvent{}
+	for rows.Next() {
+		var e K8sRolloutEvent
+		var raw string
+		if err := rows.Scan(&e.ID, &e.ActionID, &e.SequenceNo, &e.Status, &e.Stage, &e.Message, &raw, &e.ObservedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(raw), &e.Evidence)
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }
@@ -206,12 +262,15 @@ func scanRolloutAction(row rolloutScanner) (K8sRolloutAction, error) {
 	var a K8sRolloutAction
 	var auto int
 	var raw string
+	var template string
 	err := row.Scan(&a.ID, &a.ActionRequestID, &a.ClusterID, &a.Namespace, &a.ResourceKind, &a.ResourceName, &a.ResourceUID, &a.RequestedBy,
 		&a.RequestedAt, &a.ApprovedBy, &a.ApprovedAt, &a.StartedAt, &a.CompletedAt, &a.Reason, &a.TicketNo, &a.ExecutionMode, &a.Status,
 		&a.RiskLevel, &a.PreviousRevision, &a.TargetRevision, &a.PreviousSpecHash, &a.TargetSpecHash, &auto, &a.TimeoutSeconds,
 		&a.FailureReason, &a.DurationMS, &a.DesiredReplicas, &a.UpdatedReplicas, &a.ReadyReplicas, &a.AvailableReplicas,
-		&a.UnavailableReplicas, &raw, &a.CreatedAt, &a.UpdatedAt)
+		&a.UnavailableReplicas, &raw, &template, &a.RollbackStatus, &a.RollbackStartedAt, &a.RollbackCompletedAt,
+		&a.RollbackFailureReason, &a.CreatedAt, &a.UpdatedAt)
 	a.AutoRollback = auto != 0
 	_ = json.Unmarshal([]byte(raw), &a.Precheck)
+	_ = json.Unmarshal([]byte(template), &a.PreviousTemplate)
 	return a, err
 }

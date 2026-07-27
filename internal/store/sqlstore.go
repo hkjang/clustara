@@ -2059,11 +2059,27 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			desired_replicas INTEGER NOT NULL DEFAULT 0, updated_replicas INTEGER NOT NULL DEFAULT 0,
 			ready_replicas INTEGER NOT NULL DEFAULT 0, available_replicas INTEGER NOT NULL DEFAULT 0,
 			unavailable_replicas INTEGER NOT NULL DEFAULT 0, precheck_json TEXT NOT NULL DEFAULT '{}',
+			previous_template_json TEXT NOT NULL DEFAULT '{}', rollback_status TEXT NOT NULL DEFAULT '',
+			rollback_started_at TEXT NOT NULL DEFAULT '', rollback_completed_at TEXT NOT NULL DEFAULT '',
+			rollback_failure_reason TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
+		`ALTER TABLE k8s_rollout_actions ADD COLUMN previous_template_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE k8s_rollout_actions ADD COLUMN rollback_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_rollout_actions ADD COLUMN rollback_started_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_rollout_actions ADD COLUMN rollback_completed_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_rollout_actions ADD COLUMN rollback_failure_reason TEXT NOT NULL DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_rollout_action_request ON k8s_rollout_actions(action_request_id) WHERE action_request_id <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_target ON k8s_rollout_actions(cluster_id, resource_uid, requested_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_status ON k8s_rollout_actions(status, updated_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_rollout_one_active_target ON k8s_rollout_actions(cluster_id, resource_uid)
+			WHERE resource_uid <> '' AND status IN ('requested','approval_required','approved','running','monitoring','rollback_running')`,
+		`CREATE TABLE IF NOT EXISTS k8s_rollout_events (
+			id TEXT PRIMARY KEY, action_id TEXT NOT NULL, sequence_no INTEGER NOT NULL, status TEXT NOT NULL,
+			stage TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', evidence_json TEXT NOT NULL DEFAULT '{}',
+			observed_at TEXT NOT NULL, UNIQUE(action_id, sequence_no)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_events_action ON k8s_rollout_events(action_id, sequence_no)`,
 		`CREATE TABLE IF NOT EXISTS k8s_rollout_pod_transitions (
 			id TEXT PRIMARY KEY, action_id TEXT NOT NULL, pod_uid TEXT NOT NULL, pod_name TEXT NOT NULL DEFAULT '',
 			node_name TEXT NOT NULL DEFAULT '', revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',

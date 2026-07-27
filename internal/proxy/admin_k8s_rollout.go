@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"clustara/internal/kube"
 	"clustara/internal/store"
 )
 
@@ -54,6 +55,9 @@ func (s *Server) handleWorkloadRolloutPrecheck(w http.ResponseWriter, r *http.Re
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
+	if !s.requireRolloutScope(w, r, "rollout:view") {
+		return
+	}
 	var in rolloutRequestInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -74,6 +78,9 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	if !s.requireRolloutScope(w, r, "rollout:request") {
 		return
 	}
 	var in rolloutRequestInput
@@ -112,7 +119,8 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 	rolloutID := newID("rollout")
 	status := "approval_required"
 	directBySuperAdmin := check.SuperAdminDirect && strings.EqualFold(in.ExecutionMode, "IMMEDIATE")
-	if (!check.RequiresApproval || directBySuperAdmin) && strings.EqualFold(in.ExecutionMode, "IMMEDIATE") {
+	canExecute := s.rolloutScopeAllowed(r, "rollout:execute")
+	if (!check.RequiresApproval || directBySuperAdmin) && canExecute && strings.EqualFold(in.ExecutionMode, "IMMEDIATE") {
 		status = "approved"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -136,21 +144,38 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 		PreviousSpecHash: hashJSON(target.Spec), AutoRollback: in.AutoRollback, TimeoutSeconds: in.TimeoutSeconds,
 		DesiredReplicas: check.Desired, UpdatedReplicas: check.Updated, ReadyReplicas: check.Ready, AvailableReplicas: check.Available,
 		UnavailableReplicas: maxInt(0, check.Desired-check.Available), Precheck: map[string]any{"checks": check.Checks, "warnings": check.Warnings}}
+	if template, ok := target.Spec["template"].(map[string]any); ok {
+		roll.PreviousTemplate = template
+	}
 	if directBySuperAdmin {
 		roll.ApprovedBy, roll.ApprovedAt = adminID(r), now
 	}
 	if err := s.db.InsertK8sRolloutAction(r.Context(), roll); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollout_save_failed")
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			writeOpenAIError(w, http.StatusConflict, "rollout already in progress", "invalid_request_error", "rollout_in_progress")
+		} else {
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollout_save_failed")
+		}
 		return
+	}
+	_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
+		Status: status, Stage: "requested", Message: "롤아웃 요청 접수", Evidence: map[string]any{"precheck": check, "requested_by": adminID(r)}})
+	if status == "approval_required" {
+		s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 승인 대기: %s/%s %s/%s · 요청자 %s · 사유 %s",
+			roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.RequestedBy, roll.Reason))
 	}
 	s.auditAdmin(r, "k8s.rollout.request", roll.ID, auditJSON(roll))
 	if status == "approved" {
 		result := s.runApprovedK8sAction(r.Context(), adminID(r), act)
 		roll, _ = s.db.GetK8sRolloutAction(r.Context(), roll.ID)
 		if result.Err != nil {
+			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 실행 실패: %s/%s %s/%s · %s",
+				roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, result.Message))
 			writeJSON(w, result.HTTPStatus, map[string]any{"rollout": roll, "action": act, "precheck": check, "error": result.Message})
 			return
 		}
+		s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 실행 시작: %s/%s %s/%s · action %s",
+			roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.ID))
 		roll, _ = s.reconcileRollout(r, roll)
 		writeJSON(w, http.StatusAccepted, map[string]any{"rollout": roll, "action": act, "precheck": check})
 		return
@@ -174,7 +199,17 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) > 1 && parts[1] == "stream" {
+		if !s.requireRolloutScope(w, r, "rollout:view") {
+			return
+		}
 		s.streamRollout(w, r, roll)
+		return
+	}
+	if len(parts) > 1 && parts[1] == "evidence" {
+		if r.Method != http.MethodGet || !s.requireRolloutScope(w, r, "rollout:view") {
+			return
+		}
+		s.writeRolloutEvidence(w, r, roll)
 		return
 	}
 	if len(parts) > 1 {
@@ -184,6 +219,9 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 		}
 		switch parts[1] {
 		case "approve":
+			if !s.requireRolloutScope(w, r, "rollout:approve") || !s.requireRolloutScope(w, r, "rollout:execute") {
+				return
+			}
 			if err := s.db.UpdateK8sActionStatus(r.Context(), roll.ActionRequestID, "approved", adminID(r), "rollout approved"); err != nil {
 				writeOpenAIError(w, http.StatusConflict, err.Error(), "invalid_request_error", "rollout_approve_failed")
 				return
@@ -191,10 +229,17 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 			act, _ := s.db.GetK8sActionRequest(r.Context(), roll.ActionRequestID)
 			result := s.runApprovedK8sAction(r.Context(), adminID(r), act)
 			if result.Err != nil {
+				s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("승인된 롤아웃 실행 실패: %s/%s %s/%s · %s",
+					roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, result.Message))
 				writeJSON(w, result.HTTPStatus, map[string]any{"error": result.Message})
 				return
 			}
+			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("승인된 롤아웃 실행 시작: %s/%s %s/%s · action %s",
+				roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.ID))
 		case "reject":
+			if !s.requireRolloutScope(w, r, "rollout:approve") {
+				return
+			}
 			if err := s.db.UpdateK8sActionStatus(r.Context(), roll.ActionRequestID, "rejected", adminID(r), "rollout rejected"); err != nil {
 				writeOpenAIError(w, http.StatusConflict, err.Error(), "invalid_request_error", "rollout_reject_failed")
 				return
@@ -206,6 +251,8 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusNotImplemented, "pause/resume/rollback is not supported in this release", "invalid_request_error", "rollout_command_unsupported")
 			return
 		}
+	} else if !s.requireRolloutScope(w, r, "rollout:view") {
+		return
 	}
 	roll, err = s.reconcileRollout(r, roll)
 	if err != nil {
@@ -213,7 +260,8 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pods, _ := s.db.ListK8sRolloutPodTransitions(r.Context(), roll.ID)
-	writeJSON(w, http.StatusOK, map[string]any{"rollout": roll, "pods": pods, "progress_percent": rolloutProgress(roll)})
+	events, _ := s.db.ListK8sRolloutEvents(r.Context(), roll.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"rollout": roll, "pods": pods, "events": events, "progress_percent": rolloutProgress(roll)})
 }
 
 func (s *Server) handleResourceRollouts(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +271,9 @@ func (s *Server) handleResourceRollouts(w http.ResponseWriter, r *http.Request) 
 	}
 	if r.Method != http.MethodGet {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	if !s.requireRolloutScope(w, r, "rollout:view") {
 		return
 	}
 	trim := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/resources/"), "/")
@@ -339,7 +390,37 @@ func (s *Server) rolloutSuperAdmin(r *http.Request) bool {
 	return !s.cfg.Auth.Enabled
 }
 
+func (s *Server) requireRolloutScope(w http.ResponseWriter, r *http.Request, scope string) bool {
+	if s.rolloutScopeAllowed(r, scope) {
+		return true
+	}
+	writeOpenAIError(w, http.StatusForbidden, "missing required scope: "+scope, "invalid_request_error", "insufficient_scope")
+	return false
+}
+
+func (s *Server) rolloutScopeAllowed(r *http.Request, scope string) bool {
+	if !s.cfg.Auth.Enabled {
+		return true
+	}
+	claims, ok := s.currentAccessClaims(r)
+	if ok && (strings.EqualFold(claims.Role, "super_admin") || hasScope(claims.Scopes, scope)) {
+		return true
+	}
+	return false
+}
+
+func (s *Server) writeRolloutEvidence(w http.ResponseWriter, r *http.Request, roll store.K8sRolloutAction) {
+	pods, _ := s.db.ListK8sRolloutPodTransitions(r.Context(), roll.ID)
+	events, _ := s.db.ListK8sRolloutEvents(r.Context(), roll.ID)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="clustara-rollout-%s-evidence.json"`, roll.ID))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"schema_version": "1.0", "generated_at": time.Now().UTC().Format(time.RFC3339Nano),
+		"rollout": roll, "events": events, "pod_transitions": pods,
+	})
+}
+
 func (s *Server) reconcileRollout(r *http.Request, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
+	previousStatus := roll.Status
 	target, err := s.db.GetK8sInventoryItem(r.Context(), roll.ClusterID, roll.ResourceKind, roll.Namespace, roll.ResourceName)
 	if err != nil {
 		return roll, nil
@@ -387,7 +468,78 @@ func (s *Server) reconcileRollout(r *http.Request, roll store.K8sRolloutAction) 
 	if err := s.db.UpdateK8sRolloutProgress(r.Context(), roll); err != nil {
 		return roll, err
 	}
+	if roll.Status != previousStatus {
+		_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
+			Status: roll.Status, Stage: rolloutEventStage(roll.Status), Message: firstNonEmpty(roll.FailureReason, "롤아웃 상태 전환"),
+			Evidence: map[string]any{"desired": roll.DesiredReplicas, "updated": roll.UpdatedReplicas, "ready": roll.ReadyReplicas, "available": roll.AvailableReplicas}})
+		if roll.Status == "succeeded" {
+			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 성공: %s/%s %s/%s · Ready %d/%d · %s",
+				roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.ReadyReplicas, roll.DesiredReplicas,
+				(time.Duration(roll.DurationMS)*time.Millisecond).Round(time.Second)))
+		} else if roll.Status == "failed" || roll.Status == "timed_out" {
+			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 %s: %s/%s %s/%s · %s",
+				roll.Status, roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.FailureReason))
+		}
+	}
+	if (roll.Status == "failed" || roll.Status == "timed_out") && roll.AutoRollback && roll.RollbackStatus == "" {
+		roll = s.autoRollbackDeployment(r, roll)
+		_ = s.db.UpdateK8sRolloutProgress(r.Context(), roll)
+	}
 	return s.db.GetK8sRolloutAction(r.Context(), roll.ID)
+}
+
+func (s *Server) autoRollbackDeployment(r *http.Request, roll store.K8sRolloutAction) store.K8sRolloutAction {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if !strings.EqualFold(roll.ResourceKind, "Deployment") {
+		roll.RollbackStatus = "manual_required"
+		roll.RollbackFailureReason = "StatefulSet·DaemonSet 자동 롤백은 안전 정책상 지원하지 않습니다."
+		return roll
+	}
+	if len(roll.PreviousTemplate) == 0 {
+		roll.RollbackStatus = "manual_required"
+		roll.RollbackFailureReason = "저장된 이전 Pod Template이 없습니다."
+		return roll
+	}
+	roll.RollbackStatus, roll.RollbackStartedAt = "running", now
+	_ = s.db.UpdateK8sRolloutProgress(r.Context(), roll)
+	cluster, err := s.db.GetK8sCluster(r.Context(), roll.ClusterID)
+	if err == nil {
+		var client kube.Client
+		client, err = s.k8sClientForCluster(r.Context(), cluster)
+		if err == nil {
+			exec, ok := client.(kube.RolloutRollbackExecutor)
+			if !ok {
+				err = errors.New("cluster client does not support rollout rollback")
+			} else {
+				err = exec.RollbackDeploymentTemplate(r.Context(), roll.Namespace, roll.ResourceName, roll.PreviousTemplate,
+					kube.RolloutRestartMetadata{RestartedBy: adminID(r), ActionID: roll.ID, Reason: "automatic rollback"})
+			}
+		}
+	}
+	if err != nil {
+		roll.RollbackStatus, roll.RollbackFailureReason = "failed", err.Error()
+	} else {
+		roll.RollbackStatus, roll.RollbackCompletedAt = "requested", time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
+		Status: roll.Status, Stage: "rollback", Message: firstNonEmpty(roll.RollbackFailureReason, "이전 Pod Template 자동 롤백 요청 완료"),
+		Evidence: map[string]any{"rollback_status": roll.RollbackStatus}})
+	s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("Deployment 자동 롤백 %s: %s/%s %s · %s",
+		roll.RollbackStatus, roll.ClusterID, roll.Namespace, roll.ResourceName, firstNonEmpty(roll.RollbackFailureReason, "이전 Pod Template 복원 요청")))
+	return roll
+}
+
+func rolloutEventStage(status string) string {
+	switch status {
+	case "succeeded":
+		return "completed"
+	case "failed", "timed_out":
+		return "failed"
+	case "monitoring":
+		return "pod_replacement"
+	default:
+		return status
+	}
 }
 
 func (s *Server) streamRollout(w http.ResponseWriter, r *http.Request, roll store.K8sRolloutAction) {
