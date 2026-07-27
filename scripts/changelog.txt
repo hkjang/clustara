@@ -1,3 +1,6 @@
+v0.9.158:
+- **Viewport-Safe Quick Access & Major Resource Search (v0.9.158)**: 빠른 이동 패널을 뷰포트 높이 안에 고정하고 패널 전체 세로 스크롤과 모바일 단일 열 레이아웃을 적용해, 고정·처리 대기·최근 방문·리소스 섹션이 많아져도 화면 아래가 잘리지 않도록 개선했습니다. Pod·Deployment·StatefulSet·DaemonSet·ReplicaSet·Service·Ingress·Job·CronJob·HPA·PVC·Node를 전체 인벤토리에서 우선 검색하고 서버 Fleet 검색 결과와 중복 없이 병합하며, 정확한 이름과 prefix 일치를 우선 정렬합니다. 파드·디플로이먼트·스테이트풀셋·워크로드 등 한글 Kind 별칭도 지원하고 최대 12개의 주요 리소스를 즉시 표시합니다.
+
 v0.9.157:
 - **Port-Aware Kubernetes Resource Graph (v0.9.157)**: 리소스 그래프 API와 토폴로지 화면에 Ingress host/path/backend Service 포트, Service `port`·`targetPort`·`nodePort`·protocol·appProtocol, Pod와 Deployment·StatefulSet·DaemonSet·ReplicaSet·Job·CronJob의 containerPort·hostPort를 표시합니다. 숫자와 이름 기반 포트를 모두 보존하고 Service `targetPort`가 생략되면 `port` 기본값을 명시하며, 구형 Ingress `serviceName`·`servicePort` 스냅샷도 지원합니다. Ingress→Service 관계 근거에는 실제 라우팅 host/path와 backend 포트를 포함하고 토폴로지 노드·툴팁·노드 상세 카드에서 전체 포트 매핑을 확인할 수 있습니다.
 

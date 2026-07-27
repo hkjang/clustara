@@ -742,14 +742,16 @@ const adminHTML = `<!doctype html>
     .user-menu button { width: 100%; text-align: left; }
     .quick-access-wrap { position: relative; }
     .quick-access-panel {
-      position: absolute; right: 0; top: 130%; z-index: 70; width: min(680px, 92vw);
+      position: fixed; right: 12px; top: 64px; z-index: 70; width: min(760px, calc(100vw - 24px));
+      max-height: calc(100dvh - 76px); overflow-y: auto; overscroll-behavior: contain;
       background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px;
       box-shadow: 0 12px 32px rgba(0,0,0,.24); padding: 12px; display: none;
     }
     .quick-access-panel.open { display: block; }
     .quick-access-panel input { width: 100%; margin-bottom: 10px; }
     .quick-access-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; }
-    .quick-access-list { display: flex; flex-direction: column; gap: 4px; max-height: 310px; overflow: auto; }
+    .quick-access-list { display: flex; flex-direction: column; gap: 4px; }
+    #quick-access-results, #quick-access-resource-results, #quick-access-action-queue { max-height: 280px; overflow-y: auto; }
     .quick-access-item {
       display: flex; justify-content: space-between; gap: 10px; align-items: center;
       padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
@@ -827,6 +829,11 @@ const adminHTML = `<!doctype html>
     .quick-access-section-head h4 { margin: 0; }
     .quick-access-section-head button {
       font-size: 11px; padding: 3px 7px; border-radius: 5px;
+    }
+    @media (max-width: 720px) {
+      .quick-access-panel { top: 56px; right: 6px; width: calc(100vw - 12px); max-height: calc(100dvh - 64px); }
+      .quick-access-grid { grid-template-columns: 1fr; }
+      #quick-access-results, #quick-access-resource-results, #quick-access-action-queue { max-height: 240px; }
     }
     #quick-pin-current.pinned { border-color: var(--accent); color: var(--accent); }
     .ux-context {
@@ -1035,7 +1042,7 @@ const adminHTML = `<!doctype html>
             <div>
               <div class="muted" style="font-size:11px;margin-bottom:6px">검색 결과</div>
               <div id="quick-access-results" class="quick-access-list"></div>
-              <div class="muted" style="font-size:11px;margin:10px 0 6px">리소스 미리보기</div>
+              <div class="muted" style="font-size:11px;margin:10px 0 6px">주요 리소스 검색 · Pod, Deployment, StatefulSet 등</div>
               <div id="quick-access-resource-results" class="quick-access-list"></div>
             </div>
             <div class="quick-access-side">
@@ -2510,15 +2517,58 @@ const adminHTML = `<!doctype html>
       host.innerHTML = '<div class="empty" style="padding:10px">검색 중...</div>';
       uxResourceSearchTimer = setTimeout(async () => {
         try {
-          const data = await api('/admin/fleet/search?' + new URLSearchParams({ q: query, limit: '8' }).toString());
+          const localRows = await uxQuickAccessInventorySearch(query, 12);
           if (seq !== uxResourceSearchSeq) return;
-          const rows = (data.results || []).slice(0, 8);
+          host.innerHTML = localRows.map(uxResourceHTML).join('') || '<div class="empty" style="padding:10px">서버 검색 중...</div>';
+          const data = await api('/admin/fleet/search?' + new URLSearchParams({ q: query, limit: '2000' }).toString());
+          if (seq !== uxResourceSearchSeq) return;
+          const rows = uxMergeQuickAccessResources(localRows, data.results || [], 12);
           host.innerHTML = rows.map(uxResourceHTML).join('') || '<div class="empty" style="padding:10px">리소스 없음</div>';
         } catch (e) {
           if (seq !== uxResourceSearchSeq) return;
           host.innerHTML = '<div class="empty" style="padding:10px">' + escapeHTML(e.message) + '</div>';
         }
       }, 250);
+    }
+    const UX_QUICK_RESOURCE_KINDS = new Set(['Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Service', 'Ingress', 'Job', 'CronJob', 'HorizontalPodAutoscaler', 'PersistentVolumeClaim', 'Node']);
+    function uxQuickResourceTerms(query) {
+      const aliases = {
+        '파드': 'pod', '팟': 'pod', '디플로이먼트': 'deployment', '디플로이': 'deployment',
+        '스테이트풀셋': 'statefulset', '데몬셋': 'daemonset', '레플리카셋': 'replicaset',
+        '서비스': 'service', '인그레스': 'ingress', '잡': 'job', '크론잡': 'cronjob',
+        '노드': 'node', '워크로드': 'workload'
+      };
+      return String(query || '').toLowerCase().trim().split(/\s+/).filter(Boolean).map(term => aliases[term] || term);
+    }
+    function uxQuickResourceHaystack(item, clusterName) {
+      const kind = String(item.kind || '').toLowerCase();
+      const workload = ['deployment', 'statefulset', 'daemonset', 'replicaset', 'job', 'cronjob', 'pod'].includes(kind) ? 'workload 워크로드' : '';
+      return [item.name, item.namespace, item.kind, kind, item.cluster_id, clusterName, item.status, item.risk_level, workload].filter(Boolean).join(' ').toLowerCase();
+    }
+    async function uxQuickAccessInventorySearch(query, limit) {
+      const data = await uxLoadK8sSuggestions(false);
+      const terms = uxQuickResourceTerms(query);
+      const clusterNames = {};
+      ((data && data.clusters) || []).forEach(c => { clusterNames[c.id] = c.name || c.id; });
+      return ((data && data.items) || []).filter(item => {
+        if (!UX_QUICK_RESOURCE_KINDS.has(item.kind)) return false;
+        const hay = uxQuickResourceHaystack(item, clusterNames[item.cluster_id] || '');
+        return terms.every(term => hay.includes(term));
+      }).map(item => ({ ...item, cluster_name: clusterNames[item.cluster_id] || item.cluster_id || '' }))
+        .sort((a, b) => {
+          const q = String(query || '').toLowerCase().trim();
+          const score = item => (String(item.name || '').toLowerCase() === q ? 0 : (String(item.name || '').toLowerCase().startsWith(q) ? 1 : 2)) + (UX_QUICK_RESOURCE_KINDS.has(item.kind) ? 0 : 10);
+          return score(a) - score(b) || String(a.kind || '').localeCompare(String(b.kind || '')) || String(a.name || '').localeCompare(String(b.name || ''));
+        }).slice(0, limit || 12);
+    }
+    function uxMergeQuickAccessResources(primary, secondary, limit) {
+      const seen = new Set();
+      return (primary || []).concat(secondary || []).filter(item => {
+        const key = uxResourceKey(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, limit || 12);
     }
     function uxOpenQuickAccess() {
       const panel = document.getElementById('quick-access-panel');
