@@ -1352,18 +1352,28 @@ const adminHTML = `<!doctype html>
 	  bindPasswordChangeForm();
 	}
 	window.openMyPasswordChange = () => { openModal('내 비밀번호 변경', passwordChangeFormHTML(false)); bindPasswordChangeForm(); };
+    let authRefreshPromise = null;
     async function tryRefresh() {
       if (!authState.refresh) return false;
-      try {
-        const res = await fetch('/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: authState.refresh }),
-        });
-        if (!res.ok) return false;
-        saveAuth(await res.json()); // rotation: 새 access + 새 refresh 저장
-        return true;
-      } catch { return false; }
+	  // Several dashboard APIs are intentionally loaded in parallel. A rotating
+	  // refresh token may only be consumed once, so all concurrent 401 retries
+	  // must share one refresh request and the same newly issued token pair.
+	  if (authRefreshPromise) return authRefreshPromise;
+	  const refreshToken = authState.refresh;
+	  authRefreshPromise = (async () => {
+		try {
+		  const res = await fetch('/auth/refresh', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ refresh_token: refreshToken }),
+		  });
+		  if (!res.ok) return false;
+		  saveAuth(await res.json()); // rotation: 새 access + 새 refresh 저장
+		  return true;
+		} catch { return false; }
+	  })();
+	  try { return await authRefreshPromise; }
+	  finally { authRefreshPromise = null; }
     }
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();

@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.161"
+const AppVersion = "v0.9.162"
 
 type Server struct {
 	cfg              config.Config
@@ -1992,6 +1992,13 @@ func (s *Server) authorizeAdmin(r *http.Request) bool {
 // SPA's access-denied screen instead of rendering raw JSON as a document.
 func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browser <script> and <link> requests cannot attach the SPA's Bearer token.
+		// These are immutable, embedded, non-secret static files and must remain
+		// reachable before login so the admin shell can bootstrap.
+		if strings.HasPrefix(r.URL.Path, "/admin/assets/xterm/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Agent ingestion uses a cluster-scoped token validated after decoding the batch.
 		// It must not pass through the interactive administrator authentication gate.
 		if r.URL.Path == "/admin/k8s/agent/events" {
