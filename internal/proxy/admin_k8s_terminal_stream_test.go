@@ -37,7 +37,7 @@ func TestOfflineXtermAssetsAndAdminUIAreEmbedded(t *testing.T) {
 			t.Fatalf("asset %s should be immutable", path)
 		}
 	}
-	for _, marker := range []string{"/admin/assets/xterm/xterm.js", "new Terminal(", "k8sTerminalConnect", "관리자 웹 터미널", "#/k8s-terminal"} {
+	for _, marker := range []string{"/admin/assets/xterm/xterm.js?v=6.0.0", "new TerminalCtor(", "k8sTerminalEnsureLibrary", "k8stty-pod-options", "k8sTerminalPreviewPods", "관리자 웹 터미널", "#/k8s-terminal"} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("admin UI missing terminal marker %q", marker)
 		}

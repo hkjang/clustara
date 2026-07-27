@@ -6,7 +6,7 @@ const adminHTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clustara</title>
-  <link rel="stylesheet" href="/admin/assets/xterm/xterm.css">
+  <link rel="stylesheet" href="/admin/assets/xterm/xterm.css?v=6.0.0">
   <style>
     :root[data-theme="light"], :root {
       color-scheme: light;
@@ -1187,7 +1187,7 @@ const adminHTML = `<!doctype html>
 	<datalist id="ux-k8s-namespace-options"></datalist>
 	<datalist id="ux-k8s-kind-options"></datalist>
 
-  <script src="/admin/assets/xterm/xterm.js"></script>
+  <script src="/admin/assets/xterm/xterm.js?v=6.0.0"></script>
   <script>
     // ---------- theme ----------
     function applyTheme(theme) {
@@ -14246,12 +14246,27 @@ const adminHTML = `<!doctype html>
     }
     function k8sTerminalRefreshPods() {
       const cluster = (document.getElementById('k8stty-cluster') || {}).value || '';
-      const podSelect = document.getElementById('k8stty-pod');
-      if (!podSelect) return;
+      const podInput = document.getElementById('k8stty-pod'), podOptions = document.getElementById('k8stty-pod-options');
+      if (!podInput || !podOptions) return;
       const rows = k8sTerminalInventory.filter(item => !cluster || item.cluster_id === cluster);
-      podSelect.innerHTML = '<option value="">Pod 선택</option>' + rows.map(item => '<option value="' + escapeAttr(k8sTerminalPodKey(item)) + '">' + escapeHTML((item.namespace || '-') + '/' + (item.name || '-') + ' · ' + (item.status || '-')) + '</option>').join('');
+	  if (podInput.value && !rows.some(item => k8sTerminalPodKey(item) === podInput.value)) podInput.value = '';
+      podOptions.innerHTML = rows.map(item => '<option value="' + escapeAttr(k8sTerminalPodKey(item)) + '" label="' + escapeAttr((item.namespace || '-') + '/' + (item.name || '-') + ' · ' + (item.status || '-')) + '"></option>').join('');
+	  k8sTerminalPreviewPods();
       k8sTerminalRefreshContainers();
     }
+	function k8sTerminalPreviewPods() {
+	  const input = document.getElementById('k8stty-pod'), preview = document.getElementById('k8stty-pod-preview');
+	  if (!input || !preview) return;
+	  const cluster = (document.getElementById('k8stty-cluster') || {}).value || '', q = String(input.value || '').toLowerCase();
+	  const exact = k8sTerminalSelectedPod();
+	  if (exact) {
+		preview.innerHTML = '<span class="status">선택됨</span> <strong>' + escapeHTML((exact.namespace || '-') + '/' + (exact.name || '-')) + '</strong> · ' + escapeHTML(exact.status || '-') + ' · ' + escapeHTML(exact.node_name || exact.node || 'node 미확인');
+		return;
+	  }
+	  const matches = k8sTerminalInventory.filter(item => (!cluster || item.cluster_id === cluster) && (!q || k8sTerminalPodKey(item).toLowerCase().includes(q) || ((item.namespace || '') + '/' + (item.name || '')).toLowerCase().includes(q))).slice(0, 6);
+	  preview.innerHTML = matches.length ? '<span class="muted">입력 미리보기: </span>' + matches.map(item => '<button type="button" class="secondary" style="font-size:11px;margin:2px" onclick="k8sTerminalChoosePod(\'' + escapeAttr(k8sTerminalPodKey(item)) + '\')">' + escapeHTML((item.namespace || '-') + '/' + (item.name || '-')) + '</button>').join('') : '<span class="muted">일치하는 Pod가 없습니다.</span>';
+	}
+	window.k8sTerminalChoosePod = key => { const input=document.getElementById('k8stty-pod'); if(input){input.value=key;k8sTerminalPreviewPods();k8sTerminalRefreshContainers();} };
     function k8sTerminalRefreshContainers() {
       const item = k8sTerminalSelectedPod();
       const select = document.getElementById('k8stty-container');
@@ -14291,9 +14306,11 @@ const adminHTML = `<!doctype html>
       view.innerHTML =
         section('관리자 웹 터미널', '<div class="banner ' + (superAdminTerminal ? '' : 'warn') + '"><strong>' + (superAdminTerminal ? '최고 관리자 즉시 접속 가능' : '정책 기반 관리자 접속') + '</strong> · ' + (superAdminTerminal ? 'Pod와 셸을 고른 뒤 접속하면 됩니다. 별도 정책 생성이나 자기 승인이 필요 없으며 15분 제한과 전체 감사가 자동 적용됩니다.' : '활성 정책이 접속 범위를 허용하면 승인 요청이 생성됩니다.') + ' xterm.js는 서버에 내장되어 외부망을 사용하지 않습니다.</div>') +
         card('접속 방법', '<div class="card-body"><div class="kpis">' + kpi('1', 'Pod 선택') + kpi('2', '접속 사유 확인') + kpi('3', superAdminTerminal ? '바로 연결' : '승인 후 연결') + '</div><p class="muted" style="margin:8px 0 0">Pod 상세 화면의 <strong>웹 터미널</strong> 버튼으로 들어오면 클러스터와 Pod가 자동 선택됩니다.</p></div>') +
-        card('새 터미널 세션', '<div class="card-body"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;align-items:end">' +
+        card('새 터미널 세션', '<div class="card-body"><div style="display:grid;grid-template-columns:minmax(200px,280px) minmax(320px,1fr);gap:8px;align-items:end">' +
           '<label>클러스터<select id="k8stty-cluster" onchange="k8sTerminalRefreshPods()">' + clusterOpts + '</select></label>' +
-          '<label>Pod<select id="k8stty-pod" onchange="k8sTerminalRefreshContainers()"></select></label>' +
+          '<label>Pod 검색·선택<input id="k8stty-pod" list="k8stty-pod-options" placeholder="namespace 또는 Pod 이름 입력" oninput="k8sTerminalPreviewPods();k8sTerminalRefreshContainers()"><datalist id="k8stty-pod-options"></datalist></label>' +
+		  '<div id="k8stty-pod-preview" style="grid-column:1/-1;min-height:30px;padding:6px 8px;border:1px solid var(--border);border-radius:6px"></div></div>' +
+		  '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;align-items:end;margin-top:10px">' +
           '<label>Container<select id="k8stty-container"></select></label>' +
           '<label>Shell<select id="k8stty-shell"><option value="/bin/sh">/bin/sh</option><option value="/bin/bash">/bin/bash</option></select></label>' +
           '<label>권한<span style="display:block;padding:9px 10px;border:1px solid var(--border);border-radius:6px"><strong>' + escapeHTML(terminalRole) + '</strong> · 자동 판별</span></label>' +
@@ -14304,11 +14321,12 @@ const adminHTML = `<!doctype html>
       k8sTerminalRefreshPods();
       if (targetPod) {
         const selected = k8sTerminalInventory.find(item => (!clusterId || item.cluster_id === clusterId) && item.namespace === targetNamespace && item.name === targetPod);
-        const podSelect = document.getElementById('k8stty-pod');
-        if (selected && podSelect) { podSelect.value = k8sTerminalPodKey(selected); k8sTerminalRefreshContainers(); }
+        const podInput = document.getElementById('k8stty-pod');
+        if (selected && podInput) { podInput.value = k8sTerminalPodKey(selected); k8sTerminalPreviewPods(); k8sTerminalRefreshContainers(); }
       }
     }
     window.k8sTerminalRefreshPods = k8sTerminalRefreshPods;
+    window.k8sTerminalPreviewPods = k8sTerminalPreviewPods;
     window.k8sTerminalRefreshContainers = k8sTerminalRefreshContainers;
     window.k8sTerminalRequest = async () => {
       const item = k8sTerminalSelectedPod();
@@ -14346,15 +14364,31 @@ const adminHTML = `<!doctype html>
       k8sTerminalInstance.resize(cols, rows);
       if (k8sTerminalSocket && k8sTerminalSocket.readyState === WebSocket.OPEN) k8sTerminalSocket.send(JSON.stringify({ type:'resize', cols, rows }));
     }
+	async function k8sTerminalEnsureLibrary() {
+	  if (globalThis.Terminal) return globalThis.Terminal;
+	  await new Promise((resolve, reject) => {
+		const previous = document.getElementById('clustara-xterm-runtime');
+		if (previous) previous.remove();
+		const script = document.createElement('script');
+		script.id = 'clustara-xterm-runtime';
+		script.src = '/admin/assets/xterm/xterm.js?v=6.0.0-retry';
+		script.onload = resolve;
+		script.onerror = () => reject(new Error('내장 xterm.js 자산 요청에 실패했습니다.'));
+		document.head.appendChild(script);
+	  });
+	  const ctor = globalThis.Terminal || (globalThis.XTerm && globalThis.XTerm.Terminal);
+	  if (!ctor) throw new Error('내장 xterm.js가 로드됐지만 Terminal 객체를 초기화하지 못했습니다. 브라우저 캐시를 새로고침하세요.');
+	  return ctor;
+	}
     window.k8sTerminalConnect = async (id) => {
       k8sTerminalDisconnect();
       const status = document.getElementById('k8stty-status');
       try {
         const auth = await api('/admin/k8s/exec/sessions/' + encodeURIComponent(id) + '/ticket', { method:'POST', body:'{}' });
-        const host = document.getElementById('k8stty-terminal');
-        if (!host || typeof Terminal === 'undefined') throw new Error('내장 xterm.js를 불러오지 못했습니다.');
+        const host = document.getElementById('k8stty-terminal'), TerminalCtor = await k8sTerminalEnsureLibrary();
+        if (!host) throw new Error('터미널 표시 영역을 찾지 못했습니다.');
         host.innerHTML = '';
-        k8sTerminalInstance = new Terminal({ cursorBlink:true, convertEol:true, scrollback:5000, fontFamily:'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize:14, theme:{ background:'#0b1020', foreground:'#e5edf8', cursor:'#60a5fa' } });
+        k8sTerminalInstance = new TerminalCtor({ cursorBlink:true, convertEol:true, scrollback:5000, fontFamily:'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize:14, theme:{ background:'#0b1020', foreground:'#e5edf8', cursor:'#60a5fa' } });
         k8sTerminalInstance.open(host);
         k8sTerminalFit();
         const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
