@@ -1841,7 +1841,13 @@ const adminHTML = `<!doctype html>
 	const uxK8sInputObserver = new MutationObserver(mutations => mutations.forEach(m => m.addedNodes.forEach(node => { if (node.nodeType === 1) uxAttachK8sSuggestions(node); })));
 	uxK8sInputObserver.observe(document.body, { childList:true, subtree:true });
 	uxAttachK8sSuggestions(document);
-	setTimeout(() => uxLoadK8sSuggestions(false), 0);
+	// Authentication discovery/refresh runs asynchronously during bootstrap. Loading
+	// suggestions before it settles sends unauthenticated cluster/inventory requests
+	// and can race refresh-token rotation with the initial navigation request.
+	function uxLoadK8sSuggestionsAfterAuth() {
+	  if (!authState.enabled || authState.access) return uxLoadK8sSuggestions(false);
+	  return Promise.resolve({ clusters:[], items:[] });
+	}
 
     // ---------- formatting ----------
     function fmt(value) { return Number(value || 0).toLocaleString('ko-KR'); }
@@ -22349,7 +22355,7 @@ const adminHTML = `<!doctype html>
       const riskBadge = (r) => r === 'high' ? '<span class="status error">high</span>' : (r === 'medium' ? '<span class="status warn">medium</span>' : '<span class="status">low</span>');
       const contractRows = (d.contracts || []).map(c => '<tr><td><code>' + escapeHTML(c.name) + '</code></td><td>' + riskBadge(c.risk_level) + '</td><td class="muted">' + escapeHTML(c.cost_policy) + '</td><td class="muted">' + (c.timeout_ms ? Math.round(c.timeout_ms / 1000) + 's' : '-') + '</td><td>' + (c.executes ? '실행' : '읽기') + '</td><td class="muted" style="font-size:11px">' + escapeHTML(c.output_schema || '') + '</td></tr>').join('');
       view.innerHTML = section('Clustara MCP Server', '') +
-        card('AI·LLM 권장 사용 순서', '<div class="card-body"><div class="banner"><strong>1. 기능 검색</strong> <code>gateway_search_api_catalog</code> → <strong>2. 노출 확인</strong> <code>mcp_exposure</code> → <strong>3. 전용 도구 호출</strong> <code>mcp_tools</code></div><p class="muted" style="font-size:12px">reference_only API는 기능 계약 참고용이며 MCP에서 직접 실행하지 않습니다.</p><div class="kv">'+row('노드·Pod 모니터링','<code>k8s_list_clusters</code> → <code>k8s_node_metrics</code> / <code>k8s_pod_metrics</code>')+row('YAML 안전 변경','<code>k8s_create_manifest_change</code> → <code>k8s_validate_manifest_change</code> → 승인 → <code>k8s_apply_manifest_change</code> → 검증')+row('필수 권한','모니터링 <code>admin:read</code> · YAML 변경 <code>admin:write</code>')+'</div><div class="grid3" style="margin-top:12px"><div class="banner"><strong>'+fmt(coverage.openapi_operations||0)+'</strong><br>OpenAPI operations</div><div class="banner"><strong>'+fmt(coverage.mcp_cataloged_operations||0)+'</strong><br>MCP 검색 가능</div><div class="banner"><strong>'+fmt(coverage.advertised_mcp_tools||0)+'</strong><br>전용 MCP tools</div></div></div>') +
+        card('AI·LLM 권장 사용 순서', '<div class="card-body"><div class="banner"><strong>1. 기능 검색</strong> <code>gateway_search_api_catalog</code> → <strong>2. 노출 확인</strong> <code>mcp_exposure</code> → <strong>3. 전용 도구 호출</strong> <code>mcp_tools</code></div><p class="muted" style="font-size:12px">reference_only API는 기능 계약 참고용이며 MCP에서 직접 실행하지 않습니다.</p><div class="kv">'+row('노드·Pod 모니터링','<code>k8s_list_clusters</code> → <code>k8s_node_metrics</code> / <code>k8s_pod_metrics</code>')+row('YAML 안전 변경','<code>k8s_create_manifest_change</code> → <code>k8s_validate_manifest_change</code> → 일반 admin 승인 / super_admin 자동 승인 → <code>k8s_apply_manifest_change</code> → 검증')+row('안전 롤아웃','<code>k8s_rollout_precheck</code> → <code>k8s_rollout_restart(confirm=true)</code>')+row('필수 권한','모니터링 <code>admin:read</code> · 변경 <code>super_admin + admin:write</code>')+'</div><div class="grid3" style="margin-top:12px"><div class="banner"><strong>'+fmt(coverage.openapi_operations||0)+'</strong><br>OpenAPI operations</div><div class="banner"><strong>'+fmt(coverage.mcp_cataloged_operations||0)+'</strong><br>MCP 검색 가능</div><div class="banner"><strong>'+fmt(coverage.advertised_mcp_tools||0)+'</strong><br>전용 MCP tools</div></div></div>') +
         card('연결 설정 (Claude / Cursor / Roo Code / Cline)',
           '<div class="card-body"><p class="muted" style="font-size:12px">엔드포인트 <code>' + escapeHTML(origin + (d.endpoint || '')) + '</code> · 프로토콜 ' + escapeHTML(d.protocol_version || '') + ' · 인증: Proxy API Key</p>' +
           '<pre style="background:var(--bg-alt,#f6f8fa);padding:10px;border-radius:6px;overflow:auto;font-size:11px">' + escapeHTML(cfg) + '</pre>' +
@@ -26411,7 +26417,7 @@ const adminHTML = `<!doctype html>
     }
     document.getElementById('help-toggle').addEventListener('click', openHelp);
 
-    initAuth();
+    initAuth().then(uxLoadK8sSuggestionsAfterAuth);
   </script>
 </body>
 </html>`

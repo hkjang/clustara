@@ -91,6 +91,12 @@ func (s *Server) runGatewayManifestTool(r *http.Request, authCtx *store.AuthCont
 		path += "/" + requestID + "/" + command
 	}
 
+	if command == "apply" && authCtx != nil && strings.EqualFold(authCtx.Role, "super_admin") {
+		if err := s.ensureMCPManifestDirectApproval(r, authCtx, requestID); err != nil {
+			return nil, err
+		}
+	}
+
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(args))
 	if r != nil {
 		req = req.WithContext(r.Context())
@@ -119,6 +125,24 @@ func (s *Server) runGatewayManifestTool(r *http.Request, authCtx *store.AuthCont
 		return nil, errGateway(gatewayManifestErrorMessage(payload, recorder.Code))
 	}
 	return gatewayToolJSON(payload), nil
+}
+
+func (s *Server) ensureMCPManifestDirectApproval(r *http.Request, authCtx *store.AuthContext, requestID string) error {
+	change, err := s.db.GetK8sManifestChangeRequest(r.Context(), requestID)
+	if err != nil {
+		return errGateway("manifest change lookup failed: " + err.Error())
+	}
+	if !change.RequiresApproval || change.Status != "approval_required" {
+		return nil
+	}
+	actor := adminID(r)
+	note := "super_admin MCP API key direct apply; approval bypass recorded"
+	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), requestID, "approved", actor, note); err != nil {
+		return errGateway("super_admin direct approval transition failed: " + err.Error())
+	}
+	s.auditAdmin(r, "k8s.manifest_change.mcp_super_admin_direct_approve", requestID,
+		auditJSON(map[string]any{"api_key_id": firstNonEmpty(authCtx.APIKeyID, actor), "note": note}))
+	return nil
 }
 
 func gatewayManifestErrorMessage(payload map[string]any, status int) string {

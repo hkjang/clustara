@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.162"
+const AppVersion = "v0.9.163"
 
 type Server struct {
 	cfg              config.Config
@@ -1865,6 +1865,12 @@ func (s *Server) auditAdmin(r *http.Request, action string, before string, after
 }
 
 func adminID(r *http.Request) string {
+	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
+		return "mcp_api_key:" + identity.APIKeyID
+	}
+	if identity, ok := terminalStreamAuthFromRequest(r); ok && identity.AdminID != "" {
+		return identity.AdminID
+	}
 	token := bearerToken(r.Header.Get("Authorization"))
 	if token == "" {
 		return "anonymous"
@@ -1907,6 +1913,14 @@ type adminAccessDecision struct {
 // handlers and the SPA to show an "invalid token" JSON blob for ordinary role denials.
 func (s *Server) evaluateAdminAccess(r *http.Request) adminAccessDecision {
 	required := adminRequiredScope(r)
+	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
+		allowed := strings.EqualFold(identity.Role, "super_admin") || hasScope(identity.Scopes, required)
+		reason := ""
+		if !allowed {
+			reason = "MCP API key missing scope " + required
+		}
+		return adminAccessDecision{Authenticated: true, Allowed: allowed, Role: identity.Role, RequiredScope: required, Reason: reason}
+	}
 	if s.cfg.Auth.Enabled {
 		claims, ok := s.verifyAccessToken(r.Context(), bearerToken(r.Header.Get("Authorization")))
 		if !ok {
@@ -1998,6 +2012,16 @@ func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/admin/assets/xterm/") {
 			next.ServeHTTP(w, r)
 			return
+		}
+		// Browser WebSocket constructors cannot attach an Authorization header. The
+		// preceding authenticated POST issues a short-lived, one-use ticket; consume
+		// it here so the common admin gate does not reject the upgrade before the
+		// terminal handler can validate it.
+		if sessionID, ok := terminalStreamSessionID(r); ok {
+			if auth, valid := s.consumeTerminalTicket(sessionID, r.URL.Query().Get("ticket")); valid {
+				next.ServeHTTP(w, withTerminalStreamAuth(r, auth))
+				return
+			}
 		}
 		// Agent ingestion uses a cluster-scoped token validated after decoding the batch.
 		// It must not pass through the interactive administrator authentication gate.

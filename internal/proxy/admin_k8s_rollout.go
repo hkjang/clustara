@@ -482,6 +482,9 @@ func (s *Server) resolvePodRolloutTarget(r *http.Request, in rolloutRequestInput
 }
 
 func (s *Server) rolloutSuperAdmin(r *http.Request) bool {
+	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
+		return strings.EqualFold(identity.Role, "super_admin")
+	}
 	if claims, ok := s.currentAccessClaims(r); ok {
 		return strings.EqualFold(claims.Role, "super_admin")
 	}
@@ -497,6 +500,9 @@ func (s *Server) requireRolloutScope(w http.ResponseWriter, r *http.Request, sco
 }
 
 func (s *Server) rolloutScopeAllowed(r *http.Request, scope string) bool {
+	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
+		return strings.EqualFold(identity.Role, "super_admin") || hasScope(identity.Scopes, scope)
+	}
 	if !s.cfg.Auth.Enabled {
 		return true
 	}

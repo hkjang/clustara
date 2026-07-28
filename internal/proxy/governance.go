@@ -653,6 +653,13 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		s.recordPolicyDecisionEvents(r.Context(), withPolicyDecisionRequestID(decision.PolicyEvents, reqID))
 		return rpcErrorResponse(id, -32000, "blocked by governance policy: "+firstNonEmpty(decision.Reason, "mcp_tool_blocked"))
 	}
+	if decision.RequireApproval && mcpSuperAdminDirect(authCtx, route.upstreamName, toolName) {
+		decision.RequireApproval = false
+		reason := "authenticated super_admin MCP API key direct execution; approval bypassed, safety blockers preserved"
+		decision.PolicyEvents = append(decision.PolicyEvents, toolRiskDecisionEvent(g, profile, found, "super_admin_direct", reason))
+		s.auditAdmin(withMCPAdminIdentity(r, apiKeyID, authCtx), "mcp.super_admin.direct_execution", "",
+			auditJSON(map[string]any{"api_key_id": apiKeyID, "server": route.upstreamName, "tool": toolName, "reason": reason}))
+	}
 	if decision.RequireApproval {
 		allowed, approvalID, reason := s.governanceApprovalGate(r, g, firstNonEmpty(decision.Reason, "MCP tool approval required"))
 		if allowed {
@@ -727,7 +734,7 @@ func inferToolAccessClass(server, tool string) string {
 	switch {
 	case contains("secret", "credential", "password", "vault", "apikey", "api_key", "access key", "access_key", "token", "private key", "private_key", "env var", "환경 변수", "비밀"):
 		return "secret"
-	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "apply", "rollback", "restore", "ssh", "systemctl", "sudo"):
+	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "apply", "rollback", "rollout", "restart", "restore", "ssh", "systemctl", "sudo"):
 		return "execute"
 	case contains("http", "fetch", "request", "curl", "url", "web", "browse", "download", "upload", "webhook", "email", "send_", "smtp", "network", "socket"):
 		return "network"

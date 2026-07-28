@@ -12,16 +12,45 @@ import (
 
 func TestInteractiveTerminalTicketIsShortLivedAndSingleUse(t *testing.T) {
 	s := &Server{}
-	s.terminalTickets.Store("once", terminalTicket{SessionID: "session-1", ExpiresAt: time.Now().Add(time.Minute)})
-	if !s.consumeTerminalTicket("session-1", "once") {
+	s.terminalTickets.Store("once", terminalTicket{SessionID: "session-1", AdminID: "admin_test", ExpiresAt: time.Now().Add(time.Minute)})
+	auth, ok := s.consumeTerminalTicket("session-1", "once")
+	if !ok || auth.AdminID != "admin_test" {
 		t.Fatal("valid terminal ticket should be accepted")
 	}
-	if s.consumeTerminalTicket("session-1", "once") {
+	if _, ok := s.consumeTerminalTicket("session-1", "once"); ok {
 		t.Fatal("terminal ticket must be single use")
 	}
 	s.terminalTickets.Store("expired", terminalTicket{SessionID: "session-1", ExpiresAt: time.Now().Add(-time.Second)})
-	if s.consumeTerminalTicket("session-1", "expired") {
+	if _, ok := s.consumeTerminalTicket("session-1", "expired"); ok {
 		t.Fatal("expired terminal ticket must be rejected")
+	}
+}
+
+func TestTerminalTicketPassesCommonAdminGateWithoutBearerHeader(t *testing.T) {
+	s := &Server{}
+	s.cfg.Auth.Enabled = true
+	s.terminalTickets.Store("stream-ticket", terminalTicket{
+		SessionID: "session-1",
+		AdminID:   "admin_ticket_owner",
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	protected := s.withAdminAccessUX(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, ok := terminalStreamAuthFromRequest(r)
+		if !ok || auth.SessionID != "session-1" || adminID(r) != "admin_ticket_owner" {
+			t.Fatalf("terminal stream identity was not propagated: %+v ok=%v actor=%q", auth, ok, adminID(r))
+		}
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/k8s/exec/sessions/session-1/stream?ticket=stream-ticket", nil)
+	protected.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSwitchingProtocols {
+		t.Fatalf("ticket-authenticated websocket upgrade must pass admin gate, got %d", rr.Code)
+	}
+
+	if _, exists := s.terminalTickets.Load("stream-ticket"); exists {
+		t.Fatal("terminal ticket must be consumed by the common gate")
 	}
 }
 

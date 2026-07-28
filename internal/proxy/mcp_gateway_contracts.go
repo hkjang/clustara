@@ -41,5 +41,7 @@ func gatewayToolContracts() []gatewayToolContract {
 		{"k8s_approve_manifest_change", "high", "free", 10000, "admin", true, "{request} — approval ledger transition"},
 		{"k8s_apply_manifest_change", "high", "free", 120000, "admin", true, "{request, apply_result} — real SSA cluster mutation after approval"},
 		{"k8s_verify_manifest_change", "medium", "free", 30000, "admin", true, "{request, verification} — post-apply observation"},
+		{"k8s_rollout_precheck", "medium", "free", 30000, "super_admin", false, "{target, precheck} — safe rollout blockers and warnings"},
+		{"k8s_rollout_restart", "high", "free", 120000, "super_admin", true, "{rollout, action, precheck} — immediate audited rollout when blockers are absent"},
 	}
 }

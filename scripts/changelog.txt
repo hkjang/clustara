@@ -1,3 +1,6 @@
+v0.9.163:
+- **Audited Super Admin MCP Changes & Terminal Authentication Repair (v0.9.163)**: `super_admin` 역할과 `admin:write` scope를 가진 MCP API Key는 `/mcp/gateway`에서 YAML 생성·변경 요청을 검증한 뒤 별도 승인 호출 없이 적용할 수 있고, 워크로드 롤아웃 사전검사와 `confirm=true` 재시작을 수행할 수 있습니다. 정책 차단·Secret 원문 차단·server dry-run·drift guard와 PDB·PVC·Pod·Node·진행 중 롤아웃 안전 차단은 그대로 유지하며 API Key ID를 행위자로 자동 승인·직접 실행 감사 이력에 기록합니다. 브라우저 WebSocket이 Authorization 헤더를 붙일 수 없어 공통 관리자 인증 게이트에서 터미널 스트림이 401로 차단되던 문제는 30초 단일 사용 티켓을 게이트에서 검증하고 발급자의 감사 주체를 스트림 컨텍스트에 전달하도록 수정했습니다. 로그인/토큰 갱신이 완료되기 전에 자동 Kubernetes 입력 제안이 clusters·inventory를 호출해 401을 만들던 초기화 경쟁도 제거했습니다.
+
 v0.9.162:
 - **Terminal Asset Authentication & Concurrent Refresh Fix (v0.9.162)**: 브라우저의 `<script>`·`<link>` 요청은 Bearer 헤더를 보낼 수 없는데 `/admin/` 공통 인증 미들웨어가 내장 xterm.js·CSS까지 보호해 401을 반환하던 문제를 수정했습니다. 바이너리에 포함된 비밀 없는 immutable xterm 정적 자산 경로만 인증 게이트에서 명시적으로 제외하고 실제 인증 모드에서 무토큰 200을 검증합니다. 웹 터미널 진입 시 clusters·inventory·sessions 병렬 요청이 만료된 access token으로 동시에 401을 받으면 회전형 refresh token을 여러 번 소비하던 경쟁 조건도 single-flight refresh로 바꿔, 모든 요청이 하나의 새 access/refresh token 쌍을 공유해 재시도하도록 했습니다.
 

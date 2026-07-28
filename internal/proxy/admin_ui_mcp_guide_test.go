@@ -20,8 +20,10 @@ func TestAdminUserMenuAndMCPPageExposeUsageGuide(t *testing.T) {
 		`k8s_create_manifest_change`,
 		`k8s_validate_manifest_change`,
 		`k8s_apply_manifest_change`,
+		`k8s_rollout_precheck`,
+		`k8s_rollout_restart`,
 		`모니터링 <code>admin:read</code>`,
-		`YAML 변경 <code>admin:write</code>`,
+		`변경 <code>super_admin + admin:write</code>`,
 	} {
 		if !strings.Contains(adminHTML, marker) {
 			t.Fatalf("MCP guide missing %q", marker)

@@ -56,7 +56,15 @@ type browserTerminalMessage struct {
 
 type terminalTicket struct {
 	SessionID string
+	AdminID   string
 	ExpiresAt time.Time
+}
+
+type terminalStreamAuthContextKey struct{}
+
+type terminalStreamAuth struct {
+	SessionID string
+	AdminID   string
 }
 
 func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
@@ -73,21 +81,46 @@ func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, ses
 	})
 	ticket := newID("k8stty")
 	expires := now.Add(30 * time.Second)
-	s.terminalTickets.Store(ticket, terminalTicket{SessionID: sess.ID, ExpiresAt: expires})
+	s.terminalTickets.Store(ticket, terminalTicket{SessionID: sess.ID, AdminID: adminID(r), ExpiresAt: expires})
 	writeJSON(w, http.StatusCreated, map[string]any{"ticket": ticket, "expires_at": expires.Format(time.RFC3339)})
 }
 
-func (s *Server) consumeTerminalTicket(sessionID, ticket string) bool {
+func (s *Server) consumeTerminalTicket(sessionID, ticket string) (terminalStreamAuth, bool) {
 	ticket = strings.TrimSpace(ticket)
 	if ticket == "" {
-		return false
+		return terminalStreamAuth{}, false
 	}
 	raw, ok := s.terminalTickets.LoadAndDelete(ticket)
 	if !ok {
-		return false
+		return terminalStreamAuth{}, false
 	}
 	value, ok := raw.(terminalTicket)
-	return ok && value.SessionID == sessionID && time.Now().UTC().Before(value.ExpiresAt)
+	if !ok || value.SessionID != sessionID || !time.Now().UTC().Before(value.ExpiresAt) {
+		return terminalStreamAuth{}, false
+	}
+	return terminalStreamAuth{SessionID: value.SessionID, AdminID: value.AdminID}, true
+}
+
+func terminalStreamSessionID(r *http.Request) (string, bool) {
+	const prefix = "/admin/k8s/exec/sessions/"
+	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, prefix) {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/"), "/")
+	if len(parts) != 2 || parts[1] != "stream" {
+		return "", false
+	}
+	id, err := url.PathUnescape(parts[0])
+	return id, err == nil && id != ""
+}
+
+func terminalStreamAuthFromRequest(r *http.Request) (terminalStreamAuth, bool) {
+	auth, ok := r.Context().Value(terminalStreamAuthContextKey{}).(terminalStreamAuth)
+	return auth, ok && auth.SessionID != ""
+}
+
+func withTerminalStreamAuth(r *http.Request, auth terminalStreamAuth) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), terminalStreamAuthContextKey{}, auth))
 }
 
 var terminalUpgrader = websocket.Upgrader{

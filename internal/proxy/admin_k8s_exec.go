@@ -29,7 +29,13 @@ func (s *Server) handleK8sExecSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/exec/sessions/"), "/"), "/")
-	streamAuthorized := len(parts) == 2 && parts[1] == "stream" && s.consumeTerminalTicket(parts[0], r.URL.Query().Get("ticket"))
+	_, streamAuthorized := terminalStreamAuthFromRequest(r)
+	if !streamAuthorized && len(parts) == 2 && parts[1] == "stream" {
+		if auth, ok := s.consumeTerminalTicket(parts[0], r.URL.Query().Get("ticket")); ok {
+			r = withTerminalStreamAuth(r, auth)
+			streamAuthorized = true
+		}
+	}
 	if !streamAuthorized && !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
 		return

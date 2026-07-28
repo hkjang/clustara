@@ -81,20 +81,22 @@ func gatewayAPIRisk(method, summary string) string {
 func gatewayMCPToolsForOperation(path, method string) []string {
 	key := method + " " + path
 	mapping := map[string][]string{
-		"POST /v1/chat/completions":             {"gateway_chat", "gateway_run_skill", "gateway_run_text2sql_preview"},
-		"GET /v1/models":                        {"gateway_list_models"},
-		"GET /me/requests/{id}/receipt":         {"gateway_explain_request"},
-		"GET /me/dashboard":                     {"gateway_get_usage_summary", "gateway_check_quota"},
-		"GET /admin/k8s/clusters":               {"k8s_list_clusters"},
-		"GET /admin/k8s/incidents":              {"k8s_list_incidents"},
-		"GET /admin/k8s/pods":                   {"k8s_pod_health"},
-		"GET /admin/k8s/nodes/monitoring":       {"k8s_node_metrics"},
-		"GET /admin/k8s/pods/{namespace}/{pod}": {"k8s_pod_metrics"},
-		"POST /admin/k8s/manifest-changes":      {"k8s_create_manifest_change"},
-		"POST /admin/k8s/manifest-changes/{id}": {"k8s_validate_manifest_change", "k8s_approve_manifest_change", "k8s_apply_manifest_change", "k8s_verify_manifest_change"},
-		"POST /v1/workflows/{id}/run":           {"gateway_run_workflow"},
-		"POST /v1/apps/{id}/run":                {"gateway_create_app_run"},
-		"GET /admin/gateway-mcp/info":           {"gateway_search_api_catalog"},
+		"POST /v1/chat/completions":               {"gateway_chat", "gateway_run_skill", "gateway_run_text2sql_preview"},
+		"GET /v1/models":                          {"gateway_list_models"},
+		"GET /me/requests/{id}/receipt":           {"gateway_explain_request"},
+		"GET /me/dashboard":                       {"gateway_get_usage_summary", "gateway_check_quota"},
+		"GET /admin/k8s/clusters":                 {"k8s_list_clusters"},
+		"GET /admin/k8s/incidents":                {"k8s_list_incidents"},
+		"GET /admin/k8s/pods":                     {"k8s_pod_health"},
+		"GET /admin/k8s/nodes/monitoring":         {"k8s_node_metrics"},
+		"GET /admin/k8s/pods/{namespace}/{pod}":   {"k8s_pod_metrics"},
+		"POST /admin/k8s/manifest-changes":        {"k8s_create_manifest_change"},
+		"POST /admin/k8s/manifest-changes/{id}":   {"k8s_validate_manifest_change", "k8s_approve_manifest_change", "k8s_apply_manifest_change", "k8s_verify_manifest_change"},
+		"POST /api/v1/workloads/rollout/precheck": {"k8s_rollout_precheck"},
+		"POST /api/v1/workloads/rollout":          {"k8s_rollout_restart"},
+		"POST /v1/workflows/{id}/run":             {"gateway_run_workflow"},
+		"POST /v1/apps/{id}/run":                  {"gateway_create_app_run"},
+		"GET /admin/gateway-mcp/info":             {"gateway_search_api_catalog"},
 	}
 	return append([]string(nil), mapping[key]...)
 }
@@ -199,7 +201,7 @@ func gatewayOperatorGuideMarkdown() string {
 		"2. 결과의 `mcp_exposure`와 `mcp_tools`를 확인합니다.\n" +
 		"3. `dedicated_tool`만 실제 MCP 호출 대상으로 사용합니다. `reference_only`는 OpenAPI/관리 화면 참고 정보입니다.\n" +
 		"4. K8s 진단은 `k8s_list_clusters` → `k8s_list_incidents` → `k8s_pod_health` → `k8s_node_metrics`/`k8s_pod_metrics` 순서로 증거를 좁힙니다.\n" +
-		"5. YAML 변경은 `k8s_create_manifest_change` → `k8s_validate_manifest_change` → 필요 시 `k8s_approve_manifest_change` → `k8s_apply_manifest_change` → `k8s_verify_manifest_change` 순서를 지킵니다.\n\n" +
+		"5. YAML 변경은 `k8s_create_manifest_change` → `k8s_validate_manifest_change` → 일반 admin은 `k8s_approve_manifest_change` → `k8s_apply_manifest_change` → `k8s_verify_manifest_change` 순서입니다. super_admin MCP API Key는 apply 시 자동 승인·감사를 기록합니다. 롤아웃은 `k8s_rollout_precheck` → `k8s_rollout_restart` 순서입니다.\n\n" +
 		"## 데이터 안전\n\n- API Key, Secret, 비밀번호, 토큰 원문을 프롬프트나 도구 인자에 넣지 않습니다.\n" +
 		"- 읽기 결과와 추론을 구분하고, 확인하지 않은 상태를 사실로 표현하지 않습니다.\n" +
 		"- 전체 HTTP 계약은 `gateway://api/catalog`, 커버리지는 `gateway://api/coverage`에서 확인합니다.\n"
