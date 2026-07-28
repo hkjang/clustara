@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.163"
+const AppVersion = "v0.9.164"
 
 type Server struct {
 	cfg              config.Config
@@ -44,7 +44,6 @@ type Server struct {
 	retention        *store.RetentionWorker
 	killState        atomicKillState
 	loggedRequests   sync.Map
-	terminalTickets  sync.Map
 	mcpPolicy        atomic.Pointer[mcpPolicySnapshot]
 	routingRules     atomic.Pointer[routingRulesSnapshot]
 	knowledge        atomic.Pointer[knowledgeSnapshot]

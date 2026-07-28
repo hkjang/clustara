@@ -2694,6 +2694,15 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		`ALTER TABLE k8s_pod_exec_sessions ADD COLUMN exit_code INTEGER NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_exec_sessions_target ON k8s_pod_exec_sessions(cluster_id, namespace, pod, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_exec_sessions_status ON k8s_pod_exec_sessions(status, created_at)`,
+		`CREATE TABLE IF NOT EXISTS k8s_terminal_tickets (
+			ticket_hash TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			admin_id TEXT NOT NULL DEFAULT '',
+			expires_at TEXT NOT NULL,
+			consumed_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_terminal_tickets_expiry ON k8s_terminal_tickets(expires_at, consumed_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_pod_bookmarks (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,

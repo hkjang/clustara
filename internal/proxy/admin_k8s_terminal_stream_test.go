@@ -11,8 +11,14 @@ import (
 )
 
 func TestInteractiveTerminalTicketIsShortLivedAndSingleUse(t *testing.T) {
-	s := &Server{}
-	s.terminalTickets.Store("once", terminalTicket{SessionID: "session-1", AdminID: "admin_test", ExpiresAt: time.Now().Add(time.Minute)})
+	db := openTestStore(t)
+	defer db.Close()
+	s := &Server{db: db}
+	if err := db.CreateK8sTerminalTicket(t.Context(), "once", store.K8sTerminalTicket{
+		SessionID: "session-1", AdminID: "admin_test", ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	auth, ok := s.consumeTerminalTicket("session-1", "once")
 	if !ok || auth.AdminID != "admin_test" {
 		t.Fatal("valid terminal ticket should be accepted")
@@ -20,21 +26,30 @@ func TestInteractiveTerminalTicketIsShortLivedAndSingleUse(t *testing.T) {
 	if _, ok := s.consumeTerminalTicket("session-1", "once"); ok {
 		t.Fatal("terminal ticket must be single use")
 	}
-	s.terminalTickets.Store("expired", terminalTicket{SessionID: "session-1", ExpiresAt: time.Now().Add(-time.Second)})
+	if err := db.CreateK8sTerminalTicket(t.Context(), "expired", store.K8sTerminalTicket{
+		SessionID: "session-1", ExpiresAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := s.consumeTerminalTicket("session-1", "expired"); ok {
 		t.Fatal("expired terminal ticket must be rejected")
 	}
 }
 
 func TestTerminalTicketPassesCommonAdminGateWithoutBearerHeader(t *testing.T) {
-	s := &Server{}
-	s.cfg.Auth.Enabled = true
-	s.terminalTickets.Store("stream-ticket", terminalTicket{
+	db := openTestStore(t)
+	defer db.Close()
+	issuer := &Server{db: db}
+	consumer := &Server{db: db}
+	consumer.cfg.Auth.Enabled = true
+	if err := issuer.db.CreateK8sTerminalTicket(t.Context(), "stream-ticket", store.K8sTerminalTicket{
 		SessionID: "session-1",
 		AdminID:   "admin_ticket_owner",
 		ExpiresAt: time.Now().Add(time.Minute),
-	})
-	protected := s.withAdminAccessUX(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}); err != nil {
+		t.Fatal(err)
+	}
+	protected := consumer.withAdminAccessUX(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth, ok := terminalStreamAuthFromRequest(r)
 		if !ok || auth.SessionID != "session-1" || adminID(r) != "admin_ticket_owner" {
 			t.Fatalf("terminal stream identity was not propagated: %+v ok=%v actor=%q", auth, ok, adminID(r))
@@ -48,9 +63,8 @@ func TestTerminalTicketPassesCommonAdminGateWithoutBearerHeader(t *testing.T) {
 	if rr.Code != http.StatusSwitchingProtocols {
 		t.Fatalf("ticket-authenticated websocket upgrade must pass admin gate, got %d", rr.Code)
 	}
-
-	if _, exists := s.terminalTickets.Load("stream-ticket"); exists {
-		t.Fatal("terminal ticket must be consumed by the common gate")
+	if _, ok := issuer.consumeTerminalTicket("session-1", "stream-ticket"); ok {
+		t.Fatal("terminal ticket consumed by another replica must remain one-use")
 	}
 }
 

@@ -54,12 +54,6 @@ type browserTerminalMessage struct {
 	Rows uint16 `json:"rows,omitempty"`
 }
 
-type terminalTicket struct {
-	SessionID string
-	AdminID   string
-	ExpiresAt time.Time
-}
-
 type terminalStreamAuthContextKey struct{}
 
 type terminalStreamAuth struct {
@@ -73,29 +67,26 @@ func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	now := time.Now().UTC()
-	s.terminalTickets.Range(func(key, value any) bool {
-		if entry, ok := value.(terminalTicket); !ok || !now.Before(entry.ExpiresAt) {
-			s.terminalTickets.Delete(key)
-		}
-		return true
-	})
 	ticket := newID("k8stty")
 	expires := now.Add(30 * time.Second)
-	s.terminalTickets.Store(ticket, terminalTicket{SessionID: sess.ID, AdminID: adminID(r), ExpiresAt: expires})
+	if err := s.db.CreateK8sTerminalTicket(r.Context(), ticket, store.K8sTerminalTicket{
+		SessionID: sess.ID,
+		AdminID:   adminID(r),
+		ExpiresAt: expires,
+	}); err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, "terminal ticket issuance failed", "server_error", "terminal_ticket_failed")
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ticket": ticket, "expires_at": expires.Format(time.RFC3339)})
 }
 
 func (s *Server) consumeTerminalTicket(sessionID, ticket string) (terminalStreamAuth, bool) {
 	ticket = strings.TrimSpace(ticket)
-	if ticket == "" {
+	if ticket == "" || s.db == nil {
 		return terminalStreamAuth{}, false
 	}
-	raw, ok := s.terminalTickets.LoadAndDelete(ticket)
-	if !ok {
-		return terminalStreamAuth{}, false
-	}
-	value, ok := raw.(terminalTicket)
-	if !ok || value.SessionID != sessionID || !time.Now().UTC().Before(value.ExpiresAt) {
+	value, ok, err := s.db.ConsumeK8sTerminalTicket(context.Background(), sessionID, ticket)
+	if err != nil || !ok {
 		return terminalStreamAuth{}, false
 	}
 	return terminalStreamAuth{SessionID: value.SessionID, AdminID: value.AdminID}, true

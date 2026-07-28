@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"time"
 )
 
 // K8sPodExecSession records a policy-gated Pod exec / terminal request.
@@ -42,6 +45,59 @@ type K8sPodExecSessionFilter struct {
 	Pod       string
 	Status    string
 	Limit     int
+}
+
+type K8sTerminalTicket struct {
+	SessionID string
+	AdminID   string
+	ExpiresAt time.Time
+}
+
+func terminalTicketHash(ticket string) string {
+	sum := sha256.Sum256([]byte(ticket))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *SQLStore) CreateK8sTerminalTicket(ctx context.Context, ticket string, value K8sTerminalTicket) error {
+	now := time.Now().UTC()
+	// Retain consumed rows until expiry: another replica may be between its atomic
+	// consume update and the identity read that follows.
+	_, _ = s.db.ExecContext(ctx, s.bind(`DELETE FROM k8s_terminal_tickets WHERE expires_at <= ?`), now.Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_terminal_tickets
+		(ticket_hash, session_id, admin_id, expires_at, consumed_at, created_at)
+		VALUES (?, ?, ?, ?, '', ?)`),
+		terminalTicketHash(ticket), value.SessionID, value.AdminID, value.ExpiresAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	return err
+}
+
+// ConsumeK8sTerminalTicket atomically changes an unused ticket to consumed. The conditional
+// update makes one-use semantics work across all Clustara replicas sharing the database.
+func (s *SQLStore) ConsumeK8sTerminalTicket(ctx context.Context, sessionID, ticket string) (K8sTerminalTicket, bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	hash := terminalTicketHash(ticket)
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_terminal_tickets
+		SET consumed_at = ?
+		WHERE ticket_hash = ? AND session_id = ? AND consumed_at = '' AND expires_at > ?`),
+		now, hash, sessionID, now)
+	if err != nil {
+		return K8sTerminalTicket{}, false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n != 1 {
+		return K8sTerminalTicket{}, false, err
+	}
+	var value K8sTerminalTicket
+	var expiresAt string
+	err = s.db.QueryRowContext(ctx, s.bind(`SELECT session_id, admin_id, expires_at
+		FROM k8s_terminal_tickets WHERE ticket_hash = ?`), hash).Scan(&value.SessionID, &value.AdminID, &expiresAt)
+	if err != nil {
+		return K8sTerminalTicket{}, false, err
+	}
+	value.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		return K8sTerminalTicket{}, false, err
+	}
+	return value, true, nil
 }
 
 func (s *SQLStore) CreateK8sPodExecSession(ctx context.Context, sess *K8sPodExecSession) error {

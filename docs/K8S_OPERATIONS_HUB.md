@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.163** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.164** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.163)
+## 기능 상태 (v0.9.164)
 
 ### Trivy Scan·SBOM Import 인증
 
@@ -623,7 +623,7 @@ curl.exe "http://localhost:9090/admin/k8s/pods/default/nginx/runbook?cluster_id=
 
 `운영 설정` 화면의 Terminal Policy Builder는 실제 Pod exec/web terminal 기능을 켜기 전에 접속 정책을 먼저 정의하는 안전장치입니다. 정책은 role, cluster, namespace glob, Pod label selector, 허용 명령, 차단 명령, 승인 필요 여부, 최대 세션 시간, 감사 저장 여부를 포함합니다. 내장 차단 규칙은 `rm -rf`, `dd`, `mkfs`, `shutdown/reboot`, `curl|sh`, `kubectl delete`, 패키지 설치 명령 등을 기본적으로 차단합니다.
 
-`리소스 관리 → 웹 터미널`은 관리자 전용 대화형 Pod 셸입니다. 가장 빠른 진입 경로는 **Pod 상세 → 웹 터미널 → 터미널 접속**이며, 클러스터와 Pod가 자동 선택됩니다. `super_admin`은 별도 정책 생성이나 자기 승인 없이 내장 기본 정책으로 즉시 접속할 수 있고, 15분 제한·전체 감사가 강제됩니다. 다른 역할은 정책 센터의 용도별 템플릿으로 허용 범위를 추가하고 필요 시 승인받습니다. 역할은 요청 폼 값이 아니라 인증된 로그인 토큰에서 결정됩니다. 화면 자산은 MIT 라이선스의 xterm.js 6.0.0을 바이너리에 내장하므로 브라우저가 CDN이나 npm에 접근하지 않습니다. `/bin/sh` 또는 `/bin/bash`만 시작 셸로 허용하고, 30초 동안 한 번만 사용할 수 있는 티켓으로 WebSocket을 연결합니다. 브라우저 Origin은 Clustara 호스트와 같아야 하며 세션 제한 시간이 지나면 연결을 종료합니다. 접속·종료와 입출력 byte 수는 관리자 감사 로그에 남고, 출력 표본은 민감값을 마스킹하고 크기를 제한해 기존 exec 원장에 저장합니다. 비밀번호 프롬프트 입력처럼 echo되지 않는 비밀값의 유출을 막기 위해 브라우저에서 전송한 원시 키 입력은 저장하지 않습니다.
+`리소스 관리 → 웹 터미널`은 관리자 전용 대화형 Pod 셸입니다. 가장 빠른 진입 경로는 **Pod 상세 → 웹 터미널 → 터미널 접속**이며, 클러스터와 Pod가 자동 선택됩니다. `super_admin`은 별도 정책 생성이나 자기 승인 없이 내장 기본 정책으로 즉시 접속할 수 있고, 15분 제한·전체 감사가 강제됩니다. 다른 역할은 정책 센터의 용도별 템플릿으로 허용 범위를 추가하고 필요 시 승인받습니다. 역할은 요청 폼 값이 아니라 인증된 로그인 토큰에서 결정됩니다. 화면 자산은 MIT 라이선스의 xterm.js 6.0.0을 바이너리에 내장하므로 브라우저가 CDN이나 npm에 접근하지 않습니다. `/bin/sh` 또는 `/bin/bash`만 시작 셸로 허용하고, 30초 동안 한 번만 사용할 수 있는 티켓으로 WebSocket을 연결합니다. 티켓은 공유 DB에서 원자적으로 한 번만 소비되므로 발급 POST와 WebSocket이 서로 다른 Clustara Pod에 도착해도 연결할 수 있습니다. 다중 replica 배포는 모든 Pod가 동일한 PostgreSQL DB를 사용해야 하며 Pod별 로컬 SQLite 구성은 지원하지 않습니다. 브라우저 Origin은 Clustara 호스트와 같아야 하며 세션 제한 시간이 지나면 연결을 종료합니다. 접속·종료와 입출력 byte 수는 관리자 감사 로그에 남고, 출력 표본은 민감값을 마스킹하고 크기를 제한해 기존 exec 원장에 저장합니다. 비밀번호 프롬프트 입력처럼 echo되지 않는 비밀값의 유출을 막기 위해 브라우저에서 전송한 원시 키 입력은 저장하지 않습니다.
 
 Gateway MCP(`/mcp/gateway`)에 연결한 API Key가 저장된 `role=super_admin`과 `admin:write` scope를 모두 가지면 YAML 생성·변경과 워크로드 롤아웃에서 별도 사람 승인을 생략할 수 있습니다. YAML은 `k8s_create_manifest_change → k8s_validate_manifest_change → k8s_apply_manifest_change(confirm=true) → k8s_verify_manifest_change` 순서이며 apply 직전에 자동 승인 원장을 기록합니다. 롤아웃은 `k8s_rollout_precheck → k8s_rollout_restart(confirm=true)` 순서입니다. 일반 admin 키의 승인 흐름, Secret 원문 차단, 정책 Deny, server dry-run, drift guard, PDB·PVC·Pod/Node 상태 차단은 우회되지 않습니다. 모든 직접 실행은 MCP API Key ID를 actor로 관리자 감사·정책 결정·Manifest Change 또는 Rollout 원장에 남깁니다.
 
