@@ -189,13 +189,13 @@
 
       <nav>
         <ul class="nav-links">
-          <li><a href="#features">주요 기능</a></li>
-          <li><a href="#showcase">화면 둘러보기</a></li>
-          <li><a href="#comparison">도구 비교</a></li>
-          <li><a href="#architecture">아키텍처</a></li>
-          <li><a href="#quickstart">빠른 시작</a></li>
+          <li><a href="#features">Core Features</a></li>
+          <li><a href="#showcase">Showcase</a></li>
+          <li><a href="#comparison">Comparison</a></li>
+          <li><a href="#architecture">Architecture</a></li>
+          <li><a href="#quickstart">Quickstart</a></li>
           <li><a href="#faq">FAQ</a></li>
-          <li><a href="#docs">문서 가이드</a></li>
+          <li><a href="#docs">Documentation</a></li>
         </ul>
       </nav>
 
@@ -228,7 +228,7 @@
 
         <h1 class="hero-title">
           <code>kubectl</code> 없이 한눈에 해결하는<br>
-          <span class="gradient-text">Kubernetes 장애 분석·보안·FinOps 허브</span>
+          <span class="gradient-text">Kubernetes Incident Analysis, Security & FinOps Hub</span>
         </h1>
 
         <p class="hero-description">
@@ -238,10 +238,10 @@
 
         <div class="hero-actions">
           <a href="#quickstart" class="btn-primary">
-            <span>🚀 1분 만에 설치하기</span>
+            <span>🚀 Install in 1 Minute</span>
           </a>
           <a href="#docs" class="btn-secondary">
-            <span>📖 운영 가이드 읽기</span>
+            <span>📖 Read Operator Guide</span>
           </a>
         </div>
 
@@ -249,12 +249,12 @@
         <div class="hero-metrics">
           <div class="metric-card">
             <span class="metric-icon">🔒</span>
-            <div class="metric-title">100% Read-Only 수집</div>
-            <div class="metric-desc">클러스터에 영향을 주지 않는 비파괴적 안전 수집 게이트웨이</div>
+            <div class="metric-title">100% Read-Only Collection</div>
+            <div class="metric-desc">Non-Destructive Safe Collector Gateway Guaranteeing Zero Cluster Impact</div>
           </div>
           <div class="metric-card">
             <span class="metric-icon">🔍</span>
-            <div class="metric-title">근거 기반 RCA 장애 규명</div>
+            <div class="metric-title">Evidence-Based RCA Diagnostics</div>
             <div class="metric-desc">CrashLoop·OOM 및 직전 Config 변경 연계 원인 추적</div>
           </div>
           <div class="metric-card">
@@ -380,7 +380,7 @@
         <div class="features-grid">
           <article class="feature-card">
             <div class="feature-icon-box">🔍</div>
-            <h3 class="feature-card-title">근거 기반 RCA 장애 규명</h3>
+            <h3 class="feature-card-title">Evidence-Based RCA Diagnostics</h3>
             <p class="feature-card-desc">CrashLoop, OOM, ImagePull, Readiness Probe 오류를 직전 배포 및 Config 변경 이력과 자동 매핑하여 원인 후보 딥링크를 제시합니다.</p>
           </article>
 
@@ -536,7 +536,7 @@
         <div class="code-box">
           <div class="code-box-header">
             <span>Docker 컨테이너 실행 (추천)</span>
-            <button class="btn-copy" onclick="copyCode(this, 'code-docker')">복사</button>
+            <button class="btn-copy" onclick="copyCode(this, 'code-docker')">Copy</button>
           </div>
           <pre id="code-docker">docker build -t clustara:dev .
 docker run -d --name clustara --restart=always -p 9090:9090 -v $PWD/data:/data \
@@ -550,7 +550,7 @@ docker run -d --name clustara --restart=always -p 9090:9090 -v $PWD/data:/data \
         <div class="code-box">
           <div class="code-box-header">
             <span>Go 개발 환경 직접 실행</span>
-            <button class="btn-copy" onclick="copyCode(this, 'code-go')">복사</button>
+            <button class="btn-copy" onclick="copyCode(this, 'code-go')">Copy</button>
           </div>
           <pre id="code-go">export GATEWAY_SECRET="dev-only-secret"
 export ADMIN_TOKEN="dev-admin"
@@ -566,7 +566,7 @@ go run ./cmd/clustara
       <div class="container">
         <div class="section-header">
           <span class="section-tag">Frequently Asked Questions</span>
-          <h2 class="section-title">자주 묻는 질문 (FAQ)</h2>
+          <h2 class="section-title">Frequently Asked Questions (FAQ)</h2>
           <p class="section-desc">Clustara 도입 및 엔터프라이즈 운영과 관련한 핵심 질문과 답변입니다.</p>
         </div>
 
