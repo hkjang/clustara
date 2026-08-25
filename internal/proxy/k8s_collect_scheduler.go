@@ -32,14 +32,17 @@ const (
 )
 
 // k8sCollectScheduler runs the adaptive polling loop. Started once at server startup.
-func (s *Server) k8sCollectScheduler(parent context.Context) {
+func (s *Server) k8sCollectScheduler(parent context.Context, observed *backgroundWorker) {
 	lastAttempt := map[string]time.Time{} // local rate-limit (survives client-stage failures, resets on restart)
 	t := time.NewTicker(k8sCollectTickInterval)
 	defer t.Stop()
 	for waitForSchedulerTick(parent, t.C) {
-		ctx, cancel := schedulerTickContext(parent, 5*time.Minute)
-		s.runK8sCollectTick(ctx, lastAttempt, time.Now().UTC())
-		cancel()
+		observed.runTick(parent, func(tickParent context.Context, now time.Time) (int, error) {
+			ctx, cancel := schedulerTickContext(tickParent, 5*time.Minute)
+			defer cancel()
+			s.runK8sCollectTick(ctx, lastAttempt, now)
+			return 0, nil
+		})
 	}
 }
 
@@ -253,7 +256,7 @@ func (s *Server) effectiveCadencePreview(ctx context.Context) []map[string]any {
 		})
 		out = append(out, map[string]any{
 			"cluster_id": c.ID, "cluster_name": firstNonEmpty(c.Name, c.ID),
-			"priority": firstNonEmpty(strings.ToLower(strings.TrimSpace(c.Labels["priority"])), "normal"),
+			"priority":    firstNonEmpty(strings.ToLower(strings.TrimSpace(c.Labels["priority"])), "normal"),
 			"agent_alive": agentAlive, "open_incidents": openIncidents[c.ID], "watch_count": watchCount,
 			"effective_secs": secs, "reason": reason,
 		})

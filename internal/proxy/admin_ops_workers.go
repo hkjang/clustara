@@ -152,9 +152,13 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 		durableWorkerStatus(s.terminalReaper.Load().Status(), s.cfg.Workers.TerminalReaperEnabled, "터미널 세션 리퍼"),
 	)
 
-	// Text2SQL saved-report scheduler (self-disables without an execute DB).
-	workers = append(workers, workerStatus{Name: "text2sql_report_scheduler", Running: true, Status: "ok",
-		Detail: "저장 리포트 스케줄러(실행 DB 없으면 자동 무력화)"})
+	// Schedulers NewServer owns (inventory collection, node metrics, cost
+	// snapshots, report delivery, service reconcile, Text2SQL reports). Each one
+	// reports measured state: a scheduler that self-disabled or died shows as
+	// idle/critical rather than being assumed healthy.
+	for _, st := range s.schedulerStatuses() {
+		workers = append(workers, schedulerWorkerStatus(st))
+	}
 
 	overall := "ok"
 	for _, ws := range workers {
@@ -188,6 +192,35 @@ func durableWorkerStatus(st backgroundWorkerStatus, enabled bool, detail string)
 	case st.LastSuccess == "":
 		ws.Status = "warn"
 		ws.Detail += " · 아직 성공 이력 없음"
+	}
+	return ws
+}
+
+// schedulerWorkerStatus maps a NewServer-owned scheduler onto the shared
+// workerStatus shape. Unlike the durable K8s workers there is no enable flag:
+// a scheduler that is not running either self-disabled (no execute DB, no
+// reload interval) or exited, and both are worth surfacing.
+func schedulerWorkerStatus(st backgroundWorkerStatus) workerStatus {
+	ws := workerStatus{
+		Name: st.Name, Running: st.Running, Status: "ok",
+		LastRun: st.LastRun, LastSuccess: st.LastSuccess, LastError: st.LastError,
+		ErrorCount: st.Failures, LagSeconds: secondsSinceRFC3339(st.LastSuccess),
+		Detail: "interval=" + st.Interval + " ticks=" + itoaProxy(int(st.Ticks)) +
+			" processed=" + itoaProxy(int(st.Processed)),
+	}
+	switch {
+	case !st.Running:
+		ws.Status = "idle"
+		ws.Detail += " · 실행 중 아님(자동 비활성 또는 종료)"
+		if st.LastError != "" {
+			ws.Status = "warn"
+		}
+	case st.ConsecutiveFailures >= 3:
+		ws.Status = "critical"
+		ws.Detail += " · 연속 실패 " + itoaProxy(int(st.ConsecutiveFailures)) + "회"
+	case st.LastError != "":
+		ws.Status = "warn"
+		ws.Detail += " · 최근 tick 실패"
 	}
 	return ws
 }

@@ -31,7 +31,7 @@ func TestServerShutdownStopsSchedulers(t *testing.T) {
 	server := newLifecycleTestServer(t)
 
 	stopped := make(chan struct{})
-	server.startBackground("probe", func(ctx context.Context) {
+	server.startBackground("probe", time.Minute, func(ctx context.Context, _ *backgroundWorker) {
 		<-ctx.Done()
 		close(stopped)
 	})
@@ -65,7 +65,7 @@ func TestServerShutdownReportsSchedulersThatDoNotStop(t *testing.T) {
 	server := newLifecycleTestServer(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	server.startBackground("stuck", func(context.Context) { <-release })
+	server.startBackground("stuck", time.Minute, func(context.Context, *backgroundWorker) { <-release })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -83,7 +83,7 @@ func TestServerShutdownReportsSchedulersThatDoNotStop(t *testing.T) {
 func TestStartBackgroundContainsPanics(t *testing.T) {
 	server := newLifecycleTestServer(t)
 	var ran atomic.Bool
-	server.startBackground("panicky", func(context.Context) {
+	server.startBackground("panicky", time.Minute, func(context.Context, *backgroundWorker) {
 		ran.Store(true)
 		panic("scheduler exploded")
 	})
@@ -119,5 +119,81 @@ func TestSchedulerTickContextInheritsCancellation(t *testing.T) {
 	case <-tick.Done():
 	case <-time.After(time.Second):
 		t.Fatal("tick context did not observe the parent cancellation")
+	}
+}
+
+// The ops page used to hardcode text2sql_report_scheduler as a running, healthy
+// worker. It self-disables without an execute DB, so that claim was false
+// exactly when an operator most needed to know.
+func TestOpsWorkersReportsSchedulersFromMeasuredState(t *testing.T) {
+	server := newLifecycleTestServer(t)
+	byName := fetchWorkerStatuses(t, server)
+
+	for _, name := range []string{
+		"clickhouse_fact_loop", "k8s_report_scheduler", "k8s_collect_scheduler",
+		"k8s_node_metric_scheduler", "k8s_cost_snapshot_scheduler", "service_reconcile_scheduler",
+	} {
+		ws, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s is missing from /admin/ops/workers", name)
+		}
+		if !ws.Running {
+			t.Fatalf("%s should be running on a live server, got %+v", name, ws)
+		}
+	}
+
+	// Both of these self-disable under testConfig — Text2SQL has no execute DSN
+	// and the settings-reload interval is zero. Reporting them as running, which
+	// the page previously hardcoded for the Text2SQL scheduler, is exactly the
+	// lie an operator cannot afford here.
+	for _, name := range []string{"text2sql_report_scheduler", "runtime_reload_loop"} {
+		ws, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s is missing from /admin/ops/workers", name)
+		}
+		if ws.Running || ws.Status != "idle" {
+			t.Fatalf("self-disabled %s = %+v, want a non-running idle worker", name, ws)
+		}
+	}
+}
+
+func TestSchedulerWorkerStatusEscalatesByHealth(t *testing.T) {
+	tests := []struct {
+		name   string
+		status backgroundWorkerStatus
+		want   string
+	}{
+		{"self-disabled", backgroundWorkerStatus{Name: "w"}, "idle"},
+		{"exited after an error", backgroundWorkerStatus{Name: "w", LastError: "boom"}, "warn"},
+		{"healthy", backgroundWorkerStatus{Name: "w", Running: true, LastSuccess: "t"}, "ok"},
+		{"one failed tick", backgroundWorkerStatus{Name: "w", Running: true, LastError: "boom", ConsecutiveFailures: 1}, "warn"},
+		{"repeatedly failing", backgroundWorkerStatus{Name: "w", Running: true, LastError: "boom", ConsecutiveFailures: 4}, "critical"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := schedulerWorkerStatus(tc.status).Status; got != tc.want {
+				t.Fatalf("status = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Shutdown must clear the running flag on every scheduler it stops, so the ops
+// page cannot keep reporting a stopped server's workers as alive.
+func TestShutdownClearsSchedulerRunningState(t *testing.T) {
+	server := newLifecycleTestServer(t)
+	before := server.schedulerStatuses()
+	if len(before) == 0 {
+		t.Fatal("no schedulers were registered")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	for _, st := range server.schedulerStatuses() {
+		if st.Running {
+			t.Fatalf("%s still reports running after Shutdown", st.Name)
+		}
 	}
 }

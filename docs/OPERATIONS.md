@@ -285,6 +285,24 @@ curl -X POST http://localhost:9090/admin/fallback
 
 종료 시에는 워커 컨텍스트를 먼저 취소한 뒤 진행 중 tick 이 끝나 lease 를 반납할 때까지 `WORKER_SHUTDOWN_TIMEOUT` 만큼 기다립니다. 시간 내에 끝나지 않으면 경고 로그를 남기고 종료하며, 해당 롤아웃은 lease TTL 만료 후 다른 복제본이 이어받습니다.
 
+### 5.6 서버 내장 스케줄러
+
+서버 프로세스는 위 두 워커 외에도 주기 스케줄러를 함께 실행합니다. 전부 `/admin/ops/workers` 와 `clustara_worker_*` 메트릭에 **측정된 상태**로 보고됩니다 — 설정으로 스스로 꺼진 스케줄러는 `실행` 이 아니라 `유휴` 로 표시됩니다.
+
+| 스케줄러 | 역할 | 자동 비활성 조건 |
+| --- | --- | --- |
+| `k8s_collect_scheduler` | 적응형 인벤토리 수집 폴링 | `k8s_poll_enabled=false` |
+| `k8s_node_metric_scheduler` | 노드 사용량 수집·모니터링 보존 정리 | — |
+| `k8s_cost_snapshot_scheduler` | 일 단위 비용 스냅샷 | 비용 스냅샷 비활성 |
+| `k8s_report_scheduler` | 운영 다이제스트 Mattermost 전달 | 예약 없음 |
+| `service_reconcile_scheduler` | ServiceInstance 인벤토리·헬스 재조정 | 재조정 비활성 |
+| `text2sql_report_scheduler` | 저장 리포트 실행 | 실행 DB(`ExecDSN`) 미설정 시 **기동 즉시 종료** |
+| `runtime_reload_loop` | admin_settings 변경 토큰 폴링(다중 pod 수렴) | `SETTINGS_RELOAD_INTERVAL=0` |
+| `clickhouse_fact_loop` | per-request fact 배치 적재 | ClickHouse 미설정 시 no-op |
+
+이 스케줄러들은 프로세스 종료 시 함께 취소되며, `main` 이 DB 를 닫기 전에 종료를 기다립니다. 전부 영속 상태에서 재개하는 멱등 폴러이므로 진행 중 tick 은 기다리지 않고 취소합니다.
+
+
 ---
 
 ## 6. 백업 / 복구

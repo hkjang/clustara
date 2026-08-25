@@ -81,19 +81,21 @@ type Server struct {
 	terminalReaper    atomic.Pointer[K8sTerminalSessionReaper]
 	// Lifecycle of the schedulers NewServer starts. Without this the pollers
 	// outlive the store and keep querying it after Close.
-	baseCtx      context.Context
-	stopBase     context.CancelFunc
-	background   sync.WaitGroup
-	shutdownOnce sync.Once
-	serviceReconcile  *serviceReconcileRuntime // periodic ServiceInstance inventory/health reconciliation
-	dwCache           *dwQueryCache            // short-TTL cache for DW dashboard ClickHouse reads
-	sessions          *sessionInferer
-	sessionGCAt       atomic.Int64
-	extSeen           sync.Map // external key id -> struct{}; dedupes lazy registration
-	mcpConns          sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
-	mcpTools          atomic.Pointer[mcpToolsSnapshot]
-	lastReloadNano    atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
-	lastReloadTok     atomic.Pointer[string] // admin_settings change token this pod last applied
+	baseCtx          context.Context
+	stopBase         context.CancelFunc
+	background       sync.WaitGroup
+	shutdownOnce     sync.Once
+	schedulerMu      sync.Mutex
+	schedulers       []*backgroundWorker      // observation handles, in start order
+	serviceReconcile *serviceReconcileRuntime // periodic ServiceInstance inventory/health reconciliation
+	dwCache          *dwQueryCache            // short-TTL cache for DW dashboard ClickHouse reads
+	sessions         *sessionInferer
+	sessionGCAt      atomic.Int64
+	extSeen          sync.Map // external key id -> struct{}; dedupes lazy registration
+	mcpConns         sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
+	mcpTools         atomic.Pointer[mcpToolsSnapshot]
+	lastReloadNano   atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
+	lastReloadTok    atomic.Pointer[string] // admin_settings change token this pod last applied
 }
 
 func (s *Server) AttachAlertWorker(worker *AlertWorker) {
@@ -154,7 +156,9 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 		qsize = 10000
 	}
 	server.chFactQueue = make(chan store.LogRecord, qsize)
-	server.startBackground("clickhouse_fact_loop", server.clickhouseFactLoop)
+	server.startBackground("clickhouse_fact_loop", time.Minute, func(ctx context.Context, _ *backgroundWorker) {
+		server.clickhouseFactLoop(ctx)
+	})
 
 	// Pre-apply current model prices when the pricing table is empty (first boot).
 	server.seedPricingIfEmpty(context.Background())
@@ -168,19 +172,19 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 
 	// Multi-pod convergence: poll the admin_settings change token so a settings change made on any
 	// pod (or via direct DB edit) is applied on every pod within one interval, without a restart.
-	server.startBackground("runtime_reload_loop", func(ctx context.Context) {
+	server.startBackground("runtime_reload_loop", cfg.RuntimeReloadInterval, func(ctx context.Context, _ *backgroundWorker) {
 		server.runtimeReloadLoop(ctx, cfg.RuntimeReloadInterval)
 	})
 
 	// Background scheduler for due saved Text2SQL reports (self-disables without an
 	// execute DB).
-	server.startBackground("text2sql_report_scheduler", server.text2sqlReportScheduler)
+	server.startBackground("text2sql_report_scheduler", time.Minute, server.text2sqlReportScheduler)
 	// Background scheduler for due K8s operations report deliveries (Mattermost).
-	server.startBackground("k8s_report_scheduler", server.k8sReportScheduler)
-	server.startBackground("k8s_collect_scheduler", server.k8sCollectScheduler)
-	server.startBackground("k8s_node_metric_scheduler", server.k8sNodeMetricScheduler)
-	server.startBackground("k8s_cost_snapshot_scheduler", server.k8sCostSnapshotScheduler)
-	server.startBackground("service_reconcile_scheduler", server.serviceReconcileScheduler)
+	server.startBackground("k8s_report_scheduler", time.Minute, server.k8sReportScheduler)
+	server.startBackground("k8s_collect_scheduler", k8sCollectTickInterval, server.k8sCollectScheduler)
+	server.startBackground("k8s_node_metric_scheduler", k8sNodeMetricTickInterval, server.k8sNodeMetricScheduler)
+	server.startBackground("k8s_cost_snapshot_scheduler", time.Minute, server.k8sCostSnapshotScheduler)
+	server.startBackground("service_reconcile_scheduler", serviceReconcileWorkerTick, server.serviceReconcileScheduler)
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)
@@ -840,10 +844,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	body := s.metrics.Prometheus(s.logger.QueueDepth(), s.logger.Dropped(), s.logger.Written())
-	body += backgroundWorkerPrometheus([]backgroundWorkerStatus{
+	body += backgroundWorkerPrometheus(append([]backgroundWorkerStatus{
 		s.rolloutReconciler.Load().Status(),
 		s.terminalReaper.Load().Status(),
-	})
+	}, s.schedulerStatuses()...))
 	_, _ = w.Write([]byte(body))
 }
 

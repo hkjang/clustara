@@ -59,15 +59,20 @@ func newServiceReconcileRuntime() *serviceReconcileRuntime {
 	return &serviceReconcileRuntime{owner: firstNonEmpty(strings.TrimSpace(host), "clustara") + "_" + newID("svcr")}
 }
 
-func (s *Server) serviceReconcileScheduler(parent context.Context) {
+func (s *Server) serviceReconcileScheduler(parent context.Context, observed *backgroundWorker) {
 	ticker := time.NewTicker(serviceReconcileWorkerTick)
 	defer ticker.Stop()
 	for waitForSchedulerTick(parent, ticker.C) {
-		ctx, cancel := schedulerTickContext(parent, 20*time.Minute)
-		if _, err := s.runServiceReconcileBatch(ctx, false, true, 0); err != nil && ctx.Err() == nil {
-			slog.Warn("service reconcile scheduler failed", "error", err)
-		}
-		cancel()
+		observed.runTick(parent, func(tickParent context.Context, _ time.Time) (int, error) {
+			ctx, cancel := schedulerTickContext(tickParent, 20*time.Minute)
+			defer cancel()
+			result, err := s.runServiceReconcileBatch(ctx, false, true, 0)
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("service reconcile scheduler failed", "error", err)
+				return 0, err
+			}
+			return result.Reconciled, nil
+		})
 	}
 }
 

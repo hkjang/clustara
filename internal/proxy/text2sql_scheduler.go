@@ -13,24 +13,29 @@ import (
 // text2sqlReportScheduler periodically runs due saved reports (read-only) and delivers
 // a short result summary to Mattermost when configured. It self-disables when no
 // execute DB is set — scheduled reports need a place to run.
-func (s *Server) text2sqlReportScheduler(parent context.Context) {
+func (s *Server) text2sqlReportScheduler(parent context.Context, observed *backgroundWorker) {
 	if s.t2sConf().ExecDSN == "" {
+		// No execute DB: the scheduler is deliberately inert. Returning here
+		// clears the running flag so the ops page reports it as idle instead of
+		// claiming a healthy worker that never ticks.
 		return
 	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for waitForSchedulerTick(parent, t.C) {
-		ctx, cancel := schedulerTickContext(parent, 2*time.Minute)
-		due, err := s.db.DueText2SQLReports(ctx, time.Now().UTC())
-		if err != nil {
-			slog.Warn("due reports query failed", "error", err)
-			cancel()
-			continue
-		}
-		for _, rep := range due {
-			s.runScheduledReport(ctx, rep)
-		}
-		cancel()
+		observed.runTick(parent, func(tickParent context.Context, now time.Time) (int, error) {
+			ctx, cancel := schedulerTickContext(tickParent, 2*time.Minute)
+			defer cancel()
+			due, err := s.db.DueText2SQLReports(ctx, now)
+			if err != nil {
+				slog.Warn("due reports query failed", "error", err)
+				return 0, err
+			}
+			for _, rep := range due {
+				s.runScheduledReport(ctx, rep)
+			}
+			return len(due), nil
+		})
 	}
 }
 

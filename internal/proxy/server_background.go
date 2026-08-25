@@ -12,21 +12,48 @@ import (
 // context Shutdown cancels. Panics are contained so a single bad tick cannot
 // take the process down, and the goroutine is registered with the wait group
 // Shutdown drains.
-func (s *Server) startBackground(name string, run func(context.Context)) {
+//
+// The scheduler receives an observation handle it must fold each tick through,
+// so /admin/ops/workers can answer "is inventory collection still running" from
+// measured state rather than from an assumption.
+func (s *Server) startBackground(name string, interval time.Duration, run func(context.Context, *backgroundWorker)) {
 	if s == nil || run == nil || s.baseCtx == nil {
 		return
 	}
+	observed := newBackgroundWorker(name, interval, interval)
+	s.schedulerMu.Lock()
+	s.schedulers = append(s.schedulers, observed)
+	s.schedulerMu.Unlock()
+
 	s.background.Add(1)
+	observed.running.Store(true)
 	go func() {
 		defer s.background.Done()
+		defer observed.running.Store(false)
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				observed.failures.Add(1)
+				observed.lastError.Store(fmt.Sprintf("scheduler panicked: %v", recovered))
 				slog.Error("background scheduler panicked", "scheduler", name,
 					"panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
 			}
 		}()
-		run(s.baseCtx)
+		run(s.baseCtx, observed)
 	}()
+}
+
+// schedulerStatuses reports every NewServer-owned scheduler in start order.
+func (s *Server) schedulerStatuses() []backgroundWorkerStatus {
+	if s == nil {
+		return nil
+	}
+	s.schedulerMu.Lock()
+	defer s.schedulerMu.Unlock()
+	out := make([]backgroundWorkerStatus, 0, len(s.schedulers))
+	for _, worker := range s.schedulers {
+		out = append(out, worker.status())
+	}
+	return out
 }
 
 // Shutdown stops the schedulers NewServer started and waits for them to return.
