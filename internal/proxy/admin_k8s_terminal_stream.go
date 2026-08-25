@@ -54,25 +54,78 @@ type browserTerminalMessage struct {
 	Rows uint16 `json:"rows,omitempty"`
 }
 
+const terminalBrowserWriteTimeout = 5 * time.Second
+
+func writeTerminalBrowserJSON(browser *websocket.Conn, message browserTerminalMessage) error {
+	if err := browser.SetWriteDeadline(time.Now().Add(terminalBrowserWriteTimeout)); err != nil {
+		return err
+	}
+	return browser.WriteJSON(message)
+}
+
+func writeTerminalBrowserBinary(browser *websocket.Conn, data []byte) error {
+	if err := browser.SetWriteDeadline(time.Now().Add(terminalBrowserWriteTimeout)); err != nil {
+		return err
+	}
+	return browser.WriteMessage(websocket.BinaryMessage, data)
+}
+
 type terminalStreamAuthContextKey struct{}
 
 type terminalStreamAuth struct {
 	SessionID string
 	AdminID   string
+	ClaimID   string
 }
 
 func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
+	if sess.Status == "connecting" {
+		staleBefore := time.Now().UTC().Add(-execSessionTimeout(sess.MaxSessionMinutes) - 30*time.Second)
+		recovered, err := s.db.RecoverStaleK8sPodExecSessionConnection(r.Context(), sess.ID, staleBefore)
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "stale terminal connection recovery failed", "server_error", "terminal_recovery_failed")
+			return
+		}
+		if recovered {
+			sess, err = s.db.GetK8sPodExecSession(r.Context(), sess.ID)
+			if err != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, "recovered terminal session reload failed", "server_error", "terminal_recovery_failed")
+				return
+			}
+		}
+	}
 	if sess.Status != "ready" || !isInteractiveShell(sess.Command) || fmt.Sprint(k8sExecSessionPolicy(sess)["access_mode"]) != "full_tty" {
 		writeOpenAIError(w, http.StatusConflict, "approved full_tty shell session is required", "invalid_request_error", "terminal_session_not_ready")
+		return
+	}
+	if claims, ok := s.currentAccessClaims(r); ok && claims.PasswordChangeRequired {
+		writeOpenAIError(w, http.StatusForbidden, "password change is required before opening a terminal", "permission_error", "password_change_required")
 		return
 	}
 	now := time.Now().UTC()
 	ticket := newID("k8stty")
 	expires := now.Add(30 * time.Second)
+	actor := adminID(r)
+	authSessionID := ""
+	var authExpiresAt time.Time
+	if claims, ok := s.currentAccessClaims(r); ok {
+		if strings.TrimSpace(claims.Subject) != "" {
+			actor = strings.TrimSpace(claims.Subject)
+		}
+		authSessionID = strings.TrimSpace(claims.SessionID)
+		if claims.ExpiresAt > 0 {
+			authExpiresAt = time.Unix(claims.ExpiresAt, 0).UTC()
+		}
+	}
+	resolved := resolvePolicyClientIP(r, s.currentAdminIPPolicy().TrustedProxies)
 	if err := s.db.CreateK8sTerminalTicket(r.Context(), ticket, store.K8sTerminalTicket{
-		SessionID: sess.ID,
-		AdminID:   adminID(r),
-		ExpiresAt: expires,
+		SessionID:     sess.ID,
+		AdminID:       actor,
+		AuthSessionID: authSessionID,
+		AuthExpiresAt: authExpiresAt,
+		ClientIP:      resolved.Text,
+		UserAgentHash: hashProxyKey(r.UserAgent()),
+		ExpiresAt:     expires,
 	}); err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "terminal ticket issuance failed", "server_error", "terminal_ticket_failed")
 		return
@@ -80,16 +133,23 @@ func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, ses
 	writeJSON(w, http.StatusCreated, map[string]any{"ticket": ticket, "expires_at": expires.Format(time.RFC3339)})
 }
 
-func (s *Server) consumeTerminalTicket(sessionID, ticket string) (terminalStreamAuth, bool) {
+func (s *Server) consumeTerminalTicket(r *http.Request, sessionID, ticket string) (terminalStreamAuth, bool) {
 	ticket = strings.TrimSpace(ticket)
 	if ticket == "" || s.db == nil {
 		return terminalStreamAuth{}, false
 	}
-	value, ok, err := s.db.ConsumeK8sTerminalTicket(context.Background(), sessionID, ticket)
+	policy := s.currentAdminIPPolicy()
+	resolved := resolvePolicyClientIP(r, policy.TrustedProxies)
+	if policy.Enabled && !validBreakGlass(r, policy) && (policy.ConfigError != "" || !ipInNetworks(resolved.IP, policy.Allowed)) {
+		return terminalStreamAuth{}, false
+	}
+	value, ok, err := s.db.ConsumeK8sTerminalTicketAndClaimSession(
+		r.Context(), sessionID, ticket, resolved.Text, hashProxyKey(r.UserAgent()),
+	)
 	if err != nil || !ok {
 		return terminalStreamAuth{}, false
 	}
-	return terminalStreamAuth{SessionID: value.SessionID, AdminID: value.AdminID}, true
+	return terminalStreamAuth{SessionID: value.SessionID, AdminID: value.AdminID, ClaimID: value.ClaimID}, true
 }
 
 func terminalStreamSessionID(r *http.Request) (string, bool) {
@@ -107,7 +167,7 @@ func terminalStreamSessionID(r *http.Request) (string, bool) {
 
 func terminalStreamAuthFromRequest(r *http.Request) (terminalStreamAuth, bool) {
 	auth, ok := r.Context().Value(terminalStreamAuthContextKey{}).(terminalStreamAuth)
-	return auth, ok && auth.SessionID != ""
+	return auth, ok && auth.SessionID != "" && auth.ClaimID != ""
 }
 
 func withTerminalStreamAuth(r *http.Request, auth terminalStreamAuth) *http.Request {
@@ -141,70 +201,116 @@ func (s *Server) streamK8sPodTerminal(w http.ResponseWriter, r *http.Request, se
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
-	if sess.Status != "ready" {
+	streamAuth, ticketClaimed := terminalStreamAuthFromRequest(r)
+	claimID := streamAuth.ClaimID
+	expectedStatus := "ready"
+	if ticketClaimed {
+		expectedStatus = "connecting"
+	}
+	if streamAuth.SessionID != "" && streamAuth.SessionID != sess.ID {
+		writeOpenAIError(w, http.StatusUnauthorized, "terminal ticket session mismatch", "invalid_request_error", "terminal_ticket_invalid")
+		return
+	}
+	if sess.Status != expectedStatus {
 		writeOpenAIError(w, http.StatusConflict, "terminal session must be approved and ready", "invalid_request_error", "terminal_session_not_ready")
 		return
 	}
 	if !isInteractiveShell(sess.Command) {
+		if ticketClaimed {
+			s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "interactive terminal shell is invalid")
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "interactive terminal only supports /bin/sh or /bin/bash", "invalid_request_error", "terminal_shell_invalid")
 		return
 	}
 	policy := k8sExecSessionPolicy(sess)
 	if fmt.Sprint(policy["access_mode"]) != "full_tty" {
+		if ticketClaimed {
+			s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "session was not approved as full_tty")
+		}
 		writeOpenAIError(w, http.StatusConflict, "session was not approved as full_tty", "invalid_request_error", "terminal_full_tty_required")
 		return
 	}
+	if !ticketClaimed {
+		claimID = newID("k8sttyclaim")
+		connecting, err := s.db.MarkK8sPodExecSessionConnecting(r.Context(), sess.ID, adminID(r), claimID)
+		if errors.Is(err, store.ErrInvalidTransition) {
+			writeOpenAIError(w, http.StatusConflict, "terminal session is already connecting or closed", "invalid_request_error", "terminal_session_bad_state")
+			return
+		}
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "terminal session claim failed", "server_error", "terminal_session_claim_failed")
+			return
+		}
+		sess = connecting
+	}
 	cluster, err := s.db.GetK8sCluster(r.Context(), sess.ClusterID)
 	if err != nil {
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "cluster not found")
 		writeOpenAIError(w, http.StatusNotFound, "cluster not found", "invalid_request_error", "cluster_not_found")
 		return
 	}
 	client, err := s.k8sClientForCluster(r.Context(), cluster)
 	if err != nil {
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "Kubernetes connection setup failed: "+err.Error())
 		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 연결 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed")
 		return
 	}
 	terminalClient, ok := client.(kube.PodTerminalExecutor)
 	if !ok {
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "cluster client does not support interactive terminal")
 		writeOpenAIError(w, http.StatusNotImplemented, "cluster client does not support interactive terminal", "invalid_request_error", "terminal_unsupported")
 		return
 	}
 	timeout := execSessionTimeout(sess.MaxSessionMinutes)
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	kubeStream, err := terminalClient.OpenPodTerminal(ctx, sess.Namespace, sess.Pod, kube.PodTerminalOptions{Container: sess.Container, Shell: sess.Command})
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "Pod terminal 연결 실패: "+err.Error(), "server_error", "terminal_connect_failed")
-		return
-	}
-	defer kubeStream.Close()
 	browser, err := terminalUpgrader.Upgrade(w, r, nil)
 	if err != nil {
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "browser WebSocket upgrade failed")
 		return
 	}
 	defer browser.Close()
 	browser.SetReadLimit(64 * 1024)
-	running, err := s.db.MarkK8sPodExecSessionRunning(context.Background(), sess.ID, adminID(r))
+	kubeStream, err := terminalClient.OpenPodTerminal(ctx, sess.Namespace, sess.Pod, kube.PodTerminalOptions{Container: sess.Container, Shell: sess.Command})
 	if err != nil {
-		_ = browser.WriteJSON(browserTerminalMessage{Type: "error", Data: "세션 상태를 running으로 전환하지 못했습니다."})
+		_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "error", Data: "Pod terminal 연결 실패: " + err.Error()})
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "Pod terminal connection failed: "+err.Error())
+		return
+	}
+	defer kubeStream.Close()
+	transitionCtx, transitionCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	running, err := s.db.MarkK8sPodExecSessionConnected(transitionCtx, sess.ID, claimID)
+	transitionCancel()
+	if err != nil {
+		_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "error", Data: "세션 상태를 running으로 전환하지 못했습니다."})
+		s.failK8sPodTerminalConnection(sess, claimID, adminID(r), "terminal session connected transition failed")
 		return
 	}
 	sess = running
 	s.auditAdmin(r, "k8s.pod.terminal.connect", sess.ID, auditJSON(map[string]any{
 		"cluster_id": sess.ClusterID, "namespace": sess.Namespace, "pod": sess.Pod, "container": sess.Container, "shell": sess.Command,
 	}))
-	_ = browser.WriteJSON(browserTerminalMessage{Type: "status", Data: "connected"})
+	_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "status", Data: "connected"})
 
 	input := make(chan browserTerminalMessage, 32)
 	readErr := make(chan error, 1)
+	readerDone := make(chan struct{})
 	go func() {
+		defer close(readerDone)
 		for {
 			var msg browserTerminalMessage
 			if err := browser.ReadJSON(&msg); err != nil {
-				readErr <- err
+				select {
+				case readErr <- err:
+				case <-ctx.Done():
+				}
 				return
 			}
-			input <- msg
+			select {
+			case input <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	type terminalOutput struct {
@@ -213,10 +319,16 @@ func (s *Server) streamK8sPodTerminal(w http.ResponseWriter, r *http.Request, se
 		err     error
 	}
 	output := make(chan terminalOutput, 16)
+	receiverDone := make(chan struct{})
 	go func() {
+		defer close(receiverDone)
 		for {
 			channel, data, err := kubeStream.Receive()
-			output <- terminalOutput{channel: channel, data: data, err: err}
+			select {
+			case output <- terminalOutput{channel: channel, data: data, err: err}:
+			case <-ctx.Done():
+				return
+			}
 			if err != nil || channel == 3 {
 				return
 			}
@@ -242,12 +354,16 @@ loop:
 	for {
 		select {
 		case <-ctx.Done():
-			status, errMsg, exitCode = "failed", "terminal session expired", 124
-			_ = browser.WriteJSON(browserTerminalMessage{Type: "error", Data: errMsg})
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				status, errMsg, exitCode = "failed", "terminal session expired", 124
+			} else {
+				status, errMsg, exitCode = "failed", "terminal session canceled", 1
+			}
+			_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "error", Data: errMsg})
 			break loop
 		case err := <-readErr:
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				errMsg = "browser terminal disconnected"
+				status, errMsg, exitCode = "failed", "browser terminal disconnected", 1
 			}
 			break loop
 		case msg := <-input:
@@ -280,18 +396,38 @@ loop:
 			}
 			outputBytes += int64(len(out.data))
 			appendTranscript("\n[output] ", string(out.data))
-			if err := browser.WriteMessage(websocket.BinaryMessage, out.data); err != nil {
+			if err := writeTerminalBrowserBinary(browser, out.data); err != nil {
+				status, errMsg, exitCode = "failed", "browser terminal write failed", 1
 				break loop
 			}
 		}
 	}
+	cancel()
+	_ = kubeStream.Close()
 	maskedErr := truncateRunes(analyzer.MaskSensitive(errMsg), 2000)
-	updated, finalizeErr := s.db.UpdateK8sPodExecSessionExecution(context.Background(), sess.ID, status, adminID(r), transcript.String(), maskedErr, exitCode)
+	finalizeCtx, finalizeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	updated, finalizeErr := s.db.UpdateK8sPodTerminalSessionExecution(finalizeCtx, sess.ID, claimID, status, adminID(r), transcript.String(), maskedErr, exitCode)
+	finalizeCancel()
 	if finalizeErr == nil {
-		_ = browser.WriteJSON(browserTerminalMessage{Type: "status", Data: updated.Status})
+		_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "status", Data: updated.Status})
+	}
+	_ = browser.Close()
+	for _, done := range []<-chan struct{}{readerDone, receiverDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
 	}
 	s.auditAdmin(r, "k8s.pod.terminal.close", sess.ID, auditJSON(map[string]any{
 		"cluster_id": sess.ClusterID, "namespace": sess.Namespace, "pod": sess.Pod, "container": sess.Container,
 		"shell": sess.Command, "status": status, "exit_code": exitCode, "input_bytes": inputBytes, "output_bytes": outputBytes,
 	}))
+}
+
+func (s *Server) failK8sPodTerminalConnection(sess store.K8sPodExecSession, claimID, actor, message string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.db.UpdateK8sPodTerminalSessionExecution(
+		ctx, sess.ID, claimID, "failed", actor, "", truncateRunes(analyzer.MaskSensitive(message), 2000), 1,
+	)
 }

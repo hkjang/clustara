@@ -66,6 +66,46 @@ func TestBuildResourceGraphLinksIngressServicePodPVCAndNode(t *testing.T) {
 	}
 }
 
+func TestBuildResourceGraphPreservesParallelIngressRoutes(t *testing.T) {
+	items := []store.K8sInventoryItem{
+		{
+			ClusterID: "c1", Kind: "Ingress", Namespace: "default", Name: "web",
+			Spec: map[string]any{
+				"rules": []any{
+					map[string]any{
+						"host": "web.example.com",
+						"http": map[string]any{"paths": []any{
+							map[string]any{
+								"path":    "/api",
+								"backend": map[string]any{"service": map[string]any{"name": "web", "port": map[string]any{"number": float64(80)}}},
+							},
+							map[string]any{
+								"path":    "/admin",
+								"backend": map[string]any{"service": map[string]any{"name": "web", "port": map[string]any{"number": float64(8080)}}},
+							},
+						}},
+					},
+				},
+			},
+		},
+		{ClusterID: "c1", Kind: "Service", Namespace: "default", Name: "web"},
+	}
+
+	g := BuildResourceGraph(items, nil, ResourceGraphFocus{ClusterID: "c1"})
+	var routeReasons []string
+	for _, edge := range g.Edges {
+		if edge.Relation == "routes_to" {
+			routeReasons = append(routeReasons, edge.Reason)
+		}
+	}
+	if len(routeReasons) != 2 {
+		t.Fatalf("parallel ingress routes = %v, want both host/path/port routes", routeReasons)
+	}
+	if routeReasons[0] == routeReasons[1] {
+		t.Fatalf("parallel ingress route evidence must be distinct: %v", routeReasons)
+	}
+}
+
 func assertGraphNodePorts(t *testing.T, nodes []ResourceGraphNode, kind string, want []string) {
 	t.Helper()
 	for _, node := range nodes {

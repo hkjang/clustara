@@ -2,6 +2,8 @@ package kube
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,5 +78,92 @@ func TestHTTPClientInteractivePodTerminalRejectsUnsupportedShell(t *testing.T) {
 	client, _ := NewHTTPClient(HTTPClientConfig{ServerURL: "http://127.0.0.1"})
 	if _, err := client.OpenPodTerminal(context.Background(), "default", "api-1", PodTerminalOptions{Shell: "/usr/bin/zsh"}); err == nil {
 		t.Fatal("unsupported interactive shell should be rejected before dialing")
+	}
+}
+
+func TestHTTPClientInteractivePodTerminalCancellationClosesEstablishedSocket(t *testing.T) {
+	upgraded := make(chan struct{})
+	serverClosed := make(chan struct{})
+	upgrader := websocket.Upgrader{Subprotocols: []string{"v5.channel.k8s.io"}, CheckOrigin: func(*http.Request) bool { return true }}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		close(upgraded)
+		_, _, _ = conn.ReadMessage()
+		close(serverClosed)
+	}))
+	defer api.Close()
+
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := client.OpenPodTerminal(ctx, "default", "api-1", PodTerminalOptions{Shell: "/bin/sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	select {
+	case <-upgraded:
+	case <-time.After(time.Second):
+		t.Fatal("terminal WebSocket was not established")
+	}
+
+	receiveErr := make(chan error, 1)
+	go func() {
+		_, _, receiveErrValue := stream.Receive()
+		receiveErr <- receiveErrValue
+	}()
+	cancel()
+
+	select {
+	case err := <-receiveErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Receive error=%v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Receive remained blocked after terminal context cancellation")
+	}
+	select {
+	case <-serverClosed:
+	case <-time.After(time.Second):
+		t.Fatal("server-side terminal socket remained open after context cancellation")
+	}
+}
+
+func TestHTTPClientInteractivePodTerminalHandshakeUsesClientTimeout(t *testing.T) {
+	requestStarted := make(chan struct{})
+	api := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer api.Close()
+
+	client, err := NewHTTPClient(HTTPClientConfig{ServerURL: api.URL, Timeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = client.OpenPodTerminal(context.Background(), "default", "api-1", PodTerminalOptions{Shell: "/bin/sh"})
+	if err == nil {
+		t.Fatal("stalled terminal WebSocket handshake must time out")
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("handshake error=%T %v, want timeout", err, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("terminal handshake exceeded configured timeout: %v", elapsed)
+	}
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("terminal handshake request did not reach the server")
 	}
 }

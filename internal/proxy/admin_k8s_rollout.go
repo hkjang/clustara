@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,9 +180,37 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 	// controller. Persist the resolved identity so audit, locking and rollback all
 	// refer to the resource that Kubernetes actually restarts.
 	in.Namespace, in.Kind, in.Name = target.Namespace, target.Kind, target.Name
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	stableParams := map[string]any{
+		"reason": in.Reason, "ticket_no": in.TicketNo, "auto_rollback": in.AutoRollback,
+		"timeout_seconds": in.TimeoutSeconds, "execution_mode": strings.ToUpper(in.ExecutionMode),
+	}
+	commandHash := k8sActionCommandHash(in.ClusterID, in.Namespace, in.Kind, in.Name, "rollout_restart", stableParams)
+	if idempotencyKey != "" {
+		existingAction, lookupErr := s.db.GetK8sActionRequestByIdempotencyKey(r.Context(), idempotencyKey)
+		if lookupErr == nil {
+			if existingAction.CommandHash != commandHash {
+				writeOpenAIError(w, http.StatusConflict, "idempotency key was already used for a different rollout request", "invalid_request_error", "idempotency_conflict")
+				return
+			}
+			existingRollout, rolloutErr := s.db.GetK8sRolloutByActionRequest(r.Context(), existingAction.ID)
+			if rolloutErr != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, "idempotent rollout ledger is incomplete", "server_error", "rollout_ledger_incomplete")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"rollout": existingRollout, "action": existingAction, "precheck": check, "idempotent_replay": true})
+			return
+		}
+		if !errors.Is(lookupErr, store.ErrNotFound) {
+			writeOpenAIError(w, http.StatusInternalServerError, lookupErr.Error(), "server_error", "rollout_idempotency_lookup_failed")
+			return
+		}
+	} else {
+		idempotencyKey = newID("idem")
+	}
 	existing, _ := s.db.ListK8sRolloutActions(r.Context(), in.ClusterID, target.UID, 20)
 	for _, x := range existing {
-		if rolloutActive(x.Status) {
+		if rolloutNeedsReconcile(x) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "rollout already in progress", "rollout": x})
 			return
 		}
@@ -195,33 +224,49 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 		status = "approved"
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	params := map[string]any{"reason": in.Reason, "ticket_no": in.TicketNo, "rollout_id": rolloutID, "auto_rollback": in.AutoRollback, "timeout_seconds": in.TimeoutSeconds}
+	params := map[string]any{
+		"reason": in.Reason, "ticket_no": in.TicketNo, "rollout_id": rolloutID,
+		"auto_rollback": in.AutoRollback, "timeout_seconds": in.TimeoutSeconds,
+		"execution_mode": strings.ToUpper(in.ExecutionMode),
+	}
 	act := store.K8sActionRequest{ID: actionID, ClusterID: in.ClusterID, Namespace: in.Namespace, ResourceKind: in.Kind, ResourceName: in.Name,
 		Action: "rollout_restart", Parameters: params, RiskLevel: check.RiskLevel, Status: status, RequestedBy: adminID(r), TargetUID: target.UID,
-		TargetResourceVersion: k8sActionTargetResourceVersion(target), IdempotencyKey: firstNonEmpty(strings.TrimSpace(r.Header.Get("Idempotency-Key")), newID("idem")),
-		CommandHash: k8sActionCommandHash(in.ClusterID, in.Namespace, in.Kind, in.Name, "rollout_restart", params),
+		TargetResourceVersion: k8sActionTargetResourceVersion(target), IdempotencyKey: idempotencyKey,
+		CommandHash: commandHash,
 		DryRunDiff:  fmt.Sprintf("롤아웃 사전검사 통과: Ready %d/%d · Available %d · 전략 %s", check.Ready, check.Desired, check.Available, check.Strategy)}
 	if directBySuperAdmin {
 		act.ApprovedBy, act.ApprovedAt = adminID(r), now
 		act.DryRunDiff += "\n최고 관리자 즉시 실행: 경고·일반 승인 단계를 우회했으며 차단 항목은 없습니다."
-	}
-	if err := s.db.InsertK8sActionRequest(r.Context(), act); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "rollout_action_save_failed")
-		return
 	}
 	roll := store.K8sRolloutAction{ID: rolloutID, ActionRequestID: actionID, ClusterID: in.ClusterID, Namespace: in.Namespace, ResourceKind: in.Kind,
 		ResourceName: in.Name, ResourceUID: target.UID, RequestedBy: adminID(r), Reason: in.Reason, TicketNo: in.TicketNo,
 		ExecutionMode: strings.ToUpper(in.ExecutionMode), Status: status, RiskLevel: check.RiskLevel, PreviousRevision: rolloutRevision(target),
 		PreviousSpecHash: hashJSON(target.Spec), AutoRollback: in.AutoRollback, TimeoutSeconds: in.TimeoutSeconds,
 		DesiredReplicas: check.Desired, UpdatedReplicas: check.Updated, ReadyReplicas: check.Ready, AvailableReplicas: check.Available,
-		UnavailableReplicas: maxInt(0, check.Desired-check.Available), Precheck: map[string]any{"checks": check.Checks, "warnings": check.Warnings}}
+		UnavailableReplicas: maxInt(0, check.Desired-check.Available), Precheck: map[string]any{
+			"checks": check.Checks, "warnings": check.Warnings,
+			"observed_generation": intAny(target.StatusObject["observedGeneration"]),
+			"target_observed_at":  firstNonEmpty(target.ObservedAt, target.UpdatedAt),
+		}}
 	if template, ok := target.Spec["template"].(map[string]any); ok {
 		roll.PreviousTemplate = template
 	}
 	if directBySuperAdmin {
 		roll.ApprovedBy, roll.ApprovedAt = adminID(r), now
 	}
-	if err := s.db.InsertK8sRolloutAction(r.Context(), roll); err != nil {
+	event := store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
+		Status: status, Stage: "requested", Message: "롤아웃 요청 접수", Evidence: map[string]any{"precheck": check, "requested_by": adminID(r)}}
+	if err := s.db.InsertK8sRolloutRequest(r.Context(), act, roll, event); err != nil {
+		if replayAction, replayErr := s.db.GetK8sActionRequestByIdempotencyKey(r.Context(), idempotencyKey); replayErr == nil {
+			if replayAction.CommandHash == commandHash {
+				if replayRollout, replayRolloutErr := s.db.GetK8sRolloutByActionRequest(r.Context(), replayAction.ID); replayRolloutErr == nil {
+					writeJSON(w, http.StatusAccepted, map[string]any{"rollout": replayRollout, "action": replayAction, "precheck": check, "idempotent_replay": true})
+					return
+				}
+			}
+			writeOpenAIError(w, http.StatusConflict, "idempotency key was already used for a different rollout request", "invalid_request_error", "idempotency_conflict")
+			return
+		}
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeOpenAIError(w, http.StatusConflict, "rollout already in progress", "invalid_request_error", "rollout_in_progress")
 		} else {
@@ -229,8 +274,8 @@ func (s *Server) handleWorkloadRollout(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
-		Status: status, Stage: "requested", Message: "롤아웃 요청 접수", Evidence: map[string]any{"precheck": check, "requested_by": adminID(r)}})
+	roll, _ = s.db.GetK8sRolloutAction(r.Context(), roll.ID)
+	act, _ = s.db.GetK8sActionRequest(r.Context(), act.ID)
 	if status == "approval_required" {
 		s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 승인 대기: %s/%s %s/%s · 요청자 %s · 사유 %s",
 			roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.RequestedBy, roll.Reason))
@@ -291,6 +336,10 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 		switch parts[1] {
 		case "approve":
 			if !s.requireRolloutScope(w, r, "rollout:approve") || !s.requireRolloutScope(w, r, "rollout:execute") {
+				return
+			}
+			if roll.Status != "approval_required" {
+				writeOpenAIError(w, http.StatusConflict, "rollout is not awaiting approval", "invalid_request_error", "rollout_bad_state")
 				return
 			}
 			if err := s.db.UpdateK8sActionStatus(r.Context(), roll.ActionRequestID, "approved", adminID(r), "rollout approved"); err != nil {
@@ -488,7 +537,7 @@ func (s *Server) rolloutSuperAdmin(r *http.Request) bool {
 	if claims, ok := s.currentAccessClaims(r); ok {
 		return strings.EqualFold(claims.Role, "super_admin")
 	}
-	return !s.cfg.Auth.Enabled
+	return !s.cfg.Auth.Enabled && !s.keycloakConfig().Enabled
 }
 
 func (s *Server) requireRolloutScope(w http.ResponseWriter, r *http.Request, scope string) bool {
@@ -503,14 +552,11 @@ func (s *Server) rolloutScopeAllowed(r *http.Request, scope string) bool {
 	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
 		return strings.EqualFold(identity.Role, "super_admin") || hasScope(identity.Scopes, scope)
 	}
-	if !s.cfg.Auth.Enabled {
-		return true
-	}
 	claims, ok := s.currentAccessClaims(r)
 	if ok && (strings.EqualFold(claims.Role, "super_admin") || hasScope(claims.Scopes, scope)) {
 		return true
 	}
-	return false
+	return !s.cfg.Auth.Enabled && !s.keycloakConfig().Enabled
 }
 
 func (s *Server) writeRolloutEvidence(w http.ResponseWriter, r *http.Request, roll store.K8sRolloutAction) {
@@ -524,113 +570,408 @@ func (s *Server) writeRolloutEvidence(w http.ResponseWriter, r *http.Request, ro
 }
 
 func (s *Server) reconcileRollout(r *http.Request, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
-	previousStatus := roll.Status
-	target, err := s.db.GetK8sInventoryItem(r.Context(), roll.ClusterID, roll.ResourceKind, roll.Namespace, roll.ResourceName)
-	if err != nil {
+	return s.reconcileRolloutContext(r.Context(), adminID(r), roll)
+}
+
+type rolloutObservation struct {
+	Fresh                      bool
+	ActionAnnotation           bool
+	SpecChanged                bool
+	RevisionChanged            bool
+	GenerationAdvanced         bool
+	MutationObserved           bool
+	ControllerObserved         bool
+	ExecutionObserved          bool
+	Healthy                    bool
+	RollbackMutationObserved   bool
+	RollbackControllerObserved bool
+	RollbackObserved           bool
+}
+
+const (
+	rolloutRollbackRequestTimeout = 90 * time.Second
+	rolloutRollbackClaimGrace     = 2 * time.Minute
+	rolloutRollbackMinimumTimeout = 3 * time.Minute
+)
+
+func (o rolloutObservation) evidence(roll store.K8sRolloutAction, target store.K8sInventoryItem) map[string]any {
+	return map[string]any{
+		"desired": roll.DesiredReplicas, "updated": roll.UpdatedReplicas, "ready": roll.ReadyReplicas,
+		"available": roll.AvailableReplicas, "fresh_snapshot": o.Fresh, "action_annotation": o.ActionAnnotation,
+		"spec_changed": o.SpecChanged, "revision_changed": o.RevisionChanged,
+		"generation_advanced": o.GenerationAdvanced, "mutation_observed": o.MutationObserved,
+		"controller_observed": o.ControllerObserved, "execution_observed": o.ExecutionObserved,
+		"rollback_mutation_observed":   o.RollbackMutationObserved,
+		"rollback_controller_observed": o.RollbackControllerObserved, "rollback_observed": o.RollbackObserved, "target_uid": target.UID,
+		"target_revision": rolloutRevision(target), "target_spec_hash": hashJSON(target.Spec),
+		"observed_at": firstNonEmpty(target.ObservedAt, target.UpdatedAt),
+	}
+}
+
+func (s *Server) reconcileRolloutContext(ctx context.Context, actor string, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
+	now := time.Now().UTC()
+	if !rolloutReconcileDue(roll) {
 		return roll, nil
 	}
-	roll.DesiredReplicas = rolloutDesired(target)
-	roll.UpdatedReplicas = rolloutUpdated(target)
-	if target.Kind == "DaemonSet" {
-		roll.ReadyReplicas = intAny(target.StatusObject["numberReady"])
-	} else {
-		roll.ReadyReplicas = intAny(target.StatusObject["readyReplicas"])
+	before := roll
+	previousStatus, previousRollbackStatus := roll.Status, roll.RollbackStatus
+	if actor == "" {
+		actor = "system:rollout-reconciler"
 	}
-	roll.AvailableReplicas = rolloutAvailable(target)
-	roll.UnavailableReplicas = maxInt(0, roll.DesiredReplicas-roll.AvailableReplicas)
-	roll.TargetRevision = rolloutRevision(target)
-	roll.TargetSpecHash = hashJSON(target.Spec)
-	if roll.StartedAt != "" {
-		start, _ := time.Parse(time.RFC3339Nano, roll.StartedAt)
-		roll.DurationMS = time.Since(start).Milliseconds()
-		if rolloutConditionFailed(target) {
+
+	// "running" is the CAS claim held around the external patch. Do not recycle
+	// it while the original caller may still be in flight. A crashed owner can be
+	// recovered after a grace period longer than the default database lease.
+	if roll.RollbackStatus == "running" {
+		claimedAt, ok := parseRolloutTime(roll.UpdatedAt)
+		if !ok {
+			claimedAt, ok = parseRolloutTime(roll.RollbackStartedAt)
+		}
+		if !ok || now.Sub(claimedAt) < rolloutRollbackClaimGrace {
+			return roll, nil
+		}
+		roll.RollbackStatus = "requested"
+	}
+	// v0.9.156 recorded completed_at when Kubernetes only acknowledged the patch.
+	if roll.RollbackStatus == "requested" {
+		roll.RollbackCompletedAt = ""
+	}
+
+	var target store.K8sInventoryItem
+	targetFound := false
+	target, err := s.db.GetK8sInventoryItem(ctx, roll.ClusterID, roll.ResourceKind, roll.Namespace, roll.ResourceName)
+	if err == nil {
+		targetFound = true
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return roll, err
+	}
+
+	observation := rolloutObservation{}
+	if targetFound {
+		roll.DesiredReplicas = rolloutDesired(target)
+		roll.UpdatedReplicas = rolloutUpdated(target)
+		if target.Kind == "DaemonSet" {
+			roll.ReadyReplicas = intAny(target.StatusObject["numberReady"])
+		} else {
+			roll.ReadyReplicas = intAny(target.StatusObject["readyReplicas"])
+		}
+		roll.AvailableReplicas = rolloutAvailable(target)
+		roll.UnavailableReplicas = maxInt(0, roll.DesiredReplicas-roll.AvailableReplicas)
+		observation = observeRollout(roll, target)
+		if roll.RollbackStatus == "" && (observation.MutationObserved || observation.ControllerObserved) {
+			roll.TargetRevision = rolloutRevision(target)
+			roll.TargetSpecHash = hashJSON(target.Spec)
+		}
+		s.recordRolloutPods(ctx, roll, target)
+	}
+
+	start, started := parseRolloutTime(roll.StartedAt)
+	if started {
+		roll.DurationMS = now.Sub(start).Milliseconds()
+		if roll.DurationMS < 0 {
+			roll.DurationMS = 0
+		}
+	}
+	if !rolloutTerminal(roll.Status) && started {
+		timedOut := roll.TimeoutSeconds > 0 && roll.DurationMS > int64(roll.TimeoutSeconds)*1000
+		// Failure evidence has priority over timeout, and timeout has priority over
+		// health. A single snapshot can therefore never overwrite a failure with success.
+		switch {
+		case targetFound && observation.Fresh && roll.ResourceUID != "" && target.UID != roll.ResourceUID:
+			roll.Status = "failed"
+			roll.FailureReason = "rollout target UID changed"
+			roll.CompletedAt = now.Format(time.RFC3339Nano)
+		case targetFound && observation.ExecutionObserved && rolloutConditionFailed(target):
 			roll.Status = "failed"
 			roll.FailureReason = "ProgressDeadlineExceeded 또는 ReplicaFailure"
-			roll.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		}
-		if roll.DesiredReplicas > 0 && roll.UpdatedReplicas >= roll.DesiredReplicas && roll.ReadyReplicas >= roll.DesiredReplicas && roll.AvailableReplicas >= roll.DesiredReplicas {
-			roll.Status = "succeeded"
-			roll.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		}
-		if roll.TimeoutSeconds > 0 && roll.DurationMS > int64(roll.TimeoutSeconds)*1000 && roll.Status != "succeeded" {
+			roll.CompletedAt = now.Format(time.RFC3339Nano)
+		case timedOut:
 			roll.Status = "timed_out"
 			roll.FailureReason = "rollout timeout"
-			roll.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			roll.CompletedAt = now.Format(time.RFC3339Nano)
+		case targetFound && observation.ExecutionObserved && observation.Healthy:
+			roll.Status = "succeeded"
+			roll.FailureReason = ""
+			roll.CompletedAt = now.Format(time.RFC3339Nano)
 		}
 	}
-	all, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: roll.ClusterID, Kind: "Pod", Namespace: roll.Namespace, Limit: 2000})
+
+	rollbackJustRequested := false
+	if (roll.Status == "failed" || roll.Status == "timed_out") && roll.AutoRollback && roll.RollbackStatus == "" {
+		if targetFound {
+			// Freeze the failed generation as the rollback baseline. Monitoring
+			// must later observe both the restore patch and a newer controller revision.
+			roll.TargetRevision = rolloutRevision(target)
+			roll.TargetSpecHash = hashJSON(target.Spec)
+		}
+		roll.RollbackStartedAt = now.Format(time.RFC3339Nano)
+		roll.RollbackCompletedAt = ""
+		roll.RollbackFailureReason = ""
+		switch {
+		case targetFound && roll.ResourceUID != "" && target.UID != roll.ResourceUID:
+			roll.RollbackStatus = "failed"
+			roll.RollbackFailureReason = "rollout target UID changed; rollback was not applied to the replacement object"
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		case !strings.EqualFold(roll.ResourceKind, "Deployment"):
+			roll.RollbackStatus = "failed"
+			roll.RollbackFailureReason = "StatefulSet·DaemonSet 자동 롤백은 안전 정책상 지원하지 않습니다."
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		case len(roll.PreviousTemplate) == 0:
+			roll.RollbackStatus = "failed"
+			roll.RollbackFailureReason = "저장된 이전 Pod Template이 없습니다."
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		default:
+			roll.RollbackStatus = "requested"
+			rollbackJustRequested = true
+		}
+	}
+
+	if roll.RollbackStatus == "monitoring" {
+		rollbackStart, ok := parseRolloutTime(roll.RollbackStartedAt)
+		rollbackTimeout := time.Duration(roll.TimeoutSeconds) * time.Second
+		if rollbackTimeout < rolloutRollbackMinimumTimeout {
+			rollbackTimeout = rolloutRollbackMinimumTimeout
+		}
+		rollbackTimedOut := ok && now.Sub(rollbackStart) > rollbackTimeout
+		switch {
+		case targetFound && observation.RollbackObserved && rolloutConditionFailed(target):
+			roll.RollbackStatus = "failed"
+			roll.RollbackFailureReason = "rollback controller reported ProgressDeadlineExceeded 또는 ReplicaFailure"
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		case targetFound && observation.RollbackObserved && observation.Healthy:
+			roll.RollbackStatus = "succeeded"
+			roll.RollbackFailureReason = ""
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		case rollbackTimedOut:
+			roll.RollbackStatus = "failed"
+			roll.RollbackFailureReason = "rollback timeout"
+			roll.RollbackCompletedAt = now.Format(time.RFC3339Nano)
+		}
+	}
+
+	updated, err := s.persistRolloutCAS(ctx, before, roll)
+	if err != nil {
+		return roll, err
+	}
+	if !updated {
+		return s.db.GetK8sRolloutAction(ctx, roll.ID)
+	}
+	current, err := s.db.GetK8sRolloutAction(ctx, roll.ID)
+	if err != nil {
+		return roll, err
+	}
+	evidence := observation.evidence(current, target)
+	if current.Status != previousStatus {
+		_ = s.db.AppendK8sRolloutEvent(ctx, store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: current.ID,
+			Status: current.Status, Stage: rolloutEventStage(current.Status), Message: firstNonEmpty(current.FailureReason, "롤아웃 상태 전환"),
+			Evidence: evidence})
+		s.notifyRolloutTransition(ctx, current)
+	}
+	if current.RollbackStatus != previousRollbackStatus {
+		_ = s.db.AppendK8sRolloutEvent(ctx, store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: current.ID,
+			Status: current.Status, Stage: "rollback_" + current.RollbackStatus,
+			Message:  firstNonEmpty(current.RollbackFailureReason, "자동 롤백 상태 전환"),
+			Evidence: evidence})
+	}
+	if rollbackJustRequested || current.RollbackStatus == "requested" {
+		return s.requestAutoRollback(ctx, actor, current)
+	}
+	return current, nil
+}
+
+func (s *Server) persistRolloutCAS(ctx context.Context, before, after store.K8sRolloutAction) (bool, error) {
+	if before.UpdatedAt == "" {
+		current, err := s.db.GetK8sRolloutAction(ctx, before.ID)
+		if err != nil {
+			return false, err
+		}
+		if current.Status != before.Status || current.RollbackStatus != before.RollbackStatus {
+			return false, nil
+		}
+		before.UpdatedAt = current.UpdatedAt
+	}
+	return s.db.UpdateK8sRolloutProgressCAS(ctx, after, before.Status, before.RollbackStatus, before.UpdatedAt)
+}
+
+func (s *Server) requestAutoRollback(ctx context.Context, actor string, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
+	if roll.RollbackStatus != "requested" {
+		return roll, nil
+	}
+	requested := roll
+	roll.RollbackStatus = "running"
+	roll.RollbackCompletedAt = ""
+	claimed, err := s.persistRolloutCAS(ctx, requested, roll)
+	if err != nil {
+		return roll, err
+	}
+	if !claimed {
+		return s.db.GetK8sRolloutAction(ctx, roll.ID)
+	}
+	roll, err = s.db.GetK8sRolloutAction(ctx, roll.ID)
+	if err != nil {
+		return roll, err
+	}
+	_ = s.db.AppendK8sRolloutEvent(ctx, store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
+		Status: roll.Status, Stage: "rollback_running", Message: "자동 롤백 실행 소유권 획득",
+		Evidence: map[string]any{"rollback_status": roll.RollbackStatus}})
+
+	claimedState := roll
+	requestCtx, cancelRequest := context.WithTimeout(ctx, rolloutRollbackRequestTimeout)
+	defer cancelRequest()
+	cluster, err := s.db.GetK8sCluster(requestCtx, roll.ClusterID)
+	if err == nil {
+		var client kube.Client
+		client, err = s.k8sClientForCluster(requestCtx, cluster)
+		if err == nil {
+			getter, canReadLive := client.(kube.ResourceGetter)
+			if !canReadLive {
+				err = errors.New("cluster client cannot verify the live rollout target UID")
+			} else {
+				var live map[string]any
+				live, err = getter.GetResource(requestCtx, "apps/v1", "Deployment", roll.Namespace, roll.ResourceName)
+				if err == nil {
+					liveUID := textMap(asMapAny(live["metadata"]), "uid")
+					if roll.ResourceUID != "" && liveUID != roll.ResourceUID {
+						err = fmt.Errorf("rollout target UID changed from %s to %s; refusing rollback", roll.ResourceUID, firstNonEmpty(liveUID, "<missing>"))
+					}
+				}
+			}
+			if err == nil {
+				exec, ok := client.(kube.RolloutRollbackExecutor)
+				if !ok {
+					err = errors.New("cluster client does not support rollout rollback")
+				} else {
+					err = exec.RollbackDeploymentTemplate(requestCtx, roll.Namespace, roll.ResourceName, roll.PreviousTemplate,
+						kube.RolloutRestartMetadata{RestartedBy: actor, ActionID: roll.ID, Reason: "automatic rollback"})
+				}
+			}
+		}
+	}
+	if err != nil && rollbackPatchOutcomeAmbiguous(err) {
+		// The API server may have accepted the patch before the client deadline.
+		// Keep the target lock and let inventory/controller evidence decide.
+		roll.RollbackStatus = "monitoring"
+		roll.RollbackFailureReason = "rollback request outcome is unknown: " + err.Error()
+		roll.RollbackCompletedAt = ""
+	} else if err != nil {
+		roll.RollbackStatus = "failed"
+		roll.RollbackFailureReason = err.Error()
+		roll.RollbackCompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		roll.RollbackStatus = "monitoring"
+		roll.RollbackFailureReason = ""
+		roll.RollbackCompletedAt = ""
+	}
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+	defer cancelFinalize()
+	updated, updateErr := s.persistRolloutCAS(finalizeCtx, claimedState, roll)
+	if updateErr != nil {
+		return roll, updateErr
+	}
+	if !updated {
+		return s.db.GetK8sRolloutAction(finalizeCtx, roll.ID)
+	}
+	current, getErr := s.db.GetK8sRolloutAction(finalizeCtx, roll.ID)
+	if getErr != nil {
+		return roll, getErr
+	}
+	_ = s.db.AppendK8sRolloutEvent(finalizeCtx, store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: current.ID,
+		Status: current.Status, Stage: "rollback_" + current.RollbackStatus,
+		Message:  firstNonEmpty(current.RollbackFailureReason, "이전 Pod Template 복원 요청 완료"),
+		Evidence: map[string]any{"rollback_status": current.RollbackStatus}})
+	s.notifyMattermost(finalizeCtx, "k8s_rollout", fmt.Sprintf("Deployment 자동 롤백 %s: %s/%s %s · %s",
+		current.RollbackStatus, current.ClusterID, current.Namespace, current.ResourceName,
+		firstNonEmpty(current.RollbackFailureReason, "이전 Pod Template 복원 요청")))
+	return current, nil
+}
+
+func rollbackPatchOutcomeAmbiguous(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// syncRolloutActionRequest closes an Action Center row that was deliberately
+// left running because the Kubernetes mutation response was ambiguous. The
+// rollout ledger is the durable source of truth and the worker keeps terminal
+// rollout rows due until this synchronization succeeds.
+func (s *Server) syncRolloutActionRequest(ctx context.Context, roll store.K8sRolloutAction) error {
+	if roll.ActionRequestID == "" || !rolloutTerminal(roll.Status) {
+		return nil
+	}
+	action, err := s.db.GetK8sActionRequest(ctx, roll.ActionRequestID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil || action.Status != "running" {
+		return err
+	}
+
+	executionObserved := roll.Status == "succeeded" || roll.TargetSpecHash != ""
+	if target, targetErr := s.db.GetK8sInventoryItem(ctx, roll.ClusterID, roll.ResourceKind, roll.Namespace, roll.ResourceName); targetErr == nil {
+		executionObserved = executionObserved || observeRollout(roll, target).MutationObserved
+	} else if !errors.Is(targetErr, store.ErrNotFound) {
+		return targetErr
+	}
+
+	actionStatus := "failed"
+	result := "rollout mutation could not be confirmed: " + firstNonEmpty(roll.FailureReason, roll.Status)
+	if executionObserved {
+		actionStatus = "executed"
+		result = "rollout mutation confirmed by inventory/controller evidence (" + roll.Status + ")"
+	}
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+	defer cancelFinalize()
+	if err := s.db.UpdateK8sActionStatus(finalizeCtx, action.ID, actionStatus, "system:rollout-reconciler", result); err != nil {
+		if errors.Is(err, store.ErrInvalidTransition) {
+			latest, getErr := s.db.GetK8sActionRequest(finalizeCtx, action.ID)
+			if getErr == nil && latest.Status != "running" {
+				return nil
+			}
+		}
+		return err
+	}
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, action.ID, actionStatus, result)
+	return nil
+}
+
+func (s *Server) recordRolloutPods(ctx context.Context, roll store.K8sRolloutAction, target store.K8sInventoryItem) {
+	all, _ := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: roll.ClusterID, Kind: "Pod", Namespace: roll.Namespace, Limit: 2000})
 	for _, pod := range all {
 		if !podOwnedByWorkload(pod, target) {
 			continue
 		}
-		life, _ := s.db.GetK8sPodLifecycleByName(r.Context(), roll.ClusterID, pod.Namespace, pod.Name, pod.UID)
-		_ = s.db.UpsertK8sRolloutPodTransition(r.Context(), store.K8sRolloutPodTransition{ID: "rollpod_" + roll.ID + "_" + pod.UID, ActionID: roll.ID, PodUID: pod.UID, PodName: pod.Name,
+		life, _ := s.db.GetK8sPodLifecycleByName(ctx, roll.ClusterID, pod.Namespace, pod.Name, pod.UID)
+		_ = s.db.UpsertK8sRolloutPodTransition(ctx, store.K8sRolloutPodTransition{ID: "rollpod_" + roll.ID + "_" + pod.UID, ActionID: roll.ID, PodUID: pod.UID, PodName: pod.Name,
 			NodeName: textMap(pod.Spec, "nodeName"), Revision: firstNonEmpty(pod.Labels["pod-template-hash"], pod.Labels["controller-revision-hash"]),
 			CreatedAt: life.CreatedAt, ScheduledAt: life.ScheduledAt, ContainerStartedAt: firstContainerStarted(pod.StatusObject), ReadyAt: life.ReadyAt,
 			TerminatingAt: pod.DeletionTimestamp, Result: pod.Status, FailureReason: textMap(pod.StatusObject, "reason"), ObservedAt: pod.ObservedAt})
 	}
-	if err := s.db.UpdateK8sRolloutProgress(r.Context(), roll); err != nil {
-		return roll, err
-	}
-	if roll.Status != previousStatus {
-		_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
-			Status: roll.Status, Stage: rolloutEventStage(roll.Status), Message: firstNonEmpty(roll.FailureReason, "롤아웃 상태 전환"),
-			Evidence: map[string]any{"desired": roll.DesiredReplicas, "updated": roll.UpdatedReplicas, "ready": roll.ReadyReplicas, "available": roll.AvailableReplicas}})
-		if roll.Status == "succeeded" {
-			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 성공: %s/%s %s/%s · Ready %d/%d · %s",
-				roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.ReadyReplicas, roll.DesiredReplicas,
-				(time.Duration(roll.DurationMS)*time.Millisecond).Round(time.Second)))
-		} else if roll.Status == "failed" || roll.Status == "timed_out" {
-			s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("롤아웃 %s: %s/%s %s/%s · %s",
-				roll.Status, roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.FailureReason))
-		}
-	}
-	if (roll.Status == "failed" || roll.Status == "timed_out") && roll.AutoRollback && roll.RollbackStatus == "" {
-		roll = s.autoRollbackDeployment(r, roll)
-		_ = s.db.UpdateK8sRolloutProgress(r.Context(), roll)
-	}
-	return s.db.GetK8sRolloutAction(r.Context(), roll.ID)
 }
 
-func (s *Server) autoRollbackDeployment(r *http.Request, roll store.K8sRolloutAction) store.K8sRolloutAction {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if !strings.EqualFold(roll.ResourceKind, "Deployment") {
-		roll.RollbackStatus = "manual_required"
-		roll.RollbackFailureReason = "StatefulSet·DaemonSet 자동 롤백은 안전 정책상 지원하지 않습니다."
-		return roll
+func (s *Server) notifyRolloutTransition(ctx context.Context, roll store.K8sRolloutAction) {
+	switch roll.Status {
+	case "succeeded":
+		s.notifyMattermost(ctx, "k8s_rollout", fmt.Sprintf("롤아웃 성공: %s/%s %s/%s · Ready %d/%d · %s",
+			roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.ReadyReplicas, roll.DesiredReplicas,
+			(time.Duration(roll.DurationMS)*time.Millisecond).Round(time.Second)))
+	case "failed", "timed_out":
+		s.notifyMattermost(ctx, "k8s_rollout", fmt.Sprintf("롤아웃 %s: %s/%s %s/%s · %s",
+			roll.Status, roll.ClusterID, roll.Namespace, roll.ResourceKind, roll.ResourceName, roll.FailureReason))
 	}
-	if len(roll.PreviousTemplate) == 0 {
-		roll.RollbackStatus = "manual_required"
-		roll.RollbackFailureReason = "저장된 이전 Pod Template이 없습니다."
-		return roll
-	}
-	roll.RollbackStatus, roll.RollbackStartedAt = "running", now
-	_ = s.db.UpdateK8sRolloutProgress(r.Context(), roll)
-	cluster, err := s.db.GetK8sCluster(r.Context(), roll.ClusterID)
-	if err == nil {
-		var client kube.Client
-		client, err = s.k8sClientForCluster(r.Context(), cluster)
-		if err == nil {
-			exec, ok := client.(kube.RolloutRollbackExecutor)
-			if !ok {
-				err = errors.New("cluster client does not support rollout rollback")
-			} else {
-				err = exec.RollbackDeploymentTemplate(r.Context(), roll.Namespace, roll.ResourceName, roll.PreviousTemplate,
-					kube.RolloutRestartMetadata{RestartedBy: adminID(r), ActionID: roll.ID, Reason: "automatic rollback"})
-			}
-		}
-	}
+}
+
+func (s *Server) validateRolloutExecutionTarget(ctx context.Context, roll store.K8sRolloutAction) error {
+	target, err := s.db.GetK8sInventoryItem(ctx, roll.ClusterID, roll.ResourceKind, roll.Namespace, roll.ResourceName)
 	if err != nil {
-		roll.RollbackStatus, roll.RollbackFailureReason = "failed", err.Error()
-	} else {
-		roll.RollbackStatus, roll.RollbackCompletedAt = "requested", time.Now().UTC().Format(time.RFC3339Nano)
+		return fmt.Errorf("reload rollout target: %w", err)
 	}
-	_ = s.db.AppendK8sRolloutEvent(r.Context(), store.K8sRolloutEvent{ID: newID("rollevent"), ActionID: roll.ID,
-		Status: roll.Status, Stage: "rollback", Message: firstNonEmpty(roll.RollbackFailureReason, "이전 Pod Template 자동 롤백 요청 완료"),
-		Evidence: map[string]any{"rollback_status": roll.RollbackStatus}})
-	s.notifyMattermost(r.Context(), "k8s_rollout", fmt.Sprintf("Deployment 자동 롤백 %s: %s/%s %s · %s",
-		roll.RollbackStatus, roll.ClusterID, roll.Namespace, roll.ResourceName, firstNonEmpty(roll.RollbackFailureReason, "이전 Pod Template 복원 요청")))
-	return roll
+	if roll.ResourceUID != "" && target.UID != roll.ResourceUID {
+		return fmt.Errorf("target UID drifted from %s to %s", roll.ResourceUID, target.UID)
+	}
+	currentHash := hashJSON(target.Spec)
+	if roll.PreviousSpecHash != "" && currentHash != roll.PreviousSpecHash {
+		return fmt.Errorf("target spec drifted from %s to %s", roll.PreviousSpecHash, currentHash)
+	}
+	return nil
 }
 
 func rolloutEventStage(status string) string {
@@ -662,7 +1003,7 @@ func (s *Server) streamRollout(w http.ResponseWriter, r *http.Request, roll stor
 		payload, _ := json.Marshal(map[string]any{"rollout": current, "pods": pods, "progress_percent": rolloutProgress(current)})
 		_, _ = fmt.Fprintf(w, "event: progress\ndata: %s\n\n", payload)
 		flusher.Flush()
-		if !rolloutActive(current.Status) {
+		if !rolloutNeedsReconcile(current) {
 			return
 		}
 		select {
@@ -747,6 +1088,131 @@ func rolloutConditionFailed(it store.K8sInventoryItem) bool {
 	}
 	return false
 }
+
+func observeRollout(roll store.K8sRolloutAction, target store.K8sInventoryItem) rolloutObservation {
+	fresh := inventoryObservedAtOrAfter(target, roll.StartedAt)
+	actionID := rolloutTemplateAnnotation(target.Spec, "clustara.io/actionId")
+	actionAnnotation := actionID != "" && (actionID == roll.ActionRequestID || actionID == roll.ID)
+	specHash := hashJSON(target.Spec)
+	specChanged := roll.PreviousSpecHash != "" && specHash != roll.PreviousSpecHash
+	revision := rolloutRevision(target)
+	revisionChanged := roll.PreviousRevision != "" && revision != "" && revision != roll.PreviousRevision
+	previousGeneration := intAny(roll.Precheck["observed_generation"])
+	currentGeneration := intAny(target.StatusObject["observedGeneration"])
+	generationAdvanced := previousGeneration > 0 && currentGeneration > previousGeneration
+	healthy := rolloutHealthy(roll)
+
+	rollbackFresh := inventoryObservedAtOrAfter(target, roll.RollbackStartedAt)
+	rollbackAction := actionID == roll.ID && rolloutTemplateAnnotation(target.Spec, "clustara.io/rollbackAt") != ""
+	rollbackRestored := rolloutTemplatesEquivalent(roll.PreviousTemplate, rolloutTemplate(target.Spec))
+	currentRevision := rolloutRevision(target)
+	rollbackControllerObserved := rollbackFresh && roll.TargetRevision != "" && currentRevision != "" && currentRevision != roll.TargetRevision
+	rollbackMutationObserved := rollbackFresh && (rollbackAction || rollbackRestored) &&
+		(roll.TargetSpecHash == "" || hashJSON(target.Spec) != roll.TargetSpecHash)
+	mutationObserved := fresh && (actionAnnotation || specChanged)
+	controllerObserved := fresh && (revisionChanged || generationAdvanced)
+	return rolloutObservation{
+		Fresh: fresh, ActionAnnotation: actionAnnotation, SpecChanged: specChanged,
+		RevisionChanged: revisionChanged, GenerationAdvanced: generationAdvanced,
+		MutationObserved:           mutationObserved,
+		ControllerObserved:         controllerObserved,
+		ExecutionObserved:          mutationObserved && controllerObserved,
+		Healthy:                    healthy,
+		RollbackMutationObserved:   rollbackMutationObserved,
+		RollbackControllerObserved: rollbackControllerObserved,
+		RollbackObserved:           rollbackMutationObserved && rollbackControllerObserved,
+	}
+}
+
+func rolloutHealthy(roll store.K8sRolloutAction) bool {
+	return roll.DesiredReplicas > 0 &&
+		roll.UpdatedReplicas >= roll.DesiredReplicas &&
+		roll.ReadyReplicas >= roll.DesiredReplicas &&
+		roll.AvailableReplicas >= roll.DesiredReplicas
+}
+
+func inventoryObservedAtOrAfter(target store.K8sInventoryItem, since string) bool {
+	start, ok := parseRolloutTime(since)
+	if !ok {
+		return false
+	}
+	for _, raw := range []string{target.ObservedAt, target.UpdatedAt} {
+		observed, parsed := parseRolloutTime(raw)
+		if parsed {
+			return !observed.Before(start)
+		}
+	}
+	return false
+}
+
+func parseRolloutTime(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func rolloutTemplate(spec map[string]any) map[string]any {
+	template, _ := spec["template"].(map[string]any)
+	return template
+}
+
+func rolloutTemplateAnnotation(spec map[string]any, key string) string {
+	template := rolloutTemplate(spec)
+	metadata, _ := template["metadata"].(map[string]any)
+	switch annotations := metadata["annotations"].(type) {
+	case map[string]any:
+		value, ok := annotations[key]
+		if !ok || value == nil {
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprint(value))
+	case map[string]string:
+		return strings.TrimSpace(annotations[key])
+	default:
+		return ""
+	}
+}
+
+func rolloutTemplatesEquivalent(left, right map[string]any) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	return hashJSON(normalizeRolloutTemplate(left)) == hashJSON(normalizeRolloutTemplate(right))
+}
+
+func normalizeRolloutTemplate(template map[string]any) map[string]any {
+	raw, _ := json.Marshal(template)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	metadata, _ := out["metadata"].(map[string]any)
+	annotations, _ := metadata["annotations"].(map[string]any)
+	for _, key := range []string{
+		"clustara.io/restartedAt", "kubectl.kubernetes.io/restartedAt", "clustara.io/restartedBy",
+		"clustara.io/reason", "clustara.io/actionId", "clustara.io/rollbackAt", "clustara.io/rollbackBy",
+	} {
+		delete(annotations, key)
+	}
+	if len(annotations) == 0 && metadata != nil {
+		delete(metadata, "annotations")
+	}
+	return out
+}
+
+func rolloutTerminal(status string) bool {
+	switch status {
+	case "succeeded", "failed", "timed_out", "rejected", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
 func rolloutActive(status string) bool {
 	switch status {
 	case "requested", "pending", "approval_required", "approved", "running", "monitoring":
@@ -754,6 +1220,29 @@ func rolloutActive(status string) bool {
 	}
 	return false
 }
+
+func rolloutNeedsReconcile(roll store.K8sRolloutAction) bool {
+	if rolloutActive(roll.Status) || roll.Status == "rollback_running" {
+		return true
+	}
+	switch roll.RollbackStatus {
+	case "requested", "monitoring", "running":
+		return true
+	}
+	return (roll.Status == "failed" || roll.Status == "timed_out") && roll.AutoRollback && roll.RollbackStatus == ""
+}
+
+func rolloutReconcileDue(roll store.K8sRolloutAction) bool {
+	switch roll.RollbackStatus {
+	case "requested", "monitoring", "running":
+		return true
+	}
+	if (roll.Status == "failed" || roll.Status == "timed_out") && roll.AutoRollback && roll.RollbackStatus == "" {
+		return true
+	}
+	return roll.StartedAt != "" && !rolloutTerminal(roll.Status)
+}
+
 func rolloutProgress(a store.K8sRolloutAction) int {
 	if a.DesiredReplicas <= 0 {
 		return 0

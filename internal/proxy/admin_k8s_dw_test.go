@@ -101,7 +101,10 @@ func TestK8sDWReport(t *testing.T) {
 	}
 
 	// Bad cluster_id is rejected (SQL-injection guard).
-	resp2, _ := http.Get(srv.URL + "/admin/k8s/dw/report?kind=cost&cluster_id=a%27b")
+	resp2, err := http.Get(srv.URL + "/admin/k8s/dw/report?kind=cost&cluster_id=a%27b")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusBadRequest {
 		t.Fatalf("malicious cluster_id should be 400, got %d", resp2.StatusCode)

@@ -571,7 +571,16 @@ func (s *Server) decideK8sManifestChange(w http.ResponseWriter, r *http.Request,
 		status = "rejected"
 	}
 	msg := strings.TrimSpace(firstNonEmpty(in.Result, in.Note))
-	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, status, adminID(r), msg); errors.Is(err, store.ErrNotFound) {
+	var err error
+	if status == "approved" {
+		err = s.db.ApproveK8sManifestChangeWithAudit(r.Context(), id, adminID(r), msg, store.AdminAuditLog{
+			ID: newID("audit"), AdminID: adminID(r), Action: "k8s.manifest_change." + command,
+			BeforeValue: id, AfterValue: auditJSON(map[string]any{"status": status}),
+		})
+	} else {
+		err = s.db.UpdateK8sManifestChangeStatus(r.Context(), id, status, adminID(r), msg)
+	}
+	if errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
 		return
 	} else if errors.Is(err, store.ErrInvalidTransition) {
@@ -581,7 +590,9 @@ func (s *Server) decideK8sManifestChange(w http.ResponseWriter, r *http.Request,
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_decision_failed")
 		return
 	}
-	s.auditAdmin(r, "k8s.manifest_change."+command, id, auditJSON(map[string]any{"status": status}))
+	if status != "approved" {
+		s.auditAdmin(r, "k8s.manifest_change."+command, id, auditJSON(map[string]any{"status": status}))
+	}
 	req, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"request": req})
 }
@@ -633,7 +644,8 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 		driftGuard["override_note"] = strings.TrimSpace(in.Note)
 		driftGuard["overridden_by"] = adminID(r)
 	}
-	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "running", adminID(r), "SSA apply running"); err != nil {
+	actor := adminID(r)
+	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "running", actor, "SSA apply running"); err != nil {
 		if errors.Is(err, store.ErrInvalidTransition) {
 			writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition to running", "invalid_request_error", "manifest_change_bad_state")
 			return
@@ -643,31 +655,50 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 	}
 	cluster, err := s.db.GetK8sCluster(r.Context(), req.ClusterID)
 	if err != nil {
-		s.finishManifestApplyFailure(r, id, map[string]any{"error": err.Error()})
+		if finalizeErr := s.finishManifestApplyFailure(r.Context(), id, actor, map[string]any{"error": err.Error()}); finalizeErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, finalizeErr.Error(), "server_error", "k8s_manifest_change_finalize_failed")
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "cluster not found: "+err.Error(), "invalid_request_error", "k8s_cluster_failed")
 		return
 	}
 	client, err := s.k8sClientForCluster(r.Context(), cluster)
 	if err != nil {
-		s.finishManifestApplyFailure(r, id, map[string]any{"error": err.Error()})
+		if finalizeErr := s.finishManifestApplyFailure(r.Context(), id, actor, map[string]any{"error": err.Error()}); finalizeErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, finalizeErr.Error(), "server_error", "k8s_manifest_change_finalize_failed")
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "Kubernetes 연결 준비 실패: "+err.Error(), "invalid_request_error", "k8s_client_failed")
 		return
 	}
 	applier, ok := client.(kube.StackApplier)
 	if !ok {
-		s.finishManifestApplyFailure(r, id, map[string]any{"error": "applier unsupported"})
+		if finalizeErr := s.finishManifestApplyFailure(r.Context(), id, actor, map[string]any{"error": "applier unsupported"}); finalizeErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, finalizeErr.Error(), "server_error", "k8s_manifest_change_finalize_failed")
+			return
+		}
 		writeOpenAIError(w, http.StatusNotImplemented, "이 클러스터 클라이언트는 apply를 지원하지 않습니다.", "invalid_request_error", "applier_unsupported")
 		return
 	}
 	applyYAML := []byte(req.AfterYAML)
 	if aErr := applier.Apply(r.Context(), req.APIVersion, req.Kind, req.Namespace, req.Name, applyYAML, false); aErr != nil {
 		result := map[string]any{"status": "failed", "error": aErr.Error(), "field_manager": "clustara", "drift_guard": driftGuard}
-		_ = s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "failed", adminID(r), result, aErr.Error())
+		resultMessage := aErr.Error()
+		if errors.Is(aErr, context.Canceled) || errors.Is(aErr, context.DeadlineExceeded) {
+			result["outcome"] = "ambiguous"
+			result["outcome_ambiguous"] = true
+			result["reconciliation_required"] = true
+			resultMessage = "SSA apply outcome is unknown: " + aErr.Error()
+		}
+		if finalizeErr := s.updateK8sManifestApplyResultDetached(r.Context(), id, "failed", actor, result, resultMessage); finalizeErr != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, finalizeErr.Error(), "server_error", "k8s_manifest_change_finalize_failed")
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"request_id": id, "status": "failed", "apply_result": result})
 		return
 	}
 	result := map[string]any{"status": "applied", "field_manager": "clustara", "applied_at": time.Now().UTC().Format(time.RFC3339Nano), "drift_guard": driftGuard}
-	if err := s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "applied", adminID(r), result, "SSA apply succeeded"); err != nil {
+	if err := s.updateK8sManifestApplyResultDetached(r.Context(), id, "applied", actor, result, "SSA apply succeeded"); err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_finalize_failed")
 		return
 	}
@@ -677,11 +708,19 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "apply_result": result})
 }
 
-func (s *Server) finishManifestApplyFailure(r *http.Request, id string, result map[string]any) {
+const manifestApplyFinalizeTimeout = 5 * time.Second
+
+func (s *Server) finishManifestApplyFailure(requestCtx context.Context, id, actor string, result map[string]any) error {
 	if result["status"] == nil {
 		result["status"] = "failed"
 	}
-	_ = s.db.UpdateK8sManifestChangeApplyResult(r.Context(), id, "failed", adminID(r), result, fmt.Sprint(result["error"]))
+	return s.updateK8sManifestApplyResultDetached(requestCtx, id, "failed", actor, result, fmt.Sprint(result["error"]))
+}
+
+func (s *Server) updateK8sManifestApplyResultDetached(requestCtx context.Context, id, status, actor string, result map[string]any, message string) error {
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(requestCtx), manifestApplyFinalizeTimeout)
+	defer cancel()
+	return s.db.UpdateK8sManifestChangeApplyResult(finalizeCtx, id, status, actor, result, message)
 }
 
 func (s *Server) verifyK8sManifestChange(w http.ResponseWriter, r *http.Request, id string) {

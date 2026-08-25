@@ -140,6 +140,18 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 		workers = append(workers, workerStatus{Name: "alert_worker", Running: false, Status: "idle", Detail: "alert worker not attached"})
 	}
 
+	// Durable Kubernetes workers. These converge rollout and terminal-session
+	// state with no browser tab attached, so a stalled one is an availability
+	// problem an operator has to see rather than infer from logs.
+	rolloutDetail := "롤아웃 리컨실러"
+	if owner := s.rolloutReconciler.Load().OwnerID(); owner != "" {
+		rolloutDetail += " (owner=" + owner + ")"
+	}
+	workers = append(workers,
+		durableWorkerStatus(s.rolloutReconciler.Load().Status(), s.cfg.Workers.RolloutReconcilerEnabled, rolloutDetail),
+		durableWorkerStatus(s.terminalReaper.Load().Status(), s.cfg.Workers.TerminalReaperEnabled, "터미널 세션 리퍼"),
+	)
+
 	// Text2SQL saved-report scheduler (self-disables without an execute DB).
 	workers = append(workers, workerStatus{Name: "text2sql_report_scheduler", Running: true, Status: "ok",
 		Detail: "저장 리포트 스케줄러(실행 DB 없으면 자동 무력화)"})
@@ -149,6 +161,35 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 		overall = worseStatus(overall, ws.Status)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"overall": overall, "workers": workers})
+}
+
+// durableWorkerStatus maps a background worker's counters onto the shared
+// workerStatus shape. A worker that is configured on but not running, or one
+// whose ticks keep failing, escalates so the ops page shows it as degraded.
+func durableWorkerStatus(st backgroundWorkerStatus, enabled bool, detail string) workerStatus {
+	ws := workerStatus{
+		Name: st.Name, Running: st.Running, Status: "ok",
+		LastRun: st.LastRun, LastSuccess: st.LastSuccess, LastError: st.LastError,
+		ErrorCount: st.Failures, LagSeconds: secondsSinceRFC3339(st.LastSuccess),
+		Detail: detail + " · interval=" + st.Interval + " ticks=" + itoaProxy(int(st.Ticks)) +
+			" processed=" + itoaProxy(int(st.Processed)),
+	}
+	switch {
+	case !enabled:
+		ws.Status, ws.Detail = "idle", detail+" · 비활성(설정으로 꺼짐)"
+	case !st.Running:
+		ws.Status, ws.Detail = "critical", detail+" · 활성 설정이지만 실행 중이 아님"
+	case st.ConsecutiveFailures >= 3:
+		ws.Status = "critical"
+		ws.Detail += " · 연속 실패 " + itoaProxy(int(st.ConsecutiveFailures)) + "회, backoff=" + st.CurrentDelay
+	case st.LastError != "":
+		ws.Status = "warn"
+		ws.Detail += " · 최근 tick 실패"
+	case st.LastSuccess == "":
+		ws.Status = "warn"
+		ws.Detail += " · 아직 성공 이력 없음"
+	}
+	return ws
 }
 
 func secondsSinceRFC3339(raw string) int64 {

@@ -1953,6 +1953,7 @@ const adminHTML = `<!doctype html>
     const UX_ACTION_FLOW_FILTER_KEY = 'clustara.ux.action.flow.filter';
     let uxResourceSearchTimer = null;
     let uxResourceSearchSeq = 0;
+    let uxResourceSearchController = null;
     let uxActionQueueSeq = 0;
     let uxActionQueueCache = { ts: 0, html: '' };
     function uxTabFromHref(href) {
@@ -2276,7 +2277,7 @@ const adminHTML = `<!doctype html>
       }).join('');
     }
     function uxResourceKey(item) {
-      return [item.cluster_id || '', item.namespace || '', item.kind || '', item.name || '', item.catalog_id || ''].join('|');
+      return [item.cluster_id || '', item.namespace || '', String(item.kind || '').toLowerCase(), item.name || ''].join('|');
     }
     function uxResourceStorePayload(item) {
       return {
@@ -2532,24 +2533,37 @@ const adminHTML = `<!doctype html>
       const host = document.getElementById('quick-access-resource-results');
       if (!host) return;
       if (uxResourceSearchTimer) clearTimeout(uxResourceSearchTimer);
+      uxResourceSearchTimer = null;
+      const seq = ++uxResourceSearchSeq;
+      if (uxResourceSearchController) uxResourceSearchController.abort();
+      uxResourceSearchController = null;
       if (!query || query.length < 2) {
         host.innerHTML = '<div class="empty" style="padding:10px">검색어 2자 이상 입력</div>';
         return;
       }
-      const seq = ++uxResourceSearchSeq;
+      const controller = new AbortController();
+      uxResourceSearchController = controller;
       host.innerHTML = '<div class="empty" style="padding:10px">검색 중...</div>';
       uxResourceSearchTimer = setTimeout(async () => {
+        let localRows = [];
         try {
-          const localRows = await uxQuickAccessInventorySearch(query, 12);
+          localRows = await uxQuickAccessInventorySearch(query, 12);
           if (seq !== uxResourceSearchSeq) return;
           host.innerHTML = localRows.map(uxResourceHTML).join('') || '<div class="empty" style="padding:10px">서버 검색 중...</div>';
-          const data = await api('/admin/fleet/search?' + new URLSearchParams({ q: query, limit: '2000' }).toString());
+          const data = await api('/admin/fleet/search?' + new URLSearchParams({ q: query, limit: '20' }).toString(), { signal: controller.signal });
           if (seq !== uxResourceSearchSeq) return;
-          const rows = uxMergeQuickAccessResources(localRows, data.results || [], 12);
+          const rows = uxMergeQuickAccessResources(localRows, data.results || [], query, 12);
           host.innerHTML = rows.map(uxResourceHTML).join('') || '<div class="empty" style="padding:10px">리소스 없음</div>';
         } catch (e) {
           if (seq !== uxResourceSearchSeq) return;
-          host.innerHTML = '<div class="empty" style="padding:10px">' + escapeHTML(e.message) + '</div>';
+          if (e && e.name === 'AbortError') return;
+          if (localRows.length) {
+            host.innerHTML = localRows.map(uxResourceHTML).join('') + '<div class="empty" style="padding:8px">로컬 결과 · 서버 갱신 실패</div>';
+          } else {
+            host.innerHTML = '<div class="empty" style="padding:10px">' + escapeHTML(e.message) + '</div>';
+          }
+        } finally {
+          if (seq === uxResourceSearchSeq) uxResourceSearchController = null;
         }
       }, 250);
     }
@@ -2584,14 +2598,37 @@ const adminHTML = `<!doctype html>
           return score(a) - score(b) || String(a.kind || '').localeCompare(String(b.kind || '')) || String(a.name || '').localeCompare(String(b.name || ''));
         }).slice(0, limit || 12);
     }
-    function uxMergeQuickAccessResources(primary, secondary, limit) {
-      const seen = new Set();
-      return (primary || []).concat(secondary || []).filter(item => {
+    function uxQuickResourceRank(item, query) {
+      const q = String(query || '').toLowerCase().trim();
+      const terms = uxQuickResourceTerms(query);
+      const name = String(item.name || '').toLowerCase();
+      const namespace = String(item.namespace || '').toLowerCase();
+      const kind = String(item.kind || '').toLowerCase();
+      const cluster = String(item.cluster_name || item.cluster_id || '').toLowerCase();
+      if (name === q || (terms.length === 1 && name === terms[0])) return 0;
+      if (name.startsWith(q) || (terms.length === 1 && name.startsWith(terms[0]))) return 10;
+      if (name.includes(q) || (terms.length === 1 && name.includes(terms[0]))) return 20;
+      if (terms.some(term => namespace === term || kind === term || cluster === term)) return 30;
+      return 40;
+    }
+    function uxMergeQuickAccessResources(primary, secondary, query, limit) {
+      const byKey = new Map();
+      (primary || []).forEach(item => {
         const key = uxResourceKey(item);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).slice(0, limit || 12);
+        if (!byKey.has(key)) byKey.set(key, item);
+      });
+      (secondary || []).forEach(item => {
+        const key = uxResourceKey(item);
+        const local = byKey.get(key);
+        byKey.set(key, local ? { ...local, ...item } : item);
+      });
+      return Array.from(byKey.values())
+        .filter(item => UX_QUICK_RESOURCE_KINDS.has(item.kind))
+        .sort((a, b) => uxQuickResourceRank(a, query) - uxQuickResourceRank(b, query) ||
+          String(a.kind || '').localeCompare(String(b.kind || '')) ||
+          String(a.namespace || '').localeCompare(String(b.namespace || '')) ||
+          String(a.name || '').localeCompare(String(b.name || '')))
+        .slice(0, limit || 12);
     }
     function uxOpenQuickAccess() {
       const panel = document.getElementById('quick-access-panel');

@@ -387,7 +387,7 @@ func (s *Server) handleK8sPodList(w http.ResponseWriter, r *http.Request) {
 	views := make([]k8sPodView, 0, len(items))
 	for _, item := range items {
 		view := podView(item, events, false)
-		view.Usage = usageByPod[podUsageKey(item.Namespace, item.Name)]
+		view.Usage = usageByPod[podUsageKey(item.ClusterID, item.Namespace, item.Name)]
 		if !podMatchesFilters(view, q) {
 			continue
 		}
@@ -498,7 +498,7 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 	}
 	s.recordPodAccess(r, clusterID, namespace, pod, "detail", "pod_detail")
 	pv := podView(item, events, true)
-	pv.Usage = latestPodUsage(relatedMetrics)[podUsageKey(namespace, pod)]
+	pv.Usage = latestPodUsage(relatedMetrics)[podUsageKey(clusterID, namespace, pod)]
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pod":         pv,
 		"briefing":    s.buildPodBriefing(r.Context(), clusterID, item, pv, relatedEvents),
@@ -509,12 +509,14 @@ func (s *Server) handleK8sPodDetail(w http.ResponseWriter, r *http.Request, name
 	})
 }
 
-func podUsageKey(namespace, pod string) string { return namespace + "\x00" + pod }
+func podUsageKey(clusterID, namespace, pod string) string {
+	return clusterID + "\x00" + namespace + "\x00" + pod
+}
 
 func latestPodUsage(metrics []store.K8sMetricSample) map[string]k8sPodUsage {
 	out := map[string]k8sPodUsage{}
 	for _, metric := range metrics {
-		key := podUsageKey(metric.Namespace, metric.ResourceName)
+		key := podUsageKey(metric.ClusterID, metric.Namespace, metric.ResourceName)
 		usage, exists := out[key]
 		if !exists {
 			usage = k8sPodUsage{Available: true, CPUMillicores: metric.CPUMillicores, MemoryBytes: metric.MemoryBytes, ObservedAt: metric.ObservedAt}

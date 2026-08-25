@@ -201,6 +201,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_entities_identity ON catalog_entities(kind, name, project_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_catalog_entities_owner ON catalog_entities(owner_team_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_catalog_entities_runtime_ref_lower ON catalog_entities(lower(runtime_ref))`,
 		`CREATE TABLE IF NOT EXISTS access_bindings (
 			id TEXT PRIMARY KEY,
 			subject_type TEXT NOT NULL,
@@ -2074,6 +2075,10 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_status ON k8s_rollout_actions(status, updated_at)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_rollout_one_active_target ON k8s_rollout_actions(cluster_id, resource_uid)
 			WHERE resource_uid <> '' AND status IN ('requested','approval_required','approved','running','monitoring','rollback_running')`,
+		`CREATE TABLE IF NOT EXISTS k8s_rollout_reconcile_leases (
+			rollout_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_k8s_rollout_reconcile_leases_expiry ON k8s_rollout_reconcile_leases(expires_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_rollout_events (
 			id TEXT PRIMARY KEY, action_id TEXT NOT NULL, sequence_no INTEGER NOT NULL, status TEXT NOT NULL,
 			stage TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '', evidence_json TEXT NOT NULL DEFAULT '{}',
@@ -2667,6 +2672,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			role TEXT NOT NULL DEFAULT '',
 			requested_by TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending_approval',
+			connection_claim_id TEXT NOT NULL DEFAULT '',
 			risk_level TEXT NOT NULL DEFAULT 'low',
 			require_approval INTEGER NOT NULL DEFAULT 1,
 			audit_enabled INTEGER NOT NULL DEFAULT 1,
@@ -2692,16 +2698,25 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		`ALTER TABLE k8s_pod_exec_sessions ADD COLUMN output_sample TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE k8s_pod_exec_sessions ADD COLUMN error_message TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE k8s_pod_exec_sessions ADD COLUMN exit_code INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE k8s_pod_exec_sessions ADD COLUMN connection_claim_id TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_exec_sessions_target ON k8s_pod_exec_sessions(cluster_id, namespace, pod, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_pod_exec_sessions_status ON k8s_pod_exec_sessions(status, created_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_terminal_tickets (
 			ticket_hash TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
 			admin_id TEXT NOT NULL DEFAULT '',
+			auth_session_id TEXT NOT NULL DEFAULT '',
+			auth_expires_at TEXT NOT NULL DEFAULT '',
+			client_ip TEXT NOT NULL DEFAULT '',
+			user_agent_hash TEXT NOT NULL DEFAULT '',
 			expires_at TEXT NOT NULL,
 			consumed_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
+		`ALTER TABLE k8s_terminal_tickets ADD COLUMN auth_session_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_terminal_tickets ADD COLUMN auth_expires_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_terminal_tickets ADD COLUMN client_ip TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE k8s_terminal_tickets ADD COLUMN user_agent_hash TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_terminal_tickets_expiry ON k8s_terminal_tickets(expires_at, consumed_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_pod_bookmarks (
 			id TEXT PRIMARY KEY,
@@ -3077,7 +3092,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.migrateK8sRolloutTargetLock(ctx)
 }
 
 // isAlreadyExistsErr swallows the "duplicate column name" / "column already exists"

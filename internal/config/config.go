@@ -36,6 +36,7 @@ type Config struct {
 	Limits       LimitsConfig
 	MCP          MCPConfig
 	Keycloak     KeycloakConfig
+	Workers      WorkersConfig
 	// RuntimeReloadInterval is how often each pod polls the DB for admin-settings changes made on
 	// other pods (multi-replica convergence). 0 disables polling (single-pod / local dev).
 	RuntimeReloadInterval time.Duration
@@ -49,6 +50,30 @@ type HTTPConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
+}
+
+// WorkersConfig tunes the durable background workers that converge Kubernetes
+// rollout and terminal-session state without a browser tab attached. These
+// workers hold cross-replica leases, so their timings are operational knobs.
+type WorkersConfig struct {
+	// OwnerID identifies this process when it takes a rollout reconcile lease.
+	// It must be unique per replica; Load derives hostname+pid when unset.
+	OwnerID string
+
+	RolloutReconcilerEnabled bool
+	RolloutInterval          time.Duration
+	RolloutLeaseTTL          time.Duration
+	RolloutBatchSize         int
+	RolloutMaxBackoff        time.Duration
+
+	TerminalReaperEnabled   bool
+	TerminalReaperInterval  time.Duration
+	TerminalReaperBatchSize int
+	TerminalReaperBackoff   time.Duration
+
+	// ShutdownTimeout bounds how long the process waits for an in-flight worker
+	// tick to finish (and release its lease) before exiting.
+	ShutdownTimeout time.Duration
 }
 
 // KeycloakConfig configures OIDC SSO via Keycloak (Authorization Code + PKCE). When
@@ -347,6 +372,19 @@ func Load() (Config, error) {
 		Environment:           envName,
 		StrictConfig:          strictConfig,
 		RuntimeReloadInterval: durationEnv("SETTINGS_RELOAD_INTERVAL", 10*time.Second),
+		Workers: WorkersConfig{
+			OwnerID:                  strings.TrimSpace(os.Getenv("WORKER_OWNER_ID")),
+			RolloutReconcilerEnabled: boolEnv("K8S_ROLLOUT_RECONCILER_ENABLED", true),
+			RolloutInterval:          durationEnv("K8S_ROLLOUT_RECONCILER_INTERVAL", 5*time.Second),
+			RolloutLeaseTTL:          durationEnv("K8S_ROLLOUT_RECONCILER_LEASE_TTL", time.Minute),
+			RolloutBatchSize:         intEnv("K8S_ROLLOUT_RECONCILER_BATCH_SIZE", 100),
+			RolloutMaxBackoff:        durationEnv("K8S_ROLLOUT_RECONCILER_MAX_BACKOFF", 2*time.Minute),
+			TerminalReaperEnabled:    boolEnv("K8S_TERMINAL_REAPER_ENABLED", true),
+			TerminalReaperInterval:   durationEnv("K8S_TERMINAL_REAPER_INTERVAL", 30*time.Second),
+			TerminalReaperBatchSize:  intEnv("K8S_TERMINAL_REAPER_BATCH_SIZE", 250),
+			TerminalReaperBackoff:    durationEnv("K8S_TERMINAL_REAPER_MAX_BACKOFF", 5*time.Minute),
+			ShutdownTimeout:          durationEnv("WORKER_SHUTDOWN_TIMEOUT", 15*time.Second),
+		},
 		HTTP: HTTPConfig{
 			ReadHeaderTimeout: durationEnv("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),
 			ReadTimeout:       durationEnv("HTTP_READ_TIMEOUT", 60*time.Second),
@@ -526,6 +564,12 @@ func Load() (Config, error) {
 	if cfg.HTTP.MaxHeaderBytes < 0 {
 		return Config{}, fmt.Errorf("HTTP_MAX_HEADER_BYTES must be non-negative")
 	}
+	if cfg.Keycloak.Enabled && !cfg.Auth.Enabled {
+		return Config{}, fmt.Errorf("AUTH_ENABLED=true is required when SSO_KEYCLOAK_ENABLED=true")
+	}
+	if err := validateWorkers(&cfg.Workers); err != nil {
+		return Config{}, err
+	}
 	if cfg.Environment == "production" || cfg.StrictConfig {
 		if weakOperationalSecret(cfg.Secret.GatewaySecret) {
 			return Config{}, fmt.Errorf("strong GATEWAY_SECRET is required in production or strict config mode")
@@ -652,6 +696,49 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// validateWorkers rejects background-worker timings that would misbehave in a
+// multi-replica deployment and fills in a per-process lease owner identity.
+func validateWorkers(workers *WorkersConfig) error {
+	if workers.OwnerID == "" {
+		host, err := os.Hostname()
+		if err != nil || strings.TrimSpace(host) == "" {
+			host = "unknown-host"
+		}
+		workers.OwnerID = fmt.Sprintf("%s-%d", strings.TrimSpace(host), os.Getpid())
+	}
+	if workers.RolloutReconcilerEnabled {
+		if workers.RolloutInterval <= 0 {
+			return fmt.Errorf("K8S_ROLLOUT_RECONCILER_INTERVAL must be positive")
+		}
+		if workers.RolloutBatchSize <= 0 {
+			return fmt.Errorf("K8S_ROLLOUT_RECONCILER_BATCH_SIZE must be positive")
+		}
+		// A lease shorter than one tick lets a second replica pick up a rollout
+		// that the current owner is still driving, double-executing the patch.
+		if workers.RolloutLeaseTTL < workers.RolloutInterval {
+			return fmt.Errorf("K8S_ROLLOUT_RECONCILER_LEASE_TTL must be at least K8S_ROLLOUT_RECONCILER_INTERVAL")
+		}
+		if workers.RolloutMaxBackoff > 0 && workers.RolloutMaxBackoff < workers.RolloutInterval {
+			return fmt.Errorf("K8S_ROLLOUT_RECONCILER_MAX_BACKOFF must be at least K8S_ROLLOUT_RECONCILER_INTERVAL")
+		}
+	}
+	if workers.TerminalReaperEnabled {
+		if workers.TerminalReaperInterval <= 0 {
+			return fmt.Errorf("K8S_TERMINAL_REAPER_INTERVAL must be positive")
+		}
+		if workers.TerminalReaperBatchSize <= 0 {
+			return fmt.Errorf("K8S_TERMINAL_REAPER_BATCH_SIZE must be positive")
+		}
+		if workers.TerminalReaperBackoff > 0 && workers.TerminalReaperBackoff < workers.TerminalReaperInterval {
+			return fmt.Errorf("K8S_TERMINAL_REAPER_MAX_BACKOFF must be at least K8S_TERMINAL_REAPER_INTERVAL")
+		}
+	}
+	if workers.ShutdownTimeout < 0 {
+		return fmt.Errorf("WORKER_SHUTDOWN_TIMEOUT must be non-negative")
+	}
+	return nil
 }
 
 func boolEnv(key string, fallback bool) bool {

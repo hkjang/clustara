@@ -226,19 +226,48 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 		clusterByID[c.ID] = c
 		allowedClusters[c.ID] = true
 	}
+	terms := fleetSearchTerms(q.Get("q"))
+	requestedLimit := boundedInt(q.Get("limit"), 500, 1, 10000)
+	candidateLimit := requestedLimit + 1
+	if candidateLimit > 10000 {
+		candidateLimit = 10000
+	}
 	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
-		ClusterID: q.Get("cluster_id"),
-		Kind:      q.Get("kind"),
-		Namespace: q.Get("namespace"),
-		Status:    q.Get("status"),
-		Limit:     intParam(q.Get("limit"), 500),
+		ClusterID:   q.Get("cluster_id"),
+		GroupID:     q.Get("group_id"),
+		Kind:        q.Get("kind"),
+		Namespace:   q.Get("namespace"),
+		Status:      q.Get("status"),
+		SearchTerms: terms,
+		RankQuery:   strings.Join(terms, " "),
+		OwnerQuery:  q.Get("owner"),
+		ImageQuery:  q.Get("image"),
+		Limit:       candidateLimit,
 	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "fleet_search_inventory_failed")
 		return
 	}
 	catalogs, _ := s.db.ListCatalogEntities(r.Context(), store.CatalogEntityFilter{Limit: 2000})
-	terms := strings.Fields(strings.ToLower(strings.TrimSpace(q.Get("q"))))
+	runtimeRefs := make([]string, 0, len(items))
+	for _, item := range items {
+		runtimeRefs = append(runtimeRefs, fleetRuntimeRef(item))
+	}
+	exactCatalogs, err := s.db.ListCatalogEntitiesByRuntimeRefs(r.Context(), runtimeRefs)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "fleet_search_catalog_failed")
+		return
+	}
+	catalogIDs := map[string]bool{}
+	for _, catalog := range catalogs {
+		catalogIDs[catalog.ID] = true
+	}
+	for _, catalog := range exactCatalogs {
+		if !catalogIDs[catalog.ID] {
+			catalogs = append(catalogs, catalog)
+			catalogIDs[catalog.ID] = true
+		}
+	}
 	ownerFilter := strings.ToLower(strings.TrimSpace(q.Get("owner")))
 	imageFilter := strings.ToLower(strings.TrimSpace(q.Get("image")))
 	results := []fleetSearchResult{}
@@ -249,18 +278,35 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 		c := clusterByID[it.ClusterID]
 		g := groupByID[c.GroupID]
 		owner := owners[it.ClusterID+"/"+it.Namespace]
-		catalog := fleetCatalogForItem(it, catalogs)
-		hay := fleetSearchHaystack(it, c, g, owner, catalog)
+		catalogMatches := fleetCatalogsForItem(it, catalogs)
+		catalog := store.CatalogEntity{}
+		if len(catalogMatches) > 0 {
+			catalog = catalogMatches[0]
+		}
+		hay := fleetSearchHaystack(it, c, g, owner, store.CatalogEntity{})
+		ownerTextParts := []string{owner.Team, owner.Owner, owner.ServiceName}
+		for _, candidate := range catalogMatches {
+			candidateHay := fleetSearchHaystack(it, c, g, owner, candidate)
+			hay += " " + candidateHay
+			ownerTextParts = append(ownerTextParts, candidate.OwnerTeamID, candidate.Name, candidate.ProjectID)
+			if fleetContainsAllTerms(candidateHay, terms) &&
+				(ownerFilter == "" || strings.Contains(strings.ToLower(strings.Join([]string{
+					owner.Team, owner.Owner, owner.ServiceName, candidate.OwnerTeamID, candidate.Name, candidate.ProjectID,
+				}, " ")), ownerFilter)) {
+				catalog = candidate
+				break
+			}
+		}
 		if imageFilter != "" && !strings.Contains(strings.ToLower(fleetJSON(it.Spec)), imageFilter) {
 			continue
 		}
-		ownerText := strings.Join([]string{owner.Team, owner.Owner, owner.ServiceName, catalog.OwnerTeamID, catalog.Name, catalog.ProjectID}, " ")
+		ownerText := strings.Join(ownerTextParts, " ")
 		if ownerFilter != "" && !strings.Contains(strings.ToLower(ownerText), ownerFilter) {
 			continue
 		}
 		team := firstNonEmptyStr(owner.Team, catalog.OwnerTeamID)
 		serviceName := firstNonEmptyStr(owner.ServiceName, catalog.Name)
-		itemRef := it.ClusterID + "/" + it.Namespace + "/" + it.Kind + "/" + it.Name
+		itemRef := fleetRuntimeRef(it)
 		catalogStatus := "linked"
 		gapKey := ""
 		if catalog.ID == "" {
@@ -271,17 +317,8 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 				catalogStatus = "untracked"
 			}
 		}
-		if len(terms) > 0 {
-			ok := true
-			for _, term := range terms {
-				if !strings.Contains(hay, term) {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
+		if !fleetContainsAllTerms(hay, terms) {
+			continue
 		}
 		results = append(results, fleetSearchResult{
 			ClusterID:     it.ClusterID,
@@ -306,7 +343,30 @@ func (s *Server) handleFleetSearch(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:     it.UpdatedAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results)})
+	if len(terms) > 0 {
+		rankQuery := strings.Join(terms, " ")
+		sort.SliceStable(results, func(i, j int) bool {
+			left, right := fleetSearchRank(results[i], rankQuery, terms), fleetSearchRank(results[j], rankQuery, terms)
+			if left != right {
+				return left < right
+			}
+			if results[i].Kind != results[j].Kind {
+				return results[i].Kind < results[j].Kind
+			}
+			if results[i].Namespace != results[j].Namespace {
+				return results[i].Namespace < results[j].Namespace
+			}
+			if results[i].Name != results[j].Name {
+				return results[i].Name < results[j].Name
+			}
+			return results[i].ClusterID < results[j].ClusterID
+		})
+	}
+	truncated := len(results) > requestedLimit || (len(items) == candidateLimit && candidateLimit < 10000)
+	if len(results) > requestedLimit {
+		results = results[:requestedLimit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results), "truncated": truncated})
 }
 
 func (s *Server) fleetBaseData(r *http.Request) ([]store.K8sCluster, []store.K8sClusterGroup, map[string]store.K8sNamespaceOwnership, error) {
@@ -332,31 +392,139 @@ func (s *Server) fleetBaseData(r *http.Request) ([]store.K8sCluster, []store.K8s
 func fleetSearchHaystack(it store.K8sInventoryItem, c store.K8sCluster, g store.K8sClusterGroup, o store.K8sNamespaceOwnership, catalog store.CatalogEntity) string {
 	return strings.ToLower(strings.Join([]string{
 		it.ClusterID, c.Name, c.Description, c.GroupID, g.Name, g.Kind,
-		it.Kind, it.Namespace, it.Name, it.Status, it.RiskLevel, it.APIVersion,
+		it.Kind, fleetKindSearchAliases(it.Kind), it.Namespace, it.Name, it.Status, it.RiskLevel, it.APIVersion,
 		o.Team, o.Owner, o.ServiceName, o.Criticality, o.CostCenter,
 		catalog.ID, catalog.Kind, catalog.Name, catalog.ProjectID, catalog.OwnerTeamID, catalog.RuntimeRef, catalog.RepoURL, catalog.DocsURL, catalog.Criticality, strings.Join(catalog.Tags, " "),
 		fleetJSON(it.Labels), fleetJSON(it.Annotations), fleetJSON(it.Spec),
 	}, " "))
 }
 
+func fleetSearchTerms(query string) []string {
+	aliases := map[string]string{
+		"파드":     "pod",
+		"팟":      "pod",
+		"디플로이먼트": "deployment",
+		"디플로이":   "deployment",
+		"스테이트풀셋": "statefulset",
+		"데몬셋":    "daemonset",
+		"레플리카셋":  "replicaset",
+		"서비스":    "service",
+		"인그레스":   "ingress",
+		"잡":      "job",
+		"크론잡":    "cronjob",
+		"노드":     "node",
+		"워크로드":   "workload",
+	}
+	raw := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	terms := make([]string, 0, len(raw))
+	for _, term := range raw {
+		if alias := aliases[term]; alias != "" {
+			term = alias
+		}
+		terms = append(terms, term)
+	}
+	return terms
+}
+
+func fleetKindSearchAliases(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "pod":
+		return "workload 워크로드 파드 팟"
+	case "deployment":
+		return "workload 워크로드 디플로이먼트 디플로이"
+	case "statefulset":
+		return "workload 워크로드 스테이트풀셋"
+	case "daemonset":
+		return "workload 워크로드 데몬셋"
+	case "replicaset":
+		return "workload 워크로드 레플리카셋"
+	case "job":
+		return "workload 워크로드 잡"
+	case "cronjob":
+		return "workload 워크로드 크론잡"
+	case "service":
+		return "서비스"
+	case "ingress":
+		return "인그레스"
+	case "node":
+		return "노드"
+	default:
+		return ""
+	}
+}
+
+func fleetSearchRank(item fleetSearchResult, query string, terms []string) int {
+	name := strings.ToLower(strings.TrimSpace(item.Name))
+	if name == query || (len(terms) == 1 && name == terms[0]) {
+		return 0
+	}
+	if strings.HasPrefix(name, query) || (len(terms) == 1 && strings.HasPrefix(name, terms[0])) {
+		return 10
+	}
+	if strings.Contains(name, query) || (len(terms) == 1 && strings.Contains(name, terms[0])) {
+		return 20
+	}
+	namespace := strings.ToLower(strings.TrimSpace(item.Namespace))
+	kind := strings.ToLower(strings.TrimSpace(item.Kind))
+	cluster := strings.ToLower(strings.TrimSpace(firstNonEmptyStr(item.ClusterName, item.ClusterID)))
+	for _, term := range terms {
+		if namespace == term || kind == term || cluster == term {
+			return 30
+		}
+	}
+	return 40
+}
+
+func fleetContainsAllTerms(haystack string, terms []string) bool {
+	for _, term := range terms {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
+}
+
 func fleetCatalogForItem(it store.K8sInventoryItem, catalogs []store.CatalogEntity) store.CatalogEntity {
-	itemRef := it.ClusterID + "/" + it.Namespace + "/" + it.Kind + "/" + it.Name
+	matches := fleetCatalogsForItem(it, catalogs)
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return store.CatalogEntity{}
+}
+
+func fleetCatalogsForItem(it store.K8sInventoryItem, catalogs []store.CatalogEntity) []store.CatalogEntity {
+	matches := []store.CatalogEntity{}
+	itemRef := fleetRuntimeRef(it)
 	for _, catalog := range catalogs {
 		rt, ok := parseCatalogRuntimeRef(catalog.RuntimeRef)
 		if !ok {
 			continue
 		}
-		if catalog.RuntimeRef == itemRef {
-			return catalog
+		if strings.EqualFold(catalog.RuntimeRef, itemRef) {
+			matches = append(matches, catalog)
+			continue
 		}
 		if it.ClusterID == rt.ClusterID && it.Namespace == rt.Namespace && strings.EqualFold(it.Kind, rt.Kind) && it.Name == rt.Name {
-			return catalog
-		}
-		if it.ClusterID == rt.ClusterID && it.Namespace == rt.Namespace && strings.EqualFold(it.Kind, "Pod") && strings.Contains(strings.ToLower(it.Name), strings.ToLower(rt.Name)) {
-			return catalog
+			matches = append(matches, catalog)
 		}
 	}
-	return store.CatalogEntity{}
+	if len(matches) > 0 {
+		return matches
+	}
+	for _, catalog := range catalogs {
+		rt, ok := parseCatalogRuntimeRef(catalog.RuntimeRef)
+		if !ok {
+			continue
+		}
+		if it.ClusterID == rt.ClusterID && it.Namespace == rt.Namespace && strings.EqualFold(it.Kind, "Pod") && strings.Contains(strings.ToLower(it.Name), strings.ToLower(rt.Name)) {
+			matches = append(matches, catalog)
+		}
+	}
+	return matches
+}
+
+func fleetRuntimeRef(it store.K8sInventoryItem) string {
+	return it.ClusterID + "/" + it.Namespace + "/" + it.Kind + "/" + it.Name
 }
 
 func fleetJSON(value any) string {

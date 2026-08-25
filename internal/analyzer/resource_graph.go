@@ -111,7 +111,10 @@ func BuildResourceGraph(items []store.K8sInventoryItem, owners []store.K8sNamesp
 		if _, ok := nodeByID[to]; !ok {
 			return
 		}
-		id := from + "|" + rel + "|" + to
+		// Keep parallel relationships when their evidence differs. In particular,
+		// one Ingress can route multiple host/path/port combinations to the same
+		// Service and every route is operationally relevant.
+		id := from + "|" + rel + "|" + to + "|" + reason
 		if _, exists := edgeByID[id]; exists {
 			return
 		}
@@ -456,7 +459,10 @@ func materializeGraph(nodeByID map[string]ResourceGraphNode, edgeByID map[string
 		if edges[i].Relation != edges[j].Relation {
 			return edges[i].Relation < edges[j].Relation
 		}
-		return edges[i].To < edges[j].To
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
+		}
+		return edges[i].ID < edges[j].ID
 	})
 	_ = itemByKey
 	return nodes, edges

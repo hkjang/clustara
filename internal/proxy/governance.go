@@ -166,11 +166,16 @@ func (s *Server) openAIGovernanceContext(r *http.Request, meta *store.LogRecord,
 }
 
 func (s *Server) evaluateGovernance(r *http.Request, g governanceContext) governanceDecision {
+	decision, _ := s.evaluateGovernanceWithError(r, g)
+	return decision
+}
+
+func (s *Server) evaluateGovernanceWithError(r *http.Request, g governanceContext) (governanceDecision, error) {
 	rules, err := s.db.ActivePolicyRules(r.Context())
 	if err != nil {
-		return governanceDecision{SecretAction: "detect"}
+		return governanceDecision{SecretAction: "detect"}, err
 	}
-	return evaluatePolicyRules(rules, g)
+	return evaluatePolicyRules(rules, g), nil
 }
 
 // evaluatePolicyRules applies a rule set to one governance context and returns the
@@ -576,8 +581,13 @@ func (s *Server) governanceApprovalGate(r *http.Request, g governanceContext, re
 }
 
 func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, authCtx *store.AuthContext, route mcpRoute, method, exposedName, toolName string, args json.RawMessage, id json.RawMessage) *rpcResponse {
+	failClosed := isMCPDirectChangeTool(route.upstreamName, toolName)
 	profile, found, err := s.db.ToolRiskProfile(r.Context(), route.upstreamName, toolName)
 	if err != nil {
+		if failClosed {
+			s.metrics.IncMCPBlocked()
+			return rpcErrorResponse(id, -32000, "blocked: governance risk profile lookup failed for destructive MCP tool")
+		}
 		return nil
 	}
 	riskLevel, action := inferMCPRisk(route.upstreamName, toolName)
@@ -590,7 +600,14 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 	// MCP Tool Scope Enforcement (CLU-REQ-11): an opt-in least-privilege layer. When a scope is
 	// configured for this (server, tool) it constrains role + target namespace/cluster and may
 	// force/skip the approval gate.
-	if scope, scopeFound, scopeErr := s.db.MCPToolScope(r.Context(), route.upstreamName, toolName); scopeErr == nil && scopeFound {
+	forceApproval := false
+	scope, scopeFound, scopeErr := s.db.MCPToolScope(r.Context(), route.upstreamName, toolName)
+	if scopeErr != nil {
+		if failClosed {
+			s.metrics.IncMCPBlocked()
+			return rpcErrorResponse(id, -32000, "blocked: MCP tool scope lookup failed for destructive MCP tool")
+		}
+	} else if scopeFound {
 		role := ""
 		if authCtx != nil {
 			role = authCtx.Role
@@ -605,6 +622,7 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		}
 		if sd.ForceApproval {
 			action = "require_approval"
+			forceApproval = true
 		}
 		if sd.SkipApproval && action == "require_approval" {
 			action = "allow"
@@ -633,7 +651,11 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		g.SecretTypes = findingTypes(findings)
 		s.recordSecretEvents(r, "", "detect", authCtx, findings)
 	}
-	decision := s.evaluateGovernance(r, g)
+	decision, policyLookupErr := s.evaluateGovernanceWithError(r, g)
+	if policyLookupErr != nil && failClosed {
+		s.metrics.IncMCPBlocked()
+		return rpcErrorResponse(id, -32000, "blocked: active governance policy lookup failed for destructive MCP tool")
+	}
 	if action == "block" {
 		decision.Blocked = true
 		decision.Reason = firstNonEmpty(note, "MCP tool risk profile blocked "+route.upstreamName+"/"+toolName)
@@ -653,16 +675,39 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		s.recordPolicyDecisionEvents(r.Context(), withPolicyDecisionRequestID(decision.PolicyEvents, reqID))
 		return rpcErrorResponse(id, -32000, "blocked by governance policy: "+firstNonEmpty(decision.Reason, "mcp_tool_blocked"))
 	}
-	if decision.RequireApproval && mcpSuperAdminDirect(authCtx, route.upstreamName, toolName) {
+	directSuperAdmin := mcpSuperAdminDirect(authCtx, route.upstreamName, toolName)
+	directReason := "authenticated super_admin MCP API key direct execution; safety blockers preserved"
+	auditedChange := failClosed && authCtx != nil && hasScope(authCtx.Scopes, "admin:write")
+	auditChangeExecution := func(reason string) *rpcResponse {
+		action := "mcp.destructive_tool.execution_authorized"
+		if directSuperAdmin {
+			action = "mcp.super_admin.direct_execution_authorized"
+		}
+		if auditErr := s.auditAdminRequired(withMCPAdminIdentity(r, apiKeyID, authCtx), action, "",
+			auditJSON(map[string]any{"api_key_id": apiKeyID, "server": route.upstreamName, "tool": toolName, "reason": reason})); auditErr != nil {
+			s.metrics.IncMCPBlocked()
+			return rpcErrorResponse(id, -32000, "blocked: required destructive MCP execution audit could not be persisted")
+		}
+		return nil
+	}
+	if decision.RequireApproval && !forceApproval && directSuperAdmin {
 		decision.RequireApproval = false
-		reason := "authenticated super_admin MCP API key direct execution; approval bypassed, safety blockers preserved"
+		reason := directReason + "; approval bypassed"
 		decision.PolicyEvents = append(decision.PolicyEvents, toolRiskDecisionEvent(g, profile, found, "super_admin_direct", reason))
-		s.auditAdmin(withMCPAdminIdentity(r, apiKeyID, authCtx), "mcp.super_admin.direct_execution", "",
-			auditJSON(map[string]any{"api_key_id": apiKeyID, "server": route.upstreamName, "tool": toolName, "reason": reason}))
+		directReason = reason
 	}
 	if decision.RequireApproval {
 		allowed, approvalID, reason := s.governanceApprovalGate(r, g, firstNonEmpty(decision.Reason, "MCP tool approval required"))
 		if allowed {
+			if auditedChange {
+				auditReason := "authenticated MCP API key destructive tool execution; required approval satisfied"
+				if directSuperAdmin {
+					auditReason = directReason + "; required approval satisfied"
+				}
+				if auditFailure := auditChangeExecution(auditReason); auditFailure != nil {
+					return auditFailure
+				}
+			}
 			s.recordPolicyDecisionEvents(r.Context(), decision.PolicyEvents)
 			return nil
 		}
@@ -670,6 +715,15 @@ func (s *Server) enforceMCPToolGovernance(r *http.Request, apiKeyID string, auth
 		s.recordMCPRouteDecision(r, reqID, apiKeyID, method, exposedName, route, "approval_required", reason, 0)
 		s.recordPolicyDecisionEvents(r.Context(), withPolicyDecisionRequestID(decision.PolicyEvents, reqID))
 		return rpcErrorResponse(id, -32000, "approval required: "+reason+"; approval_id="+approvalID)
+	}
+	if auditedChange {
+		auditReason := "authenticated MCP API key destructive tool execution; safety blockers preserved"
+		if directSuperAdmin {
+			auditReason = directReason
+		}
+		if auditFailure := auditChangeExecution(auditReason); auditFailure != nil {
+			return auditFailure
+		}
 	}
 	s.recordPolicyDecisionEvents(r.Context(), decision.PolicyEvents)
 	return nil

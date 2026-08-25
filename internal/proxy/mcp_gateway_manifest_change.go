@@ -137,11 +137,13 @@ func (s *Server) ensureMCPManifestDirectApproval(r *http.Request, authCtx *store
 	}
 	actor := adminID(r)
 	note := "super_admin MCP API key direct apply; approval bypass recorded"
-	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), requestID, "approved", actor, note); err != nil {
+	auditDetail := auditJSON(map[string]any{"api_key_id": firstNonEmpty(authCtx.APIKeyID, actor), "note": note})
+	if err := s.db.ApproveK8sManifestChangeWithAudit(r.Context(), requestID, actor, note, store.AdminAuditLog{
+		ID: newID("audit"), AdminID: actor, Action: "k8s.manifest_change.mcp_super_admin_direct_approve",
+		BeforeValue: requestID, AfterValue: auditDetail,
+	}); err != nil {
 		return errGateway("super_admin direct approval transition failed: " + err.Error())
 	}
-	s.auditAdmin(r, "k8s.manifest_change.mcp_super_admin_direct_approve", requestID,
-		auditJSON(map[string]any{"api_key_id": firstNonEmpty(authCtx.APIKeyID, actor), "note": note}))
 	return nil
 }
 

@@ -72,9 +72,9 @@ func TestMergePodGPUMetricsAggregatesDevices(t *testing.T) {
 
 func TestLatestPodUsageCombinesLatestCPUAndGPUObservation(t *testing.T) {
 	usage := latestPodUsage([]store.K8sMetricSample{
-		{Namespace: "prod", ResourceName: "api", CPUMillicores: 250, MemoryBytes: 512 << 20, ObservedAt: "2026-07-13T01:00:00Z"},
-		{Namespace: "prod", ResourceName: "api", GPUObserved: true, GPUUtilizationPct: 45, GPUMemoryUsedBytes: 4 << 30, ObservedAt: "2026-07-13T00:59:00Z"},
-	})["prod\x00api"]
+		{ClusterID: "c1", Namespace: "prod", ResourceName: "api", CPUMillicores: 250, MemoryBytes: 512 << 20, ObservedAt: "2026-07-13T01:00:00Z"},
+		{ClusterID: "c1", Namespace: "prod", ResourceName: "api", GPUObserved: true, GPUUtilizationPct: 45, GPUMemoryUsedBytes: 4 << 30, ObservedAt: "2026-07-13T00:59:00Z"},
+	})[podUsageKey("c1", "prod", "api")]
 	if !usage.Available || usage.CPUMillicores != 250 || !usage.GPUObserved || usage.GPUUtilizationPct != 45 {
 		t.Fatalf("unexpected latest Pod usage: %+v", usage)
 	}

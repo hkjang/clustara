@@ -31,59 +31,63 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.164"
+const AppVersion = "v0.9.165"
 
 type Server struct {
-	cfg              config.Config
-	db               *store.SQLStore
-	logger           *store.AsyncLogger
-	client           *http.Client
-	metrics          *Metrics
-	secrets          atomic.Pointer[secret.Cipher]
-	secretsMu        sync.Mutex // guards concurrent rotation
-	retention        *store.RetentionWorker
-	killState        atomicKillState
-	loggedRequests   sync.Map
-	mcpPolicy        atomic.Pointer[mcpPolicySnapshot]
-	routingRules     atomic.Pointer[routingRulesSnapshot]
-	knowledge        atomic.Pointer[knowledgeSnapshot]
-	deprecations     atomic.Pointer[deprecationSnapshot]
-	costCache        atomic.Pointer[costSnapshot]
-	learnCache       atomic.Pointer[routingLearnSnapshot]
-	priceCache       atomic.Pointer[pricingSnapshot]
-	mmCache          atomic.Pointer[mattermostSnapshot]
-	t2sExec          atomic.Pointer[sql.DB]                  // lazily-opened read-only DB for Text2SQL execute mode (default / env)
-	t2sExecConns     sync.Map                                // named exec connections: connID → *sql.DB
-	t2sTwin          atomic.Pointer[sql.DB]                  // lazily-opened SQL Digital Twin DB (masked/sample) for safe validation
-	t2sKilled        atomic.Bool                             // runtime kill switch: when set, Text2SQL is disabled regardless of config
-	t2sFeatures      atomic.Pointer[map[string]bool]         // runtime Text2SQL feature toggles (admin-managed)
-	t2sRuntime       atomic.Pointer[config.Text2SQLConfig]   // admin-settings overlay over cfg.Text2SQL (runtime snapshot)
-	chRuntime        atomic.Pointer[config.ClickHouseConfig] // admin-settings overlay over cfg.ClickHouse (runtime snapshot)
-	chSinkMu         sync.Mutex                              // guards the managed ClickHouse sink worker lifecycle
-	chSinkStop       context.CancelFunc                      // cancels the running sink worker (nil when stopped)
-	chSinkStarted    bool                                    // true once the startup worker apply has run (gates reload-time restarts)
-	carbonRuntime    atomic.Pointer[config.CarbonConfig]     // admin-settings overlay over cfg.Carbon
-	insRuntime       atomic.Pointer[config.InsuranceConfig]  // admin-settings overlay over cfg.Insurance
-	cacheRuntime     atomic.Pointer[config.CacheConfig]      // admin-settings overlay over cfg.Cache
-	pricingRuntime   atomic.Pointer[config.PricingConfig]    // admin-settings overlay over cfg.PricingConf
-	skillsRuntime    atomic.Pointer[config.SkillsConfig]     // admin-settings overlay over cfg.Skills
-	limitsRuntime    atomic.Pointer[config.LimitsConfig]     // admin-settings overlay over cfg.Limits
-	loggingRuntime   atomic.Pointer[config.LoggingConfig]    // admin-settings overlay over cfg.Logging
-	mcpRuntime       atomic.Pointer[config.MCPConfig]        // admin-settings overlay over cfg.MCP
-	adminIPPolicy    atomic.Pointer[adminIPPolicy]           // runtime administrator source-network policy
-	keycloakCfg      atomic.Pointer[config.KeycloakConfig]   // DB-backed Keycloak provider overlay over cfg.Keycloak (secret decrypted)
-	chFactQueue      chan store.LogRecord                    // async per-request fact ingest queue (bounded)
-	chFactDropped    atomic.Int64                            // requests dropped when the fact queue was full
-	alertWorker      atomic.Pointer[AlertWorker]             // optional alert worker attached by cmd/clustara
-	serviceReconcile *serviceReconcileRuntime                // periodic ServiceInstance inventory/health reconciliation
-	dwCache          *dwQueryCache                           // short-TTL cache for DW dashboard ClickHouse reads
-	sessions         *sessionInferer
-	sessionGCAt      atomic.Int64
-	extSeen          sync.Map // external key id -> struct{}; dedupes lazy registration
-	mcpConns         sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
-	mcpTools         atomic.Pointer[mcpToolsSnapshot]
-	lastReloadNano   atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
-	lastReloadTok    atomic.Pointer[string] // admin_settings change token this pod last applied
+	cfg            config.Config
+	db             *store.SQLStore
+	logger         *store.AsyncLogger
+	client         *http.Client
+	metrics        *Metrics
+	secrets        atomic.Pointer[secret.Cipher]
+	secretsMu      sync.Mutex // guards concurrent rotation
+	retention      *store.RetentionWorker
+	killState      atomicKillState
+	loggedRequests sync.Map
+	mcpPolicy      atomic.Pointer[mcpPolicySnapshot]
+	routingRules   atomic.Pointer[routingRulesSnapshot]
+	knowledge      atomic.Pointer[knowledgeSnapshot]
+	deprecations   atomic.Pointer[deprecationSnapshot]
+	costCache      atomic.Pointer[costSnapshot]
+	learnCache     atomic.Pointer[routingLearnSnapshot]
+	priceCache     atomic.Pointer[pricingSnapshot]
+	mmCache        atomic.Pointer[mattermostSnapshot]
+	t2sExec        atomic.Pointer[sql.DB]                  // lazily-opened read-only DB for Text2SQL execute mode (default / env)
+	t2sExecConns   sync.Map                                // named exec connections: connID → *sql.DB
+	t2sTwin        atomic.Pointer[sql.DB]                  // lazily-opened SQL Digital Twin DB (masked/sample) for safe validation
+	t2sKilled      atomic.Bool                             // runtime kill switch: when set, Text2SQL is disabled regardless of config
+	t2sFeatures    atomic.Pointer[map[string]bool]         // runtime Text2SQL feature toggles (admin-managed)
+	t2sRuntime     atomic.Pointer[config.Text2SQLConfig]   // admin-settings overlay over cfg.Text2SQL (runtime snapshot)
+	chRuntime      atomic.Pointer[config.ClickHouseConfig] // admin-settings overlay over cfg.ClickHouse (runtime snapshot)
+	chSinkMu       sync.Mutex                              // guards the managed ClickHouse sink worker lifecycle
+	chSinkStop     context.CancelFunc                      // cancels the running sink worker (nil when stopped)
+	chSinkStarted  bool                                    // true once the startup worker apply has run (gates reload-time restarts)
+	carbonRuntime  atomic.Pointer[config.CarbonConfig]     // admin-settings overlay over cfg.Carbon
+	insRuntime     atomic.Pointer[config.InsuranceConfig]  // admin-settings overlay over cfg.Insurance
+	cacheRuntime   atomic.Pointer[config.CacheConfig]      // admin-settings overlay over cfg.Cache
+	pricingRuntime atomic.Pointer[config.PricingConfig]    // admin-settings overlay over cfg.PricingConf
+	skillsRuntime  atomic.Pointer[config.SkillsConfig]     // admin-settings overlay over cfg.Skills
+	limitsRuntime  atomic.Pointer[config.LimitsConfig]     // admin-settings overlay over cfg.Limits
+	loggingRuntime atomic.Pointer[config.LoggingConfig]    // admin-settings overlay over cfg.Logging
+	mcpRuntime     atomic.Pointer[config.MCPConfig]        // admin-settings overlay over cfg.MCP
+	adminIPPolicy  atomic.Pointer[adminIPPolicy]           // runtime administrator source-network policy
+	keycloakCfg    atomic.Pointer[config.KeycloakConfig]   // DB-backed Keycloak provider overlay over cfg.Keycloak (secret decrypted)
+	chFactQueue    chan store.LogRecord                    // async per-request fact ingest queue (bounded)
+	chFactDropped  atomic.Int64                            // requests dropped when the fact queue was full
+	alertWorker    atomic.Pointer[AlertWorker]             // optional alert worker attached by cmd/clustara
+	// Durable Kubernetes workers, published by their Start methods so
+	// /admin/ops/workers and /metrics can report them without cmd wiring.
+	rolloutReconciler atomic.Pointer[K8sRolloutReconciler]
+	terminalReaper    atomic.Pointer[K8sTerminalSessionReaper]
+	serviceReconcile  *serviceReconcileRuntime // periodic ServiceInstance inventory/health reconciliation
+	dwCache           *dwQueryCache            // short-TTL cache for DW dashboard ClickHouse reads
+	sessions          *sessionInferer
+	sessionGCAt       atomic.Int64
+	extSeen           sync.Map // external key id -> struct{}; dedupes lazy registration
+	mcpConns          sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
+	mcpTools          atomic.Pointer[mcpToolsSnapshot]
+	lastReloadNano    atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
+	lastReloadTok     atomic.Pointer[string] // admin_settings change token this pod last applied
 }
 
 func (s *Server) AttachAlertWorker(worker *AlertWorker) {
@@ -826,7 +830,12 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte(s.metrics.Prometheus(s.logger.QueueDepth(), s.logger.Dropped(), s.logger.Written())))
+	body := s.metrics.Prometheus(s.logger.QueueDepth(), s.logger.Dropped(), s.logger.Written())
+	body += backgroundWorkerPrometheus([]backgroundWorkerStatus{
+		s.rolloutReconciler.Load().Status(),
+		s.terminalReaper.Load().Status(),
+	})
+	_, _ = w.Write([]byte(body))
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -1863,12 +1872,26 @@ func (s *Server) auditAdmin(r *http.Request, action string, before string, after
 	}
 }
 
+type verifiedAccessClaimsContextKey struct{}
+
+func verifiedAccessClaimsFromRequest(r *http.Request) (accessClaims, bool) {
+	claims, ok := r.Context().Value(verifiedAccessClaimsContextKey{}).(accessClaims)
+	return claims, ok
+}
+
+func cacheVerifiedAccessClaims(r *http.Request, claims accessClaims) {
+	*r = *r.WithContext(context.WithValue(r.Context(), verifiedAccessClaimsContextKey{}, claims))
+}
+
 func adminID(r *http.Request) string {
 	if identity, ok := mcpAdminIdentityFromRequest(r); ok {
 		return "mcp_api_key:" + identity.APIKeyID
 	}
 	if identity, ok := terminalStreamAuthFromRequest(r); ok && identity.AdminID != "" {
 		return identity.AdminID
+	}
+	if claims, ok := verifiedAccessClaimsFromRequest(r); ok && strings.TrimSpace(claims.Subject) != "" {
+		return strings.TrimSpace(claims.Subject)
 	}
 	token := bearerToken(r.Header.Get("Authorization"))
 	if token == "" {
@@ -1921,7 +1944,7 @@ func (s *Server) evaluateAdminAccess(r *http.Request) adminAccessDecision {
 		return adminAccessDecision{Authenticated: true, Allowed: allowed, Role: identity.Role, RequiredScope: required, Reason: reason}
 	}
 	if s.cfg.Auth.Enabled {
-		claims, ok := s.verifyAccessToken(r.Context(), bearerToken(r.Header.Get("Authorization")))
+		claims, ok := s.currentAccessClaims(r)
 		if !ok {
 			return adminAccessDecision{RequiredScope: required, Reason: "invalid or expired access token"}
 		}
@@ -2017,7 +2040,7 @@ func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 		// it here so the common admin gate does not reject the upgrade before the
 		// terminal handler can validate it.
 		if sessionID, ok := terminalStreamSessionID(r); ok {
-			if auth, valid := s.consumeTerminalTicket(sessionID, r.URL.Query().Get("ticket")); valid {
+			if auth, valid := s.consumeTerminalTicket(r, sessionID, r.URL.Query().Get("ticket")); valid {
 				next.ServeHTTP(w, withTerminalStreamAuth(r, auth))
 				return
 			}
@@ -2060,6 +2083,9 @@ func (s *Server) withAdminAccessUX(next http.Handler) http.Handler {
 }
 
 func (s *Server) currentAccessClaims(r *http.Request) (accessClaims, bool) {
+	if claims, ok := verifiedAccessClaimsFromRequest(r); ok {
+		return claims, true
+	}
 	token := bearerToken(r.Header.Get("Authorization"))
 	if token == "" {
 		return accessClaims{}, false
@@ -2067,12 +2093,14 @@ func (s *Server) currentAccessClaims(r *http.Request) (accessClaims, bool) {
 	// Internal HS256 session token first (with session-active check).
 	if s.cfg.Auth.Enabled {
 		if c, ok := s.verifyAccessToken(r.Context(), token); ok {
+			cacheVerifiedAccessClaims(r, c)
 			return c, true
 		}
 	}
 	// Fall back to a Keycloak-issued RS256 access token (machine clients, SSO callers).
 	if s.keycloakConfig().Enabled {
 		if c, ok := s.verifyKeycloakAccessToken(r.Context(), token); ok {
+			cacheVerifiedAccessClaims(r, c)
 			return c, true
 		}
 	}

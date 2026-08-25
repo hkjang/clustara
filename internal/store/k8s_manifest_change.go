@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // K8sManifestChangeRequest is the auditable ledger for editing one live Kubernetes
@@ -239,6 +240,48 @@ func (s *SQLStore) UpdateK8sManifestChangeStatus(ctx context.Context, id, status
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ApproveK8sManifestChangeWithAudit atomically records an approval and its
+// mandatory administrator audit entry. It is intentionally narrower than
+// UpdateK8sManifestChangeStatus so no UI or approval-bypass caller can leave an
+// approved request behind when audit persistence fails.
+func (s *SQLStore) ApproveK8sManifestChangeWithAudit(ctx context.Context, id, actor, result string, audit AdminAuditLog) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := nowString()
+	res, err := tx.ExecContext(ctx, s.bind(`UPDATE k8s_manifest_change_requests
+		SET status = 'approved', updated_at = ?, result = ?, approved_by = ?, approved_at = ?
+		WHERE id = ? AND status IN ('validated', 'approval_required')`), now, result, actor, now, id)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n != 1 {
+		var count int
+		if queryErr := tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM k8s_manifest_change_requests WHERE id = ?`), id).Scan(&count); queryErr != nil {
+			return queryErr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrInvalidTransition
+	}
+
+	if audit.CreatedAt.IsZero() {
+		audit.CreatedAt = time.Now().UTC()
+	}
+	if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO admin_audit_logs
+		(id, admin_id, action, before_value, after_value, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`), audit.ID, audit.AdminID, audit.Action, audit.BeforeValue, audit.AfterValue, formatTime(audit.CreatedAt)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLStore) UpdateK8sManifestChangeApplyResult(ctx context.Context, id, status, actor string, applyResult map[string]any, result string) error {

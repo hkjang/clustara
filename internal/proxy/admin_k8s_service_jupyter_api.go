@@ -454,15 +454,22 @@ func (s *Server) runApprovedJupyterHubAction(ctx context.Context, actor string, 
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed", err)
 	}
 	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, "running", "JupyterHub API execution in progress")
-	execErr := s.executeJupyterHubServerAction(ctx, act)
+	execCtx, cancelExec := context.WithTimeout(ctx, k8sActionExecutionTimeout)
+	execErr := s.executeJupyterHubServerAction(execCtx, act)
+	cancelExec()
 	resultStatus, resultMsg := "executed", "JupyterHub Named Server 작업 완료"
 	if execErr != nil {
 		resultStatus, resultMsg = "failed", "JupyterHub Named Server 작업 실패: "+execErr.Error()
+		if errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded) {
+			resultMsg = "JupyterHub 실행 결과 불명확: 외부 응답이 중단됨; Named Server 상태를 확인하세요"
+		}
 	}
-	if err := s.db.UpdateK8sActionStatus(ctx, act.ID, resultStatus, actor, resultMsg); err != nil {
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+	defer cancelFinalize()
+	if err := s.db.UpdateK8sActionStatus(finalizeCtx, act.ID, resultStatus, actor, resultMsg); err != nil {
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, resultStatus, resultMsg)
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
 	}

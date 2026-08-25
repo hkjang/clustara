@@ -1,8 +1,34 @@
 # K8s Operations Hub
 
-> **버전: v0.9.164** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.165** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.164)
+## 기능 상태 (v0.9.165)
+
+### 지속형 롤아웃·터미널 워커
+
+롤아웃 진행 관측과 터미널 세션 회수는 더 이상 브라우저 탭이나 SSE 연결에 의존하지 않습니다.
+서버 프로세스가 두 개의 지속형 워커를 실행합니다.
+
+- **롤아웃 리컨실러** — DB 원장에서 진행 중인 롤아웃·롤백을 재개합니다. `cluster_id + rollout_id`
+  lease로 복제본 중 하나만 한 롤아웃을 처리하고, 승인된 요청 실행·진행 관측·실패/시간 초과 시
+  자동 롤백·Kubernetes 응답이 모호했던 Action Center 행 동기화를 수행합니다.
+- **터미널 세션 리퍼** — 프로세스가 죽어 `connecting`/`running`으로 남은 exec 세션을 회수하거나
+  만료시킵니다. 리퍼가 관측한 스냅샷과 정확히 일치할 때만 전이하므로 살아 있는 소유자는
+  덮어쓰지 않습니다.
+
+두 워커의 상태는 `GET /admin/ops/workers`가 실행 여부·tick 수·처리량·연속 실패·백오프와 함께
+보고하고, `/metrics`는 `clustara_worker_running`, `clustara_worker_ticks_total`,
+`clustara_worker_failures_total`, `clustara_worker_processed_total`,
+`clustara_worker_consecutive_failures`, `clustara_worker_last_success_seconds`를 워커 label과 함께
+노출합니다. 주기·lease·배치·백오프 환경 변수와 다중 replica 주의사항은
+[운영 가이드 5.5](./OPERATIONS.md)를 참고하세요.
+
+### 터미널 스트림 티켓 필수화
+
+`GET /admin/k8s/exec/sessions/{id}/stream`은 관리자 Bearer 토큰만으로는 열리지 않습니다. 일반
+GET 경로는 `admin:read`면 충분하지만 TTY를 여는 것은 승인된 실행 권한을 소비하는 행위이므로,
+발급자에게 바인딩된 1회성 티켓이 없으면 `401 terminal_ticket_required`로 거부합니다. 티켓 소비와
+세션 claim은 하나의 트랜잭션으로 처리되어 복제본 간 중복 접속이 발생하지 않습니다.
 
 ### Trivy Scan·SBOM Import 인증
 

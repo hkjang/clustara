@@ -41,7 +41,7 @@ func (s *Server) handleK8sResourceGraph(w http.ResponseWriter, r *http.Request) 
 		if !strings.EqualFold(node.Kind, "Pod") {
 			continue
 		}
-		usage := usageByPod[podUsageKey(node.Namespace, node.Name)]
+		usage := usageByPod[podUsageKey(node.ClusterID, node.Namespace, node.Name)]
 		node.CPUMillicores, node.MemoryBytes = usage.CPUMillicores, usage.MemoryBytes
 		node.GPUUtilizationPct, node.GPUMemoryUsedBytes, node.GPUObserved = usage.GPUUtilizationPct, usage.GPUMemoryUsedBytes, usage.GPUObserved
 		node.MetricsObservedAt = usage.ObservedAt

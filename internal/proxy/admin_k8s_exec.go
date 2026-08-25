@@ -29,12 +29,20 @@ func (s *Server) handleK8sExecSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/k8s/exec/sessions/"), "/"), "/")
+	streamRequest := len(parts) == 2 && strings.EqualFold(parts[1], "stream")
 	_, streamAuthorized := terminalStreamAuthFromRequest(r)
-	if !streamAuthorized && len(parts) == 2 && parts[1] == "stream" {
-		if auth, ok := s.consumeTerminalTicket(parts[0], r.URL.Query().Get("ticket")); ok {
+	if !streamAuthorized && r.Method == http.MethodGet && streamRequest {
+		if auth, ok := s.consumeTerminalTicket(r, parts[0], r.URL.Query().Get("ticket")); ok {
 			r = withTerminalStreamAuth(r, auth)
 			streamAuthorized = true
 		}
+	}
+	// A bearer token cannot safely replace the one-use terminal ticket. In
+	// particular, GET routes normally need only admin:read, while opening a TTY
+	// consumes an approved execution grant and must remain bound to its issuer.
+	if streamRequest && !streamAuthorized {
+		writeOpenAIError(w, http.StatusUnauthorized, "valid terminal ticket required", "invalid_request_error", "terminal_ticket_required")
+		return
 	}
 	if !streamAuthorized && !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -297,7 +305,8 @@ func (s *Server) executeK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusNotImplemented, "cluster client does not support Pod exec", "invalid_request_error", "exec_unsupported")
 		return
 	}
-	running, err := s.db.MarkK8sPodExecSessionRunning(r.Context(), sess.ID, adminID(r))
+	actor := adminID(r)
+	running, err := s.db.MarkK8sPodExecSessionRunning(r.Context(), sess.ID, actor)
 	if errors.Is(err, store.ErrInvalidTransition) {
 		writeOpenAIError(w, http.StatusConflict, "exec session is already running or closed", "invalid_request_error", "exec_session_bad_state")
 		return
@@ -337,7 +346,9 @@ func (s *Server) executeK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		errMsg = firstNonEmpty(stderr, fmt.Sprintf("command exited with code %d", exitCode))
 	}
 	outputSample := truncateRunes(strings.TrimSpace(stdout+"\n"+stderr), 8000)
-	updated, err := s.db.UpdateK8sPodExecSessionExecution(r.Context(), sess.ID, status, adminID(r), outputSample, truncateRunes(errMsg, 2000), exitCode)
+	finalizeCtx, finalizeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	updated, err := s.db.UpdateK8sPodExecSessionExecution(finalizeCtx, sess.ID, status, actor, outputSample, truncateRunes(errMsg, 2000), exitCode)
+	finalizeCancel()
 	if errors.Is(err, store.ErrNotFound) {
 		writeOpenAIError(w, http.StatusNotFound, "exec session not found: "+sess.ID, "invalid_request_error", "exec_session_not_found")
 		return
@@ -394,13 +405,11 @@ func (s *Server) writeK8sPodExecSessions(w http.ResponseWriter, r *http.Request,
 
 func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request, namespace, pod string) {
 	var in struct {
-		ClusterID   string            `json:"cluster_id"`
-		Container   string            `json:"container"`
-		Command     string            `json:"command"`
-		Role        string            `json:"role"`
-		Reason      string            `json:"reason"`
-		PodLabels   map[string]string `json:"pod_labels"`
-		RequestedBy string            `json:"requested_by"`
+		ClusterID string `json:"cluster_id"`
+		Container string `json:"container"`
+		Command   string `json:"command"`
+		Role      string `json:"role"`
+		Reason    string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -434,7 +443,9 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		role = strings.ToLower(strings.TrimSpace(claims.Role))
 	}
 	container := strings.TrimSpace(firstNonEmpty(in.Container, defaultContainerName(item)))
-	labels := mergePodLabels(item.Labels, in.PodLabels)
+	// Policy selectors must only see labels collected from the target Pod. Accepting
+	// request-supplied labels here would let a caller manufacture a selector match.
+	labels := item.Labels
 	policies, err := s.db.ListK8sTerminalPolicies(r.Context(), store.K8sTerminalPolicyFilter{Role: role, ClusterID: clusterID, Enabled: "true", Limit: 500})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_terminal_policy_eval_failed")
@@ -461,7 +472,6 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		nextAction = "connect_exec_transport"
 	}
 	policyResult, _ := json.Marshal(result)
-	requestedBy := strings.TrimSpace(firstNonEmpty(in.RequestedBy, adminID(r)))
 	session := store.K8sPodExecSession{
 		ID:                newID("k8sexec"),
 		ClusterID:         clusterID,
@@ -470,7 +480,7 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		Container:         container,
 		Command:           command,
 		Role:              role,
-		RequestedBy:       requestedBy,
+		RequestedBy:       adminID(r),
 		Status:            status,
 		RiskLevel:         result.RiskLevel,
 		RequireApproval:   result.RequireApproval,
@@ -495,17 +505,6 @@ func (s *Server) requestK8sPodExecSession(w http.ResponseWriter, r *http.Request
 		"executed":      false,
 		"note":          "exec transport is not opened by this endpoint; the policy-gated session request is recorded for approval/audit",
 	})
-}
-
-func mergePodLabels(base, override map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range base {
-		out[k] = v
-	}
-	for k, v := range override {
-		out[k] = v
-	}
-	return out
 }
 
 func execSessionTimeout(maxSessionMinutes int) time.Duration {

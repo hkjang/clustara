@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"clustara/internal/analyzer"
-	"clustara/internal/store"
 )
 
 // Collector SLO Dashboard (CLU-REQ-02) + Collect Gap RCA (CLU-REQ-03).
@@ -48,9 +47,17 @@ func (s *Server) handleK8sCollectSLO(w http.ResponseWriter, r *http.Request) {
 
 	samples := make([]analyzer.CollectRunSample, 0, len(runs))
 	type failView struct {
-		store.K8sCollectRun
+		ID            string `json:"id"`
+		ClusterID     string `json:"cluster_id"`
+		ClusterName   string `json:"cluster_name"`
+		Trigger       string `json:"trigger"`
+		Stage         string `json:"stage"`
+		OK            bool   `json:"ok"`
+		ErrorText     string `json:"error_text,omitempty"`
+		LatencyMS     int64  `json:"latency_ms"`
+		ResourceCount int    `json:"resource_count"`
+		StartedAt     string `json:"started_at"`
 		analyzer.CollectGap
-		ClusterName string `json:"cluster_name"`
 	}
 	recentFailures := []failView{}
 	for _, run := range runs {
@@ -67,9 +74,17 @@ func (s *Server) handleK8sCollectSLO(w http.ResponseWriter, r *http.Request) {
 		})
 		if !run.OK && len(recentFailures) < 25 {
 			recentFailures = append(recentFailures, failView{
-				K8sCollectRun: run,
-				CollectGap:    analyzer.ClassifyCollectGap(run.Stage, run.ErrorText),
+				ID:            run.ID,
+				ClusterID:     run.ClusterID,
 				ClusterName:   firstNonEmpty(names[run.ClusterID], run.ClusterID),
+				Trigger:       run.Trigger,
+				Stage:         run.Stage,
+				OK:            run.OK,
+				ErrorText:     run.ErrorText,
+				LatencyMS:     run.LatencyMS,
+				ResourceCount: run.ResourceCount,
+				StartedAt:     run.StartedAt,
+				CollectGap:    analyzer.ClassifyCollectGap(run.Stage, run.ErrorText),
 			})
 		}
 	}

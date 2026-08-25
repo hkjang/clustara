@@ -61,11 +61,16 @@ type K8sInventoryItem struct {
 }
 
 type K8sInventoryFilter struct {
-	ClusterID string
-	Kind      string
-	Namespace string
-	Status    string
-	Limit     int
+	ClusterID   string
+	GroupID     string
+	Kind        string
+	Namespace   string
+	Status      string
+	SearchTerms []string
+	RankQuery   string
+	OwnerQuery  string
+	ImageQuery  string
+	Limit       int
 }
 
 type K8sEvent struct {
@@ -464,27 +469,103 @@ func (s *SQLStore) UpsertK8sInventory(ctx context.Context, item K8sInventoryItem
 }
 
 func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) ([]K8sInventoryItem, error) {
-	query := `SELECT id, cluster_id, kind, namespace, name, COALESCE(uid, ''), COALESCE(api_version, ''),
-		COALESCE(status, ''), health_score, risk_level, COALESCE(spec_json, '{}'), COALESCE(status_json, '{}'), COALESCE(labels_json, '{}'),
-		COALESCE(annotations_json, '{}'), COALESCE(creation_timestamp,''), COALESCE(deletion_timestamp,''), observed_at, updated_at FROM k8s_inventory WHERE 1=1`
+	query := `SELECT i.id, i.cluster_id, i.kind, i.namespace, i.name, COALESCE(i.uid, ''), COALESCE(i.api_version, ''),
+		COALESCE(i.status, ''), i.health_score, i.risk_level, COALESCE(i.spec_json, '{}'), COALESCE(i.status_json, '{}'), COALESCE(i.labels_json, '{}'),
+		COALESCE(i.annotations_json, '{}'), COALESCE(i.creation_timestamp,''), COALESCE(i.deletion_timestamp,''), i.observed_at, i.updated_at
+		FROM k8s_inventory i`
 	args := []any{}
+	hasFleetSearch := len(f.SearchTerms) > 0 || strings.TrimSpace(f.OwnerQuery) != "" || strings.TrimSpace(f.GroupID) != ""
+	if hasFleetSearch {
+		query += ` LEFT JOIN k8s_clusters c ON c.id = i.cluster_id
+			LEFT JOIN k8s_cluster_groups g ON g.id = c.group_id
+			LEFT JOIN k8s_namespace_ownership o ON o.cluster_id = i.cluster_id AND o.namespace = i.namespace`
+	}
+	query += ` WHERE 1=1`
 	if f.ClusterID != "" {
-		query += ` AND cluster_id = ?`
+		query += ` AND i.cluster_id = ?`
 		args = append(args, f.ClusterID)
 	}
+	if f.GroupID != "" {
+		query += ` AND c.group_id = ?`
+		args = append(args, f.GroupID)
+	}
 	if f.Kind != "" {
-		query += ` AND lower(kind) = lower(?)`
+		query += ` AND lower(i.kind) = lower(?)`
 		args = append(args, f.Kind)
 	}
 	if f.Namespace != "" {
-		query += ` AND namespace = ?`
+		query += ` AND i.namespace = ?`
 		args = append(args, f.Namespace)
 	}
 	if f.Status != "" {
-		query += ` AND status = ?`
+		query += ` AND i.status = ?`
 		args = append(args, f.Status)
 	}
-	query += ` ORDER BY updated_at DESC LIMIT ?`
+	searchText := `lower(
+		COALESCE(i.cluster_id,'') || ' ' || COALESCE(c.name,'') || ' ' || COALESCE(c.description,'') || ' ' ||
+		COALESCE(c.group_id,'') || ' ' || COALESCE(g.name,'') || ' ' || COALESCE(g.kind,'') || ' ' ||
+		COALESCE(i.kind,'') || ' ' || COALESCE(i.namespace,'') || ' ' || COALESCE(i.name,'') || ' ' ||
+		COALESCE(i.status,'') || ' ' || COALESCE(i.risk_level,'') || ' ' || COALESCE(i.api_version,'') || ' ' ||
+		COALESCE(o.team,'') || ' ' || COALESCE(o.owner,'') || ' ' || COALESCE(o.service_name,'') || ' ' ||
+		COALESCE(o.criticality,'') || ' ' || COALESCE(o.cost_center,'') || ' ' ||
+		COALESCE(i.labels_json,'') || ' ' || COALESCE(i.annotations_json,'') || ' ' || COALESCE(i.spec_json,'')
+	)`
+	catalogRuntimeMatch := `lower(ce.runtime_ref) = lower(
+		COALESCE(i.cluster_id,'') || '/' || COALESCE(i.namespace,'') || '/' || COALESCE(i.kind,'') || '/' || COALESCE(i.name,'')
+	)`
+	catalogSearchText := `lower(
+		COALESCE(ce.id,'') || ' ' || COALESCE(ce.kind,'') || ' ' || COALESCE(ce.name,'') || ' ' ||
+		COALESCE(ce.project_id,'') || ' ' || COALESCE(ce.owner_team_id,'') || ' ' || COALESCE(ce.runtime_ref,'') || ' ' ||
+		COALESCE(ce.repo_url,'') || ' ' || COALESCE(ce.docs_url,'') || ' ' || COALESCE(ce.criticality,'') || ' ' || COALESCE(ce.tags,'')
+	)`
+	for _, rawTerm := range f.SearchTerms {
+		term := strings.ToLower(strings.TrimSpace(rawTerm))
+		if term == "" {
+			continue
+		}
+		query += ` AND (` + searchText + ` LIKE ? ESCAPE '\'`
+		args = append(args, inventoryLikeContains(term))
+		if term == "workload" {
+			query += ` OR lower(i.kind) IN ('pod','deployment','statefulset','daemonset','replicaset','job','cronjob')`
+		}
+		query += ` OR EXISTS (
+			SELECT 1 FROM catalog_entities ce
+			WHERE ` + catalogRuntimeMatch + ` AND ` + catalogSearchText + ` LIKE ? ESCAPE '\'
+		))`
+		args = append(args, inventoryLikeContains(term))
+	}
+	if ownerQuery := strings.ToLower(strings.TrimSpace(f.OwnerQuery)); ownerQuery != "" {
+		ownerText := `lower(
+			COALESCE(o.team,'') || ' ' || COALESCE(o.owner,'') || ' ' || COALESCE(o.service_name,'') || ' ' ||
+			COALESCE(ce.owner_team_id,'') || ' ' || COALESCE(ce.name,'') || ' ' || COALESCE(ce.project_id,'')
+		)`
+		query += ` AND (
+			lower(COALESCE(o.team,'') || ' ' || COALESCE(o.owner,'') || ' ' || COALESCE(o.service_name,'')) LIKE ? ESCAPE '\'
+			OR EXISTS (
+				SELECT 1 FROM catalog_entities ce
+				WHERE ` + catalogRuntimeMatch + ` AND ` + ownerText + ` LIKE ? ESCAPE '\'
+			)
+		)`
+		pattern := inventoryLikeContains(ownerQuery)
+		args = append(args, pattern, pattern)
+	}
+	if imageQuery := strings.ToLower(strings.TrimSpace(f.ImageQuery)); imageQuery != "" {
+		query += ` AND lower(COALESCE(i.spec_json,'')) LIKE ? ESCAPE '\'`
+		args = append(args, inventoryLikeContains(imageQuery))
+	}
+	if rankQuery := strings.ToLower(strings.TrimSpace(f.RankQuery)); rankQuery != "" {
+		query += ` ORDER BY CASE
+			WHEN lower(i.name) = ? THEN 0
+			WHEN lower(i.name) LIKE ? ESCAPE '\' THEN 1
+			WHEN lower(i.namespace) = ? OR lower(i.kind) = ? THEN 2
+			WHEN lower(i.name) LIKE ? ESCAPE '\' THEN 3
+			ELSE 4
+		END, lower(i.kind), lower(i.namespace), lower(i.name), i.updated_at DESC`
+		args = append(args, rankQuery, inventoryLikePrefix(rankQuery), rankQuery, rankQuery, inventoryLikeContains(rankQuery))
+	} else {
+		query += ` ORDER BY i.updated_at DESC`
+	}
+	query += ` LIMIT ?`
 	args = append(args, boundedLimit(f.Limit, 200, 10000))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
@@ -500,6 +581,18 @@ func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) (
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func inventoryLikeContains(value string) string {
+	return "%" + inventoryLikeEscape(value) + "%"
+}
+
+func inventoryLikePrefix(value string) string {
+	return inventoryLikeEscape(value) + "%"
+}
+
+func inventoryLikeEscape(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
 // ListK8sInventoryIdentities returns inventory identities for reconciliation without the
@@ -716,6 +809,14 @@ func (s *SQLStore) ListK8sSecurityFindings(ctx context.Context, f K8sFindingFilt
 }
 
 func (s *SQLStore) InsertK8sActionRequest(ctx context.Context, a K8sActionRequest) error {
+	return s.insertK8sActionRequest(ctx, s.db, a)
+}
+
+type k8sExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (s *SQLStore) insertK8sActionRequest(ctx context.Context, execer k8sExecer, a K8sActionRequest) error {
 	now := nowString()
 	if a.CreatedAt == "" {
 		a.CreatedAt = now
@@ -729,7 +830,7 @@ func (s *SQLStore) InsertK8sActionRequest(ctx context.Context, a K8sActionReques
 	if a.Status == "" {
 		a.Status = "pending"
 	}
-	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_action_requests
+	_, err := execer.ExecContext(ctx, s.bind(`INSERT INTO k8s_action_requests
 		(id, cluster_id, namespace, resource_kind, resource_name, action, parameters_json, risk_level, status,
 		requested_by, approved_by, executed_by, result, dry_run_diff, idempotency_key, target_uid, target_resource_version,
 		command_hash, created_at, updated_at, approved_at, executed_at)

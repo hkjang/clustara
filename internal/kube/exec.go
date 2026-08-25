@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // PodCommandExecutor is the non-interactive Pod exec surface used by Clustara's
@@ -43,6 +44,56 @@ type PodTerminalStream struct {
 	conn net.Conn
 	br   *bufio.Reader
 	mu   sync.Mutex
+}
+
+// execContextConn ties a raw Kubernetes exec WebSocket to the context that
+// authorized it. net.Dialer only applies context cancellation while dialing;
+// without this wrapper a connected socket can remain blocked in a handshake,
+// read, or write after the request/session context has ended.
+type execContextConn struct {
+	net.Conn
+	ctx       context.Context
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func newExecContextConn(ctx context.Context, conn net.Conn) *execContextConn {
+	bound := &execContextConn{Conn: conn, ctx: ctx, done: make(chan struct{})}
+	if ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = bound.Close()
+			case <-bound.done:
+			}
+		}()
+	}
+	return bound
+}
+
+func (c *execContextConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil && c.ctx.Err() != nil {
+		return n, c.ctx.Err()
+	}
+	return n, err
+}
+
+func (c *execContextConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if err != nil && c.ctx.Err() != nil {
+		return n, c.ctx.Err()
+	}
+	return n, err
+}
+
+func (c *execContextConn) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		close(c.done)
+		err = c.Conn.Close()
+	})
+	return err
 }
 
 func (s *PodTerminalStream) SendInput(data []byte) error {
@@ -295,11 +346,21 @@ func (c *HTTPClient) openExecWebSocket(ctx context.Context, u *url.URL) (net.Con
 		if tlsErr != nil {
 			return nil, nil, tlsErr
 		}
-		conn, err = tls.DialWithDialer(dialer, "tcp", host, tlsConf)
+		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsConf}).DialContext(ctx, "tcp", host)
 	} else {
 		conn, err = dialer.DialContext(ctx, "tcp", host)
 	}
 	if err != nil {
+		return nil, nil, err
+	}
+	bound := newExecContextConn(ctx, conn)
+	conn = bound
+	handshakeDeadline := time.Now().Add(c.cfg.Timeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(handshakeDeadline) {
+		handshakeDeadline = deadline
+	}
+	if err := conn.SetDeadline(handshakeDeadline); err != nil {
+		conn.Close()
 		return nil, nil, err
 	}
 	keyBytes := make([]byte, 16)
@@ -340,6 +401,18 @@ func (c *HTTPClient) openExecWebSocket(ctx context.Context, u *url.URL) (net.Con
 	if got, want := resp.Header.Get("Sec-WebSocket-Accept"), websocketAccept(key); got != want {
 		conn.Close()
 		return nil, nil, fmt.Errorf("invalid websocket accept header")
+	}
+	if err := ctx.Err(); err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	streamDeadline := time.Time{}
+	if deadline, ok := ctx.Deadline(); ok {
+		streamDeadline = deadline
+	}
+	if err := conn.SetDeadline(streamDeadline); err != nil {
+		conn.Close()
+		return nil, nil, err
 	}
 	return conn, br, nil
 }

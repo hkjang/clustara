@@ -788,12 +788,55 @@ func k8sActionRunErr(httpStatus int, msg, errType, errCode string, err error) k8
 	return k8sActionRunResult{HTTPStatus: httpStatus, Message: msg, ErrorType: errType, ErrorCode: errCode, Err: err}
 }
 
+const (
+	k8sActionExecutionTimeout = 2 * time.Minute
+	k8sActionFinalizeTimeout  = 5 * time.Second
+)
+
 func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act store.K8sActionRequest) k8sActionRunResult {
 	if act.Status != "approved" {
 		return k8sActionRunErr(http.StatusConflict, "action must be approved before execution (current: "+act.Status+")", "invalid_request_error", "action_not_approved", store.ErrInvalidTransition)
 	}
 	if act.Action == "jupyter_server_start" || act.Action == "jupyter_server_stop" {
 		return s.runApprovedJupyterHubAction(ctx, actor, act)
+	}
+
+	var linkedRollout store.K8sRolloutAction
+	hasLinkedRollout := false
+	if strings.EqualFold(act.Action, "rollout_restart") {
+		if rollout, lookupErr := s.db.GetK8sRolloutByActionRequest(ctx, act.ID); lookupErr == nil {
+			linkedRollout = rollout
+			hasLinkedRollout = true
+			if driftErr := s.validateRolloutExecutionTarget(ctx, rollout); driftErr != nil {
+				if err := s.db.StartK8sRolloutExecution(ctx, act.ID, rollout.ID, actor); err != nil {
+					return k8sActionRunErr(http.StatusConflict, "rollout drift check could not claim the action: "+err.Error(), "invalid_request_error", "action_bad_state", err)
+				}
+				failureReason := "execution blocked by target drift: " + driftErr.Error()
+				rollbackStatus, rollbackReason := "", ""
+				if rollout.AutoRollback {
+					rollbackStatus = "failed"
+					rollbackReason = "rollout mutation was not applied; rollback was not required"
+				}
+				finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+				finalizeErr := s.db.FinalizeK8sRolloutMutation(
+					finalizeCtx, act.ID, rollout.ID, "failed", "failed", actor,
+					"실행 차단: "+driftErr.Error(), failureReason, rollbackStatus, rollbackReason,
+				)
+				if finalizeErr == nil {
+					_ = s.db.AppendK8sRolloutEvent(finalizeCtx, store.K8sRolloutEvent{
+						ID: newID("rollevent"), ActionID: rollout.ID, Status: "failed", Stage: "drift_guard",
+						Message: failureReason, Evidence: map[string]any{"target_uid": act.TargetUID, "target_resource_version": act.TargetResourceVersion},
+					})
+				}
+				cancelFinalize()
+				if finalizeErr != nil {
+					return k8sActionRunErr(http.StatusInternalServerError, "rollout drift result could not be finalized: "+finalizeErr.Error(), "server_error", "rollout_finalize_failed", finalizeErr)
+				}
+				return k8sActionRunErr(http.StatusConflict, failureReason, "invalid_request_error", "rollout_target_drift", driftErr)
+			}
+		} else if !errors.Is(lookupErr, store.ErrNotFound) {
+			return k8sActionRunErr(http.StatusInternalServerError, lookupErr.Error(), "server_error", "rollout_ledger_lookup_failed", lookupErr)
+		}
 	}
 	cluster, err := s.db.GetK8sCluster(ctx, act.ClusterID)
 	if err != nil {
@@ -810,15 +853,32 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	if !k8sActionExecutable(act.Action) {
 		return k8sActionRunErr(http.StatusBadRequest, "실행 가능한 액션이 아닙니다: "+act.Action+" (drain 등은 수동 처리)", "invalid_request_error", "action_not_executable", errors.New("action not executable"))
 	}
-	if err := s.db.UpdateK8sActionStatus(ctx, act.ID, "running", actor, "실행 중"); errors.Is(err, store.ErrInvalidTransition) {
-		return k8sActionRunErr(http.StatusConflict, "action is already running or closed", "invalid_request_error", "action_bad_state", err)
-	} else if errors.Is(err, store.ErrNotFound) {
-		return k8sActionRunErr(http.StatusNotFound, "action request not found: "+act.ID, "invalid_request_error", "action_not_found", err)
-	} else if err != nil {
-		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed", err)
-	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, "running", "Action Center execution in progress")
 
+	var claimErr error
+	if hasLinkedRollout {
+		claimErr = s.db.StartK8sRolloutExecution(ctx, act.ID, linkedRollout.ID, actor)
+	} else {
+		claimErr = s.db.UpdateK8sActionStatus(ctx, act.ID, "running", actor, "실행 중")
+	}
+	if errors.Is(claimErr, store.ErrInvalidTransition) {
+		return k8sActionRunErr(http.StatusConflict, "action is already running or closed", "invalid_request_error", "action_bad_state", claimErr)
+	} else if errors.Is(claimErr, store.ErrNotFound) {
+		return k8sActionRunErr(http.StatusNotFound, "action request not found: "+act.ID, "invalid_request_error", "action_not_found", claimErr)
+	} else if claimErr != nil {
+		return k8sActionRunErr(http.StatusInternalServerError, claimErr.Error(), "server_error", "k8s_action_running_failed", claimErr)
+	}
+
+	beginCtx, cancelBegin := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(beginCtx, act.ID, "running", "Action Center execution in progress")
+	if hasLinkedRollout {
+		_ = s.db.AppendK8sRolloutEvent(beginCtx, store.K8sRolloutEvent{
+			ID: newID("rollevent"), ActionID: linkedRollout.ID, Status: "running", Stage: "mutation_running",
+			Message: "Kubernetes mutation execution claimed", Evidence: map[string]any{"action_request_id": act.ID},
+		})
+	}
+	cancelBegin()
+
+	execCtx, cancelExec := context.WithTimeout(ctx, k8sActionExecutionTimeout)
 	var execErr error
 	switch strings.ToLower(act.Action) {
 	case "scale":
@@ -826,58 +886,78 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 		if replicas < 0 {
 			execErr = errors.New("scale 액션에 replicas 파라미터가 필요합니다")
 		} else {
-			execErr = exec.Scale(ctx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
+			execErr = exec.Scale(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
 		}
 	case "rollout_restart":
 		if detailed, ok := client.(kube.DetailedRolloutExecutor); ok {
-			execErr = detailed.RolloutRestartWithMetadata(ctx, act.ResourceKind, act.Namespace, act.ResourceName, kube.RolloutRestartMetadata{
+			execErr = detailed.RolloutRestartWithMetadata(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, kube.RolloutRestartMetadata{
 				RestartedBy: actor,
 				ActionID:    act.ID,
 				Reason:      strings.TrimSpace(k8sActionString(act.Parameters["reason"])),
 			})
 		} else {
-			execErr = exec.RolloutRestart(ctx, act.ResourceKind, act.Namespace, act.ResourceName)
+			execErr = exec.RolloutRestart(execCtx, act.ResourceKind, act.Namespace, act.ResourceName)
 		}
 	case "cordon":
-		execErr = exec.SetCordon(ctx, act.ResourceName, true)
+		execErr = exec.SetCordon(execCtx, act.ResourceName, true)
 	case "uncordon":
-		execErr = exec.SetCordon(ctx, act.ResourceName, false)
+		execErr = exec.SetCordon(execCtx, act.ResourceName, false)
 	case "delete_pod":
-		execErr = exec.DeletePod(ctx, act.Namespace, act.ResourceName)
+		execErr = exec.DeletePod(execCtx, act.Namespace, act.ResourceName)
 	default:
 		execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
 	}
+	cancelExec()
 
 	resultStatus, resultMsg := "executed", "실행 완료"
 	if execErr != nil {
 		resultStatus, resultMsg = "failed", "실행 실패: "+execErr.Error()
 	}
-	if err := s.db.UpdateK8sActionStatus(ctx, act.ID, resultStatus, actor, resultMsg); errors.Is(err, store.ErrInvalidTransition) {
-		return k8sActionRunErr(http.StatusConflict, "action finalization was already applied", "invalid_request_error", "action_bad_state", err)
-	} else if err != nil {
-		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
-	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, resultStatus, resultMsg)
-	if strings.EqualFold(act.Action, "rollout_restart") {
-		if rollout, lookupErr := s.db.GetK8sRolloutByActionRequest(ctx, act.ID); lookupErr == nil {
-			now := time.Now().UTC()
-			rollout.ApprovedBy, rollout.ApprovedAt = act.ApprovedBy, act.ApprovedAt
-			if rollout.StartedAt == "" {
-				rollout.StartedAt = now.Format(time.RFC3339Nano)
+
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
+	defer cancelFinalize()
+	if hasLinkedRollout {
+		actionStatus, rolloutStatus := resultStatus, "monitoring"
+		failureReason, rollbackStatus, rollbackReason := "", "", ""
+		if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded)) {
+			actionStatus = "running"
+			resultStatus = "running"
+			resultMsg = "실행 결과 불명확: Kubernetes 응답이 중단되어 인벤토리 증거로 확인 중"
+			failureReason = resultMsg
+		} else if execErr != nil {
+			rolloutStatus = "failed"
+			failureReason = execErr.Error()
+			if linkedRollout.AutoRollback {
+				rollbackStatus = "failed"
+				rollbackReason = "rollout mutation was rejected; rollback was not required"
 			}
-			if execErr != nil {
-				rollout.Status, rollout.FailureReason, rollout.CompletedAt = "failed", execErr.Error(), now.Format(time.RFC3339Nano)
-			} else {
-				rollout.Status = "monitoring"
-			}
-			_ = s.db.UpdateK8sRolloutProgress(ctx, rollout)
 		}
+		if err := s.db.FinalizeK8sRolloutMutation(
+			finalizeCtx, act.ID, linkedRollout.ID, actionStatus, rolloutStatus, actor,
+			resultMsg, failureReason, rollbackStatus, rollbackReason,
+		); err != nil {
+			return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
+		}
+		_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
+		if resultStatus == "running" {
+			return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusAccepted}
+		}
+	} else {
+		if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded)) {
+			resultMsg = "실행 결과 불명확: 외부 시스템 응답이 중단됨; 대상 상태를 확인하세요"
+		}
+		if err := s.db.UpdateK8sActionStatus(finalizeCtx, act.ID, resultStatus, actor, resultMsg); errors.Is(err, store.ErrInvalidTransition) {
+			return k8sActionRunErr(http.StatusConflict, "action finalization was already applied", "invalid_request_error", "action_bad_state", err)
+		} else if err != nil {
+			return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
+		}
+		_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
 	}
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
 	}
 	// Change-aware burst: collect this cluster at high frequency briefly so the change verifies fast.
-	s.registerCollectBurst(ctx, act.ClusterID, act.Namespace, "action", "action:"+act.Action+" "+act.ResourceKind+"/"+act.ResourceName)
+	s.registerCollectBurst(finalizeCtx, act.ClusterID, act.Namespace, "action", "action:"+act.Action+" "+act.ResourceKind+"/"+act.ResourceName)
 	return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusOK}
 }
 

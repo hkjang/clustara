@@ -11,3 +11,11 @@ coverage.out
 .playwright-mcp/
 .gocache/
 scratch/
+
+# Local demo/recording artifacts (gitframe captures, codex demo runners, built binary)
+/clustara
+output/
+.gitframe/
+.codex-*
+# Local demo launcher holds real bootstrap credentials; never commit it.
+scripts/start_demo_servers.sh

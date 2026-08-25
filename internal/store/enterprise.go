@@ -302,6 +302,61 @@ func (s *SQLStore) ListCatalogEntities(ctx context.Context, f CatalogEntityFilte
 	return out, rows.Err()
 }
 
+// ListCatalogEntitiesByRuntimeRefs returns exact runtime links without applying the
+// general catalog list cap. Callers should pass only their already-bounded result set.
+func (s *SQLStore) ListCatalogEntitiesByRuntimeRefs(ctx context.Context, runtimeRefs []string) ([]CatalogEntity, error) {
+	seen := map[string]bool{}
+	refs := make([]string, 0, len(runtimeRefs))
+	for _, ref := range runtimeRefs {
+		ref = strings.ToLower(strings.TrimSpace(ref))
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	const batchSize = 500
+	out := []CatalogEntity{}
+	for start := 0; start < len(refs); start += batchSize {
+		end := start + batchSize
+		if end > len(refs) {
+			end = len(refs)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", end-start), ",")
+		query := `SELECT id, kind, name, COALESCE(project_id,''), COALESCE(owner_team_id,''), COALESCE(runtime_ref,''),
+			COALESCE(repo_url,''), COALESCE(docs_url,''), COALESCE(criticality,''), COALESCE(tags,''), created_at, updated_at
+			FROM catalog_entities WHERE lower(runtime_ref) IN (` + placeholders + `)
+			ORDER BY kind, name ASC`
+		args := make([]any, 0, end-start)
+		for _, ref := range refs[start:end] {
+			args = append(args, ref)
+		}
+		rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var entity CatalogEntity
+			var tags string
+			if err := rows.Scan(
+				&entity.ID, &entity.Kind, &entity.Name, &entity.ProjectID, &entity.OwnerTeamID, &entity.RuntimeRef,
+				&entity.RepoURL, &entity.DocsURL, &entity.Criticality, &tags, &entity.CreatedAt, &entity.UpdatedAt,
+			); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			entity.Tags = parseTags(tags)
+			out = append(out, entity)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 func (s *SQLStore) UpsertAccessBinding(ctx context.Context, b AccessBinding) error {
 	now := nowString()
 	if b.CreatedAt == "" {

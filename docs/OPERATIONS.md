@@ -194,8 +194,14 @@ test -s data/fallback.ndjson || true   # 비정상 종료 시 fallback 에 잔�
 | `proxy_log_events_written_total` | DB 에 쓰인 감사 로그 |
 | `proxy_request_duration_ms` | 전체 요청 지연 히스토그램 |
 | `proxy_first_chunk_duration_ms` | upstream 첫 응답 청크 지연 히스토그램 |
+| `clustara_worker_running{worker}` | 지속형 백그라운드 워커 실행 여부 (1/0) |
+| `clustara_worker_ticks_total{worker}` | 워커 tick 실행 누적 수 |
+| `clustara_worker_failures_total{worker}` | 오류로 끝난 tick 누적 수 |
+| `clustara_worker_processed_total{worker}` | 워커가 실제로 진행시킨 항목 수 (롤아웃/세션) |
+| `clustara_worker_consecutive_failures{worker}` | 연속 실패 tick 수 — 0 이 아니면 백오프 중 |
+| `clustara_worker_last_success_seconds{worker}` | 마지막 성공 tick 이후 경과 초 |
 
-권장 알람: `proxy_log_events_dropped_total > 0` (5분 윈도우), `proxy_upstream_errors_total` 의 분당 증가, `proxy_log_queue_depth > 80% of LOG_QUEUE_SIZE`, `proxy_first_chunk_duration_ms` P95 급증.
+권장 알람: `proxy_log_events_dropped_total > 0` (5분 윈도우), `proxy_upstream_errors_total` 의 분당 증가, `proxy_log_queue_depth > 80% of LOG_QUEUE_SIZE`, `proxy_first_chunk_duration_ms` P95 급증, `clustara_worker_running == 0` (워커 활성 설정인데 멈춤), `clustara_worker_last_success_seconds > 워커 interval × 10`.
 
 ### 5.2 어드민 알림
 
@@ -247,6 +253,37 @@ curl -X POST http://localhost:9090/admin/fallback
 ```
 
 재처리 결과의 `imported` 는 DB 에 새로 들어간 로그, `duplicates` 는 이미 DB 에 있어 제거한 로그, `failed` / `remaining` 은 파일에 남겨둔 라인입니다.
+
+### 5.5 지속형 백그라운드 워커
+
+브라우저 탭이 열려 있지 않아도 상태를 수렴시키는 워커입니다. `/admin/ops/workers` 가 실행 여부·tick 수·연속 실패·백오프를 함께 보고합니다.
+
+| 워커 | 역할 | 멈추면 생기는 일 |
+| --- | --- | --- |
+| `k8s_rollout_reconciler` | 진행 중 롤아웃/롤백을 DB 원장 기준으로 재개 (복제본 간 lease 로 단일 소유) | 롤아웃이 `running` 에서 멈추고 auto-rollback 이 발동하지 않음 |
+| `k8s_terminal_session_reaper` | 죽은 프로세스가 남긴 exec/터미널 세션을 회수·만료 | 세션이 `connecting`/`running` 으로 영구히 남아 정책 한도를 잠식 |
+
+두 워커 모두 tick 실패 시 지수 백오프(interval → 2×… → max backoff)로 물러났다가 첫 성공에 즉시 원래 주기로 복귀하며, tick 내부 panic 은 프로세스를 죽이지 않고 실패 tick 으로 기록됩니다.
+
+환경 변수:
+
+| 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `WORKER_OWNER_ID` | `<hostname>-<pid>` | 롤아웃 lease 소유자 식별자. **복제본마다 달라야 합니다** |
+| `WORKER_SHUTDOWN_TIMEOUT` | `15s` | 종료 시 진행 중 tick 이 lease 를 반납하기까지 기다리는 시간 |
+| `K8S_ROLLOUT_RECONCILER_ENABLED` | `true` | 롤아웃 리컨실러 사용 여부 |
+| `K8S_ROLLOUT_RECONCILER_INTERVAL` | `5s` | tick 주기 |
+| `K8S_ROLLOUT_RECONCILER_LEASE_TTL` | `1m` | 복제본 간 lease 유효시간. **interval 이상이어야 하며**, 작으면 기동이 거부됩니다 |
+| `K8S_ROLLOUT_RECONCILER_BATCH_SIZE` | `100` | tick 당 처리할 롤아웃 수 |
+| `K8S_ROLLOUT_RECONCILER_MAX_BACKOFF` | `2m` | 연속 실패 시 최대 대기 |
+| `K8S_TERMINAL_REAPER_ENABLED` | `true` | 터미널 세션 리퍼 사용 여부 |
+| `K8S_TERMINAL_REAPER_INTERVAL` | `30s` | tick 주기 |
+| `K8S_TERMINAL_REAPER_BATCH_SIZE` | `250` | tick 당 검사할 세션 수 |
+| `K8S_TERMINAL_REAPER_MAX_BACKOFF` | `5m` | 연속 실패 시 최대 대기 |
+
+> lease TTL 이 tick 주기보다 짧으면 다른 복제본이 아직 진행 중인 롤아웃을 넘겨받아 패치를 **이중 실행**할 수 있습니다. 그래서 설정 검증 단계에서 기동 자체를 막습니다.
+
+종료 시에는 워커 컨텍스트를 먼저 취소한 뒤 진행 중 tick 이 끝나 lease 를 반납할 때까지 `WORKER_SHUTDOWN_TIMEOUT` 만큼 기다립니다. 시간 내에 끝나지 않으면 경고 로그를 남기고 종료하며, 해당 롤아웃은 lease TTL 만료 후 다른 복제본이 이어받습니다.
 
 ---
 
