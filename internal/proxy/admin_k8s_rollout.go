@@ -988,7 +988,39 @@ func (s *Server) validateRolloutExecutionTarget(ctx context.Context, roll store.
 	if roll.PreviousSpecHash != "" && currentHash != roll.PreviousSpecHash {
 		return fmt.Errorf("target spec drifted from %s to %s", roll.PreviousSpecHash, currentHash)
 	}
+	if hazard := s.rolloutExecutionHazard(ctx, roll, target); hazard != "" {
+		return errors.New(hazard)
+	}
 	return nil
+}
+
+// rolloutExecutionHazard re-checks, immediately before the mutation, the
+// precheck blockers that describe a cluster which cannot absorb a disruption
+// right now. The full precheck runs when the rollout is requested, but an
+// approval can be granted hours later, and these three conditions can appear in
+// the meantime without changing the target's spec — so the drift check above
+// cannot see them.
+//
+// Deliberately narrower than the request-time precheck: an unhealthy workload
+// or a replica shortfall is often the very reason an operator is restarting it,
+// so those stay request-time advice rather than an execution-time block.
+func (s *Server) rolloutExecutionHazard(ctx context.Context, roll store.K8sRolloutAction, target store.K8sInventoryItem) string {
+	if target.DeletionTimestamp != "" {
+		return "target is being deleted"
+	}
+	if rolloutTemplateRolloutInFlight(target) {
+		return "another Kubernetes rollout is already in progress on the target"
+	}
+	all, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: roll.ClusterID, Limit: 5000})
+	if err != nil {
+		// Without inventory the PDB verdict is unknown. Report it rather than
+		// letting an unverified disruption through.
+		return "PodDisruptionBudget safety could not be verified: " + err.Error()
+	}
+	if _, blocked := pdbSafety(target, all); blocked {
+		return "PodDisruptionBudget allows no disruptions (disruptionsAllowed=0)"
+	}
+	return ""
 }
 
 func rolloutEventStage(status string) string {
@@ -1093,6 +1125,18 @@ func rolloutImages(it store.K8sInventoryItem) []string {
 }
 func rolloutInProgress(it store.K8sInventoryItem) bool {
 	return rolloutUpdated(it) < rolloutDesired(it) || rolloutAvailable(it) < rolloutDesired(it)
+}
+
+// rolloutTemplateRolloutInFlight reports an actual in-flight template rollout,
+// which rolloutInProgress cannot: that predicate also fires when replicas are
+// merely unavailable, so a workload that is simply broken looks identical to one
+// mid-rollout. At request time the two are reported together and either way the
+// operator is stopped, but the execution-time hazard check must not block a
+// restart of a degraded workload — that is often the reason for the restart.
+//
+// Pods still running the previous template is the signal that distinguishes them.
+func rolloutTemplateRolloutInFlight(it store.K8sInventoryItem) bool {
+	return rolloutUpdated(it) < rolloutDesired(it)
 }
 func rolloutConditionFailed(it store.K8sInventoryItem) bool {
 	for _, raw := range asSliceAny(it.StatusObject["conditions"]) {
