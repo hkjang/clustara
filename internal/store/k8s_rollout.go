@@ -447,6 +447,62 @@ func (s *SQLStore) UpdateK8sRolloutProgressCAS(ctx context.Context, a K8sRollout
 	return err == nil && n == 1, err
 }
 
+// RejectK8sRolloutWithAction rejects a rollout and its Action Center request in
+// one transaction. Doing them separately let the action land as rejected while
+// the rollout kept its old status, leaving the two ledgers permanently
+// disagreeing about the same request.
+//
+// The rollout half is a compare-and-swap on the caller's observed row, so a
+// reconciler write that landed in between is not clobbered.
+func (s *SQLStore) RejectK8sRolloutWithAction(ctx context.Context, rolloutID, actionID, actor, reason string,
+	expectedStatus, expectedRollbackStatus, expectedUpdatedAt string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := nowString()
+	res, err := tx.ExecContext(ctx, s.bind(`UPDATE k8s_action_requests SET status='rejected', updated_at=?, result=?
+		WHERE id=? AND status IN ('pending', 'approval_required', 'pending_approval')`), now, reason, actionID)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n != 1 {
+		var count int
+		if queryErr := tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM k8s_action_requests WHERE id=?`), actionID).Scan(&count); queryErr != nil {
+			return queryErr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrInvalidTransition
+	}
+
+	res, err = tx.ExecContext(ctx, s.bind(`UPDATE k8s_rollout_actions
+		SET status='rejected', completed_at=?, failure_reason=?, updated_at=?
+		WHERE id=? AND status=? AND rollback_status=? AND updated_at=?`),
+		now, reason, now, rolloutID, expectedStatus, expectedRollbackStatus, expectedUpdatedAt)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n != 1 {
+		var count int
+		if queryErr := tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM k8s_rollout_actions WHERE id=?`), rolloutID).Scan(&count); queryErr != nil {
+			return queryErr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrInvalidTransition
+	}
+	return tx.Commit()
+}
+
 func (s *SQLStore) ListK8sRolloutActions(ctx context.Context, clusterID, resourceUID string, limit int) ([]K8sRolloutAction, error) {
 	q := `SELECT id,action_request_id,cluster_id,namespace,resource_kind,resource_name,resource_uid,requested_by,requested_at,
 		approved_by,approved_at,started_at,completed_at,reason,ticket_no,execution_mode,status,risk_level,previous_revision,

@@ -360,13 +360,20 @@ func (s *Server) handleRolloutByID(w http.ResponseWriter, r *http.Request) {
 			if !s.requireRolloutScope(w, r, "rollout:approve") {
 				return
 			}
-			if err := s.db.UpdateK8sActionStatus(r.Context(), roll.ActionRequestID, "rejected", adminID(r), "rollout rejected"); err != nil {
-				writeOpenAIError(w, http.StatusConflict, err.Error(), "invalid_request_error", "rollout_reject_failed")
+			// Both ledgers move together. Updating them separately, with the
+			// rollout write's error discarded, let the action land as rejected
+			// while the rollout kept its old status — and the blind write could
+			// also clobber a reconciler update that landed in between.
+			if err := s.db.RejectK8sRolloutWithAction(r.Context(), roll.ID, roll.ActionRequestID, adminID(r), "rollout rejected",
+				roll.Status, roll.RollbackStatus, roll.UpdatedAt); err != nil {
+				status := http.StatusConflict
+				if errors.Is(err, store.ErrNotFound) {
+					status = http.StatusNotFound
+				}
+				writeOpenAIError(w, status, err.Error(), "invalid_request_error", "rollout_reject_failed")
 				return
 			}
 			roll.Status = "rejected"
-			roll.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			_ = s.db.UpdateK8sRolloutProgress(r.Context(), roll)
 		default:
 			writeOpenAIError(w, http.StatusNotImplemented, "pause/resume/rollback is not supported in this release", "invalid_request_error", "rollout_command_unsupported")
 			return
