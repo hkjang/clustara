@@ -1,8 +1,20 @@
 # K8s Operations Hub
 
-> **버전: v0.9.169** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.170** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.169)
+## 기능 상태 (v0.9.170)
+
+### 원장 전이의 원자성
+
+한 요청이 두 원장(Action Center 요청과 롤아웃/Manifest 변경)에 걸쳐 있을 때 두
+갱신은 한 트랜잭션으로 처리됩니다. 한쪽만 적용되어 두 원장이 서로 다른 상태를
+보고하는 일이 없습니다.
+
+- 롤아웃 거절: 롤아웃 쪽은 호출자가 읽은 행에 대한 CAS 이므로 그 사이 리컨실러가
+  기록한 진행 상태를 덮지 않습니다.
+- Manifest rollback 요청: 원본이 `applied`·`verified`·`verify_failed` 가 아니면
+  `409` 로 거절하며 rollback 요청을 만들지 않습니다. 같은 원본에 대한 중복 rollback
+  요청도 생성되지 않습니다.
 
 ### 서비스 reconcile 단일 실행 보장
 
