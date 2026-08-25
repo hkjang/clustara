@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"clustara/internal/store"
@@ -109,7 +110,40 @@ func (w *K8sTerminalSessionReaper) reapBatch(ctx context.Context, now time.Time)
 		}
 		updatedAt, parseErr := time.Parse(time.RFC3339Nano, session.UpdatedAt)
 		if parseErr != nil {
-			failures = append(failures, fmt.Errorf("session %s updated_at: %w", session.ID, parseErr))
+			// An unreadable heartbeat never becomes readable on its own, so
+			// treating it as a retryable failure poisoned the reaper: the tick
+			// failed on every pass, exponential backoff pinned it at its maximum,
+			// and the row stayed at the head of the recovery queue because a
+			// NULL deadline sorts first. Genuinely orphaned terminals then waited
+			// out that backoff before being closed.
+			//
+			// Fence the session out instead. The CAS matches the exact stored
+			// value, so a live owner that writes a valid timestamp wins the race
+			// and keeps its session.
+			expired, expireErr := w.server.db.ExpireStaleK8sPodExecSession(
+				ctx, session.ID, session.Status, session.UpdatedAt,
+				"terminal session heartbeat is unreadable: "+parseErr.Error(),
+			)
+			if expireErr != nil {
+				failures = append(failures, fmt.Errorf("expire unreadable session %s: %w", session.ID, expireErr))
+				continue
+			}
+			if !expired {
+				// The owner refreshed the row underneath us; the next tick reads
+				// the new value.
+				continue
+			}
+			reaped++
+			slog.Warn("expired terminal session with an unreadable heartbeat",
+				"session_id", session.ID, "status", session.Status, "updated_at", session.UpdatedAt, "error", parseErr)
+			if auditErr := w.server.db.InsertAdminAudit(ctx, store.AdminAuditLog{
+				ID: newID("audit"), AdminID: "system:terminal-session-reaper", Action: "k8s.pod.terminal.expired",
+				BeforeValue: session.ID, AfterValue: auditJSON(map[string]any{
+					"status": "failed", "exit_code": 124, "reason": "unreadable_heartbeat",
+				}),
+			}); auditErr != nil {
+				failures = append(failures, fmt.Errorf("audit unreadable session %s: %w", session.ID, auditErr))
+			}
 			continue
 		}
 		if now.Before(updatedAt.Add(execSessionTimeout(session.MaxSessionMinutes) + 30*time.Second)) {
