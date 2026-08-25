@@ -237,6 +237,20 @@ func (s *Server) handleServiceReconcile(w http.ResponseWriter, r *http.Request, 
 		writeOpenAIError(w, 405, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
+	// This path persists, so it contends for the same per-instance lease the
+	// periodic worker takes. Without it an operator-triggered sync and a
+	// scheduler tick can reconcile the same instance at once and write each
+	// other's stale health.
+	acquired, release, leaseErr := s.acquireServiceReconcileLease(r.Context(), in.ID)
+	if leaseErr != nil {
+		writeOpenAIError(w, 500, leaseErr.Error(), "server_error", "service_reconcile_lease_failed")
+		return
+	}
+	if !acquired {
+		writeOpenAIError(w, 409, "this service instance is already being reconciled", "invalid_request_error", "service_reconcile_in_progress")
+		return
+	}
+	defer release()
 	result, err := s.reconcileServiceInstance(r.Context(), in, true)
 	if err != nil {
 		writeOpenAIError(w, 500, err.Error(), "server_error", "service_reconcile_failed")

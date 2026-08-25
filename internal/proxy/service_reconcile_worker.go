@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -74,6 +75,45 @@ func (s *Server) serviceReconcileScheduler(parent context.Context, observed *bac
 			return result.Reconciled, nil
 		})
 	}
+}
+
+// serviceReconcileTimeout mirrors the worker's per-instance timeout so every
+// reconcile path holds its lease for the same duration.
+func (s *Server) serviceReconcileTimeout(ctx context.Context) time.Duration {
+	timeout := time.Duration(s.serviceReconcileSettings(ctx).TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	return timeout
+}
+
+// acquireServiceReconcileLease guards one persisting reconcile of a service
+// instance. The periodic worker already does this; any other path that persists
+// has to take the same lease or the two interleave and overwrite each other's
+// health with staler data.
+//
+// The owner is unique per call rather than the worker's runtime owner on
+// purpose: the lease lets the same owner re-acquire (that is how the worker
+// renews), so reusing the worker's id inside the same process would hand out a
+// lease the worker is actively holding.
+//
+// The returned release is always safe to call.
+func (s *Server) acquireServiceReconcileLease(ctx context.Context, instanceID string) (bool, func(), error) {
+	noop := func() {}
+	if s == nil || s.db == nil {
+		return false, noop, errors.New("service reconcile store is unavailable")
+	}
+	owner := "api_" + newID("svcrq")
+	ttl := s.serviceReconcileTimeout(ctx) + 30*time.Second
+	acquired, err := s.db.TryAcquireK8sServiceReconcileLease(ctx, instanceID, owner, time.Now().UTC(), ttl)
+	if err != nil || !acquired {
+		return false, noop, err
+	}
+	return true, func() {
+		if releaseErr := s.db.ReleaseK8sServiceReconcileLease(context.WithoutCancel(ctx), instanceID, owner); releaseErr != nil {
+			slog.Warn("release service reconcile lease failed", "instance_id", instanceID, "error", releaseErr)
+		}
+	}, nil
 }
 
 func (s *Server) serviceReconcileSettings(ctx context.Context) ServiceReconcileWorkerStatus {
