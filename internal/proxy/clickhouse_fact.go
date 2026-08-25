@@ -566,6 +566,12 @@ func requestFactRow(rec store.LogRecord) map[string]any {
 	}
 }
 
+// clickHouseFactRetryMaxAttempts bounds how many times one persisted batch is
+// replayed before it is abandoned. A batch ClickHouse rejects for a permanent
+// reason (schema drift, a malformed row) is otherwise retried forever and, as
+// the oldest entry, keeps blocking the front of the replay window.
+const clickHouseFactRetryMaxAttempts = 10
+
 // handleClickHouseFactRetry replays persisted failed fact batches by re-POSTing the stored
 // JSONEachRow payload; rows that land are cleared from the retry queue.
 // POST /admin/dw/clickhouse/fact-retry[?table=ai_request_fact]
@@ -590,7 +596,7 @@ func (s *Server) handleClickHouseFactRetry(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	recovered, rows := 0, 0
-	failed := 0
+	failed, abandoned := 0, 0
 	for _, b := range batches {
 		ref := b.TableName
 		if cfg.Database != "" && !strings.Contains(ref, ".") {
@@ -608,10 +614,37 @@ func (s *Server) handleClickHouseFactRetry(w http.ResponseWriter, r *http.Reques
 		resp, derr := s.client.Do(req)
 		cancel()
 		if derr != nil || resp.StatusCode >= 300 {
-			failed++
+			reason := "replay failed"
+			if derr != nil {
+				reason = derr.Error()
+			} else {
+				reason = "ClickHouse returned status " + itoaProxy(resp.StatusCode)
+			}
 			if resp != nil {
 				resp.Body.Close()
 			}
+			// Count the attempt so a batch ClickHouse will never accept can
+			// eventually be given up on. The queue is replayed oldest-first, so
+			// without a cap a permanently-rejected batch keeps its place at the
+			// head of every window and blocks recoverable batches behind it.
+			attempts, markErr := s.db.MarkClickHouseFactRetryAttempt(r.Context(), b.ID, reason)
+			if markErr != nil {
+				slog.Warn("clickhouse fact retry attempt not recorded", "batch", b.ID, "error", markErr)
+				failed++
+				continue
+			}
+			if attempts >= clickHouseFactRetryMaxAttempts {
+				slog.Warn("abandoning clickhouse fact batch after repeated rejections",
+					"batch", b.ID, "table", b.TableName, "rows", b.Rows, "attempts", attempts, "error", reason)
+				if delErr := s.db.DeleteClickHouseFactRetry(r.Context(), b.ID); delErr != nil {
+					slog.Warn("abandoned clickhouse fact batch not removed", "batch", b.ID, "error", delErr)
+					failed++
+					continue
+				}
+				abandoned++
+				continue
+			}
+			failed++
 			continue
 		}
 		resp.Body.Close()
@@ -619,8 +652,13 @@ func (s *Server) handleClickHouseFactRetry(w http.ResponseWriter, r *http.Reques
 		recovered++
 		rows += b.Rows
 	}
-	s.auditAdmin(r, "dw.clickhouse.fact_retry", table, auditJSON(map[string]any{"recovered": recovered, "rows": rows, "failed": failed}))
-	writeJSON(w, http.StatusOK, map[string]any{"recovered_batches": recovered, "rows": rows, "still_failing": failed})
+	s.auditAdmin(r, "dw.clickhouse.fact_retry", table, auditJSON(map[string]any{
+		"recovered": recovered, "rows": rows, "failed": failed, "abandoned": abandoned,
+	}))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recovered_batches": recovered, "rows": rows, "still_failing": failed,
+		"abandoned_batches": abandoned, "max_attempts": clickHouseFactRetryMaxAttempts,
+	})
 }
 
 // text2sqlSQLHash returns a stable hash of generated SQL (the raw SQL is never shipped to

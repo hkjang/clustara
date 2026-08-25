@@ -57,6 +57,27 @@ func (s *SQLStore) ListClickHouseFactRetries(ctx context.Context, tableName stri
 	return out, rows.Err()
 }
 
+// MarkClickHouseFactRetryAttempt records one more failed replay of a batch and
+// returns the new attempt count. Without this the attempts column stayed at its
+// initial 1 forever, so a batch ClickHouse will never accept could not be told
+// apart from one that failed on a transient outage.
+func (s *SQLStore) MarkClickHouseFactRetryAttempt(ctx context.Context, id, errMsg string) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE clickhouse_fact_retry
+		SET attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ?`), errMsg, now, id)
+	if err != nil {
+		return 0, err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return 0, ErrNotFound
+	}
+	var attempts int
+	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT attempts FROM clickhouse_fact_retry WHERE id = ?`), id).Scan(&attempts); err != nil {
+		return 0, err
+	}
+	return attempts, nil
+}
+
 // DeleteClickHouseFactRetry removes a batch (after a successful replay).
 func (s *SQLStore) DeleteClickHouseFactRetry(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM clickhouse_fact_retry WHERE id = ?`), id)
