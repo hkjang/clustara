@@ -497,12 +497,13 @@ func (s *Server) rolloutPrecheck(r *http.Request, in rolloutRequestInput) (rollo
 	if kind == "StatefulSet" && hasBadPVC(in.Namespace, all) {
 		add("pvc", "blocked", "Pending 또는 Lost PVC가 있어 StatefulSet rollout을 차단합니다.")
 	}
-	pdbFound, pdbBlocked := pdbSafety(target, all)
-	if pdbBlocked {
-		add("pdb", "blocked", "PodDisruptionBudget의 disruptionsAllowed가 0입니다.")
-	} else if pdbFound {
+	pdb := pdbSafety(target, all)
+	switch {
+	case pdb.Blocked:
+		add("pdb", "blocked", pdb.Reason)
+	case pdb.Found:
 		add("pdb", "passed", "PodDisruptionBudget이 중단을 허용합니다.")
-	} else {
+	default:
 		add("pdb", "warning", "일치하는 PodDisruptionBudget을 확인할 수 없습니다.")
 	}
 	out.RiskLevel = "low"
@@ -1017,8 +1018,8 @@ func (s *Server) rolloutExecutionHazard(ctx context.Context, roll store.K8sRollo
 		// letting an unverified disruption through.
 		return "PodDisruptionBudget safety could not be verified: " + err.Error()
 	}
-	if _, blocked := pdbSafety(target, all); blocked {
-		return "PodDisruptionBudget allows no disruptions (disruptionsAllowed=0)"
+	if pdb := pdbSafety(target, all); pdb.Blocked {
+		return pdb.Reason
 	}
 	return ""
 }
@@ -1382,7 +1383,27 @@ func podOwnedByWorkload(pod, target store.K8sInventoryItem) bool {
 	}
 	return true
 }
-func pdbSafety(target store.K8sInventoryItem, all []store.K8sInventoryItem) (bool, bool) {
+
+// pdbVerdict is the PodDisruptionBudget safety answer for one rollout target.
+// Reason names the deciding budget so an operator can act on it.
+type pdbVerdict struct {
+	Found   bool
+	Blocked bool
+	Reason  string
+}
+
+// pdbSafety reports whether any PodDisruptionBudget covering the target forbids
+// a disruption right now.
+//
+// Every matching budget is considered and the most restrictive wins. Returning
+// on the first match let a permissive budget mask a restrictive one covering the
+// same pods, which is the wrong direction for a safety check.
+//
+// A budget whose status has not been populated yet is treated as blocking, but
+// is reported as unknown rather than as an explicit zero — an operator chasing
+// "disruptionsAllowed=0" on a field that is simply absent would be misled.
+func pdbSafety(target store.K8sInventoryItem, all []store.K8sInventoryItem) pdbVerdict {
+	verdict := pdbVerdict{}
 	for _, it := range all {
 		if it.Kind != "PodDisruptionBudget" || it.Namespace != target.Namespace {
 			continue
@@ -1395,13 +1416,26 @@ func pdbSafety(target store.K8sInventoryItem, all []store.K8sInventoryItem) (boo
 		for k, v := range match {
 			if fmt.Sprint(labels[k]) != fmt.Sprint(v) {
 				same = false
+				break
 			}
 		}
-		if same {
-			return true, intAny(it.StatusObject["disruptionsAllowed"]) == 0
+		if !same {
+			continue
+		}
+		verdict.Found = true
+		allowed, reported := it.StatusObject["disruptionsAllowed"]
+		switch {
+		case !reported:
+			verdict.Blocked = true
+			verdict.Reason = "PodDisruptionBudget " + it.Name + " has not reported disruptionsAllowed yet"
+			return verdict
+		case intAny(allowed) == 0:
+			verdict.Blocked = true
+			verdict.Reason = "PodDisruptionBudget " + it.Name + " allows no disruptions (disruptionsAllowed=0)"
+			return verdict
 		}
 	}
-	return false, false
+	return verdict
 }
 func firstContainerStarted(status map[string]any) string {
 	for _, raw := range asSliceAny(status["containerStatuses"]) {
