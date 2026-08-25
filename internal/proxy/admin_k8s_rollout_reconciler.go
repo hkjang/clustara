@@ -189,11 +189,17 @@ func (w *K8sRolloutReconciler) reconcileOne(ctx context.Context, rolloutID strin
 			return nil
 		}
 	}
-	if rolloutTerminal(current.Status) {
-		return w.server.syncRolloutActionRequest(ctx, current)
-	}
+	// Do not short-circuit on the primary status alone. A terminal rollout can
+	// still carry live rollback work, and reconcileRolloutContext is what owns
+	// the auto-rollback request plus the rollback monitoring and timeout
+	// transitions. Returning early on "failed"/"timed_out" stranded those
+	// forever while the row stayed permanently due, spinning every tick.
+	//
+	// syncRolloutActionRequest is a no-op for a non-terminal rollout, so the
+	// two exits below stay equivalent to the previous behaviour for rows that
+	// genuinely have nothing left to reconcile.
 	if !rolloutNeedsReconcile(current) {
-		return nil
+		return w.server.syncRolloutActionRequest(ctx, current)
 	}
 	current, err = w.server.reconcileRolloutContext(ctx, "system:"+w.ownerID, current)
 	if err != nil {
