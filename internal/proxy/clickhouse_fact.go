@@ -849,13 +849,15 @@ func (s *Server) clickhouseFactLoop(parent context.Context) {
 		buf = buf[:0]
 	}
 
-	interval := s.chConf().FlushInterval
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
+	interval := s.chFlushInterval()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
+		// clickhouse.flush_interval is an admin-editable runtime setting, so it
+		// is re-read here the same way BatchSize is below. Shortening it takes
+		// effect from the next record or flush, not instantly, because an idle
+		// loop is parked on the old ticker until then.
+		interval, _ = resyncFlushTicker(t, interval, s.chFlushInterval())
 		select {
 		case <-parent.Done():
 			flush()
@@ -873,4 +875,28 @@ func (s *Server) clickhouseFactLoop(parent context.Context) {
 			flush()
 		}
 	}
+}
+
+// defaultClickHouseFlushInterval is used when no flush interval is configured.
+const defaultClickHouseFlushInterval = 5 * time.Second
+
+// chFlushInterval resolves the effective fact-flush interval from the runtime
+// ClickHouse overlay, so an admin change applies without a restart.
+func (s *Server) chFlushInterval() time.Duration {
+	if interval := s.chConf().FlushInterval; interval > 0 {
+		return interval
+	}
+	return defaultClickHouseFlushInterval
+}
+
+// resyncFlushTicker applies a changed flush interval to a running ticker and
+// reports the interval now in force plus whether it changed. A non-positive
+// next value is ignored so a cleared setting keeps the current cadence rather
+// than panicking Ticker.Reset.
+func resyncFlushTicker(ticker *time.Ticker, current, next time.Duration) (time.Duration, bool) {
+	if ticker == nil || next <= 0 || next == current {
+		return current, false
+	}
+	ticker.Reset(next)
+	return next, true
 }
