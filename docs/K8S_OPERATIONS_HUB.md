@@ -1,8 +1,19 @@
 # K8s Operations Hub
 
-> **버전: v0.9.168** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.169** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.168)
+## 기능 상태 (v0.9.169)
+
+### 서비스 reconcile 단일 실행 보장
+
+`POST /admin/k8s/services/instances/{id}/reconcile` 은 주기 워커와 동일한
+인스턴스별 lease 를 잡습니다. 다른 reconcile 이 진행 중이면 `409` 로 거절하며,
+요청이 실패해도 lease 를 반납합니다. 운영자의 수동 동기화와 스케줄러 tick 이
+같은 인스턴스를 동시에 저장하는 일이 없습니다.
+
+주기 스케줄러 전체는 `SERVER_SCHEDULERS_ENABLED` 로 끌 수 있습니다. 꺼진
+스케줄러도 `/admin/ops/workers` 에 유휴로 표시되므로 설정으로 껐는지 여부를
+화면에서 확인할 수 있습니다.
 
 ### 재시도 큐의 포기 조건
 
