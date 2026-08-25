@@ -274,8 +274,19 @@ func TestServerWithSchedulersDisabledStartsNone(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
 
-	if got := server.schedulerStatuses(); len(got) != 0 {
-		t.Fatalf("schedulers registered while disabled: %+v", got)
+	// Disabled schedulers stay visible so an operator can tell "turned off"
+	// from "this build has none", but none of them run.
+	statuses := server.schedulerStatuses()
+	if len(statuses) == 0 {
+		t.Fatal("disabled schedulers vanished from reporting entirely")
+	}
+	for _, st := range statuses {
+		if st.Running {
+			t.Fatalf("%s is running while schedulers are disabled", st.Name)
+		}
+		if schedulerWorkerStatus(st).Status != "idle" {
+			t.Fatalf("%s reports %q, want idle", st.Name, schedulerWorkerStatus(st).Status)
+		}
 	}
 	// Shutdown must still be a clean no-op rather than blocking on nothing.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

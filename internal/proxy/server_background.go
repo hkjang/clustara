@@ -17,6 +17,15 @@ import (
 // so /admin/ops/workers can answer "is inventory collection still running" from
 // measured state rather than from an assumption.
 func (s *Server) startBackground(name string, interval time.Duration, run func(context.Context, *backgroundWorker)) {
+	s.registerBackground(name, interval, true, run)
+}
+
+// registerBackground publishes a scheduler's observation handle and, when
+// enabled, starts it. A disabled scheduler is still registered so
+// /admin/ops/workers reports it as idle rather than omitting it — an operator
+// cannot otherwise tell a scheduler that was turned off from one this build
+// never had.
+func (s *Server) registerBackground(name string, interval time.Duration, enabled bool, run func(context.Context, *backgroundWorker)) {
 	if s == nil || run == nil || s.baseCtx == nil {
 		return
 	}
@@ -24,6 +33,10 @@ func (s *Server) startBackground(name string, interval time.Duration, run func(c
 	s.schedulerMu.Lock()
 	s.schedulers = append(s.schedulers, observed)
 	s.schedulerMu.Unlock()
+	if !enabled {
+		observed.lastError.Store("")
+		return
+	}
 
 	s.background.Add(1)
 	observed.running.Store(true)
