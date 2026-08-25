@@ -400,6 +400,10 @@ func testConfig(upstreamURL string, upstreamKey string) config.Config {
 			QueueSize:        32,
 		},
 		Secret: config.SecretConfig{GatewaySecret: "test-secret"},
+		// Tests get a server that does not reconcile shared state underneath
+		// them. A live scheduler tick landing mid-assertion is a real source of
+		// flakiness; tests that are about the schedulers opt back in.
+		Workers: config.WorkersConfig{SchedulersEnabled: false},
 		Pricing: map[string]config.ModelPrice{
 			"test-model": {InputKRWPer1M: 1, OutputKRWPer1M: 2},
 		},

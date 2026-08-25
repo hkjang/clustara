@@ -280,6 +280,7 @@ curl -X POST http://localhost:9090/admin/fallback
 | `K8S_TERMINAL_REAPER_INTERVAL` | `30s` | tick 주기 |
 | `K8S_TERMINAL_REAPER_BATCH_SIZE` | `250` | tick 당 검사할 세션 수 |
 | `K8S_TERMINAL_REAPER_MAX_BACKOFF` | `5m` | 연속 실패 시 최대 대기 |
+| `SERVER_SCHEDULERS_ENABLED` | `true` | 5.6 절의 주기 스케줄러 전체 사용 여부. `false` 면 이 프로세스는 API 트래픽만 처리하고 상태를 수렴시키지 않습니다 |
 
 > lease TTL 이 tick 주기보다 짧으면 다른 복제본이 아직 진행 중인 롤아웃을 넘겨받아 패치를 **이중 실행**할 수 있습니다. 그래서 설정 검증 단계에서 기동 자체를 막습니다.
 
@@ -299,6 +300,8 @@ curl -X POST http://localhost:9090/admin/fallback
 | `text2sql_report_scheduler` | 저장 리포트 실행 | 실행 DB(`ExecDSN`) 미설정 시 **기동 즉시 종료** |
 | `runtime_reload_loop` | admin_settings 변경 토큰 폴링(다중 pod 수렴) | `SETTINGS_RELOAD_INTERVAL=0` |
 | `clickhouse_fact_loop` | per-request fact 배치 적재 | ClickHouse 미설정 시 no-op |
+
+`SERVER_SCHEDULERS_ENABLED=false` 로 전체를 끌 수 있습니다. API 전용 replica 나 디버깅용이며, **어느 replica 에서도 켜져 있지 않으면 인벤토리·메트릭·비용·서비스 상태가 수렴하지 않습니다.** 끈 프로세스는 기동 시 경고 로그를 남깁니다.
 
 이 스케줄러들은 프로세스 종료 시 함께 취소되며, `main` 이 DB 를 닫기 전에 종료를 기다립니다. 전부 영속 상태에서 재개하는 멱등 폴러이므로 진행 중 tick 은 기다리지 않고 취소합니다.
 

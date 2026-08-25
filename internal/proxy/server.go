@@ -156,9 +156,11 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 		qsize = 10000
 	}
 	server.chFactQueue = make(chan store.LogRecord, qsize)
-	server.startBackground("clickhouse_fact_loop", time.Minute, func(ctx context.Context, _ *backgroundWorker) {
-		server.clickhouseFactLoop(ctx)
-	})
+	if cfg.Workers.SchedulersEnabled {
+		server.startBackground("clickhouse_fact_loop", time.Minute, func(ctx context.Context, _ *backgroundWorker) {
+			server.clickhouseFactLoop(ctx)
+		})
+	}
 
 	// Pre-apply current model prices when the pricing table is empty (first boot).
 	server.seedPricingIfEmpty(context.Background())
@@ -172,19 +174,23 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 
 	// Multi-pod convergence: poll the admin_settings change token so a settings change made on any
 	// pod (or via direct DB edit) is applied on every pod within one interval, without a restart.
-	server.startBackground("runtime_reload_loop", cfg.RuntimeReloadInterval, func(ctx context.Context, _ *backgroundWorker) {
-		server.runtimeReloadLoop(ctx, cfg.RuntimeReloadInterval)
-	})
+	if cfg.Workers.SchedulersEnabled {
+		server.startBackground("runtime_reload_loop", cfg.RuntimeReloadInterval, func(ctx context.Context, _ *backgroundWorker) {
+			server.runtimeReloadLoop(ctx, cfg.RuntimeReloadInterval)
+		})
 
-	// Background scheduler for due saved Text2SQL reports (self-disables without an
-	// execute DB).
-	server.startBackground("text2sql_report_scheduler", time.Minute, server.text2sqlReportScheduler)
-	// Background scheduler for due K8s operations report deliveries (Mattermost).
-	server.startBackground("k8s_report_scheduler", time.Minute, server.k8sReportScheduler)
-	server.startBackground("k8s_collect_scheduler", k8sCollectTickInterval, server.k8sCollectScheduler)
-	server.startBackground("k8s_node_metric_scheduler", k8sNodeMetricTickInterval, server.k8sNodeMetricScheduler)
-	server.startBackground("k8s_cost_snapshot_scheduler", time.Minute, server.k8sCostSnapshotScheduler)
-	server.startBackground("service_reconcile_scheduler", serviceReconcileWorkerTick, server.serviceReconcileScheduler)
+		// Background scheduler for due saved Text2SQL reports (self-disables without an
+		// execute DB).
+		server.startBackground("text2sql_report_scheduler", time.Minute, server.text2sqlReportScheduler)
+		// Background scheduler for due K8s operations report deliveries (Mattermost).
+		server.startBackground("k8s_report_scheduler", time.Minute, server.k8sReportScheduler)
+		server.startBackground("k8s_collect_scheduler", k8sCollectTickInterval, server.k8sCollectScheduler)
+		server.startBackground("k8s_node_metric_scheduler", k8sNodeMetricTickInterval, server.k8sNodeMetricScheduler)
+		server.startBackground("k8s_cost_snapshot_scheduler", time.Minute, server.k8sCostSnapshotScheduler)
+		server.startBackground("service_reconcile_scheduler", serviceReconcileWorkerTick, server.serviceReconcileScheduler)
+	} else {
+		slog.Warn("server schedulers are disabled; inventory, metrics, cost and service state will not converge on this process")
+	}
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)

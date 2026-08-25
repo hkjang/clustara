@@ -13,7 +13,7 @@ func clearOperationalConfigEnv(t *testing.T) {
 		"GATEWAY_SECRET", "ADMIN_TOKEN", "ADMIN_READONLY_TOKEN",
 		"AUTH_ENABLED", "AUTH_JWT_SECRET", "MODEL_PRICING_KRW_PER_1M",
 		"SSO_KEYCLOAK_ENABLED", "SSO_KEYCLOAK_ISSUER_URL", "SSO_KEYCLOAK_CLIENT_ID",
-		"WORKER_OWNER_ID", "WORKER_SHUTDOWN_TIMEOUT",
+		"WORKER_OWNER_ID", "WORKER_SHUTDOWN_TIMEOUT", "SERVER_SCHEDULERS_ENABLED",
 		"K8S_ROLLOUT_RECONCILER_ENABLED", "K8S_ROLLOUT_RECONCILER_INTERVAL",
 		"K8S_ROLLOUT_RECONCILER_LEASE_TTL", "K8S_ROLLOUT_RECONCILER_BATCH_SIZE",
 		"K8S_ROLLOUT_RECONCILER_MAX_BACKOFF",
@@ -251,5 +251,25 @@ func TestLoadSkipsValidationForDisabledWorkers(t *testing.T) {
 	}
 	if cfg.Workers.RolloutReconcilerEnabled || cfg.Workers.TerminalReaperEnabled {
 		t.Fatal("workers should be disabled")
+	}
+}
+
+func TestLoadEnablesServerSchedulersByDefault(t *testing.T) {
+	cfg, err := loadWithWorkerEnv(t, nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Workers.SchedulersEnabled {
+		t.Fatal("server schedulers must default to enabled; a replica that does not converge state is opt-in")
+	}
+}
+
+func TestLoadHonoursDisabledServerSchedulers(t *testing.T) {
+	cfg, err := loadWithWorkerEnv(t, map[string]string{"SERVER_SCHEDULERS_ENABLED": "false"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Workers.SchedulersEnabled {
+		t.Fatal("SERVER_SCHEDULERS_ENABLED=false must disable the periodic schedulers")
 	}
 }

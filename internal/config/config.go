@@ -74,6 +74,13 @@ type WorkersConfig struct {
 	// ShutdownTimeout bounds how long the process waits for an in-flight worker
 	// tick to finish (and release its lease) before exiting.
 	ShutdownTimeout time.Duration
+
+	// SchedulersEnabled controls the periodic schedulers NewServer starts
+	// (inventory collection, node metrics, cost snapshots, report delivery,
+	// service reconcile, Text2SQL reports, settings reload, ClickHouse facts).
+	// Turning them off leaves a replica serving API traffic only, and gives
+	// tests a server that does not reconcile shared state underneath them.
+	SchedulersEnabled bool
 }
 
 // KeycloakConfig configures OIDC SSO via Keycloak (Authorization Code + PKCE). When
@@ -384,6 +391,7 @@ func Load() (Config, error) {
 			TerminalReaperBatchSize:  intEnv("K8S_TERMINAL_REAPER_BATCH_SIZE", 250),
 			TerminalReaperBackoff:    durationEnv("K8S_TERMINAL_REAPER_MAX_BACKOFF", 5*time.Minute),
 			ShutdownTimeout:          durationEnv("WORKER_SHUTDOWN_TIMEOUT", 15*time.Second),
+			SchedulersEnabled:        boolEnv("SERVER_SCHEDULERS_ENABLED", true),
 		},
 		HTTP: HTTPConfig{
 			ReadHeaderTimeout: durationEnv("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),

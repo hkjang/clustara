@@ -19,7 +19,10 @@ func newLifecycleTestServer(t *testing.T) *Server {
 	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
 	logger.Start()
 	t.Cleanup(func() { logger.Stop(context.Background()) })
-	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	// This helper exists to exercise the schedulers, so it opts back in.
+	cfg := testConfig("http://upstream.invalid", "secret")
+	cfg.Workers.SchedulersEnabled = true
+	server, err := NewServer(cfg, db, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +219,7 @@ func TestOpsWorkersDistinguishesRetentionRunFromSuccess(t *testing.T) {
 	// the server config has to carry the same interval or the page reports the
 	// worker as disabled instead of failing.
 	cfg.Retention = retentionCfg
+	cfg.Workers.SchedulersEnabled = true
 	server, err := NewServer(cfg, db, logger, retention)
 	if err != nil {
 		t.Fatal(err)
@@ -250,5 +254,33 @@ func TestOpsWorkersDistinguishesRetentionRunFromSuccess(t *testing.T) {
 	}
 	if ws.ErrorCount == 0 {
 		t.Fatal("the ops page must surface the retention error count")
+	}
+}
+
+// A server with schedulers disabled must start clean: nothing registered, so
+// nothing reconciles shared state underneath a caller (or a test).
+func TestServerWithSchedulersDisabledStartsNone(t *testing.T) {
+	db := openTestStore(t)
+	t.Cleanup(func() { db.Close() })
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	t.Cleanup(func() { logger.Stop(context.Background()) })
+
+	cfg := testConfig("http://upstream.invalid", "secret")
+	cfg.Workers.SchedulersEnabled = false
+	server, err := NewServer(cfg, db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+
+	if got := server.schedulerStatuses(); len(got) != 0 {
+		t.Fatalf("schedulers registered while disabled: %+v", got)
+	}
+	// Shutdown must still be a clean no-op rather than blocking on nothing.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown() with no schedulers error = %v", err)
 	}
 }
