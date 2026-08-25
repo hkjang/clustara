@@ -109,17 +109,27 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 	// Retention worker.
 	if s.retention != nil {
 		cfg := s.retention.Config()
+		// LastSuccess is deliberately not LastRun: retention stamps a run even
+		// when every purge inside it failed, and that is exactly when the store
+		// stops being bounded.
 		ws := workerStatus{Name: "retention", Running: cfg.Interval > 0, Status: "ok", LastRun: s.retention.LastRun(),
-			LastSuccess: s.retention.LastRun(), LagSeconds: secondsSinceRFC3339(s.retention.LastRun()),
+			LastSuccess: s.retention.LastSuccess(), LastError: s.retention.LastError(),
+			ErrorCount: s.retention.ErrorCount(), LagSeconds: secondsSinceRFC3339(s.retention.LastSuccess()),
 			Detail: "interval=" + cfg.Interval.String() + " requests=" + itoaProxy(cfg.RequestDays) + "d"}
 		if cfg.Interval <= 0 {
 			ws.Status, ws.Detail = "idle", "보존 주기 비활성(Interval=0)"
 		} else if ws.LastRun == "" {
 			ws.Status = "warn"
 			ws.Detail += " · 아직 실행 이력 없음"
+		} else if ws.LastSuccess == "" {
+			ws.Status = "critical"
+			ws.Detail += " · 성공한 실행이 한 번도 없음(보존 미동작)"
+		} else if ws.LastError != "" {
+			ws.Status = "warn"
+			ws.Detail += " · 최근 실행 실패: " + ws.LastError
 		} else if cfg.Interval > 0 && time.Duration(ws.LagSeconds)*time.Second > cfg.Interval*3 {
 			ws.Status = "warn"
-			ws.Detail += " · 최근 실행 지연"
+			ws.Detail += " · 최근 성공 지연"
 		}
 		workers = append(workers, ws)
 	}

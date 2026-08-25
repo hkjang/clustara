@@ -36,6 +36,9 @@ func (s *Server) retentionStatus(r *http.Request) store.RetentionStatus {
 	if s.retention != nil {
 		status.LastRunAt = s.retention.LastRun()
 		status.LastDeleted = s.retention.TotalDeleted()
+		status.LastSuccessAt = s.retention.LastSuccess()
+		status.LastError = s.retention.LastError()
+		status.ErrorCount = s.retention.ErrorCount()
 	}
 	if requests, prompts, responses, err := s.db.Counts(r.Context()); err == nil {
 		status.Requests = requests

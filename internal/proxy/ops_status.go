@@ -181,7 +181,11 @@ func (s *Server) opsComponents(ctx context.Context, status OpsStatus) []OpsCompo
 		components = append(components, OpsComponentStatus{Name: "mattermost", Status: "ok", Detail: "webhook configured", UpdatedAt: now})
 	}
 	if s.retention != nil {
-		components = append(components, OpsComponentStatus{Name: "retention", Status: "ok", Detail: "last_run=" + s.retention.LastRun(), UpdatedAt: now})
+		retentionStatus, retentionDetail := "ok", "last_run="+s.retention.LastRun()
+		if lastErr := s.retention.LastError(); lastErr != "" {
+			retentionStatus, retentionDetail = "warn", "last_run="+s.retention.LastRun()+" last_error="+lastErr
+		}
+		components = append(components, OpsComponentStatus{Name: "retention", Status: retentionStatus, Detail: retentionDetail, UpdatedAt: now})
 	} else {
 		components = append(components, OpsComponentStatus{Name: "retention", Status: "disabled", Detail: "retention worker not attached"})
 	}

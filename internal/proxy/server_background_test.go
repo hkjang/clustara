@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"clustara/internal/config"
 	"clustara/internal/store"
 )
 
@@ -195,5 +196,59 @@ func TestShutdownClearsSchedulerRunningState(t *testing.T) {
 		if st.Running {
 			t.Fatalf("%s still reports running after Shutdown", st.Name)
 		}
+	}
+}
+
+// The ops page used to report the retention worker's last *run* as its last
+// *success*. Retention stamps a run even when every purge inside it failed, so
+// a worker that had stopped bounding the store still showed as healthy.
+func TestOpsWorkersDistinguishesRetentionRunFromSuccess(t *testing.T) {
+	db := openTestStore(t)
+	t.Cleanup(func() { db.Close() })
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	t.Cleanup(func() { logger.Stop(context.Background()) })
+
+	retentionCfg := config.RetentionConfig{Interval: time.Hour, RequestDays: 1}
+	retention := store.NewRetentionWorker(db, retentionCfg)
+	cfg := testConfig("http://upstream.invalid", "secret")
+	// NewServer applies the admin-settings overlay to the retention worker, so
+	// the server config has to carry the same interval or the page reports the
+	// worker as disabled instead of failing.
+	cfg.Retention = retentionCfg
+	server, err := NewServer(cfg, db, logger, retention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+
+	// A worker that has run but never succeeded is the state that matters: the
+	// store is no longer being bounded and nothing else reports it.
+	retention.RunOnce(context.Background())
+	successBeforeFailure := retention.LastSuccess()
+	if successBeforeFailure == "" {
+		t.Fatal("the first clean run should have recorded a success")
+	}
+	db.Close()
+	retention.RunOnce(context.Background())
+
+	ws, ok := fetchWorkerStatuses(t, server)["retention"]
+	if !ok {
+		t.Fatal("retention is missing from /admin/ops/workers")
+	}
+	if ws.LastError == "" {
+		t.Fatalf("retention = %+v, want the failing run's error surfaced", ws)
+	}
+	if ws.Status != "warn" {
+		t.Fatalf("retention status = %q, want warn after a failing run", ws.Status)
+	}
+	// The stamps are second-resolution, so compare against the captured value
+	// rather than against last_run: what matters is that the failing run did
+	// not advance the reported success.
+	if ws.LastSuccess != successBeforeFailure {
+		t.Fatalf("last_success = %q, want it pinned to the last clean run %q", ws.LastSuccess, successBeforeFailure)
+	}
+	if ws.ErrorCount == 0 {
+		t.Fatal("the ops page must surface the retention error count")
 	}
 }

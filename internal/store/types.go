@@ -1464,4 +1464,9 @@ type RetentionStatus struct {
 	Responses    int64  `json:"responses"`
 	LastRunAt    string `json:"last_run_at"`
 	LastDeleted  int64  `json:"last_deleted"`
+	// LastSuccessAt trails LastRunAt while purges are failing: a run is stamped
+	// even when every step inside it errored.
+	LastSuccessAt string `json:"last_success_at"`
+	LastError     string `json:"last_error"`
+	ErrorCount    uint64 `json:"error_count"`
 }
