@@ -576,8 +576,10 @@ func (s *Server) writeRolloutEvidence(w http.ResponseWriter, r *http.Request, ro
 	})
 }
 
+// reconcileRollout refreshes a rollout for an HTTP endpoint. It records observed
+// progress but never initiates the rollback patch — see reconcileRolloutContext.
 func (s *Server) reconcileRollout(r *http.Request, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
-	return s.reconcileRolloutContext(r.Context(), adminID(r), roll)
+	return s.reconcileRolloutContext(r.Context(), adminID(r), roll, false)
 }
 
 type rolloutObservation struct {
@@ -615,7 +617,15 @@ func (o rolloutObservation) evidence(roll store.K8sRolloutAction, target store.K
 	}
 }
 
-func (s *Server) reconcileRolloutContext(ctx context.Context, actor string, roll store.K8sRolloutAction) (store.K8sRolloutAction, error) {
+// reconcileRolloutContext advances one rollout from observed cluster state.
+//
+// initiateRollback controls whether this call may issue the automatic rollback
+// patch. Only the durable worker passes true. Read endpoints must not: patching
+// a Deployment is a cluster mutation, `rollout:rollback` is a real issuable
+// scope, and the rollout detail page requires only `rollout:view` — so a viewer
+// could both trigger the mutation and be recorded as the actor who performed
+// it. Deferring costs nothing: the worker picks it up on its next tick.
+func (s *Server) reconcileRolloutContext(ctx context.Context, actor string, roll store.K8sRolloutAction, initiateRollback bool) (store.K8sRolloutAction, error) {
 	now := time.Now().UTC()
 	if !rolloutReconcileDue(roll) {
 		return roll, nil
@@ -780,7 +790,7 @@ func (s *Server) reconcileRolloutContext(ctx context.Context, actor string, roll
 			Message:  firstNonEmpty(current.RollbackFailureReason, "자동 롤백 상태 전환"),
 			Evidence: evidence})
 	}
-	if rollbackJustRequested || current.RollbackStatus == "requested" {
+	if initiateRollback && (rollbackJustRequested || current.RollbackStatus == "requested") {
 		return s.requestAutoRollback(ctx, actor, current)
 	}
 	return current, nil

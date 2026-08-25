@@ -201,7 +201,10 @@ func (w *K8sRolloutReconciler) reconcileOne(ctx context.Context, rolloutID strin
 	if !rolloutNeedsReconcile(current) {
 		return w.server.syncRolloutActionRequest(ctx, current)
 	}
-	current, err = w.server.reconcileRolloutContext(ctx, "system:"+w.ownerID, current)
+	// The worker is the only initiator of the automatic rollback patch, so the
+	// mutation is always attributed to the system owner rather than to whoever
+	// happened to open the rollout page.
+	current, err = w.server.reconcileRolloutContext(ctx, "system:"+w.ownerID, current, true)
 	if err != nil {
 		return err
 	}

@@ -610,7 +610,8 @@ func TestRolloutFailureEvidenceWinsOverTimeoutAndHealthyCounts(t *testing.T) {
 	}
 	roll, _ := db.GetK8sRolloutAction(ctx, "rollout-1")
 	server := &Server{db: db, client: http.DefaultClient}
-	got, err := server.reconcileRolloutContext(ctx, "worker", roll)
+	// Acting as the worker, which is the only initiator of the rollback patch.
+	got, err := server.reconcileRolloutContext(ctx, "worker", roll, true)
 	if err != nil {
 		t.Fatal(err)
 	}
