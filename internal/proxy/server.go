@@ -1465,10 +1465,25 @@ func (s *Server) copyResponse(w http.ResponseWriter, body io.Reader, analyzer *R
 	}
 }
 
+// enqueue records one request and marks its ID as already logged, so
+// handleOpenAI's deferred fallback does not log the same request twice.
+//
+// Only use this for records whose ID is the one the in-flight /v1 handler is
+// tracking; that handler's defer is what removes the marker again. For anything
+// else see enqueueDetached.
 func (s *Server) enqueue(record store.LogRecord) {
 	if record.Request.ID != "" {
 		s.loggedRequests.Store(record.Request.ID, true)
 	}
+	s.logger.Enqueue(record)
+	s.enqueueClickHouseFact(record)
+}
+
+// enqueueDetached records a request that no /v1 handler is tracking. Marking it
+// would leak: the dedupe marker is only ever read by handleOpenAI's defer, keyed
+// on that handler's own request ID, so a marker for an independently minted ID
+// can never be consumed and would accumulate for the process lifetime.
+func (s *Server) enqueueDetached(record store.LogRecord) {
 	s.logger.Enqueue(record)
 	s.enqueueClickHouseFact(record)
 }

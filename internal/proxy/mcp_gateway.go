@@ -443,7 +443,9 @@ func (s *Server) logMCPCall(r *http.Request, apiKeyID, serverName, toolName stri
 		record.Request.Error = "tool_error"
 	}
 	s.metrics.ObserveToolInvocations(record.Tools)
-	s.enqueue(record)
+	// Detached: this reqID is minted here, so no /v1 handler will ever consume a
+	// dedupe marker for it.
+	s.enqueueDetached(record)
 	return reqID
 }
 
