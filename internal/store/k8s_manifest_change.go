@@ -92,6 +92,73 @@ func (s *SQLStore) CreateK8sManifestChangeRequest(ctx context.Context, req K8sMa
 	return err
 }
 
+// CreateK8sManifestRollbackRequest marks a source change as rollback_requested
+// and creates the rollback change request in one transaction.
+//
+// The two used to be separate, with the source's status update discarded: a
+// source in a status that cannot be rolled back (or one already rolled back)
+// still got a rollback request created, the guarded transition silently did
+// nothing, and the API reported success. Repeating the call therefore produced
+// unlimited duplicate rollback requests for the same source, each needing its
+// own validation and approval.
+//
+// The transition runs first so an ineligible source is rejected before anything
+// is written.
+func (s *SQLStore) CreateK8sManifestRollbackRequest(ctx context.Context, sourceID, actor, result string, req K8sManifestChangeRequest) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := nowString()
+	res, err := tx.ExecContext(ctx, s.bind(`UPDATE k8s_manifest_change_requests SET status='rollback_requested', updated_at=?, result=?
+		WHERE id=? AND status IN ('applied', 'verified', 'verify_failed')`), now, result, sourceID)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n != 1 {
+		var count int
+		if queryErr := tx.QueryRowContext(ctx, s.bind(`SELECT COUNT(*) FROM k8s_manifest_change_requests WHERE id=?`), sourceID).Scan(&count); queryErr != nil {
+			return queryErr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrInvalidTransition
+	}
+
+	if req.CreatedAt == "" {
+		req.CreatedAt = now
+	}
+	if req.UpdatedAt == "" {
+		req.UpdatedAt = now
+	}
+	if req.Status == "" {
+		req.Status = "draft"
+	}
+	if req.RiskLevel == "" {
+		req.RiskLevel = "low"
+	}
+	if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO k8s_manifest_change_requests
+		(id, cluster_id, namespace, kind, api_version, name, status, risk_level, requires_approval, reason,
+		before_yaml, after_yaml, before_hash, after_hash, diffs_json, impact_json, validation_json, apply_result_json,
+		verify_result_json, created_by, approved_by, applied_by, verified_by, result, idempotency_key, target_uid,
+		target_resource_version, created_at, updated_at, approved_at, applied_at, verified_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		req.ID, req.ClusterID, req.Namespace, req.Kind, req.APIVersion, req.Name, req.Status, req.RiskLevel,
+		boolInt(req.RequiresApproval), req.Reason, req.BeforeYAML, req.AfterYAML, req.BeforeHash, req.AfterHash,
+		encodeManifestDiffs(req.Diffs), encodeAnyMap(req.Impact), encodeAnyMap(req.Validation), encodeAnyMap(req.ApplyResult),
+		encodeAnyMap(req.VerifyResult), req.CreatedBy, req.ApprovedBy, req.AppliedBy, req.VerifiedBy, req.Result,
+		req.IdempotencyKey, req.TargetUID, req.TargetResourceVersion, req.CreatedAt, req.UpdatedAt, req.ApprovedAt,
+		req.AppliedAt, req.VerifiedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *SQLStore) ListK8sManifestChangeRequests(ctx context.Context, f K8sManifestChangeFilter) ([]K8sManifestChangeRequest, error) {
 	query := `SELECT id, cluster_id, namespace, kind, api_version, name, status, risk_level, requires_approval, reason,
 		before_yaml, after_yaml, before_hash, after_hash, COALESCE(diffs_json, '[]'), COALESCE(impact_json, '{}'),

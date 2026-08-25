@@ -905,11 +905,23 @@ func (s *Server) rollbackK8sManifestChange(w http.ResponseWriter, r *http.Reques
 		CreatedBy: adminID(r), TargetUID: req.TargetUID, TargetResourceVersion: req.TargetResourceVersion,
 		Result: "Rollback 후보 요청 생성됨. validate 후 승인/적용하세요.",
 	}
-	if err := s.db.CreateK8sManifestChangeRequest(r.Context(), rollbackReq); err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_rollback_save_failed")
+	// One transaction: the source is marked rollback_requested and the rollback
+	// request is created together. Previously the source's status update was
+	// discarded, so a source that could not be rolled back still produced a
+	// rollback request and the call reported success — repeating it created
+	// unlimited duplicates for the same source.
+	if err := s.db.CreateK8sManifestRollbackRequest(r.Context(), id, adminID(r),
+		"rollback request: "+rollbackReq.ID, rollbackReq); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			writeOpenAIError(w, http.StatusNotFound, "manifest change not found: "+id, "invalid_request_error", "manifest_change_not_found")
+		case errors.Is(err, store.ErrInvalidTransition):
+			writeOpenAIError(w, http.StatusConflict, "this manifest change cannot be rolled back in its current state", "invalid_request_error", "manifest_rollback_bad_state")
+		default:
+			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_rollback_save_failed")
+		}
 		return
 	}
-	_ = s.db.UpdateK8sManifestChangeStatus(r.Context(), id, "rollback_requested", adminID(r), "rollback request: "+rollbackReq.ID)
 	s.auditAdmin(r, "k8s.manifest_change.rollback", id, auditJSON(map[string]any{"rollback_request": rollbackReq.ID}))
 	writeJSON(w, http.StatusCreated, map[string]any{"request": rollbackReq, "source": req.ID})
 }
