@@ -24,7 +24,7 @@ const (
 	k8sCostSnapshotDefaultSecs  = 86400
 )
 
-func (s *Server) k8sCostSnapshotScheduler() {
+func (s *Server) k8sCostSnapshotScheduler(parent context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	// Run once shortly after startup; the persisted last-success timestamp prevents duplicate work.
@@ -32,10 +32,12 @@ func (s *Server) k8sCostSnapshotScheduler() {
 	defer timer.Stop()
 	for {
 		select {
+		case <-parent.Done():
+			return
 		case <-timer.C:
 		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := schedulerTickContext(parent, 10*time.Minute)
 		if err := s.runAutomaticK8sCostSnapshots(ctx, false); err != nil && ctx.Err() == nil {
 			slog.Warn("automatic k8s cost snapshot failed", "error", err)
 		}

@@ -68,11 +68,11 @@ func (s *Server) buildK8sReportDigest(ctx context.Context, clusterID string) (st
 }
 
 // k8sReportScheduler periodically delivers the operations digest for due schedules to Mattermost.
-func (s *Server) k8sReportScheduler() {
+func (s *Server) k8sReportScheduler(parent context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
-	for range t.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	for waitForSchedulerTick(parent, t.C) {
+		ctx, cancel := schedulerTickContext(parent, 2*time.Minute)
 		schedules, err := s.db.ListK8sReportSchedules(ctx, true)
 		if err != nil {
 			cancel()

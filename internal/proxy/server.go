@@ -79,6 +79,12 @@ type Server struct {
 	// /admin/ops/workers and /metrics can report them without cmd wiring.
 	rolloutReconciler atomic.Pointer[K8sRolloutReconciler]
 	terminalReaper    atomic.Pointer[K8sTerminalSessionReaper]
+	// Lifecycle of the schedulers NewServer starts. Without this the pollers
+	// outlive the store and keep querying it after Close.
+	baseCtx      context.Context
+	stopBase     context.CancelFunc
+	background   sync.WaitGroup
+	shutdownOnce sync.Once
 	serviceReconcile  *serviceReconcileRuntime // periodic ServiceInstance inventory/health reconciliation
 	dwCache           *dwQueryCache            // short-TTL cache for DW dashboard ClickHouse reads
 	sessions          *sessionInferer
@@ -130,6 +136,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 		dwCache:          newDWQueryCache(0),
 		serviceReconcile: newServiceReconcileRuntime(),
 	}
+	server.baseCtx, server.stopBase = context.WithCancel(context.Background())
 	server.secrets.Store(secrets)
 
 	// Build the runtime config snapshot (env defaults overlaid with admin settings)
@@ -147,7 +154,7 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 		qsize = 10000
 	}
 	server.chFactQueue = make(chan store.LogRecord, qsize)
-	go server.clickhouseFactLoop(context.Background())
+	server.startBackground("clickhouse_fact_loop", server.clickhouseFactLoop)
 
 	// Pre-apply current model prices when the pricing table is empty (first boot).
 	server.seedPricingIfEmpty(context.Background())
@@ -161,17 +168,19 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 
 	// Multi-pod convergence: poll the admin_settings change token so a settings change made on any
 	// pod (or via direct DB edit) is applied on every pod within one interval, without a restart.
-	go server.runtimeReloadLoop(context.Background(), cfg.RuntimeReloadInterval)
+	server.startBackground("runtime_reload_loop", func(ctx context.Context) {
+		server.runtimeReloadLoop(ctx, cfg.RuntimeReloadInterval)
+	})
 
 	// Background scheduler for due saved Text2SQL reports (self-disables without an
 	// execute DB).
-	go server.text2sqlReportScheduler()
+	server.startBackground("text2sql_report_scheduler", server.text2sqlReportScheduler)
 	// Background scheduler for due K8s operations report deliveries (Mattermost).
-	go server.k8sReportScheduler()
-	go server.k8sCollectScheduler()
-	go server.k8sNodeMetricScheduler()
-	go server.k8sCostSnapshotScheduler()
-	go server.serviceReconcileScheduler()
+	server.startBackground("k8s_report_scheduler", server.k8sReportScheduler)
+	server.startBackground("k8s_collect_scheduler", server.k8sCollectScheduler)
+	server.startBackground("k8s_node_metric_scheduler", server.k8sNodeMetricScheduler)
+	server.startBackground("k8s_cost_snapshot_scheduler", server.k8sCostSnapshotScheduler)
+	server.startBackground("service_reconcile_scheduler", server.serviceReconcileScheduler)
 
 	if cfg.Upstream.APIKey != "" {
 		encrypted, err := secrets.Encrypt(cfg.Upstream.APIKey)

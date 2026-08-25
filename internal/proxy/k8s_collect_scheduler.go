@@ -32,12 +32,12 @@ const (
 )
 
 // k8sCollectScheduler runs the adaptive polling loop. Started once at server startup.
-func (s *Server) k8sCollectScheduler() {
+func (s *Server) k8sCollectScheduler(parent context.Context) {
 	lastAttempt := map[string]time.Time{} // local rate-limit (survives client-stage failures, resets on restart)
 	t := time.NewTicker(k8sCollectTickInterval)
 	defer t.Stop()
-	for range t.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	for waitForSchedulerTick(parent, t.C) {
+		ctx, cancel := schedulerTickContext(parent, 5*time.Minute)
 		s.runK8sCollectTick(ctx, lastAttempt, time.Now().UTC())
 		cancel()
 	}

@@ -35,19 +35,19 @@ type k8sNodeMetricCollectResult struct {
 // k8sNodeMetricScheduler collects only metrics.k8s.io/nodes at a stable cadence. Keeping it
 // separate from the adaptive full-inventory poll prevents live-agent clusters from receiving node
 // usage only at the 30-minute reconcile interval.
-func (s *Server) k8sNodeMetricScheduler() {
+func (s *Server) k8sNodeMetricScheduler(parent context.Context) {
 	lastAttempt := map[string]time.Time{}
 	lastPrune := time.Time{}
 	ticker := time.NewTicker(k8sNodeMetricTickInterval)
 	defer ticker.Stop()
-	for range ticker.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	for waitForSchedulerTick(parent, ticker.C) {
+		ctx, cancel := schedulerTickContext(parent, 2*time.Minute)
 		now := time.Now().UTC()
 		s.runK8sNodeMetricTick(ctx, lastAttempt, now)
 		if lastPrune.IsZero() || now.Sub(lastPrune) >= 6*time.Hour {
 			lastPrune = now // rate-limit retries too; a DB outage must not cause a 20-second delete loop.
 			retentionDays := s.monitoringInt(ctx, "k8s.monitoring.retention_days", 30)
-			if _, err := s.db.PruneK8sMonitoringSamples(ctx, now.Add(-time.Duration(retentionDays)*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+			if _, err := s.db.PruneK8sMonitoringSamples(ctx, now.Add(-time.Duration(retentionDays)*24*time.Hour).Format(time.RFC3339Nano)); err != nil && ctx.Err() == nil {
 				slog.Warn("k8s monitoring retention prune failed", "error", err)
 			}
 		}

@@ -126,4 +126,9 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
+	// Stop the server's polling schedulers before the deferred db.Close runs;
+	// otherwise they keep querying a closed store for the rest of the process.
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Warn("background schedulers did not stop cleanly", "error", err)
+	}
 }
