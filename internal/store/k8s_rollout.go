@@ -101,7 +101,7 @@ func (s *SQLStore) migrateK8sRolloutTargetLock(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
-		if !retryableK8sRolloutLockMigrationError(err) || attempt == maxAttempts-1 {
+		if !retryableLockMigrationError(err) || attempt == maxAttempts-1 {
 			return fmt.Errorf("migrate Kubernetes rollout target lock: %w", err)
 		}
 
@@ -187,7 +187,10 @@ func (s *SQLStore) migrateK8sRolloutTargetLockAttempt(ctx context.Context, befor
 	return tx.Commit()
 }
 
-func retryableK8sRolloutLockMigrationError(err error) bool {
+// retryableLockMigrationError reports whether a dedupe-then-unique-index migration
+// lost a race with a concurrent writer and is worth retrying. Shared by every
+// migration of that shape, not just the rollout one.
+func retryableLockMigrationError(err error) bool {
 	message := strings.ToLower(err.Error())
 	for _, fragment := range []string{
 		"unique constraint", "duplicate key", "database is locked", "database table is locked",

@@ -3092,6 +3092,9 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.migrateK8sIncidentOpenDedupKey(ctx); err != nil {
+		return err
+	}
 	return s.migrateK8sRolloutTargetLock(ctx)
 }
 

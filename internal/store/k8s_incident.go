@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // K8sIncident groups a failure's evidence (RCA cause, events, recent change, actions) into one
@@ -54,11 +56,33 @@ func (s *SQLStore) UpsertK8sIncidentByKey(ctx context.Context, in K8sIncident, n
 	if id == "" {
 		id = newID("k8sinc")
 	}
-	_, ierr := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_incidents
+	// The insert is the decision, not the SELECT above. Two syncs of the same cluster
+	// can both reach here having each seen no open incident; without a conflict target
+	// both would insert and the dedup key would hold two open incidents, each reported
+	// as newly created and so each alerted on. The partial unique index makes the
+	// second insert a no-op, and the loser falls through to updating the winner's row.
+	res, ierr := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_incidents
 		(id, dedup_key, cluster_id, namespace, kind, name, condition, severity, status, title, evidence_json, opened_at, updated_at, resolved_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, '')`),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, '')
+		ON CONFLICT(dedup_key) WHERE status = 'open' DO NOTHING`),
 		id, in.DedupKey, in.ClusterID, in.Namespace, in.Kind, in.Name, in.Condition, in.Severity, in.Title, evJSON, now, now)
-	return id, true, ierr
+	if ierr != nil {
+		return "", false, ierr
+	}
+	if affected, aerr := res.RowsAffected(); aerr != nil {
+		return "", false, aerr
+	} else if affected == 1 {
+		return id, true, nil
+	}
+	// Lost the race: another writer opened this incident first. Refresh theirs.
+	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT id FROM k8s_incidents WHERE dedup_key = ? AND status = 'open'
+		ORDER BY opened_at DESC LIMIT 1`), in.DedupKey).Scan(&existingID); err != nil {
+		return "", false, err
+	}
+	_, uerr := s.db.ExecContext(ctx, s.bind(`UPDATE k8s_incidents SET severity = ?, title = ?, condition = ?,
+		evidence_json = ?, updated_at = ? WHERE id = ?`),
+		in.Severity, in.Title, in.Condition, evJSON, now, existingID)
+	return existingID, false, uerr
 }
 
 func (s *SQLStore) ListK8sIncidents(ctx context.Context, f K8sIncidentFilter) ([]K8sIncident, error) {
@@ -162,4 +186,87 @@ func decodeStringSlice(raw string) []string {
 	}
 	_ = json.Unmarshal([]byte(raw), &out)
 	return out
+}
+
+const k8sIncidentDedupMigrationReason = "superseded during incident dedup-key migration"
+
+// migrateK8sIncidentOpenDedupKey enforces the invariant the dedup_key was always
+// meant to carry: at most one OPEN incident per key. The column had only a
+// non-unique index, so two concurrent syncs of the same cluster could both find no
+// open incident and both insert one — measured at six duplicates for a single key
+// under eight concurrent writers. Duplicates mean duplicate alerts (each insert
+// reports created=true) and an incident that stays open after the other is
+// resolved.
+//
+// Existing duplicates are collapsed onto the earliest open incident per key, which
+// preserves the original opened_at, before the unique index is created. Same shape
+// as migrateK8sRolloutTargetLock, including the Postgres table lock that holds off
+// old-version writers until the index commits.
+func (s *SQLStore) migrateK8sIncidentOpenDedupKey(ctx context.Context) error {
+	const maxAttempts = 5
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err = s.migrateK8sIncidentOpenDedupKeyAttempt(ctx, nil)
+		if err == nil {
+			return nil
+		}
+		if !retryableLockMigrationError(err) || attempt == maxAttempts-1 {
+			return fmt.Errorf("migrate Kubernetes incident dedup key: %w", err)
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("migrate Kubernetes incident dedup key: %w", err)
+}
+
+// migrateK8sIncidentOpenDedupKeyAttempt is split out so the atomic boundary can be
+// exercised deterministically in a concurrent-writer regression test.
+func (s *SQLStore) migrateK8sIncidentOpenDedupKeyAttempt(ctx context.Context, beforeIndex func()) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if s.dialect == "postgres" {
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE k8s_incidents IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+	}
+
+	now := nowString()
+	// Intentionally the first SQLite statement in the transaction: even with no
+	// matching row, UPDATE takes the writer lock before the victim set is evaluated
+	// and holds it through index creation.
+	if _, err := tx.ExecContext(ctx, s.bind(`UPDATE k8s_incidents
+		SET status='resolved',
+			resolved_at=CASE WHEN resolved_at='' THEN ? ELSE resolved_at END,
+			title=CASE WHEN title='' THEN ? ELSE title END,
+			updated_at=?
+		WHERE id IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (
+					PARTITION BY dedup_key ORDER BY opened_at, id
+				) AS conflict_rank
+				FROM k8s_incidents WHERE status='open'
+			) ranked WHERE conflict_rank > 1
+		)`), now, k8sIncidentDedupMigrationReason, now); err != nil {
+		return err
+	}
+
+	if beforeIndex != nil {
+		beforeIndex()
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_incidents_open_dedup_key
+		ON k8s_incidents(dedup_key) WHERE status = 'open'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
