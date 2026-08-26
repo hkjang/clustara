@@ -726,10 +726,13 @@ func TestSkillRegistryLifecycle(t *testing.T) {
 		t.Fatalf("draft skill leaked to /v1/skills: %+v", pub.Skills)
 	}
 
-	// Promote to production.
+	// Promote to production. Reaching production requires every mandatory
+	// guardrail, including team scoping and a daily cap — enforcement reads an
+	// unset guardrail as unrestricted.
 	resp = postJSON(t, srv.URL+"/admin/skills", "", map[string]any{
 		"name": "text2sql-safety", "status": "production", "risk_level": "medium", "version": "1.0.0",
 		"allowed_models": "qwen-*", "allowed_tools": "sql-runner", "instructions": "Check SELECT-only.",
+		"allowed_teams": "platform", "daily_limit": 100,
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("promote = %d", resp.StatusCode)
