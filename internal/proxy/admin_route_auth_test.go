@@ -15,9 +15,20 @@ var unauthenticatedAdminRoutes = map[string]string{
 	"/admin":               "admin UI shell; must load so the login form can render",
 	"/admin/":              "admin UI shell; must load so the login form can render",
 	"/admin/assets/xterm/": "static terminal assets, no data",
+	"/metrics":             "Prometheus scrape endpoint; aggregate process counters only, no per-key, per-team or per-user labels",
 }
 
-var authGatePattern = regexp.MustCompile(`authorize\w*\(|requireAdmin|currentAccessClaims|requireScope|verifyAccessToken|authenticate|adminIdentity`)
+// identityGatedPrefixes are the route families that must establish who is calling.
+// /admin needs an operator; /me and /team must resolve the caller before returning
+// anything, since their whole contract is that you see only your own data or your
+// own team's.
+var identityGatedPrefixes = []string{"/admin", "/me", "/team", "/metrics"}
+
+// The /me and /team families identify the caller through their own helpers. Those
+// helpers do reach currentAccessClaims internally, so delegation-following already
+// covers them, but naming them keeps the check working if a helper is ever
+// restructured.
+var authGatePattern = regexp.MustCompile(`authorize\w*\(|requireAdmin|currentAccessClaims|requireScope|verifyAccessToken|authenticate|adminIdentity|meUserID|meKeyContext|resolveTeamScope|meIdentity`)
 
 func proxySources(t *testing.T) map[string]string {
 	t.Helper()
@@ -40,12 +51,12 @@ func proxySources(t *testing.T) map[string]string {
 	return out
 }
 
-// Every /admin route must reach an authorization check, directly or through the
+// Every /admin, /me and /team route must reach an authorization check, directly or through the
 // handler it delegates to. /admin/llm/prompts/compare did not: it served prompt
 // telemetry — names, call volumes, token counts, KRW cost, latency, error rates —
 // to anyone, with the api_key_id/team filter taken from the query string, while
 // every sibling handler in the same file gated on authorizeAdmin.
-func TestEveryAdminRouteIsAuthorized(t *testing.T) {
+func TestEveryIdentityGatedRouteIsAuthorized(t *testing.T) {
 	src := proxySources(t)
 	joined := strings.Join(valuesOf(src), "\n")
 
@@ -85,7 +96,14 @@ func TestEveryAdminRouteIsAuthorized(t *testing.T) {
 	checked := 0
 	for _, m := range routeRe.FindAllStringSubmatch(joined, -1) {
 		path, handler := m[1], m[2]
-		if !strings.HasPrefix(path, "/admin") {
+		relevant := false
+		for _, prefix := range identityGatedPrefixes {
+			if strings.HasPrefix(path, prefix) {
+				relevant = true
+				break
+			}
+		}
+		if !relevant {
 			continue
 		}
 		if _, allowed := unauthenticatedAdminRoutes[path]; allowed {
@@ -98,7 +116,7 @@ func TestEveryAdminRouteIsAuthorized(t *testing.T) {
 		}
 	}
 	if checked < 100 {
-		t.Fatalf("only %d /admin routes were analysed; the route scan is probably broken", checked)
+		t.Fatalf("only %d identity-gated routes were analysed; the route scan is probably broken", checked)
 	}
 }
 
