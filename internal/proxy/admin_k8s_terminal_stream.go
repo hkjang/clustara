@@ -76,6 +76,13 @@ type terminalStreamAuth struct {
 	SessionID string
 	AdminID   string
 	ClaimID   string
+	// AuthSessionID and AuthExpiresAt bind the terminal to the operator credential
+	// that opened it. A full-TTY terminal outlives the request that authorized it,
+	// so without re-checking these the shell keeps running after the operator's
+	// token expires or their session is revoked. Empty/zero for legacy admin-token
+	// auth, which has no session to check.
+	AuthSessionID string
+	AuthExpiresAt time.Time
 }
 
 func (s *Server) issueTerminalTicket(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
@@ -149,7 +156,16 @@ func (s *Server) consumeTerminalTicket(r *http.Request, sessionID, ticket string
 	if err != nil || !ok {
 		return terminalStreamAuth{}, false
 	}
-	return terminalStreamAuth{SessionID: value.SessionID, AdminID: value.AdminID, ClaimID: value.ClaimID}, true
+	// Connect-time validation (ticket expiry, client binding, credential expiry,
+	// session revocation, user status) is enforced atomically in the consume SQL.
+	// The fields below are carried forward so the live stream can re-check them.
+	return terminalStreamAuth{
+		SessionID:     value.SessionID,
+		AdminID:       value.AdminID,
+		ClaimID:       value.ClaimID,
+		AuthSessionID: value.AuthSessionID,
+		AuthExpiresAt: value.AuthExpiresAt,
+	}, true
 }
 
 func terminalStreamSessionID(r *http.Request) (string, bool) {
@@ -194,6 +210,36 @@ func isInteractiveShell(command string) bool {
 	default:
 		return false
 	}
+}
+
+// terminalAuthRecheckInterval bounds how long a full-TTY terminal can outlive the
+// credential that opened it. Sessions are already capped at 10 minutes; this caps
+// the post-revocation window at roughly one interval.
+const terminalAuthRecheckInterval = 15 * time.Second
+
+// terminalAuthLapseTolerance is how many consecutive verification failures are
+// tolerated before the terminal is closed. A single DB blip should not kill a live
+// shell, but a sustained inability to confirm the operator is still authorized must
+// not read as "still authorized".
+const terminalAuthLapseTolerance = 3
+
+// terminalAuthStillValid reports whether the operator credential behind a terminal is
+// still good. The second return distinguishes a definite revocation/expiry (false,
+// false) from an inability to check (false, true), which the caller tolerates briefly.
+func (s *Server) terminalAuthStillValid(auth terminalStreamAuth) (valid bool, indeterminate bool) {
+	if !auth.AuthExpiresAt.IsZero() && !auth.AuthExpiresAt.After(time.Now().UTC()) {
+		return false, false
+	}
+	if strings.TrimSpace(auth.AuthSessionID) == "" || s.db == nil {
+		return true, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	active, err := s.db.AuthSessionActive(ctx, auth.AuthSessionID)
+	if err != nil {
+		return false, true
+	}
+	return active, false
 }
 
 func (s *Server) streamK8sPodTerminal(w http.ResponseWriter, r *http.Request, sess store.K8sPodExecSession) {
@@ -350,9 +396,29 @@ func (s *Server) streamK8sPodTerminal(w http.ResponseWriter, r *http.Request, se
 		transcript.WriteString(line)
 	}
 	status, errMsg, exitCode := "completed", "", 0
+	authTicker := time.NewTicker(terminalAuthRecheckInterval)
+	defer authTicker.Stop()
+	authLapses := 0
 loop:
 	for {
 		select {
+		case <-authTicker.C:
+			valid, indeterminate := s.terminalAuthStillValid(streamAuth)
+			if valid {
+				authLapses = 0
+				continue
+			}
+			if indeterminate {
+				if authLapses++; authLapses < terminalAuthLapseTolerance {
+					continue
+				}
+				errMsg = "terminal session ended: operator authorization could not be verified"
+			} else {
+				errMsg = "terminal session ended: operator credential expired or was revoked"
+			}
+			status, exitCode = "failed", 1
+			_ = writeTerminalBrowserJSON(browser, browserTerminalMessage{Type: "error", Data: errMsg})
+			break loop
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				status, errMsg, exitCode = "failed", "terminal session expired", 124
