@@ -18,6 +18,7 @@
 - **[서비스 플랫폼 가이드](docs/SERVICE_PLATFORM.md)** — 서비스 카탈로그, Stack/Action Center 연결, PostgreSQL·Redis·Jupyter 백업, JupyterHub Named Server·유휴 정책과 CSI 스냅샷 Clone Restore
 - **[안전 및 보안 거버넌스 가이드](docs/SAFETY_GUIDE.md)** — 정책 엔진·승인 워크플로우
 - **[PostgreSQL 가이드](docs/POSTGRES_GUIDE.md)** — 운영 DB 구성
+- **[업그레이드 가이드 v0.9.164 → v0.9.176](docs/UPGRADE_v0.9.176.md)** — 동작이 바뀐 항목만 모은 업그레이드 전 체크리스트
 - **[릴리즈 가이드](docs/RELEASE_GUIDE.md)** — 빌드·태깅·GitHub 릴리즈·오프라인 패키지·롤백
 - **[2차 개발 플랜](docs/K8S_PHASE2_PLAN.md)** — 구현된 기능의 설계·PR 시퀀스
 
