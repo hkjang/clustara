@@ -175,6 +175,21 @@ func podSpecOf(it store.K8sInventoryItem) map[string]any {
 	return asAnyMap(tmpl["spec"])
 }
 
+// securityRelevantContainers returns every container in a pod spec that can carry a
+// securityContext, an image or a secret reference — regular, init AND ephemeral.
+//
+// Ephemeral containers are the ones a debug session attaches to a running pod
+// (`kubectl debug`, and this product's own approval-gated debug sessions). They
+// accept securityContext.privileged and their own image, so a check that walks only
+// containers+initContainers reports a pod with a privileged debug container as
+// clean. Callers that make a security judgement must use this; callers measuring
+// declared resources must not, since ephemeral containers cannot declare any.
+func securityRelevantContainers(ps map[string]any) []any {
+	out := append([]any{}, asAnySlice(ps["containers"])...)
+	out = append(out, asAnySlice(ps["initContainers"])...)
+	return append(out, asAnySlice(ps["ephemeralContainers"])...)
+}
+
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
 	res := PodSecurityResult{Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
 	priv := []string{}       // privileged-level violations (worst)
@@ -198,9 +213,7 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 		}
 	}
 
-	containers := []any{}
-	containers = append(containers, asAnySlice(ps["containers"])...)
-	containers = append(containers, asAnySlice(ps["initContainers"])...)
+	containers := securityRelevantContainers(ps)
 	podSC := asAnyMap(ps["securityContext"])
 	podRunAsNonRoot := asBool(podSC["runAsNonRoot"])
 
@@ -282,7 +295,7 @@ func secretRefFindings(it store.K8sInventoryItem, ps map[string]any) []SecFindin
 			}
 		}
 	}
-	containers := append(asAnySlice(ps["containers"]), asAnySlice(ps["initContainers"])...)
+	containers := securityRelevantContainers(ps)
 	for _, raw := range containers {
 		c := asAnyMap(raw)
 		for _, ef := range asAnySlice(c["envFrom"]) {

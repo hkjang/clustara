@@ -204,6 +204,10 @@ func ExtractImages(spec map[string]any) []string {
 	}
 	add(spec["containers"])
 	add(spec["initContainers"])
+	// Image policy rules (latest tag, digest required, unsigned image) run off this
+	// list, so a debug container's image has to be in it. Only live pod specs carry
+	// ephemeralContainers; workload templates never do.
+	add(spec["ephemeralContainers"])
 	if tmpl, ok := spec["template"].(map[string]any); ok {
 		if ps, ok := tmpl["spec"].(map[string]any); ok {
 			add(ps["containers"])

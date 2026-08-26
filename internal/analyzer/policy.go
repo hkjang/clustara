@@ -61,7 +61,7 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, strin
 		if ps == nil {
 			return nil
 		}
-		return append(asAnySlice(ps["containers"]), asAnySlice(ps["initContainers"])...)
+		return securityRelevantContainers(ps)
 	}
 	switch ruleType {
 	case "disallow_privileged":
