@@ -170,16 +170,19 @@ func ValidateSQL(raw string, opts ValidateOptions) ValidationResult {
 			return ValidationResult{Reason: "sensitive column not allowed: " + c}
 		}
 	}
-	// A wildcard select returns the blocked columns without ever naming them,
-	// which makes the check above void for the query shape a generator reaches
-	// for most often. There is no schema here to expand "*" against, so a
-	// subject that has blocked columns must list the columns it wants.
+	// A wildcard select returns the restricted columns without ever naming them,
+	// which makes both checks above void for the query shape a generator reaches
+	// for most often — a blocked column comes back in full, and an
+	// aggregate-only column comes back raw. There is no schema here to expand
+	// "*" against, so a subject with either restriction must list the columns it
+	// wants.
 	//
-	// Only applies when this subject actually has blocked columns; an
-	// unrestricted subject keeps SELECT * as before. count(*) stays allowed —
-	// it exposes no column values.
-	if len(opts.BlockedColumns) > 0 && selectStar.MatchString(stripped) {
-		return ValidationResult{Reason: "wildcard select is not allowed when sensitive columns are restricted; list the columns explicitly"}
+	// An unrestricted subject keeps SELECT * as before, and count(*) stays
+	// allowed either way — it exposes no column values.
+	if len(opts.BlockedColumns) > 0 || len(opts.AggregateOnlyColumns) > 0 {
+		if selectStar.MatchString(stripped) {
+			return ValidationResult{Reason: "wildcard select is not allowed when columns are restricted; list the columns explicitly"}
+		}
 	}
 	// aggregate-only columns may appear only inside an aggregate call. Strip aggregate
 	// call bodies (balanced parens, so nested calls like sum(coalesce(col,0)) are fully

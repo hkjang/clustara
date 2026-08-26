@@ -49,3 +49,25 @@ func TestValidateSQLKeepsWildcardWhenNothingIsRestricted(t *testing.T) {
 		}
 	}
 }
+
+// The same hole existed in the sibling control: an aggregate-only column came
+// back raw through a wildcard, without ever appearing outside an aggregate in
+// the query text.
+func TestValidateSQLRejectsWildcardWhenAggregateOnlyColumnsExist(t *testing.T) {
+	opts := ValidateOptions{AllowedTables: []string{"employees"}, AggregateOnlyColumns: []string{"salary"}}
+	for _, sql := range []string{
+		"SELECT * FROM employees",
+		"SELECT e.* FROM employees e",
+	} {
+		if got := ValidateSQL(sql, opts); got.OK {
+			t.Fatalf("ValidateSQL(%q) allowed a wildcard while aggregate-only columns exist", sql)
+		}
+	}
+	// Aggregating the column is still the supported way to use it.
+	if got := ValidateSQL("SELECT avg(salary) FROM employees", opts); !got.OK {
+		t.Fatalf("aggregate over an aggregate-only column was rejected: %s", got.Reason)
+	}
+	if got := ValidateSQL("SELECT count(*) FROM employees", opts); !got.OK {
+		t.Fatalf("count(*) was rejected: %s", got.Reason)
+	}
+}
