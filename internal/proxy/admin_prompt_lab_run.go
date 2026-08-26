@@ -55,7 +55,14 @@ func (s *Server) handlePromptLabTestCaseRun(w http.ResponseWriter, r *http.Reque
 		writeOpenAIError(w, http.StatusBadRequest, "no models specified (test case or request)", "invalid_request_error", "missing_models")
 		return
 	}
+	// Cap the fan-out, but say so. Silently returning fewer results than the
+	// caller asked for is indistinguishable from models that failed, and the
+	// models are dropped by list order rather than by any judgement.
+	droppedModels := []string{}
 	if len(specs) > maxMultiRunModels {
+		for _, dropped := range specs[maxMultiRunModels:] {
+			droppedModels = append(droppedModels, dropped.Model)
+		}
 		specs = specs[:maxMultiRunModels]
 	}
 
@@ -204,6 +211,8 @@ func (s *Server) handlePromptLabTestCaseRun(w http.ResponseWriter, r *http.Reque
 		"contract_applied": haveContract,
 		"contract_pass":    contractPass,
 		"model_count":      len(specs),
+		"model_limit":      maxMultiRunModels,
+		"dropped_models":   droppedModels,
 		"results":          pm,
 		"history":          history,
 	})
