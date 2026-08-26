@@ -36,10 +36,24 @@ var forbiddenKeywords = []string{
 	"attach", "detach", "pragma", "vacuum", "copy", "into", "commit", "rollback",
 }
 
-// dangerousFunctions are functions that can read files, sleep, or reach the network.
+// dangerousFunctions are functions that can read files, sleep, reach the network,
+// or execute SQL supplied as text. Matched as substrings against SQL whose string
+// literals have already been scrubbed, so a value that merely mentions one of
+// these names cannot trip the check.
+//
+// Some entries are deliberately prefixes: "pg_read_file" alone missed
+// pg_read_binary_file, and "pg_ls_dir" missed pg_ls_logdir/pg_ls_waldir. The
+// prefixes cover the whole family. They are kept narrow enough not to catch
+// ordinary catalog reads — "pg_stat_file" is listed exactly so pg_stat_activity
+// stays queryable.
+//
+// This is defense in depth. TEXT2SQL_EXEC_DSN is documented as a read-only DSN
+// and that database user remains the primary control; a function denylist can
+// never be complete.
 var dangerousFunctions = []string{
-	"pg_read_file", "pg_sleep", "pg_ls_dir", "dblink", "lo_import", "lo_export",
-	"load_extension", "readfile", "writefile",
+	"pg_read_", "pg_sleep", "pg_ls_", "pg_stat_file", "dblink",
+	"lo_import", "lo_export", "lo_get",
+	"query_to_xml", "load_extension", "readfile", "writefile",
 }
 
 var (
