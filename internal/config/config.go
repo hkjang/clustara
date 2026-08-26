@@ -246,6 +246,19 @@ type AuthConfig struct {
 	// SelfServiceKeys lets an authenticated user manage their OWN API keys via /me/keys
 	// (list/create/rotate/revoke), capped to their own role's scopes. Default off.
 	SelfServiceKeys bool
+	// LoginThrottle bounds password guessing. Failed attempts were already recorded
+	// in login_attempts but nothing read them, so /auth/login accepted guesses as
+	// fast as bcrypt would answer. The window is a sliding one and only counts
+	// failures since that account's last success, so a user who mistypes and then
+	// logs in is not left throttled.
+	//
+	// The per-IP limit is the real brute-force control. The per-account limit is
+	// deliberately looser: throttling purely on the account would let anyone lock a
+	// known email out by guessing against it, so it exists to slow a distributed
+	// attack on one account, not to lock the account.
+	LoginThrottleWindow     time.Duration
+	LoginThrottleMaxPerIP   int
+	LoginThrottleMaxPerUser int
 }
 
 type SecretConfig struct {
@@ -439,19 +452,22 @@ func Load() (Config, error) {
 			EmbeddingAPIKey:           os.Getenv("CACHE_EMBEDDING_API_KEY"),
 		},
 		Auth: AuthConfig{
-			ProxyAPIKeys:          parseProxyKeys(os.Getenv("PROXY_API_KEYS")),
-			AdminToken:            os.Getenv("ADMIN_TOKEN"),
-			AdminReadonlyToken:    os.Getenv("ADMIN_READONLY_TOKEN"),
-			AttributeExternalKeys: boolEnv("ATTRIBUTE_EXTERNAL_KEYS", true),
-			Enabled:               boolEnv("AUTH_ENABLED", false),
-			JWTSecret:             os.Getenv("AUTH_JWT_SECRET"),
-			AccessTokenTTL:        durationEnv("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute),
-			RefreshTokenTTL:       durationEnv("AUTH_REFRESH_TOKEN_TTL", 168*time.Hour),
-			APIKeyPrefix:          getEnv("AUTH_API_KEY_PREFIX", "vc_sk_"),
-			ServiceKeyPrefix:      getEnv("AUTH_SERVICE_KEY_PREFIX", "vc_sa_"),
-			BootstrapEmail:        strings.TrimSpace(os.Getenv("AUTH_ADMIN_BOOTSTRAP_EMAIL")),
-			BootstrapPassword:     os.Getenv("AUTH_ADMIN_BOOTSTRAP_PASSWORD"),
-			SelfServiceKeys:       boolEnv("SELF_SERVICE_KEYS_ENABLED", false),
+			ProxyAPIKeys:            parseProxyKeys(os.Getenv("PROXY_API_KEYS")),
+			AdminToken:              os.Getenv("ADMIN_TOKEN"),
+			AdminReadonlyToken:      os.Getenv("ADMIN_READONLY_TOKEN"),
+			AttributeExternalKeys:   boolEnv("ATTRIBUTE_EXTERNAL_KEYS", true),
+			Enabled:                 boolEnv("AUTH_ENABLED", false),
+			JWTSecret:               os.Getenv("AUTH_JWT_SECRET"),
+			LoginThrottleWindow:     durationEnv("AUTH_LOGIN_THROTTLE_WINDOW", 15*time.Minute),
+			LoginThrottleMaxPerIP:   intEnv("AUTH_LOGIN_THROTTLE_MAX_PER_IP", 10),
+			LoginThrottleMaxPerUser: intEnv("AUTH_LOGIN_THROTTLE_MAX_PER_USER", 25),
+			AccessTokenTTL:          durationEnv("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute),
+			RefreshTokenTTL:         durationEnv("AUTH_REFRESH_TOKEN_TTL", 168*time.Hour),
+			APIKeyPrefix:            getEnv("AUTH_API_KEY_PREFIX", "vc_sk_"),
+			ServiceKeyPrefix:        getEnv("AUTH_SERVICE_KEY_PREFIX", "vc_sa_"),
+			BootstrapEmail:          strings.TrimSpace(os.Getenv("AUTH_ADMIN_BOOTSTRAP_EMAIL")),
+			BootstrapPassword:       os.Getenv("AUTH_ADMIN_BOOTSTRAP_PASSWORD"),
+			SelfServiceKeys:         boolEnv("SELF_SERVICE_KEYS_ENABLED", false),
 		},
 		Keycloak: KeycloakConfig{
 			Enabled:         boolEnv("SSO_KEYCLOAK_ENABLED", false),

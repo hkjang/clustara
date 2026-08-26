@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -440,6 +441,41 @@ func (s *SQLStore) InsertLoginAttempt(ctx context.Context, email string, success
 		VALUES (?, ?, ?, ?, ?, ?, ?)`),
 		"login_"+auditHash(email+"|"+time.Now().UTC().Format(time.RFC3339Nano)), email, boolInt(success), ip, userAgent, reason, formatTime(time.Now().UTC()))
 	return err
+}
+
+// LoginFailureCounts reports recent failed login attempts, per source IP and per
+// account, for the login throttle. login_attempts was written on every login and
+// read by nothing, so the data needed to slow password guessing was already there
+// and unused.
+//
+// Account failures are counted only since that account's last successful login:
+// a user who mistypes a few times and then gets in must not stay throttled.
+func (s *SQLStore) LoginFailureCounts(ctx context.Context, email, ip string, since time.Time) (byIP, byUser int, err error) {
+	cutoff := formatTime(since.UTC())
+	predicate := s.timestampPredicate("created_at", ">")
+	if strings.TrimSpace(ip) != "" {
+		if err = s.db.QueryRowContext(ctx, s.bind(`SELECT COUNT(1) FROM login_attempts
+			WHERE success = 0 AND ip = ? AND `+predicate), ip, cutoff).Scan(&byIP); err != nil {
+			return 0, 0, err
+		}
+	}
+	if strings.TrimSpace(email) == "" {
+		return byIP, 0, nil
+	}
+	var lastSuccess sql.NullString
+	if err = s.db.QueryRowContext(ctx, s.bind(`SELECT MAX(created_at) FROM login_attempts
+		WHERE success = 1 AND email = ?`), email).Scan(&lastSuccess); err != nil && err != sql.ErrNoRows {
+		return 0, 0, err
+	}
+	from := cutoff
+	if lastSuccess.Valid && lastSuccess.String > from {
+		from = lastSuccess.String
+	}
+	if err = s.db.QueryRowContext(ctx, s.bind(`SELECT COUNT(1) FROM login_attempts
+		WHERE success = 0 AND email = ? AND `+predicate), email, from).Scan(&byUser); err != nil {
+		return 0, 0, err
+	}
+	return byIP, byUser, nil
 }
 
 func (s *SQLStore) RevokeAPIKey(ctx context.Context, id string) error {

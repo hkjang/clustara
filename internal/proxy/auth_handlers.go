@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,13 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(p.Email))
+	if retryAfter, throttled := s.loginThrottled(r, email); throttled {
+		_ = s.db.InsertLoginAttempt(r.Context(), email, false, clientIP(r), r.UserAgent(), "throttled")
+		_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "login_throttled", IP: clientIP(r), UserAgent: r.UserAgent(), Detail: email, CreatedAt: time.Now().UTC()})
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		writeOpenAIError(w, http.StatusTooManyRequests, "too many failed login attempts; try again later", "rate_limit_error", "login_throttled")
+		return
+	}
 	user, found, err := s.db.AuthUserByEmail(r.Context(), email)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "login_failed")
@@ -48,6 +57,35 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.InsertLoginAttempt(r.Context(), email, true, clientIP(r), r.UserAgent(), "")
 	_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "login_success", ActorUserID: user.ID, TeamID: teamID, IP: clientIP(r), UserAgent: r.UserAgent(), CreatedAt: time.Now().UTC()})
 	writeJSON(w, http.StatusOK, tokens)
+}
+
+// loginThrottled reports whether this login attempt should be rejected before the
+// password is even checked, and how long to advise waiting.
+//
+// This deliberately fails open. Every other "cannot verify" gate in the gateway
+// blocks, because there the unverified thing was a destructive action. Here the
+// actual access control is the bcrypt comparison, which still has to pass;
+// throttling is defence in depth against guessing. Refusing every login because
+// the attempt table is unreadable would lock operators out of the system during
+// exactly the incident they need it for.
+func (s *Server) loginThrottled(r *http.Request, email string) (retryAfterSeconds int, throttled bool) {
+	cfg := s.cfg.Auth
+	window := cfg.LoginThrottleWindow
+	if window <= 0 || s.db == nil {
+		return 0, false
+	}
+	byIP, byUser, err := s.db.LoginFailureCounts(r.Context(), email, clientIP(r), time.Now().UTC().Add(-window))
+	if err != nil {
+		slog.Warn("login throttle check failed; allowing the attempt to proceed to password verification", "error", err)
+		return 0, false
+	}
+	if cfg.LoginThrottleMaxPerIP > 0 && byIP >= cfg.LoginThrottleMaxPerIP {
+		return int(window.Seconds()), true
+	}
+	if cfg.LoginThrottleMaxPerUser > 0 && byUser >= cfg.LoginThrottleMaxPerUser {
+		return int(window.Seconds()), true
+	}
+	return 0, false
 }
 
 func (s *Server) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {

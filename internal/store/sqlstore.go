@@ -286,6 +286,8 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			reason TEXT,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip, success, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_email_time ON login_attempts(email, success, created_at)`,
 		`CREATE TABLE IF NOT EXISTS request_logs (
 			id TEXT PRIMARY KEY,
 			trace_id TEXT NOT NULL,
