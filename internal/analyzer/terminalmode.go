@@ -22,9 +22,27 @@ type TerminalAccessMode struct {
 	Reason           string `json:"reason"`
 }
 
+// shellNames holds shell program names without a directory. The full path is
+// stripped before lookup: enumerating spellings meant "/bin/bash" was recognised
+// while "/usr/bin/bash" — the real path on Fedora/RHEL/Arch — fell through to
+// the low-risk default and skipped the full-TTY approval.
 var shellNames = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "ash": true,
-	"/bin/sh": true, "/bin/bash": true, "/bin/zsh": true, "/bin/ash": true, "/busybox/sh": true,
+	"dash": true, "ksh": true, "fish": true, "csh": true, "tcsh": true,
+}
+
+// shellWrappers run another program, so the shell they launch is still a shell.
+// "sudo bash" and "busybox sh" are interactive sessions.
+var shellWrappers = map[string]bool{
+	"sudo": true, "env": true, "nohup": true, "exec": true, "time": true, "busybox": true,
+}
+
+// shellBase drops a leading directory so a path-qualified shell is recognised.
+func shellBase(token string) string {
+	if idx := strings.LastIndex(token, "/"); idx >= 0 {
+		return token[idx+1:]
+	}
+	return token
 }
 
 // isInteractiveShell reports whether the command launches an interactive shell. A bare request
@@ -35,10 +53,24 @@ func isInteractiveShell(command string) bool {
 	if len(fields) == 0 {
 		return true
 	}
-	if !shellNames[fields[0]] {
+	// Step over wrappers and env assignments so the shell they launch is still
+	// seen: "sudo bash", "env FOO=1 sh", "busybox sh".
+	i := 0
+	for i < len(fields) {
+		if shellWrappers[shellBase(fields[i])] {
+			i++
+			continue
+		}
+		if i > 0 && strings.Contains(fields[i], "=") {
+			i++
+			continue
+		}
+		break
+	}
+	if i >= len(fields) || !shellNames[shellBase(fields[i])] {
 		return false
 	}
-	for _, f := range fields[1:] {
+	for _, f := range fields[i+1:] {
 		if f == "-c" { // running a command string, not an interactive session
 			return false
 		}
