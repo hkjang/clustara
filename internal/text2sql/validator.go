@@ -63,6 +63,10 @@ var (
 	// schema-qualified identifiers (e.g. FROM "Sales"."Orders" o). A leading "(" is
 	// not matched, so subquery sources are skipped.
 	fromJoin     = regexp.MustCompile(`(?is)\b(?:from|join)\s+("?[a-zA-Z_][a-zA-Z0-9_]*"?(?:\."?[a-zA-Z_][a-zA-Z0-9_]*"?)*)`)
+	// commaSource matches ", <table>" at the start of the remaining FROM list,
+	// allowing an alias on the previous source ("FROM a x, b" / "FROM a AS x, b").
+	// Anchored at the start so it only walks a contiguous source list.
+	commaSource  = regexp.MustCompile(`(?is)^(?:\s+(?:as\s+)?[a-zA-Z_][a-zA-Z0-9_]*)?\s*,\s*("?[a-zA-Z_][a-zA-Z0-9_]*"?(?:\."?[a-zA-Z_][a-zA-Z0-9_]*"?)*)`)
 	lineComment  = regexp.MustCompile(`--[^\n]*`)
 	blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	// aggFuncRe matches an aggregate function name immediately followed by its opening
@@ -272,14 +276,40 @@ func ReferencedTables(sql string) []string {
 func referencedTables(sql string) []string {
 	seen := map[string]bool{}
 	out := []string{}
-	for _, m := range fromJoin.FindAllStringSubmatch(sql, -1) {
-		t := strings.ToLower(strings.TrimSpace(m[1]))
+	add := func(raw string) {
+		t := strings.ToLower(strings.TrimSpace(raw))
 		t = strings.ReplaceAll(t, `"`, "") // normalize quoted identifiers
 		if t == "" || seen[t] {
-			continue
+			return
 		}
 		seen[t] = true
 		out = append(out, t)
 	}
+	for _, m := range fromJoin.FindAllStringSubmatchIndex(sql, -1) {
+		add(sql[m[2]:m[3]])
+		// fromJoin only captures the first source after FROM/JOIN. A comma
+		// separated list ("FROM a, b") continues past it, and a source that is
+		// never extracted is never checked against the table allow-list — so it
+		// would be read without being allowed. Walk the rest of the list.
+		for _, extra := range commaJoinedSources(sql[m[1]:]) {
+			add(extra)
+		}
+	}
 	return out
+}
+
+// commaJoinedSources reads the ", table" continuations of a FROM list starting
+// immediately after the first source. It stops at anything that is not another
+// plain table reference, so a subquery source or a following clause ends the
+// walk; tables inside a subquery are picked up by the caller's own scan.
+func commaJoinedSources(rest string) []string {
+	out := []string{}
+	for {
+		m := commaSource.FindStringSubmatchIndex(rest)
+		if m == nil {
+			return out
+		}
+		out = append(out, rest[m[2]:m[3]])
+		rest = rest[m[1]:]
+	}
 }
