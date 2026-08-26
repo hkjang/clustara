@@ -59,3 +59,51 @@ func TestReferencedTablesIgnoresNonSourceCommas(t *testing.T) {
 		t.Fatalf("referencedTables = %v, want just [orders]", got)
 	}
 }
+
+// fromJoin required the source to directly follow FROM/JOIN, so a parenthesised
+// join's first source was preceded by "(" and never extracted — and an
+// unextracted source is never checked against the allow-list.
+func TestValidateSQLChecksParenthesisedJoinSources(t *testing.T) {
+	opts := ValidateOptions{AllowedTables: []string{"orders"}}
+	for _, sql := range []string{
+		"SELECT * FROM (salaries JOIN orders ON 1=1) x",
+		"SELECT * FROM (salaries CROSS JOIN orders) x",
+		"SELECT * FROM ((salaries JOIN orders ON 1=1)) x",
+		"SELECT * FROM ONLY salaries",
+	} {
+		if got := ValidateSQL(sql, opts); got.OK {
+			t.Fatalf("ValidateSQL(%q) allowed a table outside the allow-list: tables=%v", sql, got.Tables)
+		}
+	}
+}
+
+// The extracted set is what callers audit, so a Postgres ONLY/LATERAL prefix
+// must not be reported as the table name.
+func TestReferencedTablesSkipsSourcePrefixes(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want string
+	}{
+		{"select * from only salaries", "salaries"},
+		{"select * from lateral (select * from salaries) s", "salaries"},
+		{"select * from (salaries join orders on 1=1) x", "salaries"},
+	} {
+		got := referencedTables(tc.sql)
+		if len(got) == 0 || got[0] != tc.want {
+			t.Fatalf("referencedTables(%q) = %v, want %q first", tc.sql, got, tc.want)
+		}
+	}
+}
+
+// A subquery source must not be reported as a table named "select"; the tables
+// inside it are found by the same scan.
+func TestReferencedTablesSkipsSubqueryKeywords(t *testing.T) {
+	got := referencedTables("select * from (select id from orders) t")
+	if len(got) != 1 || got[0] != "orders" {
+		t.Fatalf("referencedTables = %v, want just [orders]", got)
+	}
+	opts := ValidateOptions{AllowedTables: []string{"orders"}}
+	if res := ValidateSQL("SELECT * FROM (SELECT id FROM orders) t", opts); !res.OK {
+		t.Fatalf("subquery over an allowed table was rejected: %s (tables=%v)", res.Reason, res.Tables)
+	}
+}

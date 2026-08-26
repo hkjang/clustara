@@ -62,7 +62,14 @@ var (
 	// Captures the table reference after FROM/JOIN, allowing double-quoted and
 	// schema-qualified identifiers (e.g. FROM "Sales"."Orders" o). A leading "(" is
 	// not matched, so subquery sources are skipped.
-	fromJoin     = regexp.MustCompile(`(?is)\b(?:from|join)\s+("?[a-zA-Z_][a-zA-Z0-9_]*"?(?:\."?[a-zA-Z_][a-zA-Z0-9_]*"?)*)`)
+	// Leading parentheses are consumed so a parenthesised join
+	// ("FROM (a JOIN b) x") yields its first source too — without that, "a" is
+	// preceded by "(" rather than FROM/JOIN and is never extracted, so it is
+	// never checked against the allow-list. Postgres ONLY/LATERAL prefixes are
+	// consumed for the same reason. A subquery source still lands on SELECT /
+	// VALUES / WITH, which subqueryStart filters out; the tables inside it are
+	// picked up by this same global scan.
+	fromJoin     = regexp.MustCompile(`(?is)\b(?:from|join)\s+(?:\(\s*)*(?:(?:only|lateral)\s+)?(?:\(\s*)*("?[a-zA-Z_][a-zA-Z0-9_]*"?(?:\."?[a-zA-Z_][a-zA-Z0-9_]*"?)*)`)
 	// commaSource matches ", <table>" at the start of the remaining FROM list,
 	// allowing an alias on the previous source ("FROM a x, b" / "FROM a AS x, b").
 	// Anchored at the start so it only walks a contiguous source list.
@@ -273,13 +280,18 @@ func ReferencedTables(sql string) []string {
 	return referencedTables(strings.TrimRight(strings.TrimSpace(scrubSQL(sql)), ";"))
 }
 
+// subqueryStart are the words a source position can hold that begin a subquery
+// rather than name a table. They are skipped; the tables inside the subquery are
+// found by the same scan.
+var subqueryStart = map[string]bool{"select": true, "values": true, "with": true}
+
 func referencedTables(sql string) []string {
 	seen := map[string]bool{}
 	out := []string{}
 	add := func(raw string) {
 		t := strings.ToLower(strings.TrimSpace(raw))
 		t = strings.ReplaceAll(t, `"`, "") // normalize quoted identifiers
-		if t == "" || seen[t] {
+		if t == "" || seen[t] || subqueryStart[t] {
 			return
 		}
 		seen[t] = true
