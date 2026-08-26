@@ -132,6 +132,15 @@ func (s *Server) handleLLMPrompts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLLMPromptCompare(w http.ResponseWriter, r *http.Request) {
+	// Every other handler in this file gates on authorizeAdmin; this one did not, so
+	// prompt names, call volumes, token counts, KRW cost, latency and error rates were
+	// readable without any credential — and llmScopeWhere takes its api_key_id/team
+	// filter straight from the query string, so an unauthenticated caller could aim it
+	// at any key or team.
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
 	promptName := strings.TrimSpace(r.URL.Query().Get("prompt_name"))
 	if promptName == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "prompt_name is required", "invalid_request_error", "missing_prompt_name")
