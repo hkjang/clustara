@@ -82,7 +82,17 @@ func (s *Server) handleK8sStackApply(w http.ResponseWriter, r *http.Request, id 
 		writeOpenAIError(w, http.StatusBadRequest, "stored manifest parse error: "+perr.Error(), "invalid_request_error", "manifest_parse_failed")
 		return
 	}
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, policyErr := s.db.ListK8sPolicies(r.Context())
+	if policyErr != nil {
+		// An empty rule set analyses as Denied=false and RequiresApproval=false, which
+		// would clear both gates below and apply the stack to the cluster without any
+		// policy having been consulted. Refuse instead of guessing.
+		s.recordStackHistory(r, st, "apply", in.DryRun, "policy_unavailable", 0, 0, map[string]any{"error": policyErr.Error()})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"decision": "policy_unavailable",
+			"error": policyErr.Error(),
+			"note":  "정책 목록을 불러오지 못해 정책 검사를 수행할 수 없습니다. 정책 저장소 복구 후 다시 시도하세요."})
+		return
+	}
 	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 	if plan.Denied {
 		s.recordStackHistory(r, st, "apply", in.DryRun, "denied", 0, 0, plan.PolicyViolations)
@@ -205,7 +215,15 @@ func (s *Server) handleK8sStackRollback(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	// Re-check Config Impact / image risk against the restored manifest before accepting it.
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, policyErr := s.db.ListK8sPolicies(r.Context())
+	if policyErr != nil {
+		// Same reasoning as apply: without the rule set the deny check below cannot
+		// fire, and the revision would be restored unchecked.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"decision": "policy_unavailable",
+			"error": policyErr.Error(),
+			"note":  "정책 목록을 불러오지 못해 롤백 대상의 정책 검사를 수행할 수 없습니다."})
+		return
+	}
 	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 	if plan.Denied {
 		writeJSON(w, http.StatusConflict, map[string]any{"decision": "deny", "plan": plan,

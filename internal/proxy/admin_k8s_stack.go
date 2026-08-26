@@ -54,7 +54,11 @@ func (s *Server) handleK8sStacks(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusBadRequest, "manifest parse error: "+perr.Error(), "invalid_request_error", "manifest_parse_failed")
 			return
 		}
-		policies, _ := s.db.ListK8sPolicies(r.Context())
+		// Preview only — the apply and rollback endpoints are the gates. Still report
+		// whether the plan was produced against a real rule set, since an empty one
+		// yields a clean plan that is indistinguishable from a compliant manifest.
+		policies, policyErr := s.db.ListK8sPolicies(r.Context())
+		policyCheck := policyCheckStatus(policyErr)
 		plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 		sum := sha256.Sum256([]byte(in.Manifest))
 		st := store.K8sApplicationStack{
@@ -73,7 +77,7 @@ func (s *Server) handleK8sStacks(w http.ResponseWriter, r *http.Request) {
 		if isNew {
 			status = http.StatusCreated
 		}
-		writeJSON(w, status, map[string]any{"stack": saved, "plan": plan})
+		writeJSON(w, status, map[string]any{"stack": saved, "plan": plan, "policy_check": policyCheck})
 	default:
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 	}

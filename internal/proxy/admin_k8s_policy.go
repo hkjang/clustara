@@ -27,6 +27,20 @@ func validPolicyRule(rt string) bool {
 }
 
 // handleK8sPolicies lists/creates policy-pack entries (SEC-10). GET/POST /admin/k8s/policies
+// policyCheckStatus describes whether a returned analysis plan was produced against
+// a real rule set. Analysing with no policies loaded yields a clean plan, so a
+// response carrying one must say which of the two it is.
+func policyCheckStatus(err error) map[string]any {
+	if err != nil {
+		return map[string]any{
+			"status": "unavailable",
+			"error":  err.Error(),
+			"reason": "정책 목록을 불러오지 못해 정책 검사가 수행되지 않았습니다. 이 결과는 정책 통과를 뜻하지 않습니다.",
+		}
+	}
+	return map[string]any{"status": "checked"}
+}
+
 func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -238,7 +252,14 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
 	}
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, policyErr := s.db.ListK8sPolicies(r.Context())
+	if policyErr != nil {
+		// With no rule set every resource is compliant, so this would report
+		// "0 violations" — an affirmative clean bill of health for a check that
+		// never ran. Compliance sign-off reads this endpoint.
+		writeOpenAIError(w, http.StatusServiceUnavailable, "정책 목록을 불러오지 못해 컴플라이언스 검사를 수행할 수 없습니다: "+policyErr.Error(), "server_error", "k8s_policy_load_failed")
+		return
+	}
 	violations := analyzer.CheckPolicyCompliance(items, toAnalyzerPolicies(policies))
 	writeJSON(w, http.StatusOK, map[string]any{"violations": violations, "count": len(violations)})
 }
