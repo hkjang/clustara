@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -81,13 +80,10 @@ func (rc *requestPipeline) stepMCPDiscovery() bool {
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
 		return true
 	}
-	if rc.body == nil {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "invalid_body")
-			return false
-		}
-		rc.body = body
+	// This step is the first body reader in the pipeline, so it must go through
+	// the shared bounded read — see requestPipeline.readBody.
+	if _, ok := rc.readBody(); !ok {
+		return false
 	}
 
 	model, _, prompts, _ := extractAudit(rc.body, r.URL.Path, false)

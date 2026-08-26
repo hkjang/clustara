@@ -73,6 +73,31 @@ type requestPipeline struct {
 // authentication first, then quota enforcement, optional MCP model discovery,
 // intelligent routing, governance (policy/secret/MCP/knowledge), response caches,
 // pre-call cost guard, and finally the upstream dial + response relay.
+// readBody buffers the request body once, bounded by limits.max_request_bytes
+// when that limit is configured.
+//
+// Every step that needs the body must come through here. stepLimits rejects an
+// oversized body, but it runs after the first read, so an unbounded read
+// anywhere upstream defeats the limit entirely — an operator who set it to
+// protect memory got rejection without protection. Reading one byte past the
+// limit is enough for stepLimits to detect the overflow and report it.
+func (rc *requestPipeline) readBody() ([]byte, bool) {
+	if rc.body != nil || rc.r.Body == nil {
+		return rc.body, true
+	}
+	var reader io.Reader = rc.r.Body
+	if maxBytes := rc.s.limitsConf().MaxRequestBytes; maxBytes > 0 {
+		reader = io.LimitReader(rc.r.Body, int64(maxBytes)+1)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		writeOpenAIError(rc.w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "invalid_body")
+		return nil, false
+	}
+	rc.body = body
+	return body, true
+}
+
 func (rc *requestPipeline) steps() []PipelineStep {
 	return []PipelineStep{
 		stepFunc{"auth", (*requestPipeline).stepAuth},
@@ -145,16 +170,10 @@ func (rc *requestPipeline) stepQuota() bool {
 func (rc *requestPipeline) stepRouting() bool {
 	s, r, w := rc.s, rc.r, rc.w
 
-	body := rc.body
-	var err error
-	if body == nil && r.Body != nil {
-		body, err = io.ReadAll(r.Body)
-		if err != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "invalid_body")
-			return false
-		}
+	body, ok := rc.readBody()
+	if !ok {
+		return false
 	}
-	rc.body = body
 
 	traceID := traceIDFromRequest(r)
 	rc.traceID = traceID
