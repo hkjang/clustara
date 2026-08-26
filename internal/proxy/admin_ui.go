@@ -1442,10 +1442,17 @@ const adminHTML = `<!doctype html>
     // applyNavPermissions hides nav anchors whose tab is not in the caller's allowed_tabs.
     function applyNavPermissions() {
       const nav = authState.nav;
-      const allowed = nav && Array.isArray(nav.allowed_tabs) ? new Set(nav.allowed_tabs) : null;
+      // Fail closed: an absent or malformed policy hides every menu instead of
+      // revealing all of them. authState.nav is null before the first load and
+      // is reset to null when the legacy admin token changes, and the previous
+      // "no policy means allow everything" branch showed the full menu in those
+      // windows. Every /me/navigation success path returns an allowed_tabs
+      // array and the error path substitutes ['access-denied'], so normal
+      // operation is unchanged.
+      const allowed = new Set(nav && Array.isArray(nav.allowed_tabs) ? nav.allowed_tabs : []);
       document.querySelectorAll('#tabs a[data-tab], #user-menu a[data-tab]').forEach(a => {
         const tab = a.getAttribute('data-tab');
-        a.style.display = (!allowed || allowed.has(tab)) ? '' : 'none';
+        a.style.display = allowed.has(tab) ? '' : 'none';
       });
       // Hide a grouped dropdown (e.g. 대시보드) entirely when the caller can see none of its children.
       document.querySelectorAll('#tabs .nav-group').forEach(g => {
