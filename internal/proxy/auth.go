@@ -386,6 +386,23 @@ func (s *Server) scopesAssignable(r *http.Request, scopes []string) bool {
 	return true
 }
 
+// defaultAPIKeyScopesFor resolves an API key's default scopes through the
+// custom-role overlay, the same way token issuance does.
+//
+// The key-creation endpoint validates the requested role with effectiveValidRole,
+// which accepts custom roles — but the scopes were resolved with the built-in map
+// alone, which falls back to viewer for anything it does not know. A custom role
+// narrower than viewer therefore produced a key holding viewer's scopes
+// (admin:read, security:read, costs:read, observability:read, service:read):
+// broader than the role the operator defined, which is the wrong direction for a
+// fallback. Accepting the role and then ignoring it is the bug; this resolves it.
+func (s *Server) defaultAPIKeyScopesFor(ctx context.Context, role string, serviceAccount bool) []string {
+	if strings.TrimSpace(role) == "" {
+		return defaultAPIKeyScopes(role, serviceAccount)
+	}
+	return s.effectiveScopesForRole(ctx, role)
+}
+
 func defaultAPIKeyScopes(role string, serviceAccount bool) []string {
 	if strings.TrimSpace(role) == "" {
 		if serviceAccount {

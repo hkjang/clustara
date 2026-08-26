@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.195"
+const AppVersion = "v0.9.196"
 
 type Server struct {
 	cfg            config.Config
@@ -995,7 +995,7 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		serviceAccount := role == "service_account" || strings.TrimSpace(payload.ServiceAccountID) != ""
-		scopes := defaultAPIKeyScopes(role, serviceAccount)
+		scopes := s.defaultAPIKeyScopesFor(r.Context(), role, serviceAccount)
 		if payload.Scopes != nil {
 			normalized, ok := normalizeScopes(*payload.Scopes)
 			if !ok {
