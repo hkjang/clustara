@@ -217,7 +217,7 @@ func evaluateTerminalPolicy(req terminalPolicyEvalRequest, policies []store.K8sT
 	selected := []store.K8sTerminalPolicy{}
 	for _, p := range matched {
 		for _, pattern := range append(builtinTerminalDenylist(), p.CommandDenylist...) {
-			if terminalCommandMatches(pattern, req.Command) {
+			if terminalDenyMatches(pattern, req.Command) {
 				result.Allowed = false
 				result.RequireApproval = true
 				result.RiskLevel = maxTerminalRisk(result.RiskLevel, "high")
@@ -308,6 +308,63 @@ func terminalPolicyScopeMatches(req terminalPolicyEvalRequest, p store.K8sTermin
 		return false
 	}
 	return labelSelectorMatches(p.PodSelector, req.PodLabels)
+}
+
+// terminalDenyMatches is the deny-side matcher. It is deliberately broader than
+// terminalCommandMatches, which recognises a single-word pattern only as the
+// leading program: that let "/sbin/reboot", "sh -c reboot" and even the real
+// "mkfs.ext4" past a denylist naming "reboot"/"mkfs", while multi-word entries
+// like "rm -rf" were caught anywhere because they fall through to a substring
+// match.
+//
+// Kept separate from terminalAllowlistMatches on purpose. Broadening the shared
+// matcher would also broaden the allow side, which must not become easier to
+// satisfy.
+func terminalDenyMatches(pattern, command string) bool {
+	if terminalCommandMatches(pattern, command) {
+		return true
+	}
+	p := strings.ToLower(strings.TrimSpace(pattern))
+	if p == "" || strings.ContainsAny(p, " *") {
+		return false // multi-word and wildcard patterns are already handled above
+	}
+	return terminalProgramTokenMatches(p, strings.ToLower(command))
+}
+
+// terminalProgramTokenMatches reports whether pattern names the program in any
+// command position, ignoring a leading path and a dotted variant ("mkfs.ext4").
+// Only command positions count, so an argument that merely contains the word —
+// "cat halt.log" — is not a match.
+func terminalProgramTokenMatches(pattern, command string) bool {
+	tokens := strings.Fields(command)
+	for i, raw := range tokens {
+		if !terminalCommandPosition(tokens, i) {
+			continue
+		}
+		tok := strings.Trim(raw, `"'`)
+		if idx := strings.LastIndex(tok, "/"); idx >= 0 {
+			tok = tok[idx+1:]
+		}
+		if tok == pattern || strings.HasPrefix(tok, pattern+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// terminalCommandPosition reports whether tokens[i] is where a program name goes:
+// the start of the line, or just after a shell separator or a wrapper that takes
+// a command.
+func terminalCommandPosition(tokens []string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	prev := strings.Trim(tokens[i-1], `"'`)
+	switch prev {
+	case "-c", "-lc", "&&", "||", "|", ";", "&", "(", "{", "sudo", "env", "nohup", "exec", "time", "xargs", "then", "do", "else":
+		return true
+	}
+	return strings.HasSuffix(prev, ";") || strings.HasSuffix(prev, "|") || strings.HasSuffix(prev, "&")
 }
 
 func terminalAllowlistMatches(patterns []string, command string) bool {
