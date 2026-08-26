@@ -10,23 +10,25 @@ import (
 // (and records now) only when the dedup key has not fired within the window. Concurrent-safe
 // enough for best-effort alerting via an upsert guarded by a freshness check.
 func (s *SQLStore) ShouldSendK8sNotification(ctx context.Context, key string, now time.Time, window time.Duration) (bool, error) {
-	var lastStr string
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT last_sent_at FROM k8s_notification_state WHERE dedup_key = ?`), key).Scan(&lastStr)
-	if err != nil && err != sql.ErrNoRows {
+	// The write is the guard. Reading the last send time and then writing
+	// unconditionally let two callers in the same instant both observe an expired
+	// window and both return true, which is exactly the duplicate this suppression
+	// window exists to prevent. Here the conflicting upsert only applies when the
+	// previous send is at or before the cutoff, so precisely one caller sees a row
+	// affected and is cleared to send.
+	cutoff := now.Add(-window).UTC().Format(time.RFC3339Nano)
+	stale := s.timestampPredicate("k8s_notification_state.last_sent_at", "<=")
+	res, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_notification_state (dedup_key, last_sent_at)
+		VALUES (?, ?) ON CONFLICT(dedup_key) DO UPDATE SET last_sent_at = excluded.last_sent_at
+		WHERE `+stale), key, now.UTC().Format(time.RFC3339Nano), cutoff)
+	if err != nil {
 		return false, err
 	}
-	if err == nil {
-		if last, perr := time.Parse(time.RFC3339Nano, lastStr); perr == nil && now.Sub(last) < window {
-			return false, nil // still within the suppression window
-		}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
 	}
-	_, werr := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_notification_state (dedup_key, last_sent_at)
-		VALUES (?, ?) ON CONFLICT(dedup_key) DO UPDATE SET last_sent_at = excluded.last_sent_at`),
-		key, now.UTC().Format(time.RFC3339Nano))
-	if werr != nil {
-		return false, werr
-	}
-	return true, nil
+	return affected == 1, nil
 }
 
 // K8sClusterGroup groups clusters by network/zone (업무망/개발망/운영망/인터넷망/DMZ) for

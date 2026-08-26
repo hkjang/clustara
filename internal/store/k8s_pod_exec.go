@@ -70,10 +70,18 @@ func terminalTicketHash(ticket string) string {
 //
 // column and comparison are internal SQL fragments, never request input.
 func (s *SQLStore) k8sPodExecTimePredicate(column, comparison string) string {
+	return s.timestampPredicate(column, comparison)
+}
+
+// timestampPredicate builds a dialect-correct comparison between an RFC3339 text
+// column and a bound parameter. Timestamps are stored with variable fractional
+// precision, so comparing them as plain strings is not reliable; both branches
+// convert to a real time value first.
+func (s *SQLStore) timestampPredicate(column, comparison string) string {
 	switch comparison {
 	case ">", "<=":
 	default:
-		panic("unsupported k8s pod exec timestamp comparison")
+		panic("unsupported timestamp comparison")
 	}
 	if s.dialect == "postgres" {
 		return "CAST(NULLIF(" + column + ", '') AS TIMESTAMPTZ) " + comparison + " CAST(? AS TIMESTAMPTZ)"

@@ -31,8 +31,21 @@ func (s *SQLStore) TakeOIDCFlowState(ctx context.Context, state string) (nonce, 
 		}
 		return "", "", false, err
 	}
-	// Consume regardless of age (single-use).
-	_, _ = s.db.ExecContext(ctx, s.bind(`DELETE FROM oidc_flow_states WHERE state = ?`), state)
+	// Consume regardless of age (single-use). The DELETE is the guard, not the SELECT:
+	// exactly one caller can affect the row, so only that caller may treat the state as
+	// consumed. Reading first and deleting unconditionally let two simultaneous
+	// callbacks both come back found=true — the opposite of the single-use property
+	// this function documents. A failed delete means single use cannot be guaranteed,
+	// so it is reported rather than swallowed.
+	res, derr := s.db.ExecContext(ctx, s.bind(`DELETE FROM oidc_flow_states WHERE state = ?`), state)
+	if derr != nil {
+		return "", "", false, derr
+	}
+	if affected, aerr := res.RowsAffected(); aerr != nil {
+		return "", "", false, aerr
+	} else if affected != 1 {
+		return "", "", false, nil
+	}
 	if ts, perr := time.Parse(time.RFC3339Nano, createdAt); perr == nil && time.Since(ts) > 10*time.Minute {
 		return "", "", false, nil
 	}
