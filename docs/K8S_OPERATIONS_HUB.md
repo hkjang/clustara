@@ -1,8 +1,18 @@
 # K8s Operations Hub
 
-> **버전: v0.9.179** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.180** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.179)
+## 기능 상태 (v0.9.180)
+
+### 터미널 정책 · 셸 표기와 denylist
+
+인터랙티브 셸은 표기와 무관하게 전체 TTY 로 분류되어 승인을 거칩니다 —
+`/usr/bin/bash` 처럼 경로가 다르거나 `sudo bash` 처럼 감싸도 마찬가지입니다.
+`sh -c ...` 는 고정 명령이므로 인터랙티브가 아닙니다.
+
+명령 denylist 는 프로그램 이름을 command position 에서 비교하므로 경로를 붙이거나
+셸로 감싸도 걸리며, `mkfs.ext4` 같은 점 붙은 변형도 포함합니다. 인자로 등장하는
+단어는 걸리지 않습니다.
 
 ### Text2SQL CTE
 
