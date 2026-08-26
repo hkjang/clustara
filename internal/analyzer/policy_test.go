@@ -18,7 +18,7 @@ func TestEvaluatePolicies(t *testing.T) {
 		"containers": []any{map[string]any{"name": "c", "image": "x:latest",
 			"securityContext": map[string]any{"privileged": true}}},
 	}}}
-	results := EvaluatePolicies("Deployment", spec, policies)
+	results := EvaluatePolicies("Deployment", spec, nil, policies)
 	if len(results) != 3 { // disabled policy excluded
 		t.Fatalf("expected 3 results (disabled excluded), got %d", len(results))
 	}
@@ -41,7 +41,7 @@ func TestEvaluatePoliciesCompliantPasses(t *testing.T) {
 	policies := []Policy{{ID: "1", Name: "no-priv", RuleType: "disallow_privileged", Action: "Deny", Enabled: true}}
 	spec := map[string]any{"template": map[string]any{"spec": map[string]any{
 		"containers": []any{map[string]any{"name": "c", "image": "x@sha256:abc"}}}}}
-	for _, r := range EvaluatePolicies("Deployment", spec, policies) {
+	for _, r := range EvaluatePolicies("Deployment", spec, nil, policies) {
 		if r.Violated {
 			t.Fatalf("compliant workload should not violate: %+v", r)
 		}

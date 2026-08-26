@@ -215,6 +215,10 @@ func (s *Server) handleK8sPolicySimulate(w http.ResponseWriter, r *http.Request)
 	var p struct {
 		Kind string         `json:"kind"`
 		Spec map[string]any `json:"spec"`
+		// Annotations mirror the resource's own metadata.annotations. The attestation
+		// rules read them, so a simulation without them cannot reproduce the verdict
+		// the same resource would get in a real evaluation.
+		Annotations map[string]string `json:"annotations"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
@@ -225,7 +229,7 @@ func (s *Server) handleK8sPolicySimulate(w http.ResponseWriter, r *http.Request)
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_policies_failed")
 		return
 	}
-	results := analyzer.EvaluatePolicies(p.Kind, p.Spec, toAnalyzerPolicies(policies))
+	results := analyzer.EvaluatePolicies(p.Kind, p.Spec, p.Annotations, toAnalyzerPolicies(policies))
 	decision := "allow"
 	for _, res := range results {
 		if res.Violated && strings.EqualFold(res.Action, "Deny") {

@@ -45,6 +45,18 @@ var approvalKinds = map[string]string{
 	"Namespace":          "네임스페이스 변경",
 }
 
+// docAnnotations returns a manifest document's own metadata annotations. They sit
+// beside spec, not inside it, so the policy rules cannot reach them on their own.
+func docAnnotations(doc map[string]any) map[string]string {
+	out := map[string]string{}
+	for k, v := range asAnyMap(asAnyMap(doc["metadata"])["annotations"]) {
+		if s := strings.TrimSpace(str(v)); s != "" {
+			out[k] = s
+		}
+	}
+	return out
+}
+
 // AnalyzeStackManifest validates the decoded manifest documents against the policy pack and flags
 // approval-gating resources. Pure over its inputs.
 func AnalyzeStackManifest(docs []map[string]any, policies []Policy) StackPlan {
@@ -75,7 +87,7 @@ func AnalyzeStackManifest(docs []map[string]any, policies []Policy) StackPlan {
 
 		// Policy pack: evaluate pod-bearing resources (and bare Pods) against the guardrails.
 		spec := PolicySpecOfDoc(kind, doc)
-		for _, pr := range EvaluatePolicies(kind, spec, policies) {
+		for _, pr := range EvaluatePolicies(kind, spec, docAnnotations(doc), policies) {
 			if pr.Violated {
 				plan.PolicyViolations = append(plan.PolicyViolations, pr)
 				if strings.EqualFold(pr.Action, "Deny") {

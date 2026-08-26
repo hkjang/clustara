@@ -61,14 +61,22 @@ func PolicySpecOfDoc(kind string, doc map[string]any) map[string]any {
 
 // EvaluatePolicies checks a resource (by kind + raw spec, e.g. from a manifest) against the
 // enabled policies and returns one result per policy. Pure + testable.
-func EvaluatePolicies(kind string, spec map[string]any, policies []Policy) []PolicyResult {
+//
+// annotations are the resource's own metadata annotations. They must be passed in
+// rather than read out of spec: in a manifest document metadata is a sibling of
+// spec, and on an inventory item annotations are a separate field, so a resource's
+// own annotations are not reachable from spec at all. The attestation rules
+// (vulnerability counts, expired exceptions) fire only when an annotation is present
+// with a bad value, so without this they could never fire on a bare Pod.
+func EvaluatePolicies(kind string, spec map[string]any, annotations map[string]string, policies []Policy) []PolicyResult {
 	ps := podSpecFromKindSpec(kind, spec)
+	merged := policyAnnotations(kind, spec, annotations)
 	out := []PolicyResult{}
 	for _, p := range policies {
 		if !p.Enabled {
 			continue
 		}
-		violated, detail := evalPolicyRule(p.RuleType, kind, spec, ps)
+		violated, detail := evalPolicyRule(p.RuleType, kind, spec, ps, merged)
 		out = append(out, PolicyResult{PolicyID: p.ID, Name: p.Name, RuleType: p.RuleType, Action: p.Action, Violated: violated, Detail: detail})
 	}
 	return out
@@ -78,8 +86,7 @@ func podSpecFromKindSpec(kind string, spec map[string]any) map[string]any {
 	return podSpecOf(store.K8sInventoryItem{Kind: kind, Spec: spec})
 }
 
-func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, string) {
-	annotations := policyAnnotations(kind, spec)
+func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations map[string]string) (bool, string) {
 	containers := func() []any {
 		if ps == nil {
 			return nil
@@ -181,7 +188,11 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any) (bool, strin
 	return false, ""
 }
 
-func policyAnnotations(kind string, spec map[string]any) map[string]string {
+// policyAnnotations merges every annotation source a rule may legitimately consult:
+// the pod template's annotations, any metadata carried inside the map itself (true
+// for the kinds PolicySpecOfDoc hands the whole document), and the resource's own
+// annotations supplied by the caller. The resource's own values win on conflict.
+func policyAnnotations(kind string, spec map[string]any, own map[string]string) map[string]string {
 	out := map[string]string{}
 	add := func(raw any) {
 		for k, v := range asAnyMap(raw) {
@@ -195,6 +206,11 @@ func policyAnnotations(kind string, spec map[string]any) map[string]string {
 	add(asAnyMap(asAnyMap(tmpl["metadata"])["annotations"]))
 	if strings.EqualFold(kind, "Pod") {
 		add(asAnyMap(spec["annotations"]))
+	}
+	for k, v := range own {
+		if s := strings.TrimSpace(v); s != "" {
+			out[k] = s
+		}
 	}
 	return out
 }
@@ -226,7 +242,7 @@ func CheckPolicyCompliance(items []store.K8sInventoryItem, policies []Policy) []
 		if !workloadKinds[it.Kind] && it.Kind != "Role" && it.Kind != "ClusterRole" {
 			continue
 		}
-		for _, res := range EvaluatePolicies(it.Kind, it.Spec, policies) {
+		for _, res := range EvaluatePolicies(it.Kind, it.Spec, it.Annotations, policies) {
 			if res.Violated {
 				out = append(out, PolicyComplianceViolation{
 					Namespace: it.Namespace, Kind: it.Kind, Name: it.Name,

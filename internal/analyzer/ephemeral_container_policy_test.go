@@ -32,7 +32,7 @@ func TestPolicyRulesSeePrivilegedEphemeralContainers(t *testing.T) {
 		{ID: "p3", Name: "non root", RuleType: "require_run_as_non_root", Action: "Deny", Enabled: true},
 	}
 	violated := map[string]string{}
-	for _, res := range EvaluatePolicies("Pod", privilegedEphemeralPodSpec(), policies) {
+	for _, res := range EvaluatePolicies("Pod", privilegedEphemeralPodSpec(), nil, policies) {
 		if res.Violated {
 			violated[res.RuleType] = res.Detail
 		}
