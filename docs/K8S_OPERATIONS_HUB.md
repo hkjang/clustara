@@ -1,8 +1,13 @@
 # K8s Operations Hub
 
-> **버전: v0.9.178** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.179** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.178)
+## 기능 상태 (v0.9.179)
+
+### Text2SQL CTE
+
+`WITH` 질의는 테이블 allow-list 가 걸린 subject 에서도 동작합니다. CTE 이름은 base
+table 로 세지 않으며, CTE 본문이 읽는 실제 테이블은 평소대로 검사됩니다.
 
 ### Text2SQL 컬럼 제한과 와일드카드
 
