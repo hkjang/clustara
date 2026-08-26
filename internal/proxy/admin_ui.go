@@ -1872,6 +1872,22 @@ const adminHTML = `<!doctype html>
       return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     }
     // escapeAttr is for values placed inside a single-quoted inline handler string.
+    // safeURL returns a URL only when its scheme is safe to place in an href.
+    // escapeAttr keeps a value inside the attribute but does not neutralise the
+    // scheme, so a stored "javascript:" URL still executes when an operator
+    // clicks it. These links carry externally supplied data (VCS webhook
+    // payloads, catalog repo/docs URLs), so the scheme is allow-listed and
+    // anything else renders as plain text instead of a link.
+    function safeURL(value) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      // A scheme cannot contain control characters; stripping them before the
+      // test defeats evasion that hides them inside the scheme.
+      const probe = raw.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+      if (probe.startsWith('#') || probe.startsWith('/') || probe.startsWith('?')) return raw;
+      if (probe.startsWith('http://') || probe.startsWith('https://') || probe.startsWith('mailto:')) return raw;
+      return '';
+    }
     function escapeAttr(value) {
       return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[<>&"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
     }
@@ -4782,7 +4798,8 @@ const adminHTML = `<!doctype html>
         ? '<span class="status ' + (e.state === 'merged' ? '' : (e.state === 'closed' ? 'error' : 'warn')) + '">MR ' + escapeHTML(e.state || '') + '</span>'
         : '<span class="pill">' + escapeHTML(e.kind || 'commit') + '</span>' + (e.provider === 'inferred' ? ' <span class="muted" style="font-size:11px">추론</span>' : '');
       const rows = events.map(e => {
-        const title = e.url ? '<a href="' + escapeAttr(e.url) + '" target="_blank" rel="noopener">' + escapeHTML(e.title || e.ref) + '</a>' : escapeHTML(e.title || e.ref);
+        const titleURL = safeURL(e.url);
+        const title = titleURL ? '<a href="' + escapeAttr(titleURL) + '" target="_blank" rel="noopener">' + escapeHTML(e.title || e.ref) + '</a>' : escapeHTML(e.title || e.ref);
         const sess = e.session_id ? '<a href="#" onclick="openSessionTimeline(\'' + escapeAttr(e.session_id) + '\');return false">' + escapeHTML(e.session_id) + '</a>' : '<span class="muted">미연결</span>';
         const usr = e.api_key_id ? '<a href="#/users/' + encodeURIComponent(e.api_key_id) + '">' + escapeHTML(e.api_key_id) + '</a>' : '';
         return '<tr>' +
@@ -6120,7 +6137,8 @@ const adminHTML = `<!doctype html>
         ? '<span class="status ' + (e.state === 'merged' ? '' : (e.state === 'closed' ? 'error' : 'warn')) + '">MR ' + escapeHTML(e.state || '') + '</span>'
         : '<span class="pill">' + escapeHTML(e.kind || 'commit') + '</span>' + (e.provider === 'inferred' ? ' <span class="muted" style="font-size:11px">추론</span>' : '');
       const rowsHtml = events.map(e => {
-        const label = e.url ? '<a href="' + escapeAttr(e.url) + '" target="_blank" rel="noopener">' + escapeHTML(e.title || e.ref) + '</a>' : escapeHTML(e.title || e.ref);
+        const labelURL = safeURL(e.url);
+        const label = labelURL ? '<a href="' + escapeAttr(labelURL) + '" target="_blank" rel="noopener">' + escapeHTML(e.title || e.ref) + '</a>' : escapeHTML(e.title || e.ref);
         return '<tr>' +
           '<td>' + kindBadge(e) + '</td>' +
           '<td>' + label + '<div class="muted">' + escapeHTML(e.provider) + ' · ' + escapeHTML(e.repo || '') + (e.branch ? (' · ' + escapeHTML(e.branch)) : '') + '</div></td>' +
@@ -7854,7 +7872,7 @@ const adminHTML = `<!doctype html>
         projects.map(p => '<tr><td><strong>' + escapeHTML(p.name) + '</strong><div class="muted">' + escapeHTML(p.id) + ' · ' + escapeHTML(p.workspace_id) + '</div></td><td>' + escapeHTML(p.environment || '-') + '</td><td>' + escapeHTML(p.owner_team_id || '-') + '</td><td>' + escapeHTML(p.cost_center || '-') + '</td><td>' + escapeHTML(p.criticality || '-') + '</td></tr>').join('') +
         '</tbody></table>' : '<div class="empty">프로젝트 없음</div>';
       const entityTable = entities.length ? '<table><thead><tr><th>Kind</th><th>Name</th><th>Owner</th><th>Runtime</th><th>Repo</th><th>Tags</th></tr></thead><tbody>' +
-        entities.map(e => '<tr><td>' + escapeHTML(e.kind) + '</td><td><strong>' + escapeHTML(e.name) + '</strong><div class="muted">' + escapeHTML(e.project_id || '-') + '</div></td><td>' + escapeHTML(e.owner_team_id || '-') + '</td><td><code>' + escapeHTML(e.runtime_ref || '-') + '</code></td><td>' + (e.repo_url ? '<a href="' + escapeAttr(e.repo_url) + '" target="_blank" rel="noopener">repo</a>' : '-') + '</td><td>' + ((e.tags || []).map(t => '<span class="pill">' + escapeHTML(t) + '</span>').join('') || '-') + '</td></tr>').join('') +
+        entities.map(e => '<tr><td>' + escapeHTML(e.kind) + '</td><td><strong>' + escapeHTML(e.name) + '</strong><div class="muted">' + escapeHTML(e.project_id || '-') + '</div></td><td>' + escapeHTML(e.owner_team_id || '-') + '</td><td><code>' + escapeHTML(e.runtime_ref || '-') + '</code></td><td>' + (safeURL(e.repo_url) ? '<a href="' + escapeAttr(safeURL(e.repo_url)) + '" target="_blank" rel="noopener">repo</a>' : '-') + '</td><td>' + ((e.tags || []).map(t => '<span class="pill">' + escapeHTML(t) + '</span>').join('') || '-') + '</td></tr>').join('') +
         '</tbody></table>' : '<div class="empty">카탈로그 엔티티 없음</div>';
       const bindingTable = bindings.length ? '<table><thead><tr><th>Subject</th><th>Resource</th><th>Role</th><th>Effect</th><th>Conditions</th></tr></thead><tbody>' +
         bindings.map(b => '<tr><td><code>' + escapeHTML(b.subject_type) + ':' + escapeHTML(b.subject_id) + '</code></td><td><code>' + escapeHTML(b.resource_type) + ':' + escapeHTML(b.resource_id) + '</code></td><td>' + escapeHTML(b.role) + '</td><td><span class="status ' + (b.effect === 'deny' ? 'error' : '') + '">' + escapeHTML(b.effect || 'allow') + '</span></td><td><code>' + escapeHTML(JSON.stringify(b.conditions || {})) + '</code></td></tr>').join('') +
@@ -8353,8 +8371,8 @@ const adminHTML = `<!doctype html>
           links.push('<a href="#/gitops?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">GitOps</a>');
           links.push('<a href="#/k8s-security?cluster_id=' + encodeURIComponent(rt.cluster_id) + '">Security</a>');
         }
-        if (e.repo_url) links.push('<a href="' + escapeAttr(e.repo_url) + '" target="_blank" rel="noopener">Repo</a>');
-        if (e.docs_url) links.push('<a href="' + escapeAttr(e.docs_url) + '" target="_blank" rel="noopener">Docs</a>');
+        if (safeURL(e.repo_url)) links.push('<a href="' + escapeAttr(safeURL(e.repo_url)) + '" target="_blank" rel="noopener">Repo</a>');
+        if (safeURL(e.docs_url)) links.push('<a href="' + escapeAttr(safeURL(e.docs_url)) + '" target="_blank" rel="noopener">Docs</a>');
         return links.filter(Boolean).join(' · ') || '<span class="muted">runtime/ref 없음</span>';
       };
       const scores = scoreResp.scorecards || [];
@@ -16152,7 +16170,7 @@ const adminHTML = `<!doctype html>
           '<input id="cost-storage" type="number" value="' + escapeAttr(String(prices.storage_gb_monthly_krw || 0)) + '" style="width:120px"> <span class="muted" style="font-size:11px">KRW/Disk GB·월</span>' +
           '<button type="button" onclick="k8sCostSave()">단가 저장</button> ' +
           '<button type="button" class="secondary" onclick="k8sCostSnapshot()">지금 스냅샷 기록</button></div>' +
-          '<div class="banner" style="margin-top:10px"><strong>GPU 모델별 단가 · 노드 장비 매핑</strong><div class="muted" style="font-size:11px;margin:5px 0 9px">노드 관리의 GPU product label/DCGM 수집값을 사용합니다. 공개 참고가는 실제 약정·클라우드·서버 구성에 맞게 반드시 조정하세요.</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end"><label>USD/KRW<input id="cost-usd-krw" type="number" min="1" value="'+escapeAttr(String(prices.usd_krw||1400))+'" style="display:block;width:110px"></label>'+['l40s','h100','h200','b200','b300'].map(m=>'<label>'+m.toUpperCase()+' USD/h<input id="cost-gpu-'+m+'" type="number" min="0.01" step="0.01" value="'+escapeAttr(String(gpuModelPrices[m]||0))+'" style="display:block;width:105px"></label>').join('')+'</div><div class="muted" style="font-size:10px;margin-top:8px">참고: <a href="'+escapeAttr(gpuCatalog.source_url||'https://www.runpod.io/pricing')+'" target="_blank" rel="noopener">'+escapeHTML(gpuCatalog.provider||'RunPod public pricing reference')+'</a> · 확인 '+escapeHTML(gpuCatalog.checked_at||'-')+' · 월 730시간 환산</div></div>'+
+          '<div class="banner" style="margin-top:10px"><strong>GPU 모델별 단가 · 노드 장비 매핑</strong><div class="muted" style="font-size:11px;margin:5px 0 9px">노드 관리의 GPU product label/DCGM 수집값을 사용합니다. 공개 참고가는 실제 약정·클라우드·서버 구성에 맞게 반드시 조정하세요.</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end"><label>USD/KRW<input id="cost-usd-krw" type="number" min="1" value="'+escapeAttr(String(prices.usd_krw||1400))+'" style="display:block;width:110px"></label>'+['l40s','h100','h200','b200','b300'].map(m=>'<label>'+m.toUpperCase()+' USD/h<input id="cost-gpu-'+m+'" type="number" min="0.01" step="0.01" value="'+escapeAttr(String(gpuModelPrices[m]||0))+'" style="display:block;width:105px"></label>').join('')+'</div><div class="muted" style="font-size:10px;margin-top:8px">참고: <a href="'+escapeAttr(safeURL(gpuCatalog.source_url)||'https://www.runpod.io/pricing')+'" target="_blank" rel="noopener">'+escapeHTML(gpuCatalog.provider||'RunPod public pricing reference')+'</a> · 확인 '+escapeHTML(gpuCatalog.checked_at||'-')+' · 월 730시간 환산</div></div>'+
           '<div class="banner" style="margin-top:10px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><strong>자동 스냅샷</strong><label><input id="cost-snapshot-enabled" type="checkbox" '+(automation.enabled!==false?'checked':'')+'> 사용</label><select id="cost-snapshot-interval"><option value="21600" '+(Number(automation.interval_seconds)===21600?'selected':'')+'>6시간</option><option value="43200" '+(Number(automation.interval_seconds)===43200?'selected':'')+'>12시간</option><option value="86400" '+(Number(automation.interval_seconds||86400)===86400?'selected':'')+'>매일</option><option value="604800" '+(Number(automation.interval_seconds)===604800?'selected':'')+'>매주</option></select><button type="button" class="secondary" onclick="k8sCostSave()">자동화 저장</button><span class="status '+(automation.last_error?'error':'')+'">'+(automation.last_error?'오류':'정상')+'</span></div><div class="muted" style="font-size:11px;margin-top:6px">최근 성공 '+escapeHTML(automation.last_success||'아직 없음')+' · 다음 실행 '+escapeHTML(automation.next_run||'서버 시작 후 자동 결정')+(automation.last_error?' · '+escapeHTML(automation.last_error):'')+' · 같은 날 재실행은 upsert되어 중복되지 않습니다.</div></div>'+
           '<div class="muted" style="font-size:11px;margin-top:8px">' + escapeHTML(data.note || '') + '</div><div id="cost-msg" class="muted" style="font-size:11px"></div></div>') +
         (function () {
