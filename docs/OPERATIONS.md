@@ -281,6 +281,7 @@ curl -X POST http://localhost:9090/admin/fallback
 | `K8S_TERMINAL_REAPER_BATCH_SIZE` | `250` | tick 당 검사할 세션 수 |
 | `K8S_TERMINAL_REAPER_MAX_BACKOFF` | `5m` | 연속 실패 시 최대 대기 |
 | `SERVER_SCHEDULERS_ENABLED` | `true` | 5.6 절의 주기 스케줄러 전체 사용 여부. `false` 면 이 프로세스는 API 트래픽만 처리하고 상태를 수렴시키지 않습니다 |
+| `LIMITS_MAX_REQUEST_BYTES` | `0`(비활성) | 채팅 요청 본문 상한. 설정하면 **읽기 자체가** 한도+1 바이트에서 멈춰 메모리를 보호합니다 |
 
 > lease TTL 이 tick 주기보다 짧으면 다른 복제본이 아직 진행 중인 롤아웃을 넘겨받아 패치를 **이중 실행**할 수 있습니다. 그래서 설정 검증 단계에서 기동 자체를 막습니다.
 
