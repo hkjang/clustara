@@ -1,8 +1,18 @@
 # K8s Operations Hub
 
-> **버전: v0.9.177** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.178** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.177)
+## 기능 상태 (v0.9.178)
+
+### Text2SQL 컬럼 제한과 와일드카드
+
+컬럼 제한(blocked / aggregate-only)이 걸린 subject 는 `SELECT *` 를 쓸 수 없습니다.
+와일드카드는 컬럼 이름이 질의에 나타나지 않으므로 제한 검사를 지나가고 값을 그대로
+반환했습니다.
+
+- 제한이 없는 subject 의 `SELECT *` 는 그대로입니다.
+- `count(*)` 는 계속 허용됩니다 — 컬럼 값을 노출하지 않습니다.
+- 제한이 있는 subject 는 필요한 컬럼을 명시해야 합니다.
 
 ### Text2SQL 테이블 allow-list
 
