@@ -36,6 +36,29 @@ var PolicyRuleTypes = []string{
 	"deny_unfixed_exception_expired", "deny_privileged_runtime", "enforce_pss_restricted",
 }
 
+// kindsWithTopLevelPayload are the kinds whose policy-relevant fields sit at the
+// document root instead of under `spec`: RBAC rules and subjects, ConfigMap and
+// Secret data, ServiceAccount token settings. Inventory items already store those
+// fields in Spec, so only decoded manifest documents need the distinction.
+var kindsWithTopLevelPayload = map[string]bool{
+	"configmap": true, "secret": true, "serviceaccount": true,
+	"role": true, "clusterrole": true, "rolebinding": true, "clusterrolebinding": true,
+}
+
+// PolicySpecOfDoc returns the map policy rules should read for a decoded manifest
+// document. Handing rules doc["spec"] for an RBAC object yields an empty map, which
+// silently disarms every rule reading those fields — a ClusterRole granting */*/* was
+// evaluated as clean on the manifest path while the live-inventory scan flagged it.
+func PolicySpecOfDoc(kind string, doc map[string]any) map[string]any {
+	if spec := asAnyMap(doc["spec"]); len(spec) > 0 {
+		return spec
+	}
+	if kindsWithTopLevelPayload[strings.ToLower(strings.TrimSpace(kind))] {
+		return doc
+	}
+	return map[string]any{}
+}
+
 // EvaluatePolicies checks a resource (by kind + raw spec, e.g. from a manifest) against the
 // enabled policies and returns one result per policy. Pure + testable.
 func EvaluatePolicies(kind string, spec map[string]any, policies []Policy) []PolicyResult {

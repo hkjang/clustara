@@ -74,7 +74,7 @@ func AnalyzeStackManifest(docs []map[string]any, policies []Policy) StackPlan {
 		plan.Resources = append(plan.Resources, res)
 
 		// Policy pack: evaluate pod-bearing resources (and bare Pods) against the guardrails.
-		spec := asAnyMap(doc["spec"])
+		spec := PolicySpecOfDoc(kind, doc)
 		for _, pr := range EvaluatePolicies(kind, spec, policies) {
 			if pr.Violated {
 				plan.PolicyViolations = append(plan.PolicyViolations, pr)
