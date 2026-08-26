@@ -268,17 +268,51 @@ func (s *SQLStore) MarkPodDeleted(ctx context.Context, clusterID, podUID, observ
 	return s.refreshPodDurations(ctx, clusterID, podUID, observedAt)
 }
 
+// appendPodTransition records one pod state change. A pod is observed by both the
+// watch agent and the periodic snapshot, so two writers can read the same
+// current_state and try to append the same transition at the same moment. The
+// sequence number was allocated with MAX+1 and inserted with no conflict clause, so
+// the loser hit the unique constraint and returned an error — and both collectors
+// abort their whole batch on it, leaving the rest of the cluster's inventory stale.
+//
+// Every other append in this file is already idempotent: a natural-key id plus ON
+// CONFLICT DO NOTHING. This one is brought in line. The id now derives from the
+// transition itself, so a duplicate is recognised and skipped, while a sequence
+// number lost to a genuinely different transition is retried with a fresh one.
 func (s *SQLStore) appendPodTransition(ctx context.Context, clusterID, uid, previous, current, phase, reason, message, severity, hash, at, source string) error {
-	var seq int64
-	if err := s.db.QueryRowContext(ctx, s.bind(`SELECT COALESCE(MAX(sequence_no),0)+1 FROM k8s_pod_state_transitions
-		WHERE cluster_id=? AND pod_uid=?`), clusterID, uid).Scan(&seq); err != nil {
-		return err
+	id := stableLifecycleID("podtrans", clusterID, uid, previous, current, at, source)
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var seq int64
+		if err := s.db.QueryRowContext(ctx, s.bind(`SELECT COALESCE(MAX(sequence_no),0)+1 FROM k8s_pod_state_transitions
+			WHERE cluster_id=? AND pod_uid=?`), clusterID, uid).Scan(&seq); err != nil {
+			return err
+		}
+		res, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_pod_state_transitions
+			(id,cluster_id,pod_uid,sequence_no,transition_at,observed_at,source,previous_state,current_state,phase,reason,message,severity,snapshot_hash)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`), id, clusterID, uid, seq,
+			at, at, source, previous, current, phase, reason, message, severity, hash)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 1 {
+			return nil
+		}
+		// Nothing was inserted: either this exact transition is already on record, or
+		// another transition took the sequence number. Only the latter is worth retrying.
+		var recorded int
+		if err := s.db.QueryRowContext(ctx, s.bind(`SELECT COUNT(1) FROM k8s_pod_state_transitions WHERE id = ?`), id).Scan(&recorded); err != nil {
+			return err
+		}
+		if recorded > 0 {
+			return nil
+		}
 	}
-	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_pod_state_transitions
-		(id,cluster_id,pod_uid,sequence_no,transition_at,observed_at,source,previous_state,current_state,phase,reason,message,severity,snapshot_hash)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`), stableLifecycleID("podtrans", clusterID, uid, fmt.Sprint(seq)), clusterID, uid, seq,
-		at, at, source, previous, current, phase, reason, message, severity, hash)
-	return err
+	return fmt.Errorf("append pod transition %s/%s: sequence number contention", clusterID, uid)
 }
 
 func (s *SQLStore) observeContainers(ctx context.Context, item K8sInventoryItem, observed string) error {
