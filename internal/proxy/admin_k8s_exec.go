@@ -116,6 +116,26 @@ func (s *Server) handleK8sExecSessionByID(w http.ResponseWriter, r *http.Request
 	nextAction := ""
 	switch command {
 	case "approve":
+		// The policy engine asked for a second pair of eyes on this session, so
+		// the requester cannot supply them. applySuperAdminTerminalDefault
+		// describes exactly this as the "self-approval deadlock" it exists to
+		// break: a super_admin never reaches approval at all, so enforcing the
+		// rule here strands nobody who has one.
+		//
+		// Rejecting your own request stays allowed below — withdrawing a request
+		// grants no access.
+		//
+		// Skipped when the actor is unidentified: with admin auth disabled every
+		// caller is "anonymous", so the rule could only block every approval
+		// without separating anybody. Four eyes needs two identities.
+		decider := adminID(r)
+		requester := strings.TrimSpace(sess.RequestedBy)
+		if requester != "" && requester != "anonymous" && requester == decider {
+			writeOpenAIError(w, http.StatusForbidden,
+				"the requester of an exec session cannot approve it; another administrator must decide",
+				"permission_error", "exec_session_self_approval")
+			return
+		}
 		status = "ready"
 		nextAction = "connect_exec_transport"
 	case "reject":
