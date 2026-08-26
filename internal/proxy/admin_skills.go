@@ -135,11 +135,26 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusBadRequest, "metadata must be valid JSON", "invalid_request_error", "invalid_metadata")
 			return
 		}
-		saved, err := s.db.UpsertSkill(r.Context(), store.Skill{
+		incoming := store.Skill{
 			Name: name, Description: p.Description, Version: strings.TrimSpace(p.Version), Owner: strings.TrimSpace(p.Owner),
 			Status: status, RiskLevel: risk, AllowedModels: strings.TrimSpace(p.AllowedModels), AllowedTools: strings.TrimSpace(p.AllowedTools),
 			AllowedTeams: strings.TrimSpace(p.AllowedTeams), DailyLimit: p.DailyLimit, Instructions: p.Instructions, Metadata: meta,
-		}, s.skillActor(r))
+		}
+		// The promotion gate enforces the mandatory production guardrails, but
+		// this endpoint could set status directly and bypass it. Enforcement
+		// reads an unset guardrail as "unrestricted" (len(allowed) > 0,
+		// DailyLimit > 0), so a production skill saved this way ran with any
+		// model, any tool, any team and no daily cap — exactly what
+		// productionPolicyChecks exists to prevent.
+		if status == "production" {
+			if missing := missingProductionPolicies(incoming); len(missing) > 0 {
+				writeOpenAIError(w, http.StatusBadRequest,
+					"프로덕션 전환 전 필수 항목 누락: "+strings.Join(missing, ", "),
+					"invalid_request_error", "skill_production_policy_missing")
+				return
+			}
+		}
+		saved, err := s.db.UpsertSkill(r.Context(), incoming, s.skillActor(r))
 		if err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "skill_save_failed")
 			return
@@ -226,13 +241,13 @@ func (s *Server) handleSkillEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 	violations := evaluateSkillPolicy(sk, strings.TrimSpace(p.Model), p.Tools, strings.TrimSpace(p.Team))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":          sk.Name,
-		"status":        sk.Status,
-		"enforcement":   s.skillsConf().Enforcement,
-		"production":    sk.Status == "production",
-		"allowed":       len(violations) == 0,
-		"violations":    violations,
-		"would_block":   len(violations) > 0 && strings.EqualFold(s.skillsConf().Enforcement, "enforce"),
+		"name":        sk.Name,
+		"status":      sk.Status,
+		"enforcement": s.skillsConf().Enforcement,
+		"production":  sk.Status == "production",
+		"allowed":     len(violations) == 0,
+		"violations":  violations,
+		"would_block": len(violations) > 0 && strings.EqualFold(s.skillsConf().Enforcement, "enforce"),
 	})
 }
 
