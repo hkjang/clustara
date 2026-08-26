@@ -74,6 +74,11 @@ var (
 	// allowing an alias on the previous source ("FROM a x, b" / "FROM a AS x, b").
 	// Anchored at the start so it only walks a contiguous source list.
 	commaSource  = regexp.MustCompile(`(?is)^(?:\s+(?:as\s+)?[a-zA-Z_][a-zA-Z0-9_]*)?\s*,\s*("?[a-zA-Z_][a-zA-Z0-9_]*"?(?:\."?[a-zA-Z_][a-zA-Z0-9_]*"?)*)`)
+	// selectStar matches a wildcard select item ("*" or "t.*"), but not
+	// multiplication ("a * b") nor count(*): a wildcard is followed by a comma,
+	// FROM, or the end of the statement, while a multiplication is followed by
+	// its right operand and count(*) by a closing paren.
+	selectStar   = regexp.MustCompile(`(?is)(?:^|[\s,(])(?:"?[a-zA-Z_][a-zA-Z0-9_]*"?\s*\.\s*)?\*\s*(?:,|from\b|$)`)
 	lineComment  = regexp.MustCompile(`--[^\n]*`)
 	blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	// aggFuncRe matches an aggregate function name immediately followed by its opening
@@ -164,6 +169,17 @@ func ValidateSQL(raw string, opts ValidateOptions) ValidationResult {
 		if c := strings.ToLower(strings.TrimSpace(col)); c != "" && words[c] {
 			return ValidationResult{Reason: "sensitive column not allowed: " + c}
 		}
+	}
+	// A wildcard select returns the blocked columns without ever naming them,
+	// which makes the check above void for the query shape a generator reaches
+	// for most often. There is no schema here to expand "*" against, so a
+	// subject that has blocked columns must list the columns it wants.
+	//
+	// Only applies when this subject actually has blocked columns; an
+	// unrestricted subject keeps SELECT * as before. count(*) stays allowed —
+	// it exposes no column values.
+	if len(opts.BlockedColumns) > 0 && selectStar.MatchString(stripped) {
+		return ValidationResult{Reason: "wildcard select is not allowed when sensitive columns are restricted; list the columns explicitly"}
 	}
 	// aggregate-only columns may appear only inside an aggregate call. Strip aggregate
 	// call bodies (balanced parens, so nested calls like sum(coalesce(col,0)) are fully
