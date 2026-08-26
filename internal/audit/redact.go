@@ -7,14 +7,21 @@ import (
 	"strings"
 )
 
+// secretAssign matches the key half of a credential assignment up to and
+// including the separator. The optional quotes around the key name are what let
+// the same rules cover JSON and YAML ("api_key": "...") — without them the
+// closing quote sits between the key and the colon and nothing matches, which
+// left every JSON-encoded credential unredacted.
+const secretAssign = `["']?(?:api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd|client[_-]?secret|private[_-]?key)["']?\s*(?:=>|[:=])\s*`
+
 var redactPatterns = []struct {
 	re          *regexp.Regexp
 	replacement string
 }{
 	// Generic key=value, must come before specific token rules so the value is wiped together
-	{regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd|client[_-]?secret|private[_-]?key)\s*[:=]\s*"[^"\n]+"`), `$1="[REDACTED]"`},
-	{regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd|client[_-]?secret|private[_-]?key)\s*[:=]\s*'[^'\n]+'`), `$1='[REDACTED]'`},
-	{regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd|client[_-]?secret|private[_-]?key)\s*[:=]\s*[^"'\s,}\]]+`), `$1=[REDACTED]`},
+	{regexp.MustCompile(`(?i)(` + secretAssign + `)"[^"\n]+"`), `${1}"[REDACTED]"`},
+	{regexp.MustCompile(`(?i)(` + secretAssign + `)'[^'\n]+'`), `${1}'[REDACTED]'`},
+	{regexp.MustCompile(`(?i)(` + secretAssign + `)[^"'\s,}\]>][^"'\s,}\]]*`), `${1}[REDACTED]`},
 	{regexp.MustCompile(`(?i)bearer\s+[a-z0-9._\-]+`), `Bearer [REDACTED]`},
 	{regexp.MustCompile(`(?i)basic\s+[a-z0-9+/=]{8,}`), `Basic [REDACTED]`},
 

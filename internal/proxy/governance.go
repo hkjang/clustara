@@ -42,9 +42,9 @@ var secretFirewallPatterns = []secretPattern{
 	{typ: "aws_access_key", re: regexp.MustCompile(`AKIA[0-9A-Z]{16}`), replacement: "[REDACTED_AWS_ACCESS_KEY]"},
 	{typ: "aws_secret", re: regexp.MustCompile(`(?i)(aws.{0,20}(secret|access).{0,20})[:=]\s*["']?[A-Za-z0-9/+=]{30,}`), replacement: "$1=[REDACTED]"},
 	{typ: "db_connection_string", re: regexp.MustCompile(`(?i)\b(postgres|postgresql|mysql|mongodb|redis|mssql|sqlserver)://[^\s"'<>]+`), replacement: "[REDACTED_DB_CONNECTION]"},
-	{typ: "access_token", re: regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|bearer)\s*[:= ]\s*["']?[A-Za-z0-9._\-]{20,}`), replacement: "$1=[REDACTED]"},
-	{typ: "password", re: regexp.MustCompile(`(?i)(password|passwd|pwd)\s*[:=]\s*["']?[^"',}\]\s]{6,}`), replacement: "$1=[REDACTED]"},
-	{typ: "api_key", re: regexp.MustCompile(`(?i)(api[_-]?key|x-api-key|secret[_-]?key|client[_-]?secret)\s*[:=]\s*["']?[A-Za-z0-9._\-]{16,}`), replacement: "$1=[REDACTED]"},
+	{typ: "access_token", re: regexp.MustCompile(`(?i)(["']?(?:access[_-]?token|refresh[_-]?token|bearer)["']?\s*(?:=>|[:= ])\s*["']?)[A-Za-z0-9._\-]{20,}`), replacement: "${1}[REDACTED]"},
+	{typ: "password", re: regexp.MustCompile(`(?i)(["']?(?:password|passwd|pwd)["']?\s*(?:=>|[:=])\s*["']?)[^"',}\]\s]{6,}`), replacement: "${1}[REDACTED]"},
+	{typ: "api_key", re: regexp.MustCompile(`(?i)(["']?(?:api[_-]?key|x-api-key|secret[_-]?key|client[_-]?secret)["']?\s*(?:=>|[:=])\s*["']?)[A-Za-z0-9._\-]{16,}`), replacement: "${1}[REDACTED]"},
 }
 
 type governanceContext struct {
