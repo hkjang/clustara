@@ -152,7 +152,10 @@ func (s *Server) handleAdminRoles(w http.ResponseWriter, r *http.Request) {
 				roles = append(roles, customRoleInfo(c))
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"roles": roles, "all_scopes": allScopes})
+		// unenforced_scopes is reported alongside the catalog so granting or
+		// withholding one of them is not mistaken for a live permission decision.
+		writeJSON(w, http.StatusOK, map[string]any{"roles": roles, "all_scopes": allScopes,
+			"unenforced_scopes": unenforcedScopeCatalog()})
 	case http.MethodPost:
 		var p struct {
 			Role        string   `json:"role"`

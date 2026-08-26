@@ -30,6 +30,35 @@ var allScopes = []string{
 	"rollout:view", "rollout:request", "rollout:execute", "rollout:approve", "rollout:rollback", "rollout:force", "rollout:policy-admin",
 }
 
+// unenforcedScopes are catalog entries that no code path currently checks, with the
+// reason. They are forward declarations for capabilities this release does not
+// expose, not controls that are being bypassed — there is no manual rollback
+// endpoint, no rollout force option and no rollout policy admin surface, and
+// service approvals run through the shared Action Center flow rather than a
+// dedicated one.
+//
+// They stay in the catalog so a role granted them keeps that grant when the
+// capability ships, but /admin/roles reports them: an operator withholding
+// "rollout:force" from a role would otherwise believe they had prevented
+// something. TestScopeEnforcementAnnotationMatchesCode keeps this list honest.
+var unenforcedScopes = map[string]string{
+	"rollout:rollback":     "manual rollback is not exposed; rollback is performed only by the auto-rollback reconciler",
+	"rollout:force":        "no rollout force option exists in this release",
+	"rollout:policy-admin": "no rollout policy administration endpoint exists in this release",
+	"service:approve":      "service approvals go through the shared Action Center approval flow",
+}
+
+// unenforcedScopeCatalog renders the annotation for the roles API.
+func unenforcedScopeCatalog() []map[string]string {
+	out := make([]map[string]string, 0, len(unenforcedScopes))
+	for _, sc := range allScopes {
+		if reason, ok := unenforcedScopes[sc]; ok {
+			out = append(out, map[string]string{"scope": sc, "reason": reason})
+		}
+	}
+	return out
+}
+
 var roleScopes = map[string][]string{
 	"super_admin": allScopes,
 	"admin":       allScopes,
