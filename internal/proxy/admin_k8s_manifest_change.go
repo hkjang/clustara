@@ -307,7 +307,13 @@ func (s *Server) prepareK8sManifestChangeRequest(ctx context.Context, actor stri
 	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
 	afterYAML := mustManifestYAML(storeAfterDoc)
 	diffs := diffManifestDocs(beforeDoc, storeAfterDoc)
-	policies, _ := s.db.ListK8sPolicies(ctx)
+	policies, err := s.db.ListK8sPolicies(ctx)
+	if err != nil {
+		// A nil policy list analyses as "nothing denied, no approval needed", which
+		// would under-assess the change's risk. The other store lookups in this
+		// function already fail the request; do the same rather than guess.
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_policy_load_failed")
+	}
 	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
 	impact, risk, requiresApproval := manifestChangeImpact(item, afterDoc, diffs, plan)
 	if strings.EqualFold(kind, "Secret") && manifestContainsSecretPayload(afterDoc) {
@@ -346,7 +352,13 @@ func (s *Server) prepareK8sManifestCreateRequest(ctx context.Context, actor, clu
 	storeAfterDoc := sanitizeManifestDocForLedger(afterDoc)
 	afterYAML := mustManifestYAML(storeAfterDoc)
 	diffs := diffManifestDocs(map[string]any{}, storeAfterDoc)
-	policies, _ := s.db.ListK8sPolicies(ctx)
+	policies, err := s.db.ListK8sPolicies(ctx)
+	if err != nil {
+		// A nil policy list analyses as "nothing denied, no approval needed", which
+		// would under-assess the change's risk. The other store lookups in this
+		// function already fail the request; do the same rather than guess.
+		return manifestChangeCreateResult{}, manifestChangeCreateHTTPError(http.StatusInternalServerError, err.Error(), "k8s_policy_load_failed")
+	}
 	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
 	item := store.K8sInventoryItem{ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion, Name: name}
 	impact, risk, requiresApproval := manifestCreateImpact(item, afterDoc, diffs, plan)
@@ -481,7 +493,16 @@ func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusBadRequest, "stored manifest parse error", "invalid_request_error", "manifest_parse_failed")
 		return
 	}
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, policyErr := s.db.ListK8sPolicies(r.Context())
+	if policyErr != nil {
+		// Analysing against a nil policy list yields denied=false with no violations,
+		// which would be recorded as "policy passed" and leave the change eligible for
+		// apply — a policy gate that never ran must not read as a policy gate that
+		// passed. Fail the validation instead; re-running it once the store recovers
+		// produces a real verdict.
+		s.persistManifestChangePolicyUnavailable(w, r, req, id, policyErr)
+		return
+	}
 	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 	validation := map[string]any{
 		"schema": map[string]any{"status": "basic_passed", "checked": []string{"apiVersion", "kind", "metadata.name"}},
@@ -545,6 +566,37 @@ func (s *Server) validateK8sManifestChange(w http.ResponseWriter, r *http.Reques
 	s.auditAdmin(r, "k8s.manifest_change.validate", id, auditJSON(map[string]any{"status": status, "risk": risk}))
 	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]any{"request": updated, "validation": validation, "plan": plan})
+}
+
+// persistManifestChangePolicyUnavailable records a validation attempt whose policy
+// set could not be loaded. It fails the change instead of leaving it validated, so
+// the ledger states that the gate did not run rather than implying it passed. Re-running
+// validate once the store recovers produces a real verdict.
+func (s *Server) persistManifestChangePolicyUnavailable(w http.ResponseWriter, r *http.Request, req store.K8sManifestChangeRequest, id string, cause error) {
+	validation := map[string]any{
+		"schema": map[string]any{"status": "basic_passed", "checked": []string{"apiVersion", "kind", "metadata.name"}},
+		"policy": map[string]any{
+			"status": "unavailable",
+			"error":  cause.Error(),
+			"reason": "정책 목록을 불러오지 못해 정책 검사를 수행하지 못했습니다.",
+		},
+	}
+	result := "policy validation could not run: " + cause.Error()
+	if err := s.db.UpdateK8sManifestChangeAnalysis(r.Context(), id, "failed", "blocked", true, req.Impact, validation, result); errors.Is(err, store.ErrInvalidTransition) {
+		writeOpenAIError(w, http.StatusConflict, "manifest change cannot transition from current state", "invalid_request_error", "manifest_change_bad_state")
+		return
+	} else if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_manifest_change_validate_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.manifest_change.validate", id, auditJSON(map[string]any{"status": "failed", "risk": "blocked", "reason": "policy_unavailable"}))
+	updated, _ := s.db.GetK8sManifestChangeRequest(r.Context(), id)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"request":      updated,
+		"validation":   validation,
+		"error":        result,
+		"next_actions": []string{"정책 저장소를 복구한 뒤 검증을 다시 실행하세요."},
+	})
 }
 
 func manifestSecretPayloadGuidance(operation string) map[string]any {
@@ -1242,9 +1294,15 @@ func manifestChangeBrief(req store.K8sManifestChangeRequest, driftGuard map[stri
 	}
 	policyStatus := "not_run"
 	if v, ok := req.Validation["policy"].(map[string]any); ok {
-		if denied, _ := v["denied"].(bool); denied {
+		denied, _ := v["denied"].(bool)
+		switch {
+		case strings.EqualFold(asStr(v["status"]), "unavailable"):
+			// The gate did not run. Without this the missing "denied" key would fall
+			// through to "checked" and report a policy verdict that was never reached.
+			policyStatus = "unavailable"
+		case denied:
 			policyStatus = "denied"
-		} else {
+		default:
 			policyStatus = "checked"
 		}
 	}

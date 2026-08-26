@@ -254,7 +254,12 @@ func (s *Server) buildAgentManifestDraft(r *http.Request, in agentManifestDraftI
 }
 
 func (s *Server) agentManifestDraftReview(r *http.Request, op, clusterID, namespace, kind, apiVersion, name string, afterDoc map[string]any, warnings, blockers *[]string) ([]store.K8sManifestFieldDiff, map[string]any, string, bool) {
-	policies, _ := s.db.ListK8sPolicies(r.Context())
+	policies, policyErr := s.db.ListK8sPolicies(r.Context())
+	if policyErr != nil {
+		// A nil policy list analyses clean, so the draft would look policy-compliant
+		// without any policy having been consulted. Say so rather than imply a pass.
+		*warnings = append(*warnings, "정책 목록을 불러오지 못해 정책 검사를 수행하지 못했습니다: "+policyErr.Error())
+	}
 	plan := analyzer.AnalyzeStackManifest([]map[string]any{afterDoc}, toAnalyzerPolicies(policies))
 	item := store.K8sInventoryItem{ClusterID: clusterID, Namespace: namespace, Kind: kind, APIVersion: apiVersion, Name: name}
 	if op == "create" {

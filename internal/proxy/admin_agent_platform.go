@@ -271,7 +271,12 @@ func (s *Server) handlePlatformAgentPlan(w http.ResponseWriter, r *http.Request)
 	warnings := platformAgentWarnings(in.Prompt, in.Environment, values)
 	if manifest != "" {
 		if docs, decodeErr := decodeManifestDocs(manifest); decodeErr == nil {
-			policies, _ := s.db.ListK8sPolicies(r.Context())
+			policies, policyErr := s.db.ListK8sPolicies(r.Context())
+			if policyErr != nil {
+				// Without the policy set the analysis reports Denied=false and no
+				// violations, which would pass validation without a policy check.
+				validationErrors = append(validationErrors, "정책 목록을 불러오지 못해 정책 검사를 수행하지 못했습니다: "+policyErr.Error())
+			}
 			analysis := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 			resourcePlan = map[string]any{"analysis": analysis, "resource_count": len(docs)}
 			for _, doc := range docs {
