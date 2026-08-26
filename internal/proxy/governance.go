@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"clustara/internal/audit"
 	"clustara/internal/store"
@@ -766,6 +767,13 @@ func withPolicyDecisionRequestID(events []store.PolicyDecisionEvent, requestID s
 	return events
 }
 
+// inferMCPRisk supplies the governance default for a tool with no explicit risk
+// profile. It takes the graded risk level (which feeds RiskScore, so policies can
+// match on it) but intentionally discards accessClassDefaults' recommended action
+// and returns "allow": grading is substring matching on the tool name, so gating
+// on it would put an approval wall in front of every read whose name happens to
+// contain a mutating word ("list_deployments", "count_tokens"). An operator who
+// wants a tool gated sets an explicit ToolRiskProfile, which overrides this.
 func inferMCPRisk(server, tool string) (string, string) {
 	level, _ := accessClassDefaults(inferToolAccessClass(server, tool))
 	return level, "allow"
@@ -785,14 +793,38 @@ func inferToolAccessClass(server, tool string) string {
 		}
 		return false
 	}
+	// token matches a verb as a whole word, splitting the name on separators. The
+	// verbs below need it: substring matching would grade "list_terminated_pods" as
+	// execute and "list_autoscalers" as a scale operation, while a whole-word match
+	// catches the verb in either position ("terminate_pod" and "pod_terminate").
+	words := map[string]bool{}
+	for _, w := range strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		words[w] = true
+	}
+	token := func(candidates ...string) bool {
+		for _, c := range candidates {
+			if words[c] {
+				return true
+			}
+		}
+		return false
+	}
 	switch {
 	case contains("secret", "credential", "password", "vault", "apikey", "api_key", "access key", "access_key", "token", "private key", "private_key", "env var", "환경 변수", "비밀"):
 		return "secret"
-	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "apply", "rollback", "rollout", "restart", "restore", "ssh", "systemctl", "sudo"):
+	case contains("shell", "exec", "bash", "powershell", "terminal", "command", "run_", "kubectl", "terraform", "docker", "deploy", "apply", "rollback", "rollout", "restart", "restore", "ssh", "systemctl", "sudo"),
+		// Operational verbs that disrupt live workloads or authorize a change. Without
+		// these, core Kubernetes actions graded as read: draining a node, evicting a
+		// pod and approving a manifest change all scored "low".
+		token("drain", "cordon", "uncordon", "evict", "terminate", "destroy", "failover", "reboot", "scale", "approve", "kill"):
 		return "execute"
 	case contains("http", "fetch", "request", "curl", "url", "web", "browse", "download", "upload", "webhook", "email", "send_", "smtp", "network", "socket"):
 		return "network"
-	case contains("write", "create", "update", "delete", "remove", "put", "post", "commit", "push", "mkdir", "edit", "modify", "insert", "drop", "migrate", "save", "rename", "db_", "database", "sql", "git"):
+	case contains("write", "create", "update", "delete", "remove", "put", "post", "commit", "push", "mkdir", "edit", "modify", "insert", "drop", "migrate", "save", "rename", "db_", "database", "sql", "git"),
+		// Mutating verbs that are neither CRUD-spelled nor operational.
+		token("patch", "set", "enable", "disable", "revoke", "grant", "purge", "truncate", "attach", "detach", "promote", "demote", "reset", "archive", "cancel"):
 		return "write"
 	default:
 		return "read"
@@ -801,7 +833,11 @@ func inferToolAccessClass(server, tool string) string {
 
 // accessClassDefaults maps an access class to its default risk level and the
 // recommended policy action (connecting grading to policy/approval). Execute and
-// secret tiers default to requiring approval; network is high but advisory.
+// secret tiers recommend approval; network is high but advisory.
+//
+// The recommended action is advisory only — it is surfaced in the admin tool
+// catalog so an operator can see what grading suggests, but inferMCPRisk
+// deliberately does not enforce it (see there for why).
 func accessClassDefaults(class string) (level, recommendedAction string) {
 	switch class {
 	case "secret":

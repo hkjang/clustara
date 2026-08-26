@@ -34,16 +34,27 @@ func mcpAdminIdentityFromRequest(r *http.Request) (mcpAdminIdentity, bool) {
 	return identity, ok && strings.TrimSpace(identity.APIKeyID) != ""
 }
 
+// mcpDirectChangeTools are the gateway-local MCP tools that change cluster state
+// directly. Governance treats them as fail-closed: a lookup error on any of the
+// risk/scope/policy tables blocks the call rather than passing it through. Kept as
+// a named list so the access-class grading can be checked against it — a tool that
+// is destructive enough to fail closed must not grade as a low-risk read.
+var mcpDirectChangeTools = []string{
+	"k8s_approve_manifest_change",
+	"k8s_apply_manifest_change",
+	"k8s_rollout_restart",
+}
+
 func isMCPDirectChangeTool(serverLabel, toolName string) bool {
 	if !strings.EqualFold(serverLabel, "gateway") {
 		return false
 	}
-	switch toolName {
-	case "k8s_approve_manifest_change", "k8s_apply_manifest_change", "k8s_rollout_restart":
-		return true
-	default:
-		return false
+	for _, t := range mcpDirectChangeTools {
+		if toolName == t {
+			return true
+		}
 	}
+	return false
 }
 
 func mcpSuperAdminDirect(authCtx *store.AuthContext, serverLabel, toolName string) bool {
