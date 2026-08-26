@@ -79,6 +79,14 @@ var (
 	// FROM, or the end of the statement, while a multiplication is followed by
 	// its right operand and count(*) by a closing paren.
 	selectStar   = regexp.MustCompile(`(?is)(?:^|[\s,(])(?:"?[a-zA-Z_][a-zA-Z0-9_]*"?\s*\.\s*)?\*\s*(?:,|from\b|$)`)
+	// cteName matches a common table expression's name ("WITH c AS (" and the
+	// ", c AS (" continuations). A CTE is not a base table, so it must not be
+	// measured against the table allow-list; the real tables inside its body are
+	// extracted by the same scan and checked normally.
+	//
+	// "<name> AS (" only occurs for a CTE or a WINDOW definition in valid SQL —
+	// a column alias is "expr AS name" — so this cannot swallow a base table.
+	cteName      = regexp.MustCompile(`(?is)(?:\bwith\s+(?:recursive\s+)?|,\s*)("?[a-zA-Z_][a-zA-Z0-9_]*"?)\s+as\s*\(`)
 	lineComment  = regexp.MustCompile(`--[^\n]*`)
 	blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	// aggFuncRe matches an aggregate function name immediately followed by its opening
@@ -307,26 +315,78 @@ var subqueryStart = map[string]bool{"select": true, "values": true, "with": true
 func referencedTables(sql string) []string {
 	seen := map[string]bool{}
 	out := []string{}
-	add := func(raw string) {
+	// A name resolves to a CTE only after that CTE's definition closes. Before
+	// then the same word is a base table: in
+	//
+	//	WITH salaries AS (SELECT id FROM salaries) SELECT id FROM salaries
+	//
+	// the inner reference reads the real table (a non-recursive CTE cannot see
+	// itself) while the outer one reads the CTE. Skipping the name everywhere
+	// would let that inner read past the allow-list.
+	ctes := cteDefinitionEnds(sql)
+	add := func(raw string, at int) {
 		t := strings.ToLower(strings.TrimSpace(raw))
 		t = strings.ReplaceAll(t, `"`, "") // normalize quoted identifiers
 		if t == "" || seen[t] || subqueryStart[t] {
+			return
+		}
+		if end, isCTE := ctes[t]; isCTE && end <= at {
 			return
 		}
 		seen[t] = true
 		out = append(out, t)
 	}
 	for _, m := range fromJoin.FindAllStringSubmatchIndex(sql, -1) {
-		add(sql[m[2]:m[3]])
+		add(sql[m[2]:m[3]], m[2])
 		// fromJoin only captures the first source after FROM/JOIN. A comma
 		// separated list ("FROM a, b") continues past it, and a source that is
 		// never extracted is never checked against the table allow-list — so it
 		// would be read without being allowed. Walk the rest of the list.
 		for _, extra := range commaJoinedSources(sql[m[1]:]) {
-			add(extra)
+			add(extra, m[1])
 		}
 	}
 	return out
+}
+
+// cteDefinitionEnds maps each CTE name to the offset just past its closing
+// parenthesis, so a reference can be told apart from a same-named base table by
+// where it appears.
+func cteDefinitionEnds(sql string) map[string]int {
+	ends := map[string]int{}
+	for _, m := range cteName.FindAllStringSubmatchIndex(sql, -1) {
+		name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(sql[m[2]:m[3]]), `"`, ""))
+		open := strings.LastIndex(sql[:m[1]], "(")
+		if open < 0 {
+			continue
+		}
+		if end := matchingParen(sql, open); end > 0 {
+			// Keep the first definition: a repeated name is not valid SQL, and
+			// the earliest close is the conservative choice.
+			if prev, ok := ends[name]; !ok || end < prev {
+				ends[name] = end
+			}
+		}
+	}
+	return ends
+}
+
+// matchingParen returns the offset just past the parenthesis that closes the one
+// at open, or -1 when it is unbalanced.
+func matchingParen(sql string, open int) int {
+	depth := 0
+	for i := open; i < len(sql); i++ {
+		switch sql[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
 }
 
 // commaJoinedSources reads the ", table" continuations of a FROM list starting
