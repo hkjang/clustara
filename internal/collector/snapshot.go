@@ -71,6 +71,10 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 			return result, err
 		}
 		if err := db.ObservePodLifecycle(ctx, item); err != nil {
+			// Every other abort in this function records the failure; these two did
+			// not, so a snapshot could stop halfway while the collector status still
+			// read "ok" from the previous run.
+			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
 			return result, err
 		}
 		result.Resources++
@@ -114,6 +118,7 @@ func ApplySnapshot(ctx context.Context, db *store.SQLStore, snap Snapshot, newID
 			return result, err
 		}
 		if err := db.UpsertK8sEventHistory(ctx, event); err != nil {
+			_ = db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{ID: newID("k8scol"), ClusterID: snap.ClusterID, Collector: "snapshot", Status: "error", LastError: err.Error()})
 			return result, err
 		}
 		result.Events++

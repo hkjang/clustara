@@ -57,7 +57,31 @@ type AgentApplyResult struct {
 // ApplyAgentBatch applies realtime watch deltas: ADDED/MODIFIED upsert inventory (+ a revision when
 // the spec changed), DELETED removes the inventory row. It always records the agent heartbeat —
 // even on a heartbeat-only batch (no events) — so liveness is tracked independently of traffic.
+// ApplyAgentBatch ingests one watch batch and records the outcome in the collector
+// health table. The watch path previously wrote nothing there, so a continuously
+// failing agent left that surface showing only the snapshot collector's state — the
+// live ingestion path was invisible.
 func ApplyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, newID IDFunc) (AgentApplyResult, error) {
+	result, err := applyAgentBatch(ctx, db, batch, newID)
+	if clusterID := strings.TrimSpace(batch.ClusterID); clusterID != "" && db != nil {
+		idFn := newID
+		if idFn == nil {
+			idFn = fallbackID
+		}
+		st := store.K8sCollectorStatus{ID: idFn("k8scol"), ClusterID: clusterID, Collector: "agent"}
+		if err != nil {
+			st.Status, st.LastError = "error", err.Error()
+		} else {
+			st.Status, st.LastSuccessAt = "ok", result.ObservedAt
+		}
+		// Best effort, as in the snapshot collector: health reporting must not turn a
+		// successful ingest into a failure.
+		_ = db.UpsertK8sCollectorStatus(ctx, st)
+	}
+	return result, err
+}
+
+func applyAgentBatch(ctx context.Context, db *store.SQLStore, batch AgentBatch, newID IDFunc) (AgentApplyResult, error) {
 	if newID == nil {
 		newID = fallbackID
 	}

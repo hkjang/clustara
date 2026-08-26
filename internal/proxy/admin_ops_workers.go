@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"clustara/internal/store"
 )
 
 // workerStatus is one background worker's observable health.
@@ -170,6 +172,21 @@ func (s *Server) handleOpsWorkers(w http.ResponseWriter, r *http.Request) {
 		workers = append(workers, schedulerWorkerStatus(st))
 	}
 
+	// Ingestion collector health. Five subsystems record into k8s_collector_status
+	// and nothing read it, so a collector could be failing every batch with no
+	// operator surface showing it. Worst status first; bounded so a large fleet
+	// cannot swamp the board.
+	if s.db != nil {
+		if rows, err := s.db.ListK8sCollectorStatus(r.Context(), 50); err == nil {
+			for _, st := range rows {
+				workers = append(workers, collectorWorkerStatus(st))
+			}
+		} else {
+			workers = append(workers, workerStatus{Name: "k8s_collectors", Running: false, Status: "warn",
+				Detail: "수집기 상태 조회 실패: " + err.Error()})
+		}
+	}
+
 	overall := "ok"
 	for _, ws := range workers {
 		overall = worseStatus(overall, ws.Status)
@@ -231,6 +248,42 @@ func schedulerWorkerStatus(st backgroundWorkerStatus) workerStatus {
 	case st.LastError != "":
 		ws.Status = "warn"
 		ws.Detail += " · 최근 tick 실패"
+	}
+	return ws
+}
+
+// collectorWorkerStatus renders one recorded ingestion collector onto the board.
+// last_success is reported separately from the current status for the same reason
+// the retention worker does: a collector erroring now may still have succeeded
+// recently, and one that has never succeeded is a different problem entirely.
+func collectorWorkerStatus(st store.K8sCollectorStatus) workerStatus {
+	ws := workerStatus{
+		Name:        "k8s_collector:" + st.Collector + "@" + st.ClusterID,
+		Running:     true,
+		Status:      "ok",
+		LastRun:     st.UpdatedAt,
+		LastSuccess: st.LastSuccessAt,
+		LastError:   st.LastError,
+		LagSeconds:  secondsSinceRFC3339(st.LastSuccessAt),
+		Detail:      "cluster=" + st.ClusterID + " collector=" + st.Collector,
+	}
+	if st.LagSeconds > 0 {
+		ws.LagSeconds = int64(st.LagSeconds)
+	}
+	switch {
+	case strings.EqualFold(st.Status, "error"):
+		ws.Status = "critical"
+		if st.LastError != "" {
+			ws.Detail += " · " + st.LastError
+		}
+		if st.LastSuccessAt == "" {
+			ws.Detail += " · 성공한 수집이 한 번도 없음"
+		}
+	case strings.EqualFold(st.Status, "warn"):
+		ws.Status = "warn"
+	case st.LastSuccessAt == "":
+		ws.Status = "warn"
+		ws.Detail += " · 성공 이력 없음"
 	}
 	return ws
 }

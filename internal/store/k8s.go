@@ -950,12 +950,40 @@ func (s *SQLStore) UpsertK8sCollectorStatus(ctx context.Context, st K8sCollector
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(cluster_id, collector) DO UPDATE SET
 			status = excluded.status,
-			last_success_at = excluded.last_success_at,
+			-- Error writes carry no success timestamp, and overwriting with the blank
+			-- erased the one fact an operator wants during an incident: when this
+			-- collector last worked. Keep the previous value unless a real one arrives.
+			last_success_at = CASE WHEN excluded.last_success_at <> '' THEN excluded.last_success_at ELSE k8s_collector_status.last_success_at END,
 			last_error = excluded.last_error,
 			lag_seconds = excluded.lag_seconds,
 			updated_at = excluded.updated_at`),
 		st.ID, st.ClusterID, st.Collector, st.Status, st.LastSuccessAt, st.LastError, st.LagSeconds, st.UpdatedAt)
 	return err
+}
+
+// ListK8sCollectorStatus returns the recorded health of every ingestion collector,
+// worst status first. The table was written by five subsystems and read by none, so
+// the bookkeeping existed but no operator surface could show it.
+func (s *SQLStore) ListK8sCollectorStatus(ctx context.Context, limit int) ([]K8sCollectorStatus, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT id, cluster_id, collector, status,
+		COALESCE(last_success_at, ''), COALESCE(last_error, ''), COALESCE(lag_seconds, 0), updated_at
+		FROM k8s_collector_status
+		ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, updated_at DESC
+		LIMIT ?`), boundedLimit(limit, 100, 500))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []K8sCollectorStatus{}
+	for rows.Next() {
+		var st K8sCollectorStatus
+		if err := rows.Scan(&st.ID, &st.ClusterID, &st.Collector, &st.Status,
+			&st.LastSuccessAt, &st.LastError, &st.LagSeconds, &st.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLStore) K8sOverview(ctx context.Context) (K8sOverview, error) {
