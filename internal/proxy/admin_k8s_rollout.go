@@ -485,26 +485,35 @@ func (s *Server) rolloutPrecheck(r *http.Request, in rolloutRequestInput) (rollo
 		}
 		add("on_delete", status, kind+" OnDelete 전략은 자동 Pod 교체가 보장되지 않습니다.")
 	}
-	all, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: in.ClusterID, Limit: 5000})
-	if hasBadOwnedPod(target, all) {
-		add("pod_health", "blocked", "소유 Pod에 CrashLoopBackOff 또는 ImagePullBackOff가 있습니다.")
+	// Inventory backs the pod / node / PVC / PDB checks below. A failed read yields an
+	// empty slice, which every one of them reads as "nothing wrong" — pod_health would
+	// even report "no blocking Pod errors" without having looked at a single Pod. Block
+	// instead, matching rolloutExecutionHazard, which already refuses to let an
+	// unverified disruption through.
+	all, invErr := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: in.ClusterID, Limit: 5000})
+	if invErr != nil {
+		add("inventory", "blocked", "클러스터 인벤토리를 조회할 수 없어 Pod·노드·PVC·PodDisruptionBudget 안전 점검을 수행하지 못했습니다: "+invErr.Error())
 	} else {
-		add("pod_health", "passed", "차단 대상 Pod 오류가 없습니다.")
-	}
-	if hasNotReadyNode(all) {
-		add("node_health", "warning", "NotReady 노드가 있어 신규 Pod 배치가 지연될 수 있습니다.")
-	}
-	if kind == "StatefulSet" && hasBadPVC(in.Namespace, all) {
-		add("pvc", "blocked", "Pending 또는 Lost PVC가 있어 StatefulSet rollout을 차단합니다.")
-	}
-	pdb := pdbSafety(target, all)
-	switch {
-	case pdb.Blocked:
-		add("pdb", "blocked", pdb.Reason)
-	case pdb.Found:
-		add("pdb", "passed", "PodDisruptionBudget이 중단을 허용합니다.")
-	default:
-		add("pdb", "warning", "일치하는 PodDisruptionBudget을 확인할 수 없습니다.")
+		if hasBadOwnedPod(target, all) {
+			add("pod_health", "blocked", "소유 Pod에 CrashLoopBackOff 또는 ImagePullBackOff가 있습니다.")
+		} else {
+			add("pod_health", "passed", "차단 대상 Pod 오류가 없습니다.")
+		}
+		if hasNotReadyNode(all) {
+			add("node_health", "warning", "NotReady 노드가 있어 신규 Pod 배치가 지연될 수 있습니다.")
+		}
+		if kind == "StatefulSet" && hasBadPVC(in.Namespace, all) {
+			add("pvc", "blocked", "Pending 또는 Lost PVC가 있어 StatefulSet rollout을 차단합니다.")
+		}
+		pdb := pdbSafety(target, all)
+		switch {
+		case pdb.Blocked:
+			add("pdb", "blocked", pdb.Reason)
+		case pdb.Found:
+			add("pdb", "passed", "PodDisruptionBudget이 중단을 허용합니다.")
+		default:
+			add("pdb", "warning", "일치하는 PodDisruptionBudget을 확인할 수 없습니다.")
+		}
 	}
 	out.RiskLevel = "low"
 	if out.Desired <= 1 || kind != "Deployment" || len(out.Warnings) > 1 {

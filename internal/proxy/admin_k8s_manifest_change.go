@@ -639,7 +639,10 @@ func (s *Server) applyK8sManifestChange(w http.ResponseWriter, r *http.Request, 
 		})
 		return
 	}
-	if forceDrift && strings.EqualFold(asStr(driftGuard["status"]), "drift") {
+	// Record an override for both overridable verdicts so the ledger shows what the
+	// operator waived: an observed drift, or a guard that could not run at all.
+	if driftStatus := strings.ToLower(asStr(driftGuard["status"])); forceDrift && (driftStatus == "drift" || driftStatus == "unknown") {
+		driftGuard["overridden_status"] = driftStatus
 		driftGuard["status"] = "overridden"
 		driftGuard["override_note"] = strings.TrimSpace(in.Note)
 		driftGuard["overridden_by"] = adminID(r)
@@ -1201,6 +1204,12 @@ func manifestChangeDriftBlocks(guard map[string]any, force bool) bool {
 	case "blocked":
 		return true
 	case "drift":
+		return !force
+	case "unknown":
+		// The guard could not read live state, so nothing was verified — neither the
+		// UID comparison nor the baseline hash check ran. Treating that as "no drift"
+		// let an apply through with no staleness guard at all. Block like drift does,
+		// while still allowing a deliberate, audited override.
 		return !force
 	default:
 		return false
