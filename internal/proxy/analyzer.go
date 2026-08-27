@@ -23,6 +23,10 @@ type ResponseAnalysis struct {
 	HasUsage                 bool
 	CompletionTokensEstimate int
 	ToolCalls                []parsedTool
+	// ToolCallsTruncated reports that the upstream declared more tool calls than
+	// maxToolCalls, so the list is incomplete. Surfaced rather than dropped silently:
+	// these rows are persisted, and a caller reading them should know they are capped.
+	ToolCallsTruncated bool
 }
 
 type ResponseAnalyzer struct {
@@ -42,15 +46,16 @@ type ResponseAnalyzer struct {
 	// bounding memory does not change the token estimate. audit.EstimateTokens is
 	// max(words, ceil(runes/4)) over the text *after* trimming, so the leading and
 	// trailing whitespace runs are tracked separately and subtracted.
-	completionRunes  int
-	completionWords  int
-	completionOpenWd bool
-	completionLead   int
-	completionTail   int
-	completionSawWd  bool
-	usage            audit.Usage
-	hasUsage         bool
-	toolCalls        []parsedTool
+	completionRunes    int
+	completionWords    int
+	completionOpenWd   bool
+	completionLead     int
+	completionTail     int
+	completionSawWd    bool
+	usage              audit.Usage
+	hasUsage           bool
+	toolCalls          []parsedTool
+	toolCallsTruncated bool
 	// streaming tool_calls arrive in fragments keyed by index; we accumulate names.
 	streamToolNames map[int]string
 }
@@ -63,6 +68,13 @@ const maxLineBytes = 1 << 20
 // maxCompletionBytes bounds the retained completion text. The token estimate is
 // computed from running counters instead, so this caps memory without changing it.
 const maxCompletionBytes = 8 << 20
+
+// maxToolCalls bounds the tool calls tracked for one response. Both the streaming
+// index map and the assembled list are filled straight from upstream JSON and had
+// no limit: 100k distinct indices produced 100k map entries and 100k parsedTool
+// records, each of which becomes a persisted tool-invocation row. Real responses
+// declare a handful, so this is far above any legitimate use.
+const maxToolCalls = 512
 
 func NewResponseAnalyzer(stream bool, captureText bool, maxBytes int) *ResponseAnalyzer {
 	return &ResponseAnalyzer{
@@ -108,7 +120,7 @@ func (a *ResponseAnalyzer) Finalize() ResponseAnalysis {
 			continue
 		}
 		server, tool, isMCP := classifyToolName(name)
-		a.toolCalls = append(a.toolCalls, parsedTool{Server: server, Tool: tool, Source: "call", IsMCP: isMCP})
+		a.addToolCall(parsedTool{Server: server, Tool: tool, Source: "call", IsMCP: isMCP})
 	}
 
 	return ResponseAnalysis{
@@ -120,6 +132,7 @@ func (a *ResponseAnalyzer) Finalize() ResponseAnalysis {
 		HasUsage:                 a.hasUsage,
 		CompletionTokensEstimate: a.estimateCompletionTokens(),
 		ToolCalls:                a.toolCalls,
+		ToolCallsTruncated:       a.toolCallsTruncated,
 	}
 }
 
@@ -219,6 +232,16 @@ func endsWithSpace(s string) bool {
 	return unicode.IsSpace(r)
 }
 
+// addToolCall appends a parsed tool call up to maxToolCalls, recording that the
+// list was capped rather than discarding the fact.
+func (a *ResponseAnalyzer) addToolCall(t parsedTool) {
+	if len(a.toolCalls) >= maxToolCalls {
+		a.toolCallsTruncated = true
+		return
+	}
+	a.toolCalls = append(a.toolCalls, t)
+}
+
 func (a *ResponseAnalyzer) consumeSSELine(line string) {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "data:") {
@@ -288,7 +311,7 @@ func (a *ResponseAnalyzer) parseChunk(payload []byte) {
 		for _, tc := range choice.Message.ToolCalls {
 			if tc.Function.Name != "" {
 				server, tool, isMCP := classifyToolName(tc.Function.Name)
-				a.toolCalls = append(a.toolCalls, parsedTool{Server: server, Tool: tool, Source: "call", IsMCP: isMCP, ArgHash: hashArgs(tc.Function.Arguments)})
+				a.addToolCall(parsedTool{Server: server, Tool: tool, Source: "call", IsMCP: isMCP, ArgHash: hashArgs(tc.Function.Arguments)})
 			}
 		}
 		// Streaming: delta.tool_calls fragments — accumulate by index, name appears once.
@@ -296,6 +319,12 @@ func (a *ResponseAnalyzer) parseChunk(payload []byte) {
 			if tc.Function.Name != "" {
 				if a.streamToolNames == nil {
 					a.streamToolNames = map[int]string{}
+				}
+				if _, known := a.streamToolNames[tc.Index]; !known && len(a.streamToolNames) >= maxToolCalls {
+					// The index comes from upstream, so an ever-increasing one would
+					// grow this map without limit. Keep the indices already seen.
+					a.toolCallsTruncated = true
+					continue
 				}
 				if a.streamToolNames[tc.Index] == "" {
 					a.streamToolNames[tc.Index] = tc.Function.Name

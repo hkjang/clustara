@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.199"
+const AppVersion = "v0.9.200"
 
 type Server struct {
 	cfg            config.Config
@@ -2339,8 +2339,12 @@ func (s *Server) inferSessionID(r *http.Request, apiKeyID string, now time.Time)
 		firstNonEmptyHeader(r, "X-Vibe-Repo", "X-Repo", "X-Project"),
 		firstNonEmptyHeader(r, "X-Vibe-Branch", "X-Branch"),
 	}, "|")
+	// Key the in-memory map by the hash, not the raw identity: the identity carries
+	// the full User-Agent and caller-supplied headers, so a large one produced a
+	// correspondingly large map key. The hash is fixed-width and already computed
+	// here for the persisted row.
 	identityHash := audit.HashText(identity)
-	if sessionID, ok := s.sessions.existingSession(identity, now); ok {
+	if sessionID, ok := s.sessions.existingSession(identityHash, now); ok {
 		s.persistInferredSession(r.Context(), identityHash, sessionID, now)
 		return sessionID
 	}
@@ -2349,7 +2353,7 @@ func (s *Server) inferSessionID(r *http.Request, apiKeyID string, now time.Time)
 		recoveredID = rec.SessionID
 		recoveredLastSeen = rec.LastSeen
 	}
-	sessionID := s.sessions.sessionForRecovered(identity, now, recoveredID, recoveredLastSeen)
+	sessionID := s.sessions.sessionForRecovered(identityHash, now, recoveredID, recoveredLastSeen)
 	s.persistInferredSession(r.Context(), identityHash, sessionID, now)
 	return sessionID
 }

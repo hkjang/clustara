@@ -611,6 +611,13 @@ func (rc *requestPipeline) stepUpstream() bool {
 	if len(analysis.ToolCalls) > 0 {
 		meta.Tools = append(meta.Tools, toolInvocations(meta.Request, analysis.ToolCalls)...)
 	}
+	if analysis.ToolCallsTruncated {
+		// The upstream declared more tool calls than the analyzer retains. Say so:
+		// these become persisted rows, and a silently short list would read as a
+		// complete one.
+		slog.Warn("upstream tool calls exceeded the per-response cap; recorded list is truncated",
+			"request_id", meta.Request.ID, "model", meta.Request.Model, "recorded", len(analysis.ToolCalls), "cap", maxToolCalls)
+	}
 	s.metrics.ObserveToolInvocations(meta.Tools)
 	meta.Evaluations = buildLLMEvaluations(meta, analysis)
 	s.metrics.ObserveLLMEvaluations(meta.Evaluations)
