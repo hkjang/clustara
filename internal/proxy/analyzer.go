@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"hash"
+	"math"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"clustara/internal/audit"
 )
@@ -23,20 +26,43 @@ type ResponseAnalysis struct {
 }
 
 type ResponseAnalyzer struct {
-	stream       bool
-	captureText  bool
-	maxBytes     int
-	hasher       hash.Hash
-	capture      bytes.Buffer
-	lineBuffer   []byte
+	stream      bool
+	captureText bool
+	maxBytes    int
+	hasher      hash.Hash
+	capture     bytes.Buffer
+	lineBuffer  []byte
+	// resyncing is set when a single SSE "line" exceeded maxLineBytes: the oversized
+	// line is abandoned and bytes are dropped until the next newline, rather than
+	// letting one unterminated line pull the whole response into memory.
+	resyncing    bool
 	finishReason string
 	completion   strings.Builder
-	usage        audit.Usage
-	hasUsage     bool
-	toolCalls    []parsedTool
+	// These measure the entire completion even after the retained text is capped, so
+	// bounding memory does not change the token estimate. audit.EstimateTokens is
+	// max(words, ceil(runes/4)) over the text *after* trimming, so the leading and
+	// trailing whitespace runs are tracked separately and subtracted.
+	completionRunes  int
+	completionWords  int
+	completionOpenWd bool
+	completionLead   int
+	completionTail   int
+	completionSawWd  bool
+	usage            audit.Usage
+	hasUsage         bool
+	toolCalls        []parsedTool
 	// streaming tool_calls arrive in fragments keyed by index; we accumulate names.
 	streamToolNames map[int]string
 }
+
+// maxLineBytes bounds one assembled SSE line. A legitimate "data:" line is a single
+// JSON chunk of at most a few KB; anything past this is not parseable SSE, so
+// abandoning it loses no analysis while keeping the buffer bounded.
+const maxLineBytes = 1 << 20
+
+// maxCompletionBytes bounds the retained completion text. The token estimate is
+// computed from running counters instead, so this caps memory without changing it.
+const maxCompletionBytes = 8 << 20
 
 func NewResponseAnalyzer(stream bool, captureText bool, maxBytes int) *ResponseAnalyzer {
 	return &ResponseAnalyzer{
@@ -92,22 +118,105 @@ func (a *ResponseAnalyzer) Finalize() ResponseAnalysis {
 		FinishReason:             a.finishReason,
 		Usage:                    a.usage,
 		HasUsage:                 a.hasUsage,
-		CompletionTokensEstimate: audit.EstimateTokens(completionText),
+		CompletionTokensEstimate: a.estimateCompletionTokens(),
 		ToolCalls:                a.toolCalls,
 	}
 }
 
 func (a *ResponseAnalyzer) consumeSSE(p []byte) {
+	if a.resyncing {
+		// Still discarding an oversized line; resume at the next newline.
+		idx := bytes.IndexByte(p, '\n')
+		if idx < 0 {
+			return
+		}
+		a.resyncing = false
+		p = p[idx+1:]
+	}
 	a.lineBuffer = append(a.lineBuffer, p...)
 	for {
 		idx := bytes.IndexByte(a.lineBuffer, '\n')
 		if idx < 0 {
+			// No line terminator yet. An upstream that never sends one would
+			// otherwise grow this buffer to the size of the whole response.
+			if len(a.lineBuffer) > maxLineBytes {
+				a.lineBuffer = nil
+				a.resyncing = true
+			}
 			return
 		}
 		line := string(a.lineBuffer[:idx])
 		a.lineBuffer = a.lineBuffer[idx+1:]
 		a.consumeSSELine(line)
 	}
+}
+
+// appendCompletion adds extracted content, measuring all of it for the token
+// estimate while retaining only up to maxCompletionBytes.
+func (a *ResponseAnalyzer) appendCompletion(s string) {
+	if s == "" {
+		return
+	}
+	for _, r := range s {
+		a.completionRunes++
+		if unicode.IsSpace(r) {
+			if a.completionSawWd {
+				a.completionTail++
+			} else {
+				a.completionLead++
+			}
+			continue
+		}
+		a.completionSawWd = true
+		a.completionTail = 0
+	}
+	fields := len(strings.Fields(s))
+	if fields > 0 {
+		// A word split across two deltas must not be counted twice.
+		if a.completionOpenWd && !startsWithSpace(s) {
+			fields--
+		}
+		a.completionWords += fields
+		a.completionOpenWd = !endsWithSpace(s)
+	} else {
+		// Whitespace only: any word left open by the previous delta is now closed.
+		a.completionOpenWd = false
+	}
+	if a.completion.Len() < maxCompletionBytes {
+		remaining := maxCompletionBytes - a.completion.Len()
+		if remaining > len(s) {
+			remaining = len(s)
+		}
+		a.completion.WriteString(s[:remaining])
+	}
+}
+
+// estimateCompletionTokens mirrors audit.EstimateTokens over the whole completion,
+// using the running counters so a capped retained string does not shrink the
+// estimate — this number feeds cost fallback when the upstream reports no usage.
+func (a *ResponseAnalyzer) estimateCompletionTokens() int {
+	if !a.completionSawWd {
+		return 0
+	}
+	trimmed := a.completionRunes - a.completionLead - a.completionTail
+	if trimmed < 0 {
+		trimmed = 0
+	}
+	byChars := int(math.Ceil(float64(trimmed) / 4.0))
+	if byChars < a.completionWords {
+		return a.completionWords
+	}
+	return byChars
+}
+
+func startsWithSpace(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsSpace(r)
+}
+
+func endsWithSpace(s string) bool {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return unicode.IsSpace(r)
 }
 
 func (a *ResponseAnalyzer) consumeSSELine(line string) {
@@ -171,9 +280,9 @@ func (a *ResponseAnalyzer) parseChunk(payload []byte) {
 		return
 	}
 	for _, choice := range chunk.Choices {
-		a.completion.WriteString(contentString(choice.Delta.Content))
-		a.completion.WriteString(contentString(choice.Message.Content))
-		a.completion.WriteString(contentString(choice.Text))
+		a.appendCompletion(contentString(choice.Delta.Content))
+		a.appendCompletion(contentString(choice.Message.Content))
+		a.appendCompletion(contentString(choice.Text))
 
 		// Non-streaming: message.tool_calls carries complete names.
 		for _, tc := range choice.Message.ToolCalls {
