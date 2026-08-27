@@ -15,6 +15,17 @@ import (
 	"clustara/internal/store"
 )
 
+// maxSemanticEmbedBytes bounds what the semantic cache will send to the embedding
+// model. The prompt text was passed through at whatever size the request happened to
+// be — a 2MB single-turn message produced a 2MB embedding request.
+const maxSemanticEmbedBytes = 32 << 10
+
+// semanticEmbedInputTooLarge reports whether a prompt is too big to be worth
+// embedding for cache matching.
+func semanticEmbedInputTooLarge(text string) bool {
+	return len(text) > maxSemanticEmbedBytes
+}
+
 // chatPromptText extracts a flat text representation of a chat request's messages, used
 // as the embedding input for semantic-cache matching.
 func chatPromptText(body []byte) string {
@@ -155,6 +166,14 @@ func (s *Server) serveChatSemantic(ctx context.Context, w http.ResponseWriter, r
 	}
 	text := chatPromptText(body)
 	if text == "" {
+		return nil, false
+	}
+	// Skip the embedding call for prompts too large to embed. Embedding models cap
+	// their input well below this, so the call would cost a paid round trip and then
+	// fail; and a prompt this size is not going to match a stored entry anyway.
+	// Declining to use the cache is the correct outcome here — nothing is reported as
+	// done, the request simply proceeds to the upstream unchanged.
+	if semanticEmbedInputTooLarge(text) {
 		return nil, false
 	}
 	vec, err := s.embedText(ctx, r, cfg.ChatSemanticModel, text)
