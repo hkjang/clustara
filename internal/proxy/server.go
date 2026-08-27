@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.200"
+const AppVersion = "v0.9.201"
 
 type Server struct {
 	cfg            config.Config
@@ -2393,6 +2393,8 @@ func extractAudit(body []byte, endpoint string, rawPrompts bool) (string, bool, 
 	stream, _ := root["stream"].(bool)
 	texts := []string{}
 	prompts := []store.PromptLog{}
+	truncatedPrompts := false
+	unretainedTokens := 0
 
 	if endpoint == "/v1/chat/completions" {
 		if messages, ok := root["messages"].([]any); ok {
@@ -2407,6 +2409,14 @@ func extractAudit(body []byte, endpoint string, rawPrompts bool) (string, bool, 
 					continue
 				}
 				texts = append(texts, content)
+				if len(prompts) >= maxPromptEntries {
+					// Keep the earliest messages and stop building rows, but keep
+					// measuring: the tokens of the messages that are not retained still
+					// belong to this request's estimate.
+					truncatedPrompts = true
+					unretainedTokens += audit.EstimateTokens(content)
+					continue
+				}
 				prompts = append(prompts, promptLog(role, content, rawPrompts))
 			}
 		}
@@ -2425,6 +2435,19 @@ func extractAudit(body []byte, endpoint string, rawPrompts bool) (string, bool, 
 		}
 	}
 
+	if unretainedTokens > 0 && len(prompts) > 0 {
+		// Fold the unretained messages' tokens into the last retained row so the
+		// request total stays exact even though the rows are capped. Only the
+		// per-request sum is consumed, never a single row's share.
+		prompts[len(prompts)-1].TokenEstimate += unretainedTokens
+	}
+	if truncatedPrompts {
+		// Say so rather than silently persisting a short list: a truncated audit
+		// trail must not read as a complete one.
+		slog.Warn("request messages exceeded the prompt audit retention limit; recorded prompts are truncated",
+			"endpoint", endpoint, "model", model, "retained", len(prompts), "cap", maxPromptEntries)
+	}
+
 	languages := audit.InferLanguages(texts)
 	topLanguage := ""
 	if len(languages) > 0 {
@@ -2436,22 +2459,57 @@ func extractAudit(body []byte, endpoint string, rawPrompts bool) (string, bool, 
 	return model, stream, prompts, languages
 }
 
+// maxPromptEntries bounds how many messages of one request are retained as prompt
+// rows, and maxPromptContentBytes bounds how much of each is kept. Every message
+// previously produced a row holding its full redacted text, so the request body's
+// size and message count passed straight through into memory, into persisted rows,
+// and into CPU: audit.Redact runs its full rule set per message. Measured on a
+// 10.3MB body of 20,000 messages — 20,000 rows, 11MB retained, four seconds of CPU
+// for a single request.
+const (
+	maxPromptEntries      = 200
+	maxPromptContentBytes = 8 << 10
+)
+
+// promptTruncationNote marks text that was cut, so a shortened audit entry cannot be
+// mistaken for the whole message.
+const promptTruncationNote = "\n…[truncated by clustara: message exceeded the audit retention limit]"
+
 func promptLog(role string, content string, rawPrompts bool) store.PromptLog {
+	// Hash the whole message: the hash identifies the content for dedupe and
+	// analysis, so it must not change with the retention limit. Only the retained
+	// text is shortened — which also bounds the redaction work, since Redact runs
+	// its whole rule set over whatever it is given.
+	hash := audit.HashText(content)
+	retained := content
+	if len(retained) > maxPromptContentBytes {
+		retained = retained[:maxPromptContentBytes] + promptTruncationNote
+	}
 	raw := ""
 	if rawPrompts {
-		raw = content
+		raw = retained
 	}
 	return store.PromptLog{
-		Role:         firstNonEmpty(role, "unknown"),
-		ContentHash:  audit.HashText(content),
-		ContentText:  raw,
-		RedactedText: audit.Redact(content),
+		Role:          firstNonEmpty(role, "unknown"),
+		ContentHash:   hash,
+		ContentText:   raw,
+		RedactedText:  audit.Redact(retained),
+		TokenEstimate: audit.EstimateTokens(content),
 	}
 }
 
+// promptTokenEstimate sums the per-message estimates measured over the full
+// messages. Estimating from RedactedText instead would under-report as soon as the
+// audit retention limit shortened it, and this number feeds cost prediction and the
+// usage fallback.
 func promptTokenEstimate(prompts []store.PromptLog) int {
 	total := 0
 	for _, prompt := range prompts {
+		if prompt.TokenEstimate > 0 {
+			total += prompt.TokenEstimate
+			continue
+		}
+		// Rows built elsewhere (or read back from storage) carry no measurement.
 		total += audit.EstimateTokens(prompt.RedactedText)
 	}
 	return total

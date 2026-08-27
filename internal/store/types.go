@@ -303,6 +303,10 @@ type PromptLog struct {
 	RedactedText string
 	LanguageHint string
 	CreatedAt    time.Time
+	// TokenEstimate is measured over the whole message, before any audit-retention
+	// truncation of RedactedText. Cost prediction and the usage fallback read it, so
+	// it must not shrink just because less text is retained.
+	TokenEstimate int
 }
 
 type ResponseLog struct {
