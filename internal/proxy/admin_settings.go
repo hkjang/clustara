@@ -671,7 +671,7 @@ func (s *Server) reloadRuntimeConfig(ctx context.Context) {
 		}
 	}
 	// Restart the ClickHouse sink worker when its URL or interval changed (start/stop too).
-	if s.chSinkStarted && (prevCH.URL != ch.URL || prevCH.SinkInterval != ch.SinkInterval) {
+	if s.chSinkHasStarted() && (prevCH.URL != ch.URL || prevCH.SinkInterval != ch.SinkInterval) {
 		s.applyClickHouseSinkWorker()
 	}
 	// Record when/what this pod last applied, for cross-pod convergence observability.

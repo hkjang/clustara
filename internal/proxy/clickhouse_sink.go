@@ -536,6 +536,19 @@ func (s *Server) handleClickHouseTableInfo(w http.ResponseWriter, r *http.Reques
 // when a URL and a positive interval are configured.
 // applyClickHouseSinkWorker (re)starts or stops the background sink worker according to
 // the current effective ClickHouse config. Safe to call at startup and on settings change.
+// chSinkHasStarted reports whether the startup sink apply has already run.
+//
+// chSinkStarted is written under chSinkMu by applyClickHouseSinkWorker, which runs
+// both from admin request handlers and from the settings-change poller goroutine, so
+// reading it unlocked was a genuine race rather than a theoretical one. The lock is
+// released before the caller acts on the answer: applyClickHouseSinkWorker takes the
+// same mutex and Go mutexes are not reentrant.
+func (s *Server) chSinkHasStarted() bool {
+	s.chSinkMu.Lock()
+	defer s.chSinkMu.Unlock()
+	return s.chSinkStarted
+}
+
 func (s *Server) applyClickHouseSinkWorker() {
 	s.chSinkMu.Lock()
 	defer s.chSinkMu.Unlock()
