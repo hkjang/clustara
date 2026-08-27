@@ -45,6 +45,13 @@ type mcpToolDef struct {
 }
 
 // mcpUpstreamConn caches the initialize handshake + session id for one upstream.
+//
+// The same pointer is shared across goroutines via s.mcpConns, so both fields need
+// mu. The lock is taken once by callUpstream and held for its whole body; every
+// function reached from there — ensureUpstreamInit, rpcCall, rpcNotify, postRPC —
+// touches the fields with the lock already held and must not take it again, since
+// Go mutexes are not reentrant. callUpstream is the only place a conn is obtained,
+// which is what makes that hold-across-callees arrangement safe.
 type mcpUpstreamConn struct {
 	mu          sync.Mutex
 	sessionID   string
