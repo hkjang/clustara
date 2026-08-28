@@ -122,6 +122,10 @@ func (s *Server) handleServiceBackupOperation(w http.ResponseWriter, r *http.Req
 	restore.Status = "pending_approval"
 	restore.RequestID = change.Request.ID
 	if err := s.db.UpsertK8sServiceRestore(r.Context(), restore); err != nil {
+		restore.Status = "failed"
+		restore.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = s.db.UpsertK8sServiceRestore(r.Context(), restore)
+		s.withdrawManifestChange(r, change.Request.ID, "복구 레코드를 연결하지 못해 요청을 철회했습니다: "+err.Error())
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_restore_link_failed")
 		return
 	}

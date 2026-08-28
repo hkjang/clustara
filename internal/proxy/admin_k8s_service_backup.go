@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -152,6 +153,11 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 	backup.Status = "pending_approval"
 	backup.RequestID = change.Request.ID
 	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
+		backup.Status = "failed"
+		backup.IntegrityStatus = "not_started"
+		backup.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = s.db.InsertK8sServiceBackup(r.Context(), backup)
+		s.withdrawManifestChange(r, change.Request.ID, "백업 레코드를 연결하지 못해 요청을 철회했습니다: "+err.Error())
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_link_failed")
 		return
 	}
@@ -250,6 +256,11 @@ func (s *Server) createJupyterLabFilesystemBackup(w http.ResponseWriter, r *http
 	backup.Status = "pending_approval"
 	backup.RequestID = change.Request.ID
 	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
+		backup.Status = "failed"
+		backup.IntegrityStatus = "not_started"
+		backup.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = s.db.InsertK8sServiceBackup(r.Context(), backup)
+		s.withdrawManifestChange(r, change.Request.ID, "백업 레코드를 연결하지 못해 요청을 철회했습니다: "+err.Error())
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_link_failed")
 		return
 	}
@@ -312,6 +323,11 @@ func (s *Server) createServiceVolumeSnapshotBackup(w http.ResponseWriter, r *htt
 	backup.Status = "pending_approval"
 	backup.RequestID = change.Request.ID
 	if err := s.db.InsertK8sServiceBackup(r.Context(), backup); err != nil {
+		backup.Status = "failed"
+		backup.IntegrityStatus = "not_started"
+		backup.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = s.db.InsertK8sServiceBackup(r.Context(), backup)
+		s.withdrawManifestChange(r, change.Request.ID, "백업 레코드를 연결하지 못해 요청을 철회했습니다: "+err.Error())
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "service_backup_link_failed")
 		return
 	}
@@ -584,4 +600,32 @@ func (s *Server) reconcileServiceBackupStatuses(ctx context.Context, instance st
 		}
 		_ = s.db.InsertK8sServiceBackup(ctx, backup)
 	}
+}
+
+// withdrawManifestChange rejects a manifest change whose owning record could not
+// be linked to it.
+//
+// These flows write their record, create the manifest change, then link the two.
+// A failure at the link step returned 500 and left both halves live: a change
+// that creates a backup Job or restores a volume once approved, and a record
+// stuck at "preparing" that never references it. Approving such a change does
+// real work the system has no completed record of — the backup never links, so
+// integrity verification never runs on it and a later restore cannot find its
+// ownership evidence; a restore writes over its target with nothing recording
+// that it happened.
+//
+// The prepare-failure path one step earlier already unwinds by marking the record
+// failed. This is the half that only exists once the change has been created, and
+// it is also the reliable half: the record write is the operation that just
+// failed, so marking it failed is best-effort, while withdrawing the change
+// touches a different table.
+func (s *Server) withdrawManifestChange(r *http.Request, changeID, reason string) {
+	if strings.TrimSpace(changeID) == "" {
+		return
+	}
+	if err := s.db.UpdateK8sManifestChangeStatus(r.Context(), changeID, "rejected", adminID(r), reason); err != nil {
+		slog.Error("could not withdraw the manifest change after a link failure; it may still be approved and act with no owning record",
+			"manifest_change_id", changeID, "error", err)
+	}
+	s.auditAdmin(r, "k8s.manifest_change.withdrawn_after_link_failure", changeID, auditJSON(map[string]any{"reason": reason}))
 }
