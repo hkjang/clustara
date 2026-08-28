@@ -447,7 +447,6 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 		writeOpenAIError(w, 500, err.Error(), "server_error", "service_stack_failed")
 		return
 	}
-	_ = sNew
 	owner := adminID(r)
 	if claims, ok := s.currentAccessClaims(r); ok {
 		owner = claims.Subject
@@ -473,7 +472,25 @@ func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) 
 			PasswordKey: strings.TrimSpace(in.CredentialPasswordKey), Namespace: instance.Namespace,
 		}
 		if err := s.db.UpsertK8sServiceCredential(r.Context(), credential); err != nil {
-			writeOpenAIError(w, 500, err.Error(), "server_error", "service_credential_save_failed")
+			// The stack and instance rows above are already written, and neither
+			// table constrains a service's identity — UpsertK8sStack mints a fresh
+			// id whenever it is called without one, and instances carry only
+			// non-unique indexes. So the 500 an operator sees here invites the one
+			// response that makes it worse: a retry, which leaves a second stack
+			// and a second instance for the same service alongside the first.
+			//
+			// There is no delete for a service instance, so the unwind marks it
+			// instead — the same compensation the backup flows use. The response
+			// names what was left behind rather than making the operator guess.
+			s.unwindServiceInstanceCreate(r, instance, stack.ID, sNew, err)
+			writeJSON(w, 500, map[string]any{
+				"error":         map[string]any{"message": "서비스 자격증명 참조를 저장하지 못했습니다: " + err.Error(), "type": "server_error", "code": "service_credential_save_failed"},
+				"instance_id":   instance.ID,
+				"instance":      map[string]any{"status": "failed"},
+				"stack_id":      stack.ID,
+				"stack_created": sNew,
+				"note":          "인스턴스는 failed 로 표시했습니다. 다시 시도하면 새 인스턴스가 생성되며, 위 stack_id 는 그대로 남습니다.",
+			})
 			return
 		}
 	}
@@ -693,4 +710,30 @@ func (s *Server) recordServiceOperationRow(r *http.Request, op store.K8sServiceO
 		return false
 	}
 	return true
+}
+
+// unwindServiceInstanceCreate marks a service instance dead after a later step of
+// its creation failed.
+//
+// Creating an instance writes a stack, the instance, then the credential
+// reference, with no transaction across them. Neither table constrains a
+// service's identity — UpsertK8sStack mints a fresh id whenever it is called
+// without one, and instances carry only non-unique indexes — so the 500 an
+// operator sees invites the one response that makes it worse: a retry, leaving a
+// second stack and a second instance for the same service beside the first.
+//
+// There is no delete for a service instance, so this marks rather than removes,
+// the same compensation the backup flows use. Marking is the reliable half here:
+// it rewrites a row that was just written successfully, unlike the credential
+// write that failed.
+func (s *Server) unwindServiceInstanceCreate(r *http.Request, instance store.K8sServiceInstance, stackID string, stackCreated bool, cause error) {
+	instance.Status = "failed"
+	if err := s.db.UpsertK8sServiceInstance(r.Context(), instance); err != nil {
+		slog.Error("could not mark the service instance failed after a later creation step failed; "+
+			"it will keep reading as a live service", "instance_id", instance.ID, "error", err)
+	}
+	slog.Error("service instance creation unwound", "instance_id", instance.ID,
+		"stack_id", stackID, "stack_created", stackCreated, "error", cause)
+	s.auditAdmin(r, "k8s.service_instance.create_unwound", instance.ID,
+		auditJSON(map[string]any{"stack_id": stackID, "stack_created": stackCreated, "error": cause.Error()}))
 }
