@@ -97,6 +97,11 @@ func (si *sessionInferer) sessionForRecovered(identity string, now time.Time, re
 // flood of fresh, distinct identities looks like — it removes just enough entries to
 // make room, so eviction stays amortised O(1) per insert rather than scanning for a
 // single oldest entry every time.
+//
+// The caller must hold si.mu. Every call site does, and Go mutexes are not
+// reentrant, so taking the lock here would deadlock rather than fix anything.
+// A static reading sees entries touched without the lock and looks like a bug;
+// TestLockDisciplineFindingsAreClassified records it as reviewed.
 func (si *sessionInferer) evictIfFull(now time.Time) {
 	if len(si.entries) < maxSessionEntries {
 		return
@@ -140,6 +145,9 @@ func mintSessionID(identity string, now time.Time) string {
 
 // gc evicts entries that have been idle past the window. Cheap and lazy: runs at
 // most once per idle interval.
+// gc drops entries past the idle window, at most once per idle interval.
+//
+// The caller must hold si.mu — see evictIfFull for why this is not taken here.
 func (si *sessionInferer) gc(now time.Time) {
 	if !si.lastGC.IsZero() && now.Sub(si.lastGC) < si.idle {
 		return

@@ -141,6 +141,10 @@ func (s *PodTerminalStream) Receive() (byte, []byte, error) {
 	}
 }
 
+// Close deliberately does not take s.mu. That mutex serialises frame writes, so
+// holding it here would make Close block behind a write to a stuck peer — the
+// exact situation Close exists to escape. net.Conn is safe to close while
+// another goroutine is writing; the write simply fails.
 func (s *PodTerminalStream) Close() error { return s.conn.Close() }
 
 type PodExecOptions struct {
