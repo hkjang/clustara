@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -106,4 +107,58 @@ func atoiSafe(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// TestReleaseArtifactNaming pins the two names an operator downloads and loads:
+//
+//	docker image : <service>:<version>       e.g. clustara:v0.9.205
+//	archive      : <service>-<version>.tar.gz e.g. clustara-v0.9.205.tar.gz
+//
+// This exists because the names silently drifted for 24 releases (v0.9.181..v0.9.204): the script
+// parsed only getopts flags, so `release.sh v0.9.204` had its argument discarded and the version
+// fell back to a date-SHA stamp. Nothing failed — the release just shipped under the wrong name.
+// The test drives the real script in dry-run mode, so it covers argument parsing too, and it
+// asserts the script REJECTS input it cannot honour rather than quietly substituting a default.
+func TestReleaseArtifactNaming(t *testing.T) {
+	script := filepath.Join("..", "..", "scripts", "release.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("stat %s: %v", script, err)
+	}
+
+	run := func(args ...string) (string, error) {
+		out, err := exec.Command("bash", append([]string{script, "-n"}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+
+	// The version reaches the names the same way whichever form the caller uses.
+	for _, form := range [][]string{{AppVersion}, {"-v", AppVersion}} {
+		out, err := run(form...)
+		if err != nil {
+			t.Fatalf("release.sh -n %v failed: %v\n%s", form, err, out)
+		}
+		wantImage := "image=clustara:" + AppVersion
+		wantArchive := "archive=clustara-" + AppVersion + ".tar.gz"
+		if !strings.Contains(out, wantImage) {
+			t.Fatalf("release.sh -n %v: want %q, got:\n%s", form, wantImage, out)
+		}
+		if !strings.Contains(out, wantArchive) {
+			t.Fatalf("release.sh -n %v: want %q, got:\n%s", form, wantArchive, out)
+		}
+	}
+
+	// The service name is what varies; the shape does not.
+	out, err := run("-i", "gateway", "v1.2.3")
+	if err != nil {
+		t.Fatalf("release.sh -n -i gateway v1.2.3 failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "image=gateway:v1.2.3") || !strings.Contains(out, "archive=gateway-v1.2.3.tar.gz") {
+		t.Fatalf("custom service name not honoured, got:\n%s", out)
+	}
+
+	// Input the script cannot honour must fail loudly. A silent fallback is what caused the drift.
+	for _, bad := range [][]string{{"v1", "junk"}, {"-v", "v1", "v2"}} {
+		if out, err := run(bad...); err == nil {
+			t.Fatalf("release.sh -n %v should have failed, got:\n%s", bad, out)
+		}
+	}
 }
