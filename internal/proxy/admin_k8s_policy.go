@@ -37,6 +37,13 @@ func validPolicyRule(rt string) bool {
 // resource comes back clean and the response was indistinguishable from a real
 // pass. "No rules ran" is not "nothing was wrong".
 func policyCheckStatus(err error, policies []store.K8sPolicy) map[string]any {
+	return policyCheckStatusOver(err, policies, -1)
+}
+
+// policyCheckStatusOver adds what the run had to examine. resources < 0 means the
+// caller is analysing a manifest it was handed rather than a fetched inventory,
+// where "nothing to examine" is not a possible surprise.
+func policyCheckStatusOver(err error, policies []store.K8sPolicy, resources int) map[string]any {
 	if err != nil {
 		return map[string]any{
 			"status": "unavailable",
@@ -57,7 +64,17 @@ func policyCheckStatus(err error, policies []store.K8sPolicy) map[string]any {
 			"reason": "활성화된 정책이 없어 검사할 규칙이 없었습니다. 이 결과는 정책 통과를 뜻하지 않습니다.",
 		}
 	}
-	return map[string]any{"status": "checked", "rules": enabled}
+	if resources == 0 {
+		return map[string]any{
+			"status": "no_resources", "rules": enabled, "resources": 0,
+			"reason": "검사 대상 리소스가 없었습니다. 에이전트가 인벤토리를 보고하지 않았을 수 있으며, 이 결과는 정책 통과를 뜻하지 않습니다.",
+		}
+	}
+	out := map[string]any{"status": "checked", "rules": enabled}
+	if resources > 0 {
+		out["resources"] = resources
+	}
+	return out
 }
 
 func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +305,6 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 	// rule set looks exactly like "0 violations" from a passing one. Say which.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"violations": violations, "count": len(violations),
-		"policy_check": policyCheckStatus(nil, policies),
+		"policy_check": policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items)),
 	})
 }

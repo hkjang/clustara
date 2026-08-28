@@ -43,14 +43,51 @@ func TestComplianceReportSaysWhenNoRulesRan(t *testing.T) {
 		t.Fatalf("status = %v with only a disabled policy: %v", check["status"], check)
 	}
 
-	// One enabled policy means the check really ran.
+	// An enabled rule is still not a check if there is nothing to examine. An
+	// empty inventory — an agent that never connected, or stopped reporting —
+	// produces "0 violations" from every rule.
 	mustUpsertPolicy(t, db, "pol_on", true)
 	check, _ = getJSON(t, srv.URL+"/admin/k8s/policies/compliance")["policy_check"].(map[string]any)
-	if check["status"] != "checked" {
-		t.Fatalf("status = %v with an enabled policy: %v", check["status"], check)
+	if check["status"] != "no_resources" {
+		t.Fatalf("status = %v with rules but an empty inventory; every rule trivially passes over "+
+			"nothing, so this must not read as compliant: %v", check["status"], check)
 	}
-	if check["rules"] != float64(1) {
-		t.Fatalf("rules = %v, want 1: %v", check["rules"], check)
+
+	// A rule and something to run it against: now it is a real check.
+	mustUpsertWorkload(t, db, "inv_api")
+	check, _ = getJSON(t, srv.URL+"/admin/k8s/policies/compliance")["policy_check"].(map[string]any)
+	if check["status"] != "checked" {
+		t.Fatalf("status = %v with an enabled policy and a workload: %v", check["status"], check)
+	}
+	if check["rules"] != float64(1) || check["resources"] != float64(1) {
+		t.Fatalf("rules/resources = %v/%v, want 1/1: %v", check["rules"], check["resources"], check)
+	}
+}
+
+// Only workloads and RBAC objects are evaluated, so the number of inventory rows
+// is not the number of things examined: an inventory of nothing but Services
+// yields a clean report from every rule.
+func TestComplianceCountsOnlyEvaluableResources(t *testing.T) {
+	db, srv := newPolicyStatusServer(t)
+	mustUpsertPolicy(t, db, "pol_on", true)
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{
+		ID: "inv_svc", ClusterID: "c1", Kind: "Service", Namespace: "prod", Name: "api",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check, _ := getJSON(t, srv.URL+"/admin/k8s/policies/compliance")["policy_check"].(map[string]any)
+	if check["status"] != "no_resources" {
+		t.Fatalf("status = %v with only a Service in the inventory; policies evaluate workloads and "+
+			"RBAC objects, so nothing was examined: %v", check["status"], check)
+	}
+}
+
+func mustUpsertWorkload(t *testing.T, db *store.SQLStore, id string) {
+	t.Helper()
+	if err := db.UpsertK8sInventory(context.Background(), store.K8sInventoryItem{
+		ID: id, ClusterID: "c1", Kind: "Deployment", Namespace: "prod", Name: "api",
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

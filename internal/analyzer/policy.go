@@ -239,7 +239,7 @@ type PolicyComplianceViolation struct {
 func CheckPolicyCompliance(items []store.K8sInventoryItem, policies []Policy) []PolicyComplianceViolation {
 	out := []PolicyComplianceViolation{}
 	for _, it := range items {
-		if !workloadKinds[it.Kind] && it.Kind != "Role" && it.Kind != "ClusterRole" {
+		if !policyEvaluable(it) {
 			continue
 		}
 		for _, res := range EvaluatePolicies(it.Kind, it.Spec, it.Annotations, policies) {
@@ -252,4 +252,25 @@ func CheckPolicyCompliance(items []store.K8sInventoryItem, policies []Policy) []
 		}
 	}
 	return out
+}
+
+// policyEvaluable reports whether a policy run would look at this resource at
+// all. Most of an inventory is not a workload or an RBAC object, so the number
+// of items fetched says little about how much was actually examined.
+func policyEvaluable(it store.K8sInventoryItem) bool {
+	return workloadKinds[it.Kind] || it.Kind == "Role" || it.Kind == "ClusterRole"
+}
+
+// CountPolicyEvaluable returns how many of these resources a policy run would
+// evaluate. A compliance report needs it: "0 violations" over nothing examined
+// is not a pass, and an empty or unreported inventory looks exactly like a clean
+// one otherwise.
+func CountPolicyEvaluable(items []store.K8sInventoryItem) int {
+	n := 0
+	for _, it := range items {
+		if policyEvaluable(it) {
+			n++
+		}
+	}
+	return n
 }
