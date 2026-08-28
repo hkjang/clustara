@@ -106,3 +106,74 @@ func putCatalog(t *testing.T, base, id string, body map[string]any) {
 		t.Fatalf("PUT catalog %s = %d for %v", id, resp.StatusCode, body)
 	}
 }
+
+// enabled = 1 is the filter ActiveContextRegistry uses to decide which contexts
+// are injected into every prompt, so the flag costs tokens on each request. The
+// only writer forced it true on every write — including when the caller sent
+// "enabled": false — and there is no DELETE route, so a context could never be
+// turned off.
+//
+// Same root cause as the policy and catalog defects, opposite polarity: those let
+// an omitted key disable something; this discarded an explicit disable.
+func TestContextCanBeDisabledExplicitly(t *testing.T) {
+	db, srv := newPolicyStatusServer(t)
+	ctx := context.Background()
+
+	if err := db.UpsertContextRegistry(ctx, store.ContextRegistryEntry{
+		ID: "ctx_live", Key: "house-style", Name: "House style", Content: "…", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	postJSONTo(t, srv.URL+"/admin/contexts", map[string]any{"id": "ctx_live", "enabled": false})
+
+	entries, err := db.ListContextRegistry(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.ID != "ctx_live" {
+			continue
+		}
+		if e.Enabled {
+			t.Fatal("an explicit \"enabled\": false was discarded; the context stays injected into " +
+				"every prompt and there is no other way to turn it off")
+		}
+		if e.Key != "house-style" || e.Content != "…" {
+			t.Fatalf("fields the caller did not send were cleared: %+v", e)
+		}
+		return
+	}
+	t.Fatal("context not found")
+}
+
+// A newly registered context is still on by default when enabled is absent.
+func TestNewContextDefaultsToEnabled(t *testing.T) {
+	db, srv := newPolicyStatusServer(t)
+	postJSONTo(t, srv.URL+"/admin/contexts", map[string]any{
+		"key": "fresh", "name": "Fresh", "content": "body",
+	})
+	entries, _ := db.ListContextRegistry(context.Background())
+	for _, e := range entries {
+		if e.Key == "fresh" {
+			if !e.Enabled {
+				t.Fatal("a new context defaulted to disabled")
+			}
+			return
+		}
+	}
+	t.Fatal("context not created")
+}
+
+func postJSONTo(t *testing.T, url string, body map[string]any) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		t.Fatalf("POST %s = %d for %v", url, resp.StatusCode, body)
+	}
+}

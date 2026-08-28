@@ -961,7 +961,8 @@ func (s *Server) handleContexts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"contexts": contexts})
 	case http.MethodPost:
 		var c store.ContextRegistryEntry
-		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		present, decErr := decodeWithPresence(r, &c)
+		if err := decErr; err != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 			return
 		}
@@ -971,12 +972,37 @@ func (s *Server) handleContexts(w http.ResponseWriter, r *http.Request) {
 		c.Key = strings.TrimSpace(c.Key)
 		c.Name = strings.TrimSpace(c.Name)
 		c.Content = strings.TrimSpace(c.Content)
+		// enabled = 1 is the filter ActiveContextRegistry uses to decide which
+		// contexts are injected into every prompt, so this flag costs tokens on
+		// each request. Forcing it true on every write made it unsettable: there is
+		// no other writer and no DELETE route, so a context could never be turned
+		// off — an explicit "enabled": false was discarded along with an absent one.
+		//
+		// The same root cause as the policy and catalog defects, with the opposite
+		// polarity: those let an omitted key disable something, this refused an
+		// explicit disable. Distinguishing absent from false fixes both.
+		// Restoration has to run whether or not "enabled" was sent: a request that
+		// only disables a context carries no key/name/content, and those must come
+		// from the stored row rather than fail validation as missing.
+		if existing, found := s.contextRegistryByID(r, c.ID); found {
+			if !present["key"] {
+				c.Key = existing.Key
+			}
+			if !present["name"] {
+				c.Name = existing.Name
+			}
+			if !present["content"] {
+				c.Content = existing.Content
+			}
+			if !present["enabled"] {
+				c.Enabled = existing.Enabled
+			}
+		} else if !present["enabled"] {
+			c.Enabled = true // a newly registered context is on by default
+		}
 		if c.Key == "" || c.Name == "" || c.Content == "" {
 			writeOpenAIError(w, http.StatusBadRequest, "key, name and content are required", "invalid_request_error", "missing_context")
 			return
-		}
-		if !c.Enabled {
-			c.Enabled = true
 		}
 		if c.TokenEstimate == 0 {
 			c.TokenEstimate = audit.EstimateTokens(c.Content)
@@ -1120,4 +1146,23 @@ func normalizeModelList(models []string) []string {
 		out = append(out, model)
 	}
 	return out
+}
+
+// contextRegistryByID finds one registry entry. The registry is small enough that
+// listing is cheaper than adding a query, and the caller only needs it to keep
+// fields a partial update did not mention.
+func (s *Server) contextRegistryByID(r *http.Request, id string) (store.ContextRegistryEntry, bool) {
+	if strings.TrimSpace(id) == "" {
+		return store.ContextRegistryEntry{}, false
+	}
+	all, err := s.db.ListContextRegistry(r.Context())
+	if err != nil {
+		return store.ContextRegistryEntry{}, false
+	}
+	for _, entry := range all {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return store.ContextRegistryEntry{}, false
 }
