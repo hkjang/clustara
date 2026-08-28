@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,5 +138,41 @@ func fallbackRecord(id string) LogRecord {
 			Source:           "usage",
 			CreatedAt:        now,
 		},
+	}
+}
+
+// TestAsyncLoggerStopDrainsQueuedRecords pins the guarantee the shutdown path
+// depends on: when Stop returns, every record handed to Enqueue has reached the
+// store. The queue lives only in memory, so this is the sole moment those rows
+// become durable — a shutdown path that skips Stop (an os.Exit, say) destroys
+// them silently. cmd/clustara's TestMainDoesNotExitPastCleanup guards that side;
+// this guards that Stop actually earns the trust.
+func TestAsyncLoggerStopDrainsQueuedRecords(t *testing.T) {
+	db := openStoreForTest(t)
+	defer db.Close()
+
+	const records = 200
+	logger := NewAsyncLogger(db, records+64, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+
+	// Enqueue far faster than the writer can drain, so the channel still holds
+	// a backlog at the moment Stop closes done. That backlog is exactly what a
+	// skipped Stop would throw away.
+	for i := 0; i < records; i++ {
+		logger.Enqueue(fallbackRecord(fmt.Sprintf("req_drain_%03d", i)))
+	}
+	if logger.dropped.Load() != 0 {
+		t.Fatalf("queue overflowed (%d dropped); widen it so the test measures the drain, not backpressure", logger.dropped.Load())
+	}
+
+	logger.Stop(context.Background())
+
+	var stored int
+	if err := db.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM request_logs WHERE id LIKE 'req_drain_%'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != records {
+		t.Fatalf("Stop returned with %d/%d records persisted; the shutdown drain is losing queued rows", stored, records)
 	}
 }

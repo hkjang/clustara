@@ -50,6 +50,13 @@ type HTTPConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
+	// ShutdownTimeout bounds how long the process waits for in-flight requests
+	// to finish before releasing resources. It is deliberately far shorter than
+	// WriteTimeout: a streaming response may legitimately run for minutes, but
+	// shutdown has to fit inside the pod's termination grace period. Exceeding
+	// it is logged and the process still unwinds cleanly — it never skips the
+	// async logger flush.
+	ShutdownTimeout time.Duration
 }
 
 // WorkersConfig tunes the durable background workers that converge Kubernetes
@@ -412,6 +419,7 @@ func Load() (Config, error) {
 			WriteTimeout:      durationEnv("HTTP_WRITE_TIMEOUT", 10*time.Minute),
 			IdleTimeout:       durationEnv("HTTP_IDLE_TIMEOUT", 120*time.Second),
 			MaxHeaderBytes:    intEnv("HTTP_MAX_HEADER_BYTES", 1<<20),
+			ShutdownTimeout:   durationEnv("HTTP_SHUTDOWN_TIMEOUT", 15*time.Second),
 		},
 		Upstream: UpstreamConfig{
 			Provider:     getEnv("UPSTREAM_PROVIDER", "openai"),
@@ -593,6 +601,11 @@ func Load() (Config, error) {
 	}
 	if err := validateWorkers(&cfg.Workers); err != nil {
 		return Config{}, err
+	}
+	// A non-positive drain window makes every shutdown report failure, because
+	// context.WithTimeout hands back an already-expired context.
+	if cfg.HTTP.ShutdownTimeout <= 0 {
+		return Config{}, fmt.Errorf("HTTP_SHUTDOWN_TIMEOUT must be positive")
 	}
 	if cfg.Environment == "production" || cfg.StrictConfig {
 		if weakOperationalSecret(cfg.Secret.GatewaySecret) {

@@ -16,22 +16,35 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run holds the entire process lifecycle and reports the exit code, so that
+// every exit path unwinds the deferred cleanup below it.
+//
+// main must never call os.Exit itself once a resource has been registered for
+// cleanup, and neither may run: os.Exit skips deferred functions, and
+// logger.Stop is the only thing that flushes the async logger's in-memory
+// queue. Records sitting in that queue — request and audit rows — exist
+// nowhere else, so an os.Exit anywhere below silently destroys them.
+// TestMainDoesNotExitPastCleanup pins this.
+func run() int {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	db, err := store.Open(context.Background(), cfg.Database)
 	if err != nil {
 		slog.Error("open database", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		slog.Error("migrate database", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	logger := store.NewAsyncLogger(db, cfg.Logging.QueueSize, cfg.Logging.FallbackPath)
@@ -45,7 +58,7 @@ func main() {
 	srv, err := proxy.NewServer(cfg, db, logger, retention)
 	if err != nil {
 		slog.Error("create proxy server", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
@@ -99,13 +112,14 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	exitCode := 0
 	select {
 	case sig := <-stop:
 		slog.Info("shutdown requested", "signal", sig.String())
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server stopped", "error", err)
-			os.Exit(1)
+			exitCode = 1
 		}
 	}
 	// Cancel first, then wait: an in-flight reconcile tick must be allowed to
@@ -120,15 +134,27 @@ func main() {
 		slog.Warn("k8s terminal session reaper did not stop in time", "timeout", cfg.Workers.ShutdownTimeout)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
-		slog.Error("graceful shutdown failed", "error", err)
-		os.Exit(1)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	defer cancelDrain()
+	if err := httpServer.Shutdown(drainCtx); err != nil {
+		// Fall through rather than exiting. Outliving the drain window is an
+		// ordinary outcome here, not a corrupt state: HTTP_WRITE_TIMEOUT
+		// defaults to 10 minutes so that chat and log streams can be
+		// long-lived, while HTTP_SHUTDOWN_TIMEOUT defaults to 15 seconds to
+		// fit inside a pod's termination grace period. Abandoning cleanup on
+		// this path would drop the queued audit records belonging to the very
+		// requests that were still in flight.
+		slog.Error("graceful shutdown timed out; releasing resources anyway",
+			"error", err, "timeout", cfg.HTTP.ShutdownTimeout, "write_timeout", cfg.HTTP.WriteTimeout)
+		exitCode = 1
 	}
 	// Stop the server's polling schedulers before the deferred db.Close runs;
 	// otherwise they keep querying a closed store for the rest of the process.
-	if err := srv.Shutdown(ctx); err != nil {
+	// This gets its own budget because drainCtx may already be expired.
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	defer cancelStop()
+	if err := srv.Shutdown(stopCtx); err != nil {
 		slog.Warn("background schedulers did not stop cleanly", "error", err)
 	}
+	return exitCode
 }
