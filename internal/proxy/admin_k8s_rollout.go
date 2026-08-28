@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -956,7 +957,9 @@ func (s *Server) syncRolloutActionRequest(ctx context.Context, roll store.K8sRol
 		}
 		return err
 	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, action.ID, actionStatus, result)
+	if _, err := s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, action.ID, actionStatus, result); err != nil {
+		slog.Warn("service operation ledger status update failed", "error", err)
+	}
 	return nil
 }
 

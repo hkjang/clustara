@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -667,4 +668,29 @@ func (s *Server) recordServiceOperation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	writeJSON(w, 202, map[string]any{"operation": rec, "action_request_id": requestID, "action_center": "#/k8s-actions", "stack_id": in.StackID})
+}
+
+// recordServiceOperation writes one row to the service operations ledger and
+// reports whether it landed.
+//
+// The ledger is not decoration. jupyterHubBackupWorkspaceOwner recovers a
+// restore's ownership evidence from it, and the approval and execution paths
+// move rows through their statuses by request id. A missing row is fail-closed
+// where it matters — the restore is blocked rather than misdirected — but it is
+// silent: the request answers success while its operation never appears, and the
+// later status updates match nothing.
+//
+// The insert error is therefore logged and audited rather than discarded. It does
+// not fail the request: the manifest change and backup rows are already written
+// by this point, and refusing here would leave the caller with a half-recorded
+// request and no way to retry it.
+func (s *Server) recordServiceOperationRow(r *http.Request, op store.K8sServiceOperation) bool {
+	if err := s.db.InsertK8sServiceOperation(r.Context(), op); err != nil {
+		slog.Error("service operation ledger write failed; the operation will not appear in the instance history",
+			"instance_id", op.ServiceInstanceID, "operation", op.OperationType, "request_id", op.RequestID, "error", err)
+		s.auditAdmin(r, "k8s.service_operation.ledger_write_failed", op.ServiceInstanceID,
+			auditJSON(map[string]any{"operation": op.OperationType, "request_id": op.RequestID, "error": err.Error()}))
+		return false
+	}
+	return true
 }

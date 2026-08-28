@@ -126,7 +126,7 @@ func (s *Server) handleServiceBackupOperation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	params, _ := json.Marshal(map[string]any{"restore_id": restore.ID, "backup_id": backup.ID, "target_instance_id": preview.Target.ID, "mode": preview.Mode, "resource_kind": preview.ResourceKind, "resource_name": preview.ResourceName, "manifest_change_id": change.Request.ID})
-	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: preview.Target.ID, OperationType: "restore", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-restore-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.recordServiceOperationRow(r, store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: preview.Target.ID, OperationType: "restore", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-restore-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
 	s.auditAdmin(r, "k8s.service_restore.request", "", auditJSON(map[string]any{"restore_id": restore.ID, "backup_id": backup.ID, "target_instance_id": preview.Target.ID, "mode": preview.Mode, "manifest_change_id": change.Request.ID}))
 	note := "복구 리소스는 기존 Manifest Change Studio 검증·승인·SSA Apply 후 생성됩니다."
 	writeJSON(w, http.StatusAccepted, map[string]any{"restore": restore, "manifest_change": change.Request, "preview": preview, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": note})

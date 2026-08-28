@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -768,7 +769,9 @@ func (s *Server) handleK8sActionByID(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_update_failed")
 		return
 	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(r.Context(), id, status, firstNonEmpty(strings.TrimSpace(payload.Result), "Action Center "+status))
+	if _, err := s.db.UpdateK8sServiceOperationsByRequestID(r.Context(), id, status, firstNonEmpty(strings.TrimSpace(payload.Result), "Action Center "+status)); err != nil {
+		slog.Warn("service operation ledger status update failed", "request_id", id, "error", err)
+	}
 	s.auditAdmin(r, "k8s.action."+command, "", auditJSON(map[string]string{"id": id, "status": status}))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": status})
 }
@@ -869,7 +872,12 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	}
 
 	beginCtx, cancelBegin := context.WithTimeout(context.WithoutCancel(ctx), k8sActionFinalizeTimeout)
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(beginCtx, act.ID, "running", "Action Center execution in progress")
+	// The affected-row count is deliberately not checked: most action requests are not
+	// service operations at all (a plain rollout has no ledger row), so zero rows is the
+	// normal case. A failed UPDATE is a different matter and is reported.
+	if _, err := s.db.UpdateK8sServiceOperationsByRequestID(beginCtx, act.ID, "running", "Action Center execution in progress"); err != nil {
+		slog.Warn("service operation ledger status update failed", "error", err)
+	}
 	if hasLinkedRollout {
 		_ = s.db.AppendK8sRolloutEvent(beginCtx, store.K8sRolloutEvent{
 			ID: newID("rollevent"), ActionID: linkedRollout.ID, Status: "running", Stage: "mutation_running",
@@ -938,7 +946,9 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 		); err != nil {
 			return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 		}
-		_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
+		if _, err := s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg); err != nil {
+			slog.Warn("service operation ledger status update failed", "error", err)
+		}
 		if resultStatus == "running" {
 			return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusAccepted}
 		}
@@ -951,7 +961,9 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 		} else if err != nil {
 			return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 		}
-		_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
+		if _, err := s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg); err != nil {
+			slog.Warn("service operation ledger status update failed", "error", err)
+		}
 	}
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}

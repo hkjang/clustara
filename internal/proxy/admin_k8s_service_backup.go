@@ -156,7 +156,7 @@ func (s *Server) handleServiceBackups(w http.ResponseWriter, r *http.Request, in
 		return
 	}
 	params, _ := json.Marshal(map[string]any{"backup_id": backup.ID, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID})
-	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: operationType, Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.recordServiceOperationRow(r, store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: operationType, Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
 	s.auditAdmin(r, "k8s.service_backup.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "strategy": catalog.Code, "manifest_change_id": change.Request.ID, "target_pvc": input.TargetPVC}))
 	writeJSON(w, http.StatusAccepted, map[string]any{"backup": backup, "manifest_change": change.Request, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": "실제 Job 적용은 기존 Manifest Change Studio 검증·승인·SSA Apply 흐름에서 수행합니다."})
 }
@@ -254,7 +254,7 @@ func (s *Server) createJupyterLabFilesystemBackup(w http.ResponseWriter, r *http
 		return
 	}
 	params, _ := json.Marshal(map[string]any{"backup_id": backup.ID, "workspace_owner": input.WorkspaceOwner, "source_pvc": input.SourcePVC, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID})
-	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup_workspace", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.recordServiceOperationRow(r, store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup_workspace", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
 	s.auditAdmin(r, "k8s.service_backup.workspace.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "workspace_owner": input.WorkspaceOwner, "source_pvc": input.SourcePVC, "target_pvc": input.TargetPVC, "manifest_change_id": change.Request.ID}))
 	writeJSON(w, http.StatusAccepted, map[string]any{"backup": backup, "manifest_change": change.Request, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": "중지된 Jupyter 작업공간을 read-only로 마운트한 아카이브 Job이며 기존 승인·SSA Apply 흐름에서 실행됩니다."})
 }
@@ -316,7 +316,7 @@ func (s *Server) createServiceVolumeSnapshotBackup(w http.ResponseWriter, r *htt
 		return
 	}
 	params, _ := json.Marshal(map[string]any{"backup_id": backup.ID, "source_pvc": sourcePVC, "snapshot_class": input.SnapshotClass, "manifest_change_id": change.Request.ID})
-	_ = s.db.InsertK8sServiceOperation(r.Context(), store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup_snapshot", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
+	s.recordServiceOperationRow(r, store.K8sServiceOperation{ID: newID("svcop"), ServiceInstanceID: instance.ID, OperationType: "backup_snapshot", Status: "pending_approval", RequestID: change.Request.ID, IdempotencyKey: "service-backup-op:" + input.IdempotencyKey, ParametersJSON: string(params), RequestedBy: adminID(r), Result: "Manifest Change Studio validation and approval required"})
 	s.auditAdmin(r, "k8s.service_backup.snapshot.request", "", auditJSON(map[string]any{"instance_id": instance.ID, "backup_id": backup.ID, "manifest_change_id": change.Request.ID, "source_pvc": sourcePVC, "snapshot_class": input.SnapshotClass}))
 	writeJSON(w, http.StatusAccepted, map[string]any{"backup": backup, "manifest_change": change.Request, "approval_url": "#/k8s-manifest-changes?id=" + change.Request.ID, "note": "VolumeSnapshot 생성은 기존 Manifest Change Studio 검증·승인·SSA Apply 흐름에서 수행합니다."})
 }

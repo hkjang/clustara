@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -453,7 +454,9 @@ func (s *Server) runApprovedJupyterHubAction(ctx context.Context, actor string, 
 		}
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_running_failed", err)
 	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, "running", "JupyterHub API execution in progress")
+	if _, err := s.db.UpdateK8sServiceOperationsByRequestID(ctx, act.ID, "running", "JupyterHub API execution in progress"); err != nil {
+		slog.Warn("service operation ledger status update failed", "error", err)
+	}
 	execCtx, cancelExec := context.WithTimeout(ctx, k8sActionExecutionTimeout)
 	execErr := s.executeJupyterHubServerAction(execCtx, act)
 	cancelExec()
@@ -469,7 +472,9 @@ func (s *Server) runApprovedJupyterHubAction(ctx context.Context, actor string, 
 	if err := s.db.UpdateK8sActionStatus(finalizeCtx, act.ID, resultStatus, actor, resultMsg); err != nil {
 		return k8sActionRunErr(http.StatusInternalServerError, err.Error(), "server_error", "k8s_action_finalize_failed", err)
 	}
-	_, _ = s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg)
+	if _, err := s.db.UpdateK8sServiceOperationsByRequestID(finalizeCtx, act.ID, resultStatus, resultMsg); err != nil {
+		slog.Warn("service operation ledger status update failed", "error", err)
+	}
 	if execErr != nil {
 		return k8sActionRunResult{ID: act.ID, Status: resultStatus, Message: resultMsg, HTTPStatus: http.StatusBadGateway, Err: execErr, ExecutionFailed: true}
 	}
