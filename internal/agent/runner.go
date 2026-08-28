@@ -194,7 +194,32 @@ func (r *Runner) listCurrent(ctx context.Context, target kube.ResourceTarget) (s
 	return lastRV, nil
 }
 
+// errWatchStalled means the API server neither sent an event nor closed the
+// stream within the client-side deadline. It is reported as a reconnect so the
+// condition shows up in the agent's heartbeat instead of vanishing.
+var errWatchStalled = errors.New("watch stalled: no data and no close within the client deadline")
+
+// watchClientDeadline is how long a single watch may run before the client tears
+// it down itself. The API server is asked to close at WatchTimeout; this is a
+// backstop for the case where that close never arrives, so it is deliberately
+// well past the server's own deadline and never fires on a healthy watch.
+func (r *Runner) watchClientDeadline() time.Duration {
+	return r.cfg.WatchTimeout + r.cfg.WatchTimeout/2
+}
+
 func (r *Runner) watch(ctx context.Context, target kube.ResourceTarget, rv string) error {
+	// The kube HTTP client deliberately has no Timeout, because that would cut
+	// every watch short. The stream's only other bound is the server-side
+	// timeoutSeconds below -- and on a half-open connection (an LB or NAT idle
+	// drop, a partitioned node, a firewall that discards without RST) the
+	// server's close never reaches us and Decode blocks forever on a socket
+	// that will never deliver another byte. That failure is silent: no error,
+	// no reconnect, no events, while the heartbeat goroutine keeps reporting
+	// the agent healthy and this resource kind quietly stops updating. Bound it
+	// on our side too.
+	watchCtx, cancel := context.WithTimeout(ctx, r.watchClientDeadline())
+	defer cancel()
+
 	reqURL, err := url.Parse(r.cfg.KubeAPIServer + target.Path)
 	if err != nil {
 		return err
@@ -208,14 +233,14 @@ func (r *Runner) watch(ctx context.Context, target kube.ResourceTarget, rv strin
 	}
 	reqURL.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
+	req, err := http.NewRequestWithContext(watchCtx, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
 		return err
 	}
 	r.setKubeHeaders(req)
 	resp, err := r.kubeHTTP.Do(req)
 	if err != nil {
-		return err
+		return r.classifyWatchErr(ctx, watchCtx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -229,7 +254,7 @@ func (r *Runner) watch(ctx context.Context, target kube.ResourceTarget, rv strin
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			return err
+			return r.classifyWatchErr(ctx, watchCtx, err)
 		}
 		watchType := strings.ToUpper(strings.TrimSpace(ev.Type))
 		rv := objectResourceVersion(ev.Object)
@@ -602,6 +627,16 @@ func newKubeHTTPClient(cfg Config) (*http.Client, string, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConf
 	return &http.Client{Transport: transport}, token, nil
+}
+
+// classifyWatchErr names the client-side deadline for what it is. The parent
+// context is checked first: during shutdown both contexts are done, and that is
+// an ordinary stop rather than a stalled stream.
+func (r *Runner) classifyWatchErr(parent, watchCtx context.Context, err error) error {
+	if parent.Err() == nil && watchCtx.Err() != nil {
+		return fmt.Errorf("%w after %s", errWatchStalled, r.watchClientDeadline())
+	}
+	return err
 }
 
 func selectTargets(kinds []string) ([]kube.ResourceTarget, error) {
