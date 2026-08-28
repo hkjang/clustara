@@ -177,18 +177,45 @@ func (s *Server) handleServiceCatalogByID(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 200, map[string]any{"catalog": cat, "versions": versions, "profiles": profiles})
 	case http.MethodPut:
 		var in store.K8sServiceCatalog
-		if json.NewDecoder(r.Body).Decode(&in) != nil {
+		present, decErr := decodeWithPresence(r, &in)
+		if decErr != nil {
 			writeOpenAIError(w, 400, "invalid JSON", "invalid_request_error", "invalid_body")
 			return
 		}
+		// This PUT replaces the whole row, so every key the caller left out arrives
+		// as a zero value. Code and Name were already defended by hand; Enabled was
+		// not, and it is a bool — a request changing only the description omits it,
+		// decodes false, and disables the catalog. Disabling is precisely what the
+		// DELETE branch below does, so the omission performs the delete.
 		in.ID = cat.ID
 		in.CreatedAt = cat.CreatedAt
 		in.CreatedBy = cat.CreatedBy
-		if in.Code == "" {
+		if !present["code"] {
 			in.Code = cat.Code
 		}
-		if in.Name == "" {
+		if !present["name"] {
 			in.Name = cat.Name
+		}
+		if !present["category"] {
+			in.Category = cat.Category
+		}
+		if !present["description"] {
+			in.Description = cat.Description
+		}
+		if !present["icon"] {
+			in.Icon = cat.Icon
+		}
+		if !present["docs_url"] {
+			in.DocsURL = cat.DocsURL
+		}
+		if !present["deployment_type"] {
+			in.DeploymentType = cat.DeploymentType
+		}
+		if !present["required_capabilities_json"] {
+			in.RequiredCapabilitiesJSON = cat.RequiredCapabilitiesJSON
+		}
+		if !present["enabled"] {
+			in.Enabled = cat.Enabled
 		}
 		if err := s.db.UpsertK8sServiceCatalog(r.Context(), in); err != nil {
 			writeOpenAIError(w, 500, err.Error(), "server_error", "service_catalog_save_failed")

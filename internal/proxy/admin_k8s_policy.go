@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
@@ -98,13 +97,9 @@ func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"policies": ps, "available_rule_types": analyzer.PolicyRuleTypes})
 	case http.MethodPost:
-		body, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if readErr != nil {
-			writeOpenAIError(w, http.StatusBadRequest, "could not read request body", "invalid_request_error", "invalid_body")
-			return
-		}
 		var p store.K8sPolicy
-		if err := json.Unmarshal(body, &p); err != nil {
+		present, decErr := decodeWithPresence(r, &p)
+		if decErr != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 			return
 		}
@@ -117,8 +112,6 @@ func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 		//
 		// Merge instead: only fields actually present in the body override what is
 		// stored.
-		present := map[string]json.RawMessage{}
-		_ = json.Unmarshal(body, &present)
 		if id := strings.TrimSpace(p.ID); id != "" {
 			existing, listErr := s.db.ListK8sPolicies(r.Context())
 			if listErr != nil {
@@ -129,16 +122,16 @@ func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
 				if cur.ID != id {
 					continue
 				}
-				if _, ok := present["name"]; !ok {
+				if !present["name"] {
 					p.Name = cur.Name
 				}
-				if _, ok := present["rule_type"]; !ok {
+				if !present["rule_type"] {
 					p.RuleType = cur.RuleType
 				}
-				if _, ok := present["action"]; !ok {
+				if !present["action"] {
 					p.Action = cur.Action
 				}
-				if _, ok := present["enabled"]; !ok {
+				if !present["enabled"] {
 					p.Enabled = cur.Enabled
 				}
 				p.CreatedAt = cur.CreatedAt
