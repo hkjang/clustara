@@ -2971,7 +2971,13 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			request_id TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL DEFAULT '', parameters_json TEXT NOT NULL DEFAULT '{}',
 			requested_by TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_service_operations_idem ON k8s_service_operations(idempotency_key)`,
+		// Partial, like every other idempotency index. Without the predicate a second
+		// row carrying an empty key collides with the first, and four of the five
+		// writers discard the insert error -- the operation would simply vanish from
+		// the service operations ledger. Every writer defaults the key today, so this
+		// is closing the trap rather than a live failure.
+		`DROP INDEX IF EXISTS idx_k8s_service_operations_idem`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_k8s_service_operations_idem ON k8s_service_operations(idempotency_key) WHERE idempotency_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_service_operations_instance ON k8s_service_operations(service_instance_id, created_at)`,
 		`CREATE TABLE IF NOT EXISTS k8s_service_backups (
 			id TEXT PRIMARY KEY, service_instance_id TEXT NOT NULL, backup_type TEXT NOT NULL, location TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
