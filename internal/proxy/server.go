@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.212"
+const AppVersion = "v0.9.213"
 
 type Server struct {
 	cfg            config.Config
@@ -1529,6 +1529,7 @@ func (s *Server) authenticateProxyContext(r *http.Request) (string, *store.AuthC
 	}
 	if found {
 		authCtx := authContextFromAPIKey(key)
+		s.clampAPIKeyToOwner(r.Context(), &authCtx, key)
 		s.enrichAuthContextTeam(r.Context(), &authCtx)
 		if !key.RevokedAt.IsZero() || key.Status != "active" {
 			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "api_key_denied", APIKeyID: key.ID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: "revoked_or_inactive", CreatedAt: time.Now().UTC()})
@@ -1553,7 +1554,7 @@ func (s *Server) authenticateProxyContext(r *http.Request) (string, *store.AuthC
 			return "", nil, false
 		}
 		scope := apiScopeForRequest(r)
-		if s.cfg.Auth.Enabled && scope != "" && !hasScope(key.Scopes, scope) {
+		if s.cfg.Auth.Enabled && scope != "" && !hasScope(authCtx.Scopes, scope) {
 			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "scope_denied", APIKeyID: key.ID, TeamID: key.Team, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: scope, CreatedAt: time.Now().UTC()})
 			return "", nil, false
 		}

@@ -50,6 +50,10 @@ type APIKeyRecord struct {
 	// (service accounts, external/passthrough keys) or the row predates the
 	// column. Only FindActiveAPIKeyByHash populates it.
 	OwnerStatus string
+	// OwnerRole is the current role of the owning user, resolved in the same
+	// query. The role stored on the key itself is frozen at creation, so this is
+	// what lets authentication clamp a key that outranks its owner today.
+	OwnerRole string
 }
 
 type APIKeyPublic struct {

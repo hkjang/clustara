@@ -560,3 +560,56 @@ func parseAPITime(raw string) time.Time {
 func accountStatusDisabled(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "disabled")
 }
+
+// clampAPIKeyToOwner lowers an API key's effective grant to its owner's current
+// role.
+//
+// A key freezes the role and scopes it was minted with. Demoting a user updates
+// the users row and revokes their sessions, so the browser immediately reflects
+// the new boundary — but the key kept the old one, and authContextFromAPIKey
+// hands that straight to the request. It reaches further than it looks:
+// withMCPAdminIdentity copies this role, and evaluateAdminAccess grants full
+// admin to an MCP identity whose role reads "super_admin", including the direct
+// cluster-change tools.
+//
+// Clamping rather than overwriting is deliberate. A key may have been narrowed
+// on purpose, so the scopes are intersected, never replaced — the key can only
+// lose reach here. It is also reversible: re-promoting the user restores the
+// key's original grant, with no key rotation needed.
+//
+// Only a strict demotion is acted on. A lateral move between equal-ranked roles,
+// or an edit to a custom role's scope list, leaves keys carrying scopes their
+// role no longer implies — but at that point a deliberately scoped key and a
+// stale one are indistinguishable, so widening this rule would silently break
+// working keys.
+func (s *Server) clampAPIKeyToOwner(ctx context.Context, authCtx *store.AuthContext, key store.APIKeyRecord) {
+	if authCtx == nil || strings.TrimSpace(key.UserID) == "" {
+		return
+	}
+	ownerRole := strings.TrimSpace(key.OwnerRole)
+	// Rank 0 means the role is unknown to this build; clamping to it would strip
+	// the key entirely on the strength of a value we cannot interpret.
+	if ownerRole == "" || roleRank(ownerRole) == 0 {
+		return
+	}
+	if roleRank(ownerRole) >= roleRank(authCtx.Role) {
+		return
+	}
+	authCtx.Role = ownerRole
+	authCtx.Scopes = intersectScopes(authCtx.Scopes, s.effectiveScopesForRole(ctx, ownerRole))
+}
+
+// intersectScopes keeps the order of have, dropping anything not in allow.
+func intersectScopes(have, allow []string) []string {
+	permitted := make(map[string]bool, len(allow))
+	for _, scope := range allow {
+		permitted[scope] = true
+	}
+	out := make([]string, 0, len(have))
+	for _, scope := range have {
+		if permitted[scope] {
+			out = append(out, scope)
+		}
+	}
+	return out
+}
