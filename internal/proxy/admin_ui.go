@@ -5627,6 +5627,26 @@ const adminHTML = `<!doctype html>
 	}
     function cardWithID(id, title, inner) { return '<section id="' + escapeHTML(id) + '"><h2>' + escapeHTML(title) + '</h2>' + inner + '</section>'; }
 
+    // scanNotice renders the scan/policy_check block these reports return. A clean
+    // result means nothing until you know the check actually ran over everything:
+    // an empty rule set, an empty or truncated resource window, and a failed
+    // lookup all produce "no findings" that must not read as a pass.
+    function scanNotice(s) {
+      if (!s || !s.status || s.status === 'checked') return '';
+      const labels = { unavailable: '검사 수행 안 됨', no_rules: '검사할 규칙 없음', no_resources: '검사 대상 없음', partial: '일부만 검사' };
+      const label = labels[s.status] || s.status;
+      const detail = s.reason || s.error || '이 결과는 전수 통과를 뜻하지 않습니다.';
+      const counts = [];
+      if (typeof s.rules === 'number') counts.push('규칙 ' + fmt(s.rules));
+      if (typeof s.resources === 'number') counts.push('리소스 ' + fmt(s.resources));
+      const tail = counts.length ? ' <span class="muted">(' + escapeHTML(counts.join(' · ')) + ')</span>' : '';
+      return sectionLead('<strong>' + escapeHTML(label) + ':</strong> ' + escapeHTML(detail) + tail, '⚠', 'warn');
+    }
+
+    // scanIncomplete reports whether a scan block means "nothing was concluded",
+    // so an empty findings table can say that instead of "none found".
+    function scanIncomplete(s) { return !!(s && s.status && s.status !== 'checked'); }
+
     // ---------- LLM observability ----------
     const llmState = {
       window: sessionStorage.getItem('llmWindow') || '24h',
@@ -13427,7 +13447,7 @@ const adminHTML = `<!doctype html>
       };
 
       view.innerHTML =
-        section('K8s 보안', k8sSecuritySubnav(clusterId) + '<div class="kpis">' +
+        section('K8s 보안', k8sSecuritySubnav(clusterId) + scanNotice(data.scan) + '<div class="kpis">' +
           kpi('보안 점수', fmt(sum.score || 0)) +
           kpi('Privileged', fmt(sum.privileged || 0)) +
           kpi('Baseline', fmt(sum.baseline || 0)) +
@@ -14831,7 +14851,7 @@ const adminHTML = `<!doctype html>
       try {
         [data, comp, term] = await Promise.all([
           api('/admin/k8s/policies'),
-          api('/admin/k8s/policies/compliance').catch(() => ({ violations: [] })),
+          api('/admin/k8s/policies/compliance').catch(e => ({ violations: [], policy_check: { status: 'unavailable', reason: (e && e.message) || '컴플라이언스 조회에 실패했습니다.' } })),
           api('/admin/k8s/terminal-policies').catch(() => ({ templates: [], policies: [] })),
         ]);
       } catch (e) { view.innerHTML = section('K8s 정책 센터', '<div class="card-body" style="padding:16px"><p class="muted">' + escapeHTML(e.message) + '</p></div>'); return; }
@@ -14868,9 +14888,9 @@ const adminHTML = `<!doctype html>
         '<tr><td><span class="status ' + (v.action === 'Deny' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(v.action) + '</span></td>' +
         '<td>' + escapeHTML(v.rule_type) + '</td><td>' + escapeHTML((v.namespace || '-') + '/' + v.kind + '/' + v.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(v.cluster_id, v.kind, v.namespace, v.name, 'YAML') + '</div></td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(v.detail || '') + '</td></tr>').join('')
-        : '<tr><td colspan="4" class="muted">위반 없음.</td></tr>';
+        : '<tr><td colspan="4" class="muted">' + (scanIncomplete(comp.policy_check) ? '검사가 완료되지 않아 위반 여부를 판단할 수 없습니다.' : '위반 없음.') + '</td></tr>';
       view.innerHTML =
-		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + sectionLead('<strong>판정 원칙:</strong> Admission 정책은 위반한 활성 규칙 중 가장 강한 효과가 적용됩니다. <strong>Deny</strong>는 차단, <strong>Warn</strong>은 허용+경고, <strong>Audit</strong>은 허용+기록입니다. 터미널은 super_admin에게 감사 가능한 15분 기본 접속을 제공하고, 다른 역할만 별도 예외 정책을 적용합니다.', '⚖') + '<div class="kpis">' + kpi('Deny', fmt(denyCount)) + kpi('Warn', fmt(warnCount)) + kpi('Audit', fmt(auditCount)) + kpi('중지', fmt(disabledCount)) + kpi('미적용 검사', fmt(uncovered)) + kpi('현재 위반', fmt((comp.violations || []).length)) + '</div>') +
+		section('K8s 정책 센터', k8sSecuritySubnav(clusterId) + sectionLead('<strong>판정 원칙:</strong> Admission 정책은 위반한 활성 규칙 중 가장 강한 효과가 적용됩니다. <strong>Deny</strong>는 차단, <strong>Warn</strong>은 허용+경고, <strong>Audit</strong>은 허용+기록입니다. 터미널은 super_admin에게 감사 가능한 15분 기본 접속을 제공하고, 다른 역할만 별도 예외 정책을 적용합니다.', '⚖') + '<div class="kpis">' + kpi('Deny', fmt(denyCount)) + kpi('Warn', fmt(warnCount)) + kpi('Audit', fmt(auditCount)) + kpi('중지', fmt(disabledCount)) + kpi('미적용 검사', fmt(uncovered)) + kpi('현재 위반', scanIncomplete(comp.policy_check) ? '판정 불가' : fmt((comp.violations || []).length)) + '</div>' + scanNotice(comp.policy_check)) +
 		card('현재 허용·경고·차단 범위', '<div class="card-body"><div class="resource-insight-grid"><div class="resource-insight"><strong><span class="status error">Deny</span> 배포 차단</strong><p>위반 시 Manifest 검증과 Admission 요청을 통과할 수 없습니다. 원인 수정 또는 승인된 좁은 범위 예외가 필요합니다.</p></div><div class="resource-insight"><strong><span class="status warn">Warn</span> 허용 + 주의</strong><p>요청은 진행할 수 있지만 운영자가 위험을 확인하고 후속 조치나 승인 여부를 판단해야 합니다.</p></div><div class="resource-insight"><strong><span class="status">Audit</span> 허용 + 기록</strong><p>차단하지 않고 위반 증적만 남깁니다. 신규 정책을 관찰 모드로 도입할 때 적합합니다.</p></div></div>' + sectionLead('<strong>플랫폼 불변 가드:</strong> Secret <code>data/stringData</code> 원문 저장은 정책 action이나 승인으로 허용할 수 없습니다. 메타데이터만 이 화면 계열에서 관리하고 값은 Config Change Control·ExternalSecret·SealedSecret·Secret Manager 경로를 사용하세요.', '🔐', 'warn') + '</div>') +
 		card('Effective Policy Matrix', '<div class="card-body"><div class="muted" style="font-size:11px;margin-bottom:8px">현재 저장된 활성 정책을 기준으로 계산합니다. 같은 검사에 정책이 여러 개면 Deny → Warn → Audit 순으로 가장 강한 효과를 표시합니다.</div>' + k8sPolicyMatrixHTML(data.policies || [], data.available_rule_types || []) + '</div>') +
         card('터미널 정책 템플릿 (Pod exec)',
@@ -16497,7 +16517,7 @@ const adminHTML = `<!doctype html>
         const dr = d.drift || {};
         const badge = dr.synced ? '<span class="status">SYNCED</span>' : '<span class="status warn">DRIFT · 누락 ' + fmt(dr.missing || 0) + '</span>';
         const rows = (dr.entries || []).map(e => '<tr><td>' + (e.status === 'missing' ? '<span class="status error" style="font-size:10px">missing</span>' : '<span class="status" style="font-size:10px">present</span>') + '</td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td></tr>').join('') || '<tr><td colspan="3" class="muted">선언 리소스 없음</td></tr>';
-        out.innerHTML = '<div style="margin-bottom:4px">드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(dr.declared || 0) + ' · 존재 ' + fmt(dr.present || 0) + '</span> ' +
+        out.innerHTML = scanNotice(d.scan) + '<div style="margin-bottom:4px">드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(dr.declared || 0) + ' · 존재 ' + fmt(dr.present || 0) + '</span> ' +
           '<button type="button" class="secondary" style="font-size:11px" onclick="k8sStackFieldDrift(\'' + escapeAttr(id) + '\')">필드 드리프트</button></div>' +
           '<table><thead><tr><th>상태</th><th>Kind</th><th>리소스</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
@@ -16515,7 +16535,7 @@ const adminHTML = `<!doctype html>
           const diffHtml = (e.diffs || []).map(df => '<div style="font-size:11px"><code>' + escapeHTML(df.path) + '</code>: <span class="status warn" style="font-size:10px">' + escapeHTML(df.declared || '∅') + '</span> → <span class="status error" style="font-size:10px">' + escapeHTML(df.live || '∅') + '</span></div>').join('');
           return '<tr><td><span class="status warn" style="font-size:10px">drift</span></td><td>' + escapeHTML(e.kind) + '</td><td>' + escapeHTML((e.namespace || '-') + '/' + e.name) + '</td><td>' + diffHtml + '</td></tr>';
         }).join('') || '<tr><td colspan="4" class="muted">선언 리소스 없음</td></tr>';
-        out.innerHTML = '<div style="margin-bottom:4px">필드 드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(fd.declared || 0) + ' · 존재 ' + fmt(fd.present || 0) + '</span></div>' +
+        out.innerHTML = scanNotice(d.scan) + '<div style="margin-bottom:4px">필드 드리프트: ' + badge + ' <span class="muted" style="font-size:11px">선언 ' + fmt(fd.declared || 0) + ' · 존재 ' + fmt(fd.present || 0) + '</span></div>' +
           '<table><thead><tr><th>상태</th><th>Kind</th><th>리소스</th><th>필드 차이</th></tr></thead><tbody>' + rows + '</tbody></table>';
       } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
     };
