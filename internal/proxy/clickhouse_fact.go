@@ -227,11 +227,11 @@ func (s *Server) emitPolicyFacts(events []store.PolicyDecisionEvent) {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), chFactInsertTimeout)
 		defer cancel()
 		payload, _, err := insertJSONEachRow(ctx, s.client, ch, table, rows)
 		if err != nil {
-			_ = s.db.RecordClickHouseFactRetry(context.Background(), table, payload, len(rows), err.Error())
+			s.recordFactRetry(table, payload, len(rows), err)
 		}
 	}()
 }
@@ -276,11 +276,11 @@ func (s *Server) emitFeedbackFact(fb store.LLMFeedback) {
 		"ingested_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), chFactInsertTimeout)
 		defer cancel()
 		payload, _, err := insertJSONEachRow(ctx, s.client, ch, table, []map[string]any{row})
 		if err != nil {
-			_ = s.db.RecordClickHouseFactRetry(context.Background(), table, payload, 1, err.Error())
+			s.recordFactRetry(table, payload, 1, err)
 		}
 	}()
 }
@@ -332,11 +332,11 @@ func (s *Server) emitSkillFact(run store.SkillRun) {
 		"ingested_at":   time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), chFactInsertTimeout)
 		defer cancel()
 		payload, _, err := insertJSONEachRow(ctx, s.client, ch, table, []map[string]any{row})
 		if err != nil {
-			_ = s.db.RecordClickHouseFactRetry(context.Background(), table, payload, 1, err.Error())
+			s.recordFactRetry(table, payload, 1, err)
 		}
 	}()
 }
@@ -520,49 +520,49 @@ func requestFactRow(rec store.LogRecord) map[string]any {
 		ipHash = audit.HashText(r.ClientIP)[:16]
 	}
 	return map[string]any{
-		"event_date":        ts.Format("2006-01-02"),
-		"event_time":        ts.Format(time.RFC3339Nano),
-		"request_id":        r.ID,
-		"trace_id":          r.TraceID,
-		"session_id":        r.SessionID,
-		"api_key_id":        r.APIKeyID,
-		"team":              "", // resolved at query time via api_key; kept blank to avoid a join here
-		"endpoint":          r.Endpoint,
-		"provider":          r.Provider,
-		"model":             r.Model,
-		"requested_model":   r.RequestedModel,
-		"stream":            b2i(r.Stream),
-		"status_code":       r.StatusCode,
-		"error_category":    errorCategory(r.StatusCode, r.Error),
-		"latency_ms":        r.LatencyMS,
-		"first_chunk_ms":    r.FirstChunkMS,
-		"prompt_tokens":     promptTokens,
-		"completion_tokens": completionTokens,
-		"cached_tokens":     cachedTokens,
-		"reasoning_tokens":  reasoningTokens,
-		"total_tokens":      totalTokens,
-		"cost_krw":          cost,
-		"currency":          currency,
-		"repo":              r.Repo,
-		"branch":            r.Branch,
-		"project":           r.Project,
-		"service":           r.Service,
-		"cost_center":       r.CostCenter,
-		"task_type":         r.TaskType,
-		"prompt_name":       r.PromptName,
-		"prompt_version":    r.PromptVersion,
+		"event_date":         ts.Format("2006-01-02"),
+		"event_time":         ts.Format(time.RFC3339Nano),
+		"request_id":         r.ID,
+		"trace_id":           r.TraceID,
+		"session_id":         r.SessionID,
+		"api_key_id":         r.APIKeyID,
+		"team":               "", // resolved at query time via api_key; kept blank to avoid a join here
+		"endpoint":           r.Endpoint,
+		"provider":           r.Provider,
+		"model":              r.Model,
+		"requested_model":    r.RequestedModel,
+		"stream":             b2i(r.Stream),
+		"status_code":        r.StatusCode,
+		"error_category":     errorCategory(r.StatusCode, r.Error),
+		"latency_ms":         r.LatencyMS,
+		"first_chunk_ms":     r.FirstChunkMS,
+		"prompt_tokens":      promptTokens,
+		"completion_tokens":  completionTokens,
+		"cached_tokens":      cachedTokens,
+		"reasoning_tokens":   reasoningTokens,
+		"total_tokens":       totalTokens,
+		"cost_krw":           cost,
+		"currency":           currency,
+		"repo":               r.Repo,
+		"branch":             r.Branch,
+		"project":            r.Project,
+		"service":            r.Service,
+		"cost_center":        r.CostCenter,
+		"task_type":          r.TaskType,
+		"prompt_name":        r.PromptName,
+		"prompt_version":     r.PromptVersion,
 		"prompt_fingerprint": r.PromptFingerprint,
-		"tool_count":        r.ToolCount,
-		"failover":          b2i(r.Failover),
-		"fallback_from":     r.FallbackFrom,
-		"fallback_reason":   r.FallbackReason,
-		"route_reason":      r.RouteReason,
-		"route_detail":      r.RouteDetail,
-		"complexity_score":  r.Complexity,
-		"language_top":      langTop,
-		"client_ip_hash":    ipHash,
-		"request_hash":      r.RequestHash,
-		"ingested_at":       time.Now().UTC().Format(time.RFC3339Nano),
+		"tool_count":         r.ToolCount,
+		"failover":           b2i(r.Failover),
+		"fallback_from":      r.FallbackFrom,
+		"fallback_reason":    r.FallbackReason,
+		"route_reason":       r.RouteReason,
+		"route_detail":       r.RouteDetail,
+		"complexity_score":   r.Complexity,
+		"language_top":       langTop,
+		"client_ip_hash":     ipHash,
+		"request_hash":       r.RequestHash,
+		"ingested_at":        time.Now().UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -937,4 +937,32 @@ func resyncFlushTicker(ticker *time.Ticker, current, next time.Duration) (time.D
 	}
 	ticker.Reset(next)
 	return next, true
+}
+
+const (
+	// chFactInsertTimeout bounds one ClickHouse fact insert.
+	chFactInsertTimeout = 30 * time.Second
+	// chFactRetryTimeout bounds the primary-store write that parks a failed
+	// insert for retry. It is short on purpose: this path runs only when
+	// ClickHouse is already unhealthy, which means many of these goroutines are
+	// taking it at once, and each one is holding a connection-pool slot.
+	chFactRetryTimeout = 5 * time.Second
+)
+
+// recordFactRetry parks a ClickHouse fact insert that failed so the retry worker
+// can pick it up.
+//
+// It exists to keep this write bounded. The emit goroutines are fire-and-forget
+// and untracked, so their count grows with request rate; a retry write on an
+// unbounded context would wait forever for a primary-store connection, and the
+// exact condition that triggers it -- ClickHouse being down -- is the condition
+// that makes many of them run at once. An unbounded error path inside an
+// otherwise-bounded goroutine turns a downstream outage into a goroutine and
+// connection leak in the gateway itself.
+func (s *Server) recordFactRetry(table, payload string, rows int, cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), chFactRetryTimeout)
+	defer cancel()
+	if err := s.db.RecordClickHouseFactRetry(ctx, table, payload, rows, cause.Error()); err != nil {
+		slog.Warn("park clickhouse fact for retry failed", "table", table, "rows", rows, "error", err)
+	}
 }

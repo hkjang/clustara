@@ -119,11 +119,11 @@ func (s *Server) shipMultiModelFacts(table string, rows []map[string]any) {
 	}
 	ch := s.chConf()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), chFactInsertTimeout)
 		defer cancel()
 		payload, _, err := insertJSONEachRow(ctx, s.client, ch, table, rows)
 		if err != nil {
-			_ = s.db.RecordClickHouseFactRetry(context.Background(), table, payload, len(rows), err.Error())
+			s.recordFactRetry(table, payload, len(rows), err)
 		}
 	}()
 }
