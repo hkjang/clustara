@@ -24,6 +24,10 @@ type serviceReconcileResult struct {
 	Metrics          []store.K8sMetricSample     `json:"-"`
 }
 
+// serviceReconcileScanBudget caps how many inventory rows one reconcile examines.
+// A var so a test can drive the truncation path without seeding thousands of rows.
+var serviceReconcileScanBudget = 5000
+
 func (s *Server) reconcileServiceInstance(ctx context.Context, in store.K8sServiceInstance, persist bool) (serviceReconcileResult, error) {
 	result := serviceReconcileResult{Instance: in, Components: []store.K8sServiceComponent{}, Endpoints: []store.K8sServiceEndpoint{}}
 	stack, err := s.db.GetK8sStack(ctx, in.StackID)
@@ -34,11 +38,30 @@ func (s *Server) reconcileServiceInstance(ctx context.Context, in store.K8sServi
 	if err != nil {
 		return result, fmt.Errorf("decode stack manifest: %w", err)
 	}
-	all, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{ClusterID: in.ClusterID, Namespace: in.Namespace, Limit: 5000})
+	// Deliberately unfiltered by kind: related-resource discovery below matches
+	// Pods and PVCs the manifest never declares, so narrowing the fetch would
+	// silently shrink what counts as part of the service. One row past the budget
+	// instead, so an over-full namespace is detectable.
+	all, err := s.db.ListK8sInventory(ctx, store.K8sInventoryFilter{
+		ClusterID: in.ClusterID, Namespace: in.Namespace, Limit: serviceReconcileScanBudget + 1,
+	})
 	if err != nil {
 		return result, err
 	}
+	truncated := len(all) > serviceReconcileScanBudget
+	if truncated {
+		all = all[:serviceReconcileScanBudget]
+	}
 	collectionStatus, inventoryObservedAt := serviceInventoryFreshness(all, time.Now().UTC(), time.Duration(s.monitoringInt(ctx, "k8s.services.inventory_stale_seconds", 900))*time.Second)
+	// Freshness catches inventory that is old; it cannot catch inventory that is
+	// incomplete. A truncated window drops declared components, which are then
+	// recorded "missing" and drive the health verdict down — and unlike the drift
+	// report, this one is written back onto the instance. Treating truncation as
+	// not-observed routes it through the same refusal the stale case already
+	// takes: health becomes "collecting" and the instance status is left alone.
+	if truncated && collectionStatus == "observed" {
+		collectionStatus = "partial"
+	}
 	actual := map[string]store.K8sInventoryItem{}
 	for _, it := range all {
 		actual[serviceResourceKey(it.Kind, it.Namespace, it.Name)] = it
