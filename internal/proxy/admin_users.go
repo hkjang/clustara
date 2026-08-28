@@ -424,14 +424,21 @@ func (s *Server) handleAuthUserUpdate(w http.ResponseWriter, r *http.Request, id
 			return
 		}
 	}
+	// Both conditions want the same thing — the account's existing access tokens
+	// must stop working now — so revoke once and report whether it happened.
+	// Discarding this error let a disabled account, or one demoted to a lower
+	// role, keep operating under its old token while the response said otherwise.
+	revokeReason := ""
 	if status == "disabled" {
-		// kill live sessions + refresh tokens so the account stops working now
-		_ = s.db.RevokeAuthSessionsForUser(r.Context(), id)
-	}
-	if (role != "" && role != user.Role) || p.TeamID != nil {
+		revokeReason = "account_disabled"
+	} else if (role != "" && role != user.Role) || p.TeamID != nil {
 		// Role and team are embedded in access tokens. Revoke all sessions so the new
 		// authorization boundary takes effect immediately instead of waiting for expiry.
-		_ = s.db.RevokeAuthSessionsForUser(r.Context(), id)
+		revokeReason = "authorization_changed"
+	}
+	sessionsRevoked := true
+	if revokeReason != "" {
+		sessionsRevoked = s.revokeSessionsAndReport(r, id, revokeReason)
 	}
 	if role != "" && role != user.Role {
 		_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "role_changed", ActorUserID: id, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: user.Role + " → " + role, CreatedAt: time.Now().UTC()})
@@ -441,7 +448,7 @@ func (s *Server) handleAuthUserUpdate(w http.ResponseWriter, r *http.Request, id
 	s.auditAdmin(r, "auth_user.update",
 		auditJSON(map[string]string{"id": id, "role": user.Role, "status": user.Status, "team": oldTeam}),
 		auditJSON(map[string]string{"id": id, "role": updated.Role, "status": updated.Status, "team": newTeam}))
-	writeJSON(w, http.StatusOK, map[string]any{"user": updated, "team_id": newTeam})
+	writeJSON(w, http.StatusOK, map[string]any{"user": updated, "team_id": newTeam, "sessions_revoked": sessionsRevoked})
 }
 
 func (s *Server) handleIPs(w http.ResponseWriter, r *http.Request) {

@@ -224,7 +224,7 @@ func (s *Server) provisionKeycloakUser(ctx context.Context, claims map[string]an
 	}
 	// 3) New user.
 	user := store.AuthUser{
-		ID:           "usr_" + audit.HashText("keycloak|"+kc.IssuerURL+"|"+sub)[:16],
+		ID:           "usr_" + audit.HashText("keycloak|" + kc.IssuerURL + "|" + sub)[:16],
 		Email:        firstNonEmpty(email, sub+"@sso.local"),
 		PasswordHash: "", // SSO-only account (no local password)
 		Name:         name,
@@ -322,8 +322,13 @@ func (s *Server) handleKeycloakBackchannelLogout(w http.ResponseWriter, r *http.
 			s.auditAuthEvent(r.Context(), "sso_backchannel_logout", users[0], "", "", "keycloak sid="+sid+" sub="+sub)
 		}
 	} else if id, found, _ := s.db.AuthIdentityBySubject(r.Context(), "keycloak", s.keycloakConfig().IssuerURL, sub); found {
-		// No sid → log out every session for the subject.
-		_ = s.db.RevokeAuthSessionsForUser(r.Context(), id.UserID)
+		// No sid → log out every session for the subject. A 200 here tells the OP
+		// the logout is done and it will not retry, so a failed revocation must
+		// answer 500 instead of silently leaving the sessions alive.
+		if !s.revokeSessionsAndReport(r, id.UserID, "sso_backchannel_logout") {
+			writeOpenAIError(w, http.StatusInternalServerError, "session revocation failed", "server_error", "logout_revocation_failed")
+			return
+		}
 		s.auditAuthEvent(r.Context(), "sso_backchannel_logout", id.UserID, "", "", "keycloak sub="+sub)
 	}
 	w.WriteHeader(http.StatusOK)
@@ -450,14 +455,14 @@ func (s *Server) handleKeycloakConfigSave(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var p struct {
-		Enabled         bool     `json:"enabled"`
-		IssuerURL       string   `json:"issuer_url"`
-		ClientID        string   `json:"client_id"`
-		ClientSecret    *string  `json:"client_secret"` // nil/omitted = keep existing; "" = clear
-		RedirectURI     string   `json:"redirect_uri"`
-		Scopes          []string `json:"scopes"`
-		DefaultRole     string   `json:"default_role"`
-		RoleClaim       string   `json:"role_claim"`
+		Enabled         bool              `json:"enabled"`
+		IssuerURL       string            `json:"issuer_url"`
+		ClientID        string            `json:"client_id"`
+		ClientSecret    *string           `json:"client_secret"` // nil/omitted = keep existing; "" = clear
+		RedirectURI     string            `json:"redirect_uri"`
+		Scopes          []string          `json:"scopes"`
+		DefaultRole     string            `json:"default_role"`
+		RoleClaim       string            `json:"role_claim"`
 		GroupClaim      string            `json:"group_claim"`
 		AllowLocalLogin bool              `json:"allow_local_login"`
 		RoleMap         map[string]string `json:"role_map"` // nil/omitted = keep existing; {} = reset to defaults
@@ -590,4 +595,3 @@ func strClaim(claims map[string]any, key string) string {
 	}
 	return ""
 }
-

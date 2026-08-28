@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"unicode"
@@ -88,9 +89,17 @@ func (s *Server) handleAuthPasswordChange(w http.ResponseWriter, r *http.Request
 		writeOpenAIError(w, http.StatusInternalServerError, "비밀번호를 변경하지 못했습니다", "server_error", "password_change_failed")
 		return
 	}
-	_ = s.db.RevokeAuthSessionsForUser(r.Context(), user.ID)
-	s.auditAuthEvent(r.Context(), "password_changed", user.ID, "", claims.TeamID, "self-service; all sessions revoked")
-	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "reauthentication_required": true, "sessions_revoked": true})
+	// The password change is already committed, so this stays a 200 — but the
+	// response and the audit trail must report what actually happened. Claiming
+	// "sessions_revoked" without checking is how a user who just changed a
+	// compromised password is told the attacker was logged out when they were not.
+	revoked := s.revokeSessionsAndReport(r, user.ID, "password_change")
+	detail := "self-service; all sessions revoked"
+	if !revoked {
+		detail = "self-service; SESSION REVOCATION FAILED — existing sessions may still be active"
+	}
+	s.auditAuthEvent(r.Context(), "password_changed", user.ID, "", claims.TeamID, detail)
+	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "reauthentication_required": true, "sessions_revoked": revoked})
 }
 
 // POST /admin/users/{id}/password-reset {temporary_password}. Full administrators only. The
@@ -129,10 +138,14 @@ func (s *Server) handleAdminUserPasswordReset(w http.ResponseWriter, r *http.Req
 		writeOpenAIError(w, http.StatusInternalServerError, "비밀번호를 초기화하지 못했습니다", "server_error", "password_reset_failed")
 		return
 	}
-	_ = s.db.RevokeAuthSessionsForUser(r.Context(), user.ID)
-	s.auditAdmin(r, "auth_user.password_reset", user.ID, auditJSON(map[string]any{"must_change_password": true, "sessions_revoked": true}))
-	s.auditAuthEvent(r.Context(), "password_reset", user.ID, "", "", "administrator reset; all sessions revoked")
-	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "must_change_password": true, "sessions_revoked": true})
+	revoked := s.revokeSessionsAndReport(r, user.ID, "password_reset")
+	detail := "administrator reset; all sessions revoked"
+	if !revoked {
+		detail = "administrator reset; SESSION REVOCATION FAILED — existing sessions may still be active"
+	}
+	s.auditAdmin(r, "auth_user.password_reset", user.ID, auditJSON(map[string]any{"must_change_password": true, "sessions_revoked": revoked}))
+	s.auditAuthEvent(r.Context(), "password_reset", user.ID, "", "", detail)
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "must_change_password": true, "sessions_revoked": revoked})
 }
 
 // withPasswordChangeGate restricts reset accounts to the credential-change flow until the
@@ -151,4 +164,23 @@ func (s *Server) withPasswordChangeGate(next http.Handler) http.Handler {
 		}
 		writeOpenAIError(w, http.StatusForbidden, "비밀번호를 먼저 변경해야 합니다", "permission_error", "password_change_required")
 	})
+}
+
+// revokeSessionsAndReport revokes every session for userID and reports whether it
+// actually happened, so callers can tell the truth instead of assuming.
+//
+// Session revocation is the only thing that stops an already-issued access token:
+// password_changed_at is stored and displayed but never consulted during
+// validation, so there is no second line of defence behind this call. A failure
+// that is discarded leaves a live session while the API response and the audit
+// record both say it was revoked — the one combination an incident responder
+// cannot recover from, because the trail is wrong.
+func (s *Server) revokeSessionsAndReport(r *http.Request, userID, reason string) bool {
+	if err := s.db.RevokeAuthSessionsForUser(r.Context(), userID); err != nil {
+		slog.Error("revoke sessions failed; existing sessions remain active",
+			"user_id", userID, "reason", reason, "error", err)
+		s.auditAuthEvent(r.Context(), "session_revocation_failed", userID, "", "", reason+": "+err.Error())
+		return false
+	}
+	return true
 }

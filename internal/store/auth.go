@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -140,14 +141,27 @@ func (s *SQLStore) UpdateAuthUserRoleStatus(ctx context.Context, id, role, statu
 }
 
 // RevokeAuthSessionsForUser revokes every active session for one user — used when
-// an account is deactivated so its access tokens stop working immediately.
+// an account is deactivated, its role changes, or its password is changed, so its
+// access tokens stop working immediately.
+//
+// The auth_sessions update is the authoritative one and its failure is returned:
+// rotateRefreshToken re-checks AuthSessionActive before minting anything, so a
+// revoked session cannot be refreshed even if a refresh row survives. The
+// refresh_tokens update is therefore defence in depth — its failure is logged
+// rather than returned, so that a cleanup problem is never reported as "the
+// sessions are still live". Deliberately not one transaction: rolling back would
+// un-revoke sessions that were already killed, which is the wrong direction to
+// fail for a revocation.
 func (s *SQLStore) RevokeAuthSessionsForUser(ctx context.Context, userID string) error {
 	now := formatTime(time.Now().UTC())
 	if _, err := s.db.ExecContext(ctx, s.bind(`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`), now, userID); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, s.bind(`UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`), now, userID)
-	return err
+	if _, err := s.db.ExecContext(ctx, s.bind(`UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`), now, userID); err != nil {
+		slog.Warn("revoke refresh tokens failed; sessions are revoked so refresh is already blocked",
+			"user_id", userID, "error", err)
+	}
+	return nil
 }
 
 func (s *SQLStore) UpsertAuthTeam(ctx context.Context, team AuthTeam) error {
