@@ -325,11 +325,36 @@ func (r *Runner) flushLoop(ctx context.Context) error {
 				r.flushEvents(ctx, nil)
 			}
 		case <-ctx.Done():
-			if len(pending) > 0 {
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), r.cfg.RequestTimeout)
-				r.flushEvents(shutdownCtx, pending)
-				cancel()
+			// Drain the channel, not just what has already been batched. The
+			// watch goroutines share this context, so they have stopped
+			// producing; whatever is still buffered in r.events was observed
+			// and taken off the watch stream but never sent, and the buffer
+			// holds QueueSize (2000 by default) of them. Dropping that loses
+			// real cluster transitions on every agent restart — and agents
+			// restart on every node drain and upgrade.
+			//
+			// Draining costs nothing when the network is down: flushEvents
+			// falls back to the on-disk offline queue, which replays on the
+			// next start. The whole drain shares one deadline so shutdown
+			// still fits inside the pod's termination grace period.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), r.cfg.RequestTimeout)
+			draining := true
+			for draining {
+				select {
+				case ev := <-r.events:
+					pending = append(pending, ev)
+					if len(pending) >= r.cfg.MaxBatchSize {
+						r.flushEvents(shutdownCtx, pending)
+						pending = make([]queuedEvent, 0, r.cfg.MaxBatchSize)
+					}
+				default:
+					draining = false
+				}
 			}
+			if len(pending) > 0 {
+				r.flushEvents(shutdownCtx, pending)
+			}
+			cancel()
 			return nil
 		}
 	}
