@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -146,6 +147,10 @@ func (s *Server) handleK8sStackByID(w http.ResponseWriter, r *http.Request) {
 
 // handleK8sStackDrift compares a saved stack's declared resources against the live inventory.
 // GET /admin/k8s/stacks/{id}/drift
+// driftScanBudget caps how many inventory rows one drift comparison examines. A
+// var so a test can drive the truncation path without seeding thousands of rows.
+var driftScanBudget = 5000
+
 func (s *Server) handleK8sStackDrift(w http.ResponseWriter, r *http.Request, id string) {
 	st, err := s.db.GetK8sStack(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -161,19 +166,61 @@ func (s *Server) handleK8sStackDrift(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	plan := analyzer.AnalyzeStackManifest(docs, nil) // resources only; policies not needed for drift
-	inventory, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: st.ClusterID, Limit: 5000})
+
+	// Drift is decided by absence: a declared resource that is not in the fetched
+	// inventory is reported "missing", and Synced is false whenever any is. Both
+	// inputs to that judgement were unguarded.
+	//
+	// The inventory error was discarded, so a failed fetch produced an empty
+	// inventory and reported every declared resource as missing — a database
+	// problem rendered as "the whole stack is gone". And the fetch took 5000 rows
+	// of any kind ordered by updated_at, so on a busy cluster a stack's
+	// long-stable resources fall outside the window and read as missing. The
+	// remediation an operator reaches for on this screen is to re-apply the
+	// manifest, so a false "missing" provokes a real write to the cluster.
+	declaredKinds := map[string]bool{}
+	for _, res := range plan.Resources {
+		if k := strings.TrimSpace(res.Kind); k != "" {
+			declaredKinds[k] = true
+		}
+	}
+	kinds := make([]string, 0, len(declaredKinds))
+	for k := range declaredKinds {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	inventory, invErr := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: st.ClusterID, Kinds: kinds, Limit: driftScanBudget + 1,
+	})
+	if invErr != nil {
+		writeOpenAIError(w, http.StatusInternalServerError,
+			"인벤토리를 조회하지 못해 드리프트를 판정할 수 없습니다: "+invErr.Error(),
+			"server_error", "k8s_inventory_failed")
+		return
+	}
+	truncated := len(inventory) > driftScanBudget
+	if truncated {
+		inventory = inventory[:driftScanBudget]
+	}
+	scan := map[string]any{"status": "checked", "resources": len(inventory)}
+	if truncated {
+		scan = map[string]any{
+			"status": "partial", "resources": len(inventory),
+			"reason": "인벤토리가 상한을 초과해 일부만 조회했습니다. 드리프트는 부재로 판정하므로 '누락'은 실제로 존재하는 리소스일 수 있습니다. 재적용 전에 확인하세요.",
+		}
+	}
 	if r.URL.Query().Get("fields") == "true" {
 		// Field-level drift (CLU-REQ-07): image, replicas, env, resources, probes, labels, annotations.
 		fieldReport := analyzer.DetectStackFieldDrift(docs, st.Namespace, inventory)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"stack_id": id, "cluster_id": st.ClusterID, "field_drift": fieldReport,
+			"stack_id": id, "cluster_id": st.ClusterID, "field_drift": fieldReport, "scan": scan,
 			"note": "선언된 매니페스트와 실제 클러스터 객체를 필드 단위(image·replicas·env·resources·probe·label·annotation)로 비교합니다.",
 		})
 		return
 	}
 	report := analyzer.DetectStackDrift(plan.Resources, st.Namespace, inventory)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"stack_id": id, "cluster_id": st.ClusterID, "drift": report,
+		"stack_id": id, "cluster_id": st.ClusterID, "drift": report, "scan": scan,
 		"note": "선언된 리소스가 클러스터 인벤토리에 존재하는지(존재/누락) 비교합니다. 필드 단위 diff는 ?fields=true 또는 변경 타임라인/Diff를 참고하세요.",
 	})
 }
