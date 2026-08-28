@@ -217,3 +217,33 @@ func TestOwnerPromotionDoesNotElevateTheKey(t *testing.T) {
 		t.Fatalf("role = %q; promoting the owner must not elevate an existing key", authCtx.Role)
 	}
 }
+
+// The consequence the parser guard exists for, at the gate that matters. An
+// api_keys row whose expires_at cannot be parsed used to read as "no expiry",
+// because zero is the sentinel for absent — so corrupt data produced a key with
+// an unlimited lifetime.
+func TestAPIKeyWithAnUnreadableExpiryIsRefused(t *testing.T) {
+	srv, db := newSSOTestServer(t)
+	const rawKey = "pcg_test_corrupt_expiry"
+	mustCreateAPIKey(t, db, "ak_corrupt", "", rawKey)
+
+	if _, _, ok := srv.authenticateProxyContext(requestWithKey(t, rawKey)); !ok {
+		t.Fatal("the key should authenticate before its expiry is corrupted")
+	}
+
+	corruptAPIKeyExpiry(t, db, "ak_corrupt")
+
+	if _, _, ok := srv.authenticateProxyContext(requestWithKey(t, rawKey)); ok {
+		t.Fatal("a key whose expires_at cannot be parsed still authenticates: an unreadable timestamp " +
+			"read as \"never expires\", so corrupt data granted an unlimited lifetime")
+	}
+}
+
+// corruptAPIKeyExpiry writes an expires_at the parser cannot read, the way an
+// older writer or a manual fix in another format would.
+func corruptAPIKeyExpiry(t *testing.T, db *store.SQLStore, id string) {
+	t.Helper()
+	if err := db.SetAPIKeyExpiryRaw(context.Background(), id, "2026-08-29 05:54:00+00"); err != nil {
+		t.Fatal(err)
+	}
+}

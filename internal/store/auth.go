@@ -521,6 +521,22 @@ func formatOptionalTime(value time.Time) string {
 	return formatTime(value)
 }
 
+// unparseableTimestamp stands in for a stored timestamp that is present but
+// cannot be read. It is deliberately not the zero time: zero means "absent", and
+// for the expiry columns absent means "never expires".
+//
+// Returning zero for a corrupt value therefore turned unreadable data into an
+// unlimited lifetime — an api key, a session, a security-ingest key or a terminal
+// grant whose expires_at could not be parsed simply stopped expiring, at the
+// gates in server.go, admin_security_ingest_auth.go and
+// admin_k8s_terminal_stream.go. A far-past instant fails those same checks
+// closed with no call-site changes, and shows up in any view as an obviously
+// wrong 1970 date rather than as a blank.
+var unparseableTimestamp = time.Unix(0, 0).UTC()
+
+// parseOptionalTime reads a stored timestamp. An empty value is absent and
+// returns the zero time; a value that is present but unreadable returns
+// unparseableTimestamp, which reads as long expired rather than as absent.
 func parseOptionalTime(raw string) time.Time {
 	if raw == "" {
 		return time.Time{}
@@ -531,5 +547,25 @@ func parseOptionalTime(raw string) time.Time {
 	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
 		return parsed
 	}
-	return time.Time{}
+	slog.Warn("stored timestamp could not be parsed; treating it as long expired rather than as absent",
+		"value", truncateForLog(raw))
+	return unparseableTimestamp
+}
+
+// truncateForLog keeps a malformed value short enough to log without turning a
+// corrupt row into an unbounded log line.
+func truncateForLog(raw string) string {
+	const max = 64
+	if len(raw) <= max {
+		return raw
+	}
+	return raw[:max] + "…"
+}
+
+// SetAPIKeyExpiryRaw writes expires_at verbatim. It exists for tests that need a
+// value the parser cannot read, which is how a row written by an older version
+// or repaired by hand in another format would look.
+func (s *SQLStore) SetAPIKeyExpiryRaw(ctx context.Context, id, raw string) error {
+	_, err := s.db.ExecContext(ctx, s.bind(`UPDATE api_keys SET expires_at = ? WHERE id = ?`), raw, id)
+	return err
 }

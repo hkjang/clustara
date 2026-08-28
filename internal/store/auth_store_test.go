@@ -212,7 +212,16 @@ func TestAuthStoreUserTeamTokenAuditAndAPIKeyLifecycle(t *testing.T) {
 	if values := decodeStringList(`not-json`); len(values) != 0 {
 		t.Fatalf("invalid string list should decode empty: %+v", values)
 	}
-	if formatOptionalTime(time.Time{}) != "" || parseOptionalTime("bad").IsZero() == false || parseOptionalTime(now.Format(time.RFC3339)).IsZero() {
-		t.Fatal("optional time helper mismatch")
+	if formatOptionalTime(time.Time{}) != "" {
+		t.Fatal("the zero time must format as an empty string")
+	}
+	// "bad" used to parse to the zero time, and zero is the sentinel for absent —
+	// which the expiry gates read as "never expires". It now reads as long
+	// expired; TestUnparseableTimestampReadsAsExpiredNotAbsent covers the detail.
+	if parseOptionalTime("bad").IsZero() {
+		t.Fatal("an unreadable timestamp must not read as absent")
+	}
+	if parseOptionalTime(now.Format(time.RFC3339)).IsZero() {
+		t.Fatal("a valid timestamp must parse")
 	}
 }
