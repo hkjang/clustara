@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.237"
+const AppVersion = "v0.9.238"
 
 type Server struct {
 	cfg            config.Config
@@ -1380,6 +1380,13 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Both branches enqueue detached. The dedupe marker's only reader is this
+		// defer, keyed on this handler's request id, so by the time we get here
+		// nothing can ever consume a new one: s.enqueue would store a marker that
+		// lives for the rest of the process. Every request blocked after the audit
+		// record was built — the per-request cost cap, governance, the cost guard —
+		// left one behind, and rejected requests are what a misconfigured or
+		// hostile client produces in volume.
 		meta := rc.meta
 		if meta.Request.ID != "" {
 			if _, logged := s.loggedRequests.LoadAndDelete(meta.Request.ID); !logged {
@@ -1391,7 +1398,7 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 				if meta.Request.Error == "" {
 					meta.Request.Error = "pipeline_blocked"
 				}
-				s.enqueue(meta)
+				s.enqueueDetached(meta)
 			}
 		} else {
 			traceID := rc.traceID
@@ -1407,8 +1414,7 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			if meta.Request.Error == "" {
 				meta.Request.Error = "early_blocked"
 			}
-			s.enqueue(meta)
-			s.loggedRequests.Delete(meta.Request.ID)
+			s.enqueueDetached(meta)
 		}
 	}()
 

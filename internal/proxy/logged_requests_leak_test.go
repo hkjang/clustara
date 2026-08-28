@@ -1,74 +1,160 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"clustara/internal/config"
 	"clustara/internal/store"
 )
 
-func countLoggedRequestMarkers(s *Server) int {
+// loggedRequests is a dedupe marker whose only reader is handleOpenAI's own
+// defer, keyed on that handler's request id. Once the defer has run, nothing can
+// ever consume the entry again.
+//
+// The defer's else-branch knows this and deletes the marker after enqueueing.
+// The first branch does not — and s.enqueue() stores it. So every request that
+// reaches the defer already blocked (quota, governance, model allowlist, cost
+// guard, kill switch) leaves a permanent entry, one per rejected request, for the
+// lifetime of the process. Rejected requests are exactly what a misconfigured or
+// hostile client produces in volume.
+func TestBlockedRequestsDoNotLeakDedupeMarkers(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer upstream.Close()
+
+	srv, db, proxy := newLeakTestProxy(t, upstream.URL)
+
+	// A per-request cost cap of a fraction of a KRW. That check runs after
+	// rc.meta is assigned, which is what puts the defer on its first branch --
+	// the one that re-stores the marker. The model-allowlist block, by contrast,
+	// fires before the record exists and takes the else-branch, which deletes.
+	const rawKey = "pcg_leak_probe"
+	if err := db.UpsertAPIKey(context.Background(), store.APIKeyRecord{
+		ID: "ak_leak", Name: "leak", KeyHash: hashProxyKey(rawKey), Status: "active",
+		Role: "developer", Scopes: []string{"chat:completion"},
+		BudgetLimitKRW: 0.000001,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const blocked = 5
+	for i := 0; i < blocked; i++ {
+		body, _ := json.Marshal(map[string]any{
+			"model":    "test-model",
+			"messages": []map[string]string{{"role": "user", "content": "hi"}},
+		})
+		req, _ := http.NewRequest(http.MethodPost, proxy.URL+"/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+rawKey)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 400 {
+			t.Fatalf("request %d was not blocked (status %d); the test needs a request that is "+
+				"rejected after the audit record is built", i, resp.StatusCode)
+		}
+	}
+
+	if n := countLoggedRequests(srv); n != 0 {
+		t.Fatalf("%d dedupe markers left behind by %d blocked requests. Nothing can consume them: the "+
+			"only reader is the defer that just finished, so the map grows without bound for every "+
+			"rejected request the gateway sees", n, blocked)
+	}
+}
+
+func countLoggedRequests(s *Server) int {
 	n := 0
-	s.loggedRequests.Range(func(any, any) bool {
+	s.loggedRequests.Range(func(_, _ any) bool {
 		n++
 		return true
 	})
 	return n
 }
 
-// loggedRequests is a dedupe marker that only handleOpenAI's deferred fallback
-// consumes, and it matches on the request ID that handler is tracking. An MCP
-// tool call mints its own ID, so a marker stored for it can never be read — it
-// just accumulates for the lifetime of the process.
-func TestMCPCallLoggingDoesNotAccumulateDedupeMarkers(t *testing.T) {
+func newLeakTestProxy(t *testing.T, upstreamURL string) (*Server, *store.SQLStore, *httptest.Server) {
+	t.Helper()
 	db := openTestStore(t)
-	defer db.Close()
-	logger := store.NewAsyncLogger(db, 256, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	t.Cleanup(func() { db.Close() })
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
 	logger.Start()
-	defer logger.Stop(context.Background())
+	t.Cleanup(func() { logger.Stop(context.Background()) })
 
-	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	cfg := config.Config{
+		ListenAddr: ":0",
+		Upstream:   config.UpstreamConfig{Provider: "test", BaseURL: upstreamURL, APIKey: "up", Timeout: 5 * time.Second},
+		Database:   config.DatabaseConfig{Driver: "sqlite"},
+		Logging:    config.LoggingConfig{ResponseMaxBytes: 4096, QueueSize: 32},
+		// Pricing must be present or the cost estimate is not "priced" and the
+		// per-request cap never engages.
+		Pricing: map[string]config.ModelPrice{"test-model": {InputKRWPer1M: 1000, OutputKRWPer1M: 2000}},
+	}
+	server, err := NewServer(cfg, db, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	for i := 0; i < 50; i++ {
-		server.logMCPCall(req, "key-1", "files", "read", json.RawMessage(`{}`), false, 200, 5)
-	}
-
-	if leaked := countLoggedRequestMarkers(server); leaked != 0 {
-		t.Fatalf("MCP tool calls left %d dedupe markers behind; they are never read or deleted", leaked)
-	}
+	proxy := httptest.NewServer(server.Routes())
+	t.Cleanup(proxy.Close)
+	return server, db, proxy
 }
 
-// The /v1 path still needs the marker: it is what stops handleOpenAI's deferred
-// fallback from logging a request the pipeline already recorded.
-func TestPipelineEnqueueStillMarksRequestsAsLogged(t *testing.T) {
-	db := openTestStore(t)
-	defer db.Close()
-	logger := store.NewAsyncLogger(db, 256, filepath.Join(t.TempDir(), "fallback.ndjson"))
-	logger.Start()
-	defer logger.Stop(context.Background())
+// The marker still has to do its real job: a request that completes normally is
+// logged once by the pipeline, and the defer must not log it a second time.
+func TestSuccessfulRequestIsLoggedExactlyOnce(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))
+	}))
+	defer upstream.Close()
 
-	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	srv, db, proxy := newLeakTestProxy(t, upstream.URL)
+	const rawKey = "pcg_once_probe"
+	if err := db.UpsertAPIKey(context.Background(), store.APIKeyRecord{
+		ID: "ak_once", Name: "once", KeyHash: hashProxyKey(rawKey), Status: "active",
+		Role: "developer", Scopes: []string{"chat:completion"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "test-model",
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	req, _ := http.NewRequest(http.MethodPost, proxy.URL+"/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("request failed: %d", resp.StatusCode)
+	}
 
-	server.enqueue(store.LogRecord{Request: store.RequestLog{ID: "req-1"}})
-	if _, marked := server.loggedRequests.Load("req-1"); !marked {
-		t.Fatal("enqueue must mark a tracked /v1 request as logged")
+	waitFor(t, 3*time.Second, func() bool {
+		rows, err := db.RecentRequests(context.Background(), store.RequestFilter{Limit: 10})
+		return err == nil && len(rows) >= 1
+	})
+	rows, err := db.RecentRequests(context.Background(), store.RequestFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, loaded := server.loggedRequests.LoadAndDelete("req-1"); !loaded {
-		t.Fatal("the marker must be consumable exactly once")
+	if len(rows) != 1 {
+		t.Fatalf("a successful request was logged %d times; the dedupe marker must still suppress the "+
+			"defer's fallback record", len(rows))
 	}
-	if got := countLoggedRequestMarkers(server); got != 0 {
-		t.Fatalf("markers remaining after consumption = %d, want 0", got)
+	if n := countLoggedRequests(srv); n != 0 {
+		t.Fatalf("%d markers left after a successful request", n)
 	}
 }
