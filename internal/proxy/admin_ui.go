@@ -20595,7 +20595,11 @@ const adminHTML = `<!doctype html>
       const [kill, alerts, cost, policiesResp, secretResp, policyResp, approvalResp, incidentsResp] = await Promise.all([
         api('/admin/kill-switch'),
         api('/admin/alerts'),
-        api('/admin/cost').catch(() => ({ enabled: false, threshold_krw: 0 })),
+        // A failed read used to render the guard as off with a 0 threshold, and the
+        // form below posts exactly those two fields. Saving from that state
+        // disables the guard and destroys its configured threshold, so when the
+        // real state is unknown the form is withheld rather than pre-filled.
+        api('/admin/cost').catch(e => unavailable(e, {})),
         api('/admin/policies').catch(() => ({ policies: [] })),
         api('/admin/security/secrets?window=24h&limit=80').catch(() => ({ secret_events: [], count: 0, filters: {} })),
         api('/admin/policies/decisions?window=24h&limit=80').catch(() => ({ policy_decisions: [], count: 0, filters: {} })),
@@ -20662,15 +20666,18 @@ const adminHTML = `<!doctype html>
       ) : '<div class="empty">발화 이력 없음</div>';
 
       const costCard = '<div style="padding:14px">' +
-        '<div class="kv">' +
-          row('상태', cost.enabled ? '<span class="status warn">가드 켜짐</span>' : '<span class="status">꺼짐</span>') +
-          row('임계값', money(cost.threshold_krw || 0) + ' <span class="muted">(예상 비용이 이 값을 넘으면 차단)</span>') +
-        '</div>' +
-        '<div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">' +
-          '<label style="display:flex; align-items:center; gap:6px; font-weight:700"><input type="checkbox" id="cost-enabled" ' + (cost.enabled ? 'checked' : '') + ' style="width:auto; height:auto; min-width:0"> 가드 사용</label>' +
-          '<input id="cost-threshold" type="number" min="0" step="100" value="' + (cost.threshold_krw || 0) + '" placeholder="임계값(KRW)" style="width:160px">' +
-          '<button id="cost-save" class="secondary" type="button">저장</button>' +
-        '</div>' +
+        (cost._unavailable
+          ? sectionLead('<strong>비용 가드 상태 불명:</strong> ' + escapeHTML(cost._unavailable) +
+              ' 현재 설정을 읽지 못했습니다. 이 상태에서 저장하면 실제 설정을 덮어쓰므로 편집 폼을 표시하지 않습니다.', '⚠', 'warn')
+          : '<div class="kv">' +
+              row('상태', cost.enabled ? '<span class="status warn">가드 켜짐</span>' : '<span class="status">꺼짐</span>') +
+              row('임계값', money(cost.threshold_krw || 0) + ' <span class="muted">(예상 비용이 이 값을 넘으면 차단)</span>') +
+            '</div>' +
+            '<div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">' +
+              '<label style="display:flex; align-items:center; gap:6px; font-weight:700"><input type="checkbox" id="cost-enabled" ' + (cost.enabled ? 'checked' : '') + ' style="width:auto; height:auto; min-width:0"> 가드 사용</label>' +
+              '<input id="cost-threshold" type="number" min="0" step="100" value="' + (cost.threshold_krw || 0) + '" placeholder="임계값(KRW)" style="width:160px">' +
+              '<button id="cost-save" class="secondary" type="button">저장</button>' +
+            '</div>') +
         '<div class="muted" style="margin-top:8px; font-size:12px">예상 비용이 임계값을 초과하면 HTTP 402 로 차단합니다. 클라이언트가 <code>X-Cost-Approve: 1</code> 헤더를 보내면 승인되어 통과합니다. 모든 chat 응답에는 <code>X-Estimated-Input-Tokens / X-Estimated-Output-Tokens / X-Estimated-Cost-KRW / X-Estimated-Latency-MS</code> 헤더가 붙습니다. 예상 출력 토큰은 모델별 최근 7일 평균(표본 부족 시 max_tokens 또는 기본 600).</div>' +
         '<div style="margin-top:12px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">' +
           '<label class="muted" style="font-size:12px">모델<br><input id="cp-model" placeholder="gpt-4.1" style="width:160px"></label>' +
@@ -20868,7 +20875,10 @@ const adminHTML = `<!doctype html>
       document.getElementById('approval-status').addEventListener('change', refreshApprovals);
       document.getElementById('policy-decision-form').addEventListener('submit', refreshPolicyDecisionEvents);
       document.getElementById('alert-form').addEventListener('submit', addAlert);
-      document.getElementById('cost-save').addEventListener('click', async () => {
+      // Absent when the current cost-guard settings could not be read: the form is
+      // withheld rather than pre-filled with defaults that a save would write back.
+      const costSaveBtn = document.getElementById('cost-save');
+      if (costSaveBtn) costSaveBtn.addEventListener('click', async () => {
         await api('/admin/cost', { method: 'POST', body: JSON.stringify({
           enabled: document.getElementById('cost-enabled').checked,
           threshold_krw: Number(document.getElementById('cost-threshold').value || 0),
