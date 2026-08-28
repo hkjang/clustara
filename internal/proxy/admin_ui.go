@@ -5198,12 +5198,13 @@ const adminHTML = `<!doctype html>
         api('/admin/timeseries?window=' + win + '&bucket=' + bucket),
         api('/admin/heatmap?window=' + heatWindow),
         api('/admin/requests?limit=20'),
-        api('/admin/anomalies?recent=6h&z=3').catch(() => ({ anomalies: [] })),
+        api('/admin/anomalies?recent=6h&z=3').catch(e => unavailable(e, { anomalies: [] })),
         api('/admin/ops/risk').catch(() => null),
       ]);
       const modelQuality = await api('/admin/models/quality?window=30d').catch(() => ({ models: [] }));
       const costAnomalies = await api('/admin/cost/anomalies?window=6h&min_repeats=5').catch(() => null);
       const anomalies = (anomalyResp && anomalyResp.anomalies) || [];
+      const anomaliesNotice = fetchNotice(anomalyResp, '이상 징후');
 
       const html =
         section('요약', kpiBlock(stats)) +
@@ -5224,7 +5225,7 @@ const adminHTML = `<!doctype html>
         section('모델별 코딩 품질 점수 (최근 30일)', modelQualityHTML(modelQuality.models || [])) +
         section('프로젝트별 비용 (최근 30일)', costAllocationPanel()) +
         (costAnomalies ? section('비용 이상탐지 (월말 예상 초과 · 세션 루프)', costAnomalyHTML(costAnomalies)) : '') +
-        section('이상 징후 (최근 6시간 vs 7일 기준선, |z| ≥ 3)', anomalyTable(anomalies)) +
+        section('이상 징후 (최근 6시간 vs 7일 기준선, |z| ≥ 3)', anomaliesNotice + anomalyTable(anomalies)) +
         section('시간대 히트맵 (Asia/Seoul, 최근 ' + heatWindow + ')', heatmapHTML(heat.cells || [])) +
         section('최근 호출 이력', requestsTable(recent.requests || []));
 
@@ -5646,6 +5647,17 @@ const adminHTML = `<!doctype html>
     // scanIncomplete reports whether a scan block means "nothing was concluded",
     // so an empty findings table can say that instead of "none found".
     function scanIncomplete(s) { return !!(s && s.status && s.status !== 'checked'); }
+
+    // unavailable marks a payload that came from a failed request rather than
+    // from the server. Views whose emptiness reads as a conclusion — no pending
+    // approvals, no budget breaches, no anomalies — must not present a fabricated
+    // empty result as the answer.
+    function unavailable(e, shape) { return Object.assign({}, shape, { _unavailable: (e && e.message) || '조회에 실패했습니다.' }); }
+    function fetchNotice(x, what) {
+      if (!x || !x._unavailable) return '';
+      return sectionLead('<strong>' + escapeHTML(what) + ' 조회 실패:</strong> ' + escapeHTML(x._unavailable) +
+        ' 아래 결과는 비어 있지만, 실제로 항목이 없다는 뜻이 아닙니다.', '⚠', 'warn');
+    }
 
     // ---------- LLM observability ----------
     const llmState = {
@@ -8855,7 +8867,7 @@ const adminHTML = `<!doctype html>
     async function renderQuotas() {
       const [r, br] = await Promise.all([
         api('/admin/quotas'),
-        api('/admin/budgets').catch(() => ({ budgets: [] }))
+        api('/admin/budgets').catch(e => unavailable(e, { budgets: [] }))
       ]);
       const usage = r.usage || [];
       const quotaRow = (u) => {
@@ -8905,7 +8917,7 @@ const adminHTML = `<!doctype html>
       const budgetTable = budgets.length ? (
         '<table><thead><tr><th>대상</th><th>이번 달 누적 / 월 예산</th><th>월말 예상 지출</th><th>소진 예측</th><th>메모</th><th>동작</th></tr></thead><tbody>' +
         budgets.map(budgetRow).join('') + '</tbody></table>'
-      ) : '<div class="empty">설정된 예산 없음</div>';
+      ) : '<div class="empty">' + (br._unavailable ? '예산을 조회하지 못했습니다. 예산이 없다는 뜻이 아닙니다.' : '설정된 예산 없음') + '</div>';
 
       const html = section('사용 한도 (Quota)',
         '<div class="card-body">' +
@@ -8942,7 +8954,7 @@ const adminHTML = `<!doctype html>
           '<input id="b-note" placeholder="메모">' +
           '<button type="submit">추가</button>' +
         '</form>' +
-        budgetTable + '</div>'
+        fetchNotice(br, '예산') + budgetTable + '</div>'
       );
       document.getElementById('view').innerHTML = html;
       document.getElementById('quota-form').addEventListener('submit', addQuota);
@@ -20587,7 +20599,7 @@ const adminHTML = `<!doctype html>
         api('/admin/policies').catch(() => ({ policies: [] })),
         api('/admin/security/secrets?window=24h&limit=80').catch(() => ({ secret_events: [], count: 0, filters: {} })),
         api('/admin/policies/decisions?window=24h&limit=80').catch(() => ({ policy_decisions: [], count: 0, filters: {} })),
-        api('/admin/approvals?status=pending&window=24h&limit=50').catch(() => ({ approvals: [], count: 0, filters: {} })),
+        api('/admin/approvals?status=pending&window=24h&limit=50').catch(e => unavailable(e, { approvals: [], count: 0, filters: {} })),
         api('/admin/incidents?window=7d').catch(() => ({ incidents: [] })),
       ]);
       const rules = alerts.rules || [];
@@ -20597,6 +20609,7 @@ const adminHTML = `<!doctype html>
       const secretEvents = secretResp.secret_events || [];
       const policyDecisions = policyResp.policy_decisions || [];
       const approvals = approvalResp.approvals || [];
+      const approvalsNotice = fetchNotice(approvalResp, '승인 대기');
       const incidents = incidentsResp.incidents || [];
 
       const killCard = '<div style="padding:14px"><div class="kv">' +
@@ -20722,7 +20735,7 @@ const adminHTML = `<!doctype html>
           '<button type="submit">조회</button>' +
         '</form>' +
         '<div class="muted" style="padding:0 12px 10px; font-size:12px">승인/거절 후 클라이언트는 <code>X-Governance-Approval-ID</code>로 같은 요청을 재전송합니다.</div>' +
-        '<div id="approval-results">' + approvalQueueTable(approvals, approvalResp) + '</div>';
+        approvalsNotice + '<div id="approval-results">' + approvalQueueTable(approvals, approvalResp) + '</div>';
 
       const policyCard =
         '<form class="inline-form" id="ai-policy-form" style="grid-template-columns: minmax(140px,1.2fr) 90px 90px minmax(120px,1fr) minmax(130px,1fr) minmax(130px,1fr) minmax(130px,1fr) 80px;">' +
@@ -25071,14 +25084,21 @@ const adminHTML = `<!doctype html>
         '<table><thead><tr><th>용어</th><th>매핑</th><th>설명</th><th>스키마</th><th></th></tr></thead><tbody>' + glossRows + '</tbody></table>'
         : '<div class="empty">업무 용어 사전 없음. 등록하면 사용자가 업무 언어로 질문할 때 매핑이 프롬프트에 주입됩니다.</div>';
       const featData = await api('/admin/text2sql/features').catch(() => ({ features: [] }));
-      const killState = await api('/admin/text2sql/kill-switch').catch(() => ({ disabled: false }));
+      // A failed read used to render disabled:false — the switch drawn as off
+      // and the service labelled 정상. The control is interactive from that
+      // display, so an operator whose kill switch is actually engaged sees
+      // "normal", and clicking the box turns the switch OFF mid-incident. When
+      // the real state is unknown, say so and refuse the toggle.
+      const killState = await api('/admin/text2sql/kill-switch').catch(e => unavailable(e, {}));
       const featRows = (featData.features || []).map(f =>
         '<tr><td><strong>' + escapeHTML(f.name) + '</strong><div class="muted">' + escapeHTML(f.description || '') + '</div></td>' +
         '<td><label class="switch"><input type="checkbox" onchange="toggleT2SFeature(\'' + escapeAttr(f.name) + '\', this.checked)"' + (f.enabled ? ' checked' : '') + '> ' + (f.enabled ? '<span class="status">ON</span>' : '<span class="muted">OFF</span>') + '</label></td></tr>'
       ).join('');
       const featTable = '<table><thead><tr><th>기능</th><th>상태</th></tr></thead><tbody>' +
         '<tr><td><strong>kill_switch</strong><div class="muted">Text2SQL 전체 즉시 중지 (장애·비용·보안 대응)</div></td>' +
-        '<td><label class="switch"><input type="checkbox" onchange="toggleT2SKill(this.checked)"' + (killState.disabled ? ' checked' : '') + '> ' + (killState.disabled ? '<span class="status error">중지됨</span>' : '<span class="status">정상</span>') + '</label></td></tr>' +
+        '<td>' + (killState._unavailable
+          ? '<span class="status error">상태 불명</span> <span class="muted" style="font-size:11px">' + escapeHTML(killState._unavailable) + ' — 실제 상태를 확인할 때까지 전환할 수 없습니다.</span>'
+          : '<label class="switch"><input type="checkbox" onchange="toggleT2SKill(this.checked)"' + (killState.disabled ? ' checked' : '') + '> ' + (killState.disabled ? '<span class="status error">중지됨</span>' : '<span class="status">정상</span>') + '</label>') + '</td></tr>' +
         featRows + '</tbody></table>';
       const riskData = await api('/admin/text2sql/risk-queue?window=7d&min_risk=50').catch(() => ({ queue: [] }));
       const riskQ = riskData.queue || [];
