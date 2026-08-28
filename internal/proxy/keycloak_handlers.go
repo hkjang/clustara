@@ -199,17 +199,33 @@ func (s *Server) provisionKeycloakUser(ctx context.Context, claims map[string]an
 		return ""
 	}
 
-	// 1) Existing linked identity → load + sync status. Only an explicit claim→role mapping
+	// 1) Existing linked identity → load + sync role. Only an explicit claim→role mapping
 	// changes the role; a default-fallback role must NOT overwrite the user's existing role
 	// (otherwise e.g. a super_admin whose IdP carries no mapped role gets demoted to the default).
 	if id, found, _ := s.db.AuthIdentityBySubject(ctx, "keycloak", kc.IssuerURL, sub); found {
 		if user, ok, _ := s.db.AuthUserByID(ctx, id.UserID); ok {
+			if authUserDisabled(user) {
+				return store.AuthUser{}, "", &keycloakError{"account is disabled"}
+			}
 			newRole := user.Role
 			if roleExplicit {
 				newRole = role
 			}
-			_ = s.db.UpdateAuthUserRoleStatus(ctx, user.ID, newRole, "active")
-			user.Role, user.Status = newRole, "active"
+			// Fill a blank status (legacy rows) but never overwrite an explicit
+			// one. This used to force "active" unconditionally, which silently
+			// reversed an administrator's disable: the disabled user clicked
+			// "sign in with SSO" and came back fully restored, role and all.
+			statusSync := ""
+			if strings.TrimSpace(user.Status) == "" {
+				statusSync = "active"
+				user.Status = "active"
+			}
+			if err := s.db.UpdateAuthUserRoleStatus(ctx, user.ID, newRole, statusSync); err != nil {
+				// Non-fatal: the login proceeds under the role already on the row.
+				slog.Warn("sso login: role sync failed", "user_id", user.ID, "error", err)
+			} else {
+				user.Role = newRole
+			}
 			eff := effectiveTeam(user.ID)
 			s.finishKeycloakLink(ctx, user.ID, sub, email, username, team)
 			return user, eff, nil
@@ -218,6 +234,9 @@ func (s *Server) provisionKeycloakUser(ctx context.Context, claims map[string]an
 	// 2) Existing local user with same email → merge by linking.
 	if email != "" {
 		if user, found, _ := s.db.AuthUserByEmail(ctx, email); found {
+			if authUserDisabled(user) {
+				return store.AuthUser{}, "", &keycloakError{"account is disabled"}
+			}
 			eff := effectiveTeam(user.ID)
 			s.finishKeycloakLink(ctx, user.ID, sub, email, username, team)
 			return user, eff, nil
@@ -634,4 +653,17 @@ func ssoLogoutDetail(sessionRevoked bool) string {
 		return "keycloak; session revoked"
 	}
 	return "keycloak; SESSION REVOCATION FAILED — the access token remains valid until it expires"
+}
+
+// authUserDisabled reports whether an account carries an explicit administrative
+// disable.
+//
+// Local login refuses anything that is not exactly "active"; SSO login cannot use
+// that rule, because rows predating the status column carry an empty value and
+// would be locked out of the only sign-in method they have. So the SSO gate keys
+// on the explicit "disabled" instead — the value an administrator sets, and the
+// one that also revokes the account's live sessions. The IdP authenticating
+// someone means they exist there; it does not overrule that decision.
+func authUserDisabled(user store.AuthUser) bool {
+	return strings.EqualFold(strings.TrimSpace(user.Status), "disabled")
 }
