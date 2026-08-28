@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -457,4 +458,23 @@ func lowerSet(ss []string) map[string]bool {
 		out[strings.ToLower(s)] = true
 	}
 	return out
+}
+
+// SecurityRelevantKinds lists the resource kinds AnalyzeSecurity and AnalyzeTLS
+// read, so a caller can spend its row budget on those instead of on kinds the
+// analysis never looks at.
+//
+// This matters more here than for a plain list. The NetworkPolicy finding is a
+// set difference over the fetched rows — namespaces with a workload but no
+// NetworkPolicy — so a window that happens to include a namespace's workload and
+// exclude its NetworkPolicy does not merely miss a finding, it reports one that
+// is not there.
+func SecurityRelevantKinds() []string {
+	kinds := make([]string, 0, len(workloadKinds)+4)
+	for kind := range workloadKinds {
+		kinds = append(kinds, kind)
+	}
+	kinds = append(kinds, "Role", "ClusterRole", "NetworkPolicy", "Secret")
+	sort.Strings(kinds)
+	return kinds
 }

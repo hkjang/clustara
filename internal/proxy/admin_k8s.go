@@ -573,22 +573,52 @@ func (s *Server) handleK8sSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 2000})
+	// Fetch only the kinds this analysis reads, and ask for one row past the
+	// budget so truncation is detectable.
+	//
+	// The old fetch took 2000 rows of any kind ordered by updated_at. That is not
+	// just an under-count here: the NetworkPolicy finding is a set difference over
+	// the fetched rows, so a window holding a namespace's workload but not its
+	// NetworkPolicy reports a gap that does not exist. A partial scan can invent
+	// findings, not only miss them, which is why it is called out below rather
+	// than merely flagged.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: clusterID,
+		Kinds:     analyzer.SecurityRelevantKinds(),
+		Limit:     securityScanBudget + 1,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
+	}
+	truncated := len(items) > securityScanBudget
+	if truncated {
+		items = items[:securityScanBudget]
 	}
 	report := analyzer.AnalyzeSecurity(items)
 	actions, _ := s.db.ListK8sActionRequests(r.Context(), store.K8sActionFilter{ClusterID: clusterID, Limit: 1000})
 	anomalies := analyzer.DetectActionAnomalies(actions, time.Now().UTC(), time.Hour, 5)
 	tls := analyzer.AnalyzeTLS(items, time.Now().UTC(), 30)
+	scan := map[string]any{"status": "checked", "resources": len(items)}
+	if truncated {
+		scan = map[string]any{
+			"status": "partial", "resources": len(items),
+			"reason": "검사 대상이 상한을 초과해 일부만 점검했습니다. 네임스페이스 단위 판정(NetworkPolicy 공백)은 부분 조회에서 실제와 다를 수 있으므로 이 결과만으로 판단하지 마세요.",
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report":          report,
 		"audit_anomalies": anomalies,
 		"tls":             tls,
+		"scan":            scan,
 		"note":            "Pod Security Standards 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백을 인벤토리로 점검한 결과입니다.",
 	})
 }
+
+// securityScanBudget caps how many security-relevant resources one posture run
+// examines. A var so a test can drive the truncation path without seeding
+// thousands of rows.
+var securityScanBudget = 8000
 
 func (s *Server) handleK8sConnectivity(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
