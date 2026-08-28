@@ -83,9 +83,23 @@ func countLoggedRequests(s *Server) int {
 }
 
 func newLeakTestProxy(t *testing.T, upstreamURL string) (*Server, *store.SQLStore, *httptest.Server) {
+	srv, db, proxy, _ := newLeakTestProxyAt(t, upstreamURL)
+	return srv, db, proxy
+}
+
+// newLeakTestProxyAt also returns the store's file path, so a test can read
+// columns no store accessor projects.
+func newLeakTestProxyAt(t *testing.T, upstreamURL string) (*Server, *store.SQLStore, *httptest.Server, string) {
 	t.Helper()
-	db := openTestStore(t)
+	dbPath := filepath.Join(t.TempDir(), "gateway.db")
+	db, err := store.Open(context.Background(), config.DatabaseConfig{Driver: "sqlite", DSN: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { db.Close() })
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
 	logger.Start()
 	t.Cleanup(func() { logger.Stop(context.Background()) })
@@ -99,13 +113,13 @@ func newLeakTestProxy(t *testing.T, upstreamURL string) (*Server, *store.SQLStor
 		// per-request cap never engages.
 		Pricing: map[string]config.ModelPrice{"test-model": {InputKRWPer1M: 1000, OutputKRWPer1M: 2000}},
 	}
-	server, err := NewServer(cfg, db, logger, nil)
-	if err != nil {
-		t.Fatal(err)
+	server, serr := NewServer(cfg, db, logger, nil)
+	if serr != nil {
+		t.Fatal(serr)
 	}
 	proxy := httptest.NewServer(server.Routes())
 	t.Cleanup(proxy.Close)
-	return server, db, proxy
+	return server, db, proxy, dbPath
 }
 
 // The marker still has to do its real job: a request that completes normally is

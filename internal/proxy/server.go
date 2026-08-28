@@ -32,7 +32,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.239"
+const AppVersion = "v0.9.240"
 
 type Server struct {
 	cfg            config.Config
@@ -1653,16 +1653,37 @@ func (s *Server) rememberExternalKey(id string) {
 	s.extSeenCount.Store(0)
 }
 
-// clampExternalLabel bounds a client-supplied label by runes, so a multi-byte
-// value is cut on a character boundary rather than mid-rune.
-func clampExternalLabel(value string) string {
+// clampExternalLabel bounds a client-supplied label used as an api-key display
+// name.
+func clampExternalLabel(value string) string { return clampLabel(value, externalLabelMax) }
+
+// clampLabel bounds a client-supplied value by runes, cutting on a character
+// boundary rather than mid-rune.
+//
+// Every one of these lands in a request_logs column, one row per request, and
+// they are all attacker-chosen: request headers and, for the session id, a field
+// in the request body. Headers are bounded only by MaxHeaderBytes (1 MiB by
+// default) in aggregate, so without this a single request could write hundreds of
+// kilobytes of arbitrary text per row, at request rate. The repo and branch hints
+// additionally feed the session identity key, so an oversized header inflated the
+// session map's memory per entry as well.
+func clampLabel(value string, max int) string {
 	value = strings.TrimSpace(value)
-	if utf8.RuneCountInString(value) <= externalLabelMax {
+	if max <= 0 || utf8.RuneCountInString(value) <= max {
 		return value
 	}
-	runes := []rune(value)
-	return string(runes[:externalLabelMax])
+	return string([]rune(value)[:max])
 }
+
+// Bounds for the client-supplied metadata on an audit row. Identifiers get the
+// short bound; user-agent and forwarded-for are legitimately longer (a proxy
+// chain, a verbose client string) and get room to stay useful.
+const (
+	auditIdentifierMax = 120
+	auditSessionIDMax  = 200
+	auditUserAgentMax  = 512
+	auditForwardedMax  = 512
+)
 
 type resolvedProvider struct {
 	Name    string
@@ -2353,16 +2374,16 @@ func (s *Server) auditRequest(endpoint string, body []byte, apiKeyID string, tra
 			TraceID:             traceID,
 			APIKeyID:            apiKeyID,
 			ClientIP:            clientIP(r),
-			ForwardedFor:        r.Header.Get("X-Forwarded-For"),
-			UserAgent:           r.UserAgent(),
+			ForwardedFor:        clampLabel(r.Header.Get("X-Forwarded-For"), auditForwardedMax),
+			UserAgent:           clampLabel(r.UserAgent(), auditUserAgentMax),
 			Hostname:            hostname(),
 			Model:               model,
 			Endpoint:            endpoint,
 			Stream:              stream,
 			Provider:            s.cfg.Upstream.Provider,
-			SessionID:           llmMeta.SessionID,
-			PromptName:          llmMeta.PromptName,
-			PromptVersion:       llmMeta.PromptVersion,
+			SessionID:           clampLabel(llmMeta.SessionID, auditSessionIDMax),
+			PromptName:          clampLabel(llmMeta.PromptName, auditIdentifierMax),
+			PromptVersion:       clampLabel(llmMeta.PromptVersion, auditIdentifierMax),
 			PromptVariablesHash: llmMeta.PromptVariablesHash,
 			ToolCount:           llmMeta.ToolCount,
 			Complexity:          complexityScore(prompts, llmMeta.ToolCount),
@@ -2370,12 +2391,12 @@ func (s *Server) auditRequest(endpoint string, body []byte, apiKeyID string, tra
 			PromptFingerprint:   promptFingerprint(prompts),
 			RequestHash:         audit.HashText(string(body)),
 			BodyRaw:             rawBody,
-			ReplayOf:            r.Header.Get("X-Proxy-Replay-Of"),
-			Repo:                firstNonEmptyHeader(r, "X-Vibe-Repo", "X-Repo"),
-			Branch:              firstNonEmptyHeader(r, "X-Vibe-Branch", "X-Branch"),
-			Project:             firstNonEmptyHeader(r, "X-Vibe-Project", "X-Project"),
-			Service:             firstNonEmptyHeader(r, "X-Vibe-Service", "X-Service"),
-			CostCenter:          firstNonEmptyHeader(r, "X-Vibe-Cost-Center", "X-Budget-Code"),
+			ReplayOf:            clampLabel(r.Header.Get("X-Proxy-Replay-Of"), auditIdentifierMax),
+			Repo:                clampLabel(firstNonEmptyHeader(r, "X-Vibe-Repo", "X-Repo"), auditIdentifierMax),
+			Branch:              clampLabel(firstNonEmptyHeader(r, "X-Vibe-Branch", "X-Branch"), auditIdentifierMax),
+			Project:             clampLabel(firstNonEmptyHeader(r, "X-Vibe-Project", "X-Project"), auditIdentifierMax),
+			Service:             clampLabel(firstNonEmptyHeader(r, "X-Vibe-Service", "X-Service"), auditIdentifierMax),
+			CostCenter:          clampLabel(firstNonEmptyHeader(r, "X-Vibe-Cost-Center", "X-Budget-Code"), auditIdentifierMax),
 			CreatedAt:           now,
 		},
 		Prompts:   prompts,
