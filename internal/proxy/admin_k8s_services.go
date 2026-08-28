@@ -372,7 +372,7 @@ func (s *Server) writeServiceValidation(w http.ResponseWriter, r *http.Request, 
 	policies, policyErr := s.db.ListK8sPolicies(r.Context())
 	plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 	writeJSON(w, 200, map[string]any{"valid": true, "catalog": cat, "version": ver, "manifest": manifest, "resource_plan": plan, "values": values,
-		"policy_check": policyCheckStatus(policyErr), "approval_required": in.Environment == "production"})
+		"policy_check": policyCheckStatus(policyErr, policies), "approval_required": in.Environment == "production"})
 }
 
 func (s *Server) handleServiceInstances(w http.ResponseWriter, r *http.Request) {

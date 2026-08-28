@@ -30,7 +30,13 @@ func validPolicyRule(rt string) bool {
 // policyCheckStatus describes whether a returned analysis plan was produced against
 // a real rule set. Analysing with no policies loaded yields a clean plan, so a
 // response carrying one must say which of the two it is.
-func policyCheckStatus(err error) map[string]any {
+//
+// Both ways of having no rule set count. A load failure was already reported; an
+// empty or entirely disabled policy list was not, and it reaches the same place:
+// EvaluatePolicies skips anything not enabled, so with none enabled every
+// resource comes back clean and the response was indistinguishable from a real
+// pass. "No rules ran" is not "nothing was wrong".
+func policyCheckStatus(err error, policies []store.K8sPolicy) map[string]any {
 	if err != nil {
 		return map[string]any{
 			"status": "unavailable",
@@ -38,7 +44,20 @@ func policyCheckStatus(err error) map[string]any {
 			"reason": "정책 목록을 불러오지 못해 정책 검사가 수행되지 않았습니다. 이 결과는 정책 통과를 뜻하지 않습니다.",
 		}
 	}
-	return map[string]any{"status": "checked"}
+	enabled := 0
+	for _, p := range policies {
+		if p.Enabled {
+			enabled++
+		}
+	}
+	if enabled == 0 {
+		return map[string]any{
+			"status": "no_rules",
+			"rules":  0,
+			"reason": "활성화된 정책이 없어 검사할 규칙이 없었습니다. 이 결과는 정책 통과를 뜻하지 않습니다.",
+		}
+	}
+	return map[string]any{"status": "checked", "rules": enabled}
 }
 
 func (s *Server) handleK8sPolicies(w http.ResponseWriter, r *http.Request) {
@@ -265,5 +284,10 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	violations := analyzer.CheckPolicyCompliance(items, toAnalyzerPolicies(policies))
-	writeJSON(w, http.StatusOK, map[string]any{"violations": violations, "count": len(violations)})
+	// Compliance sign-off reads this endpoint, and "0 violations" from an empty
+	// rule set looks exactly like "0 violations" from a passing one. Say which.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"violations": violations, "count": len(violations),
+		"policy_check": policyCheckStatus(nil, policies),
+	})
 }

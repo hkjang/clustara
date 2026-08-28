@@ -58,7 +58,7 @@ func (s *Server) handleK8sStacks(w http.ResponseWriter, r *http.Request) {
 		// whether the plan was produced against a real rule set, since an empty one
 		// yields a clean plan that is indistinguishable from a compliant manifest.
 		policies, policyErr := s.db.ListK8sPolicies(r.Context())
-		policyCheck := policyCheckStatus(policyErr)
+		policyCheck := policyCheckStatus(policyErr, policies)
 		plan := analyzer.AnalyzeStackManifest(docs, toAnalyzerPolicies(policies))
 		sum := sha256.Sum256([]byte(in.Manifest))
 		st := store.K8sApplicationStack{

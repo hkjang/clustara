@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"clustara/internal/store"
 	"errors"
 	"testing"
 
@@ -39,7 +40,9 @@ func TestEmptyPolicySetAnalysesAsFullyCompliant(t *testing.T) {
 // Responses that carry an analysis plan must state whether a rule set was actually
 // loaded, so a clean plan produced from nothing cannot be read as a pass.
 func TestPolicyCheckStatusDistinguishesUnavailableFromChecked(t *testing.T) {
-	ok := policyCheckStatus(nil)
+	// "checked" now requires a rule that can actually run; a successful load of an
+	// empty list is reported as no_rules, pinned by TestComplianceReportSaysWhenNoRulesRan.
+	ok := policyCheckStatus(nil, []store.K8sPolicy{{ID: "p", Enabled: true}})
 	if got := asStr(ok["status"]); got != "checked" {
 		t.Errorf("successful load reported %q, want checked", got)
 	}
@@ -47,7 +50,7 @@ func TestPolicyCheckStatusDistinguishesUnavailableFromChecked(t *testing.T) {
 		t.Error("successful load must not carry an error field")
 	}
 
-	failed := policyCheckStatus(errors.New("database is closed"))
+	failed := policyCheckStatus(errors.New("database is closed"), nil)
 	if got := asStr(failed["status"]); got != "unavailable" {
 		t.Errorf("failed load reported %q, want unavailable", got)
 	}
