@@ -535,6 +535,26 @@ func (rc *requestPipeline) stepUpstream() bool {
 	s.metrics.ObserveLatency(meta.Request.LatencyMS)
 
 	analysis := analyzer.Finalize()
+	// A streamed completion always ends with a chunk carrying finish_reason —
+	// stop, length, tool_calls or content_filter — before [DONE]. Ending without
+	// one means the answer was cut off mid-completion by the upstream or
+	// something between it and here.
+	//
+	// Nothing else catches this. The close is clean at the socket level, so there
+	// is no copy error; the status was already 200 before the first byte; and the
+	// partial content still yields an estimated token count, so the caller is
+	// billed. Without this the row is indistinguishable from a complete response.
+	//
+	// Streams only: a truncated non-streamed body is a short read, which already
+	// surfaces as a copy error. An existing error is never overwritten, and a
+	// response that produced no completion at all (an upstream 4xx/5xx, or an
+	// endpoint with no choices such as embeddings) is left alone.
+	if stream && resp.StatusCode < 400 && meta.Request.Error == "" &&
+		analysis.FinishReason == "" && analysis.CompletionTokensEstimate > 0 {
+		meta.Request.Error = truncatedStreamError
+		slog.Warn("stream ended without a finish_reason; recording as truncated",
+			"trace_id", traceID, "model", meta.Request.Model)
+	}
 	if captureForCache && analysis.Text != "" {
 		s.maybeStoreEmbeddingCache(r.Context(), body, resp.StatusCode, resp.Header.Get("Content-Type"), []byte(analysis.Text))
 	}
@@ -635,3 +655,7 @@ func (rc *requestPipeline) stepUpstream() bool {
 	s.enqueue(meta)
 	return true
 }
+
+// truncatedStreamError marks a streamed completion that ended without a
+// finish_reason. See stepUpstream for why that is treated as a failure.
+const truncatedStreamError = "truncated_stream: upstream ended without a finish_reason"
