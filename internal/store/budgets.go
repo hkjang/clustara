@@ -78,11 +78,20 @@ func (s *SQLStore) budgetStatus(ctx context.Context, b Budget, now time.Time) (B
 		st.ProjectedRatio = st.ProjectedKRW / b.MonthlyKRW
 	}
 	st.OnTrack = st.ProjectedKRW <= b.MonthlyKRW || b.MonthlyKRW <= 0
-	// exhaustion date: when cumulative spend at the current run-rate hits the budget.
+	// Exhaustion date: when cumulative spend at the current run-rate hits the
+	// budget. The bound is checked in days, before any Duration is built.
+	//
+	// Converting the other way round is what went wrong: a low run rate makes
+	// daysToExhaust enormous, and float64 → time.Duration overflows past roughly
+	// 106,751 days into a NEGATIVE duration. The resulting date lands centuries in
+	// the past, which then satisfies the "not after month end" test and gets
+	// published. A 1,000,000 KRW budget with 0.05 KRW spent early in the month
+	// reported an exhaustion date of 1734-04-22 — the dashboard showed a budget as
+	// long exhausted exactly when spending was lowest.
 	if runRate > 0 && b.MonthlyKRW > 0 {
 		daysToExhaust := b.MonthlyKRW / runRate
-		exhaust := start.Add(time.Duration(daysToExhaust * 24 * float64(time.Hour)))
-		if !exhaust.After(start.AddDate(0, 1, 0)) {
+		if daysToExhaust >= 0 && daysToExhaust <= daysInMonth {
+			exhaust := start.Add(time.Duration(daysToExhaust * 24 * float64(time.Hour)))
 			st.ExhaustionDate = exhaust.In(budgetKST).Format("2006-01-02")
 		}
 	}
