@@ -61,9 +61,14 @@ type K8sInventoryItem struct {
 }
 
 type K8sInventoryFilter struct {
-	ClusterID   string
-	GroupID     string
-	Kind        string
+	ClusterID string
+	GroupID   string
+	Kind      string
+	// Kinds narrows to a set of kinds. It exists so a caller whose analysis only
+	// looks at certain kinds can spend its row budget on those: the query orders
+	// by updated_at, so an unfiltered fetch on a busy cluster fills up with
+	// whatever churns most and can miss the stable objects entirely.
+	Kinds       []string
 	Namespace   string
 	Status      string
 	SearchTerms []string
@@ -492,6 +497,14 @@ func (s *SQLStore) ListK8sInventory(ctx context.Context, f K8sInventoryFilter) (
 	if f.Kind != "" {
 		query += ` AND lower(i.kind) = lower(?)`
 		args = append(args, f.Kind)
+	}
+	if len(f.Kinds) > 0 {
+		placeholders := make([]string, 0, len(f.Kinds))
+		for _, kind := range f.Kinds {
+			placeholders = append(placeholders, "lower(?)")
+			args = append(args, kind)
+		}
+		query += ` AND lower(i.kind) IN (` + strings.Join(placeholders, ",") + `)`
 	}
 	if f.Namespace != "" {
 		query += ` AND i.namespace = ?`

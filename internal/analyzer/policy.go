@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"sort"
 	"strings"
 
 	"clustara/internal/store"
@@ -273,4 +274,17 @@ func CountPolicyEvaluable(items []store.K8sInventoryItem) int {
 		}
 	}
 	return n
+}
+
+// PolicyEvaluableKinds lists the resource kinds a policy run examines, so a
+// caller can fetch only those rather than spending a row limit on kinds the
+// evaluation ignores.
+func PolicyEvaluableKinds() []string {
+	kinds := make([]string, 0, len(workloadKinds)+2)
+	for kind := range workloadKinds {
+		kinds = append(kinds, kind)
+	}
+	kinds = append(kinds, "Role", "ClusterRole")
+	sort.Strings(kinds)
+	return kinds
 }

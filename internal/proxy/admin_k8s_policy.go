@@ -37,13 +37,13 @@ func validPolicyRule(rt string) bool {
 // resource comes back clean and the response was indistinguishable from a real
 // pass. "No rules ran" is not "nothing was wrong".
 func policyCheckStatus(err error, policies []store.K8sPolicy) map[string]any {
-	return policyCheckStatusOver(err, policies, -1)
+	return policyCheckStatusOver(err, policies, -1, false)
 }
 
 // policyCheckStatusOver adds what the run had to examine. resources < 0 means the
 // caller is analysing a manifest it was handed rather than a fetched inventory,
 // where "nothing to examine" is not a possible surprise.
-func policyCheckStatusOver(err error, policies []store.K8sPolicy, resources int) map[string]any {
+func policyCheckStatusOver(err error, policies []store.K8sPolicy, resources int, truncated bool) map[string]any {
 	if err != nil {
 		return map[string]any{
 			"status": "unavailable",
@@ -68,6 +68,12 @@ func policyCheckStatusOver(err error, policies []store.K8sPolicy, resources int)
 		return map[string]any{
 			"status": "no_resources", "rules": enabled, "resources": 0,
 			"reason": "검사 대상 리소스가 없었습니다. 에이전트가 인벤토리를 보고하지 않았을 수 있으며, 이 결과는 정책 통과를 뜻하지 않습니다.",
+		}
+	}
+	if truncated {
+		return map[string]any{
+			"status": "partial", "rules": enabled, "resources": resources,
+			"reason": "검사 대상이 상한을 초과해 일부만 검사했습니다. 위반이 없다는 결과가 전수 통과를 뜻하지 않습니다.",
 		}
 	}
 	out := map[string]any{"status": "checked", "rules": enabled}
@@ -278,6 +284,11 @@ func (s *Server) handleK8sPolicySimulate(w http.ResponseWriter, r *http.Request)
 
 // handleK8sPolicyCompliance runs the enabled policies across the inventory (SEC-10 정책 팩).
 // GET /admin/k8s/policies/compliance?cluster_id=
+// complianceScanBudget caps how many evaluable resources one compliance run
+// examines. A var rather than a const so a test can drive the truncation path
+// without seeding thousands of rows.
+var complianceScanBudget = 5000
+
 func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -287,7 +298,21 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: r.URL.Query().Get("cluster_id"), Limit: 4000})
+	// Fetch only the kinds a policy run evaluates, and ask for one row beyond the
+	// budget so truncation is detectable.
+	//
+	// The unfiltered fetch this replaces asked for 4000 rows ordered by
+	// updated_at, so the budget went to whatever churns most and the stable
+	// production workloads — the ones that have not changed lately — fell outside
+	// the window first. The report then declared itself "checked" over that
+	// sample. Scoping reclaims the budget from the kinds the evaluation ignores;
+	// Pods are evaluated, so it cannot exclude the busiest kind, which is why the
+	// truncation flag below carries the rest of the weight.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: r.URL.Query().Get("cluster_id"),
+		Kinds:     analyzer.PolicyEvaluableKinds(),
+		Limit:     complianceScanBudget + 1,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
@@ -300,11 +325,15 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 		writeOpenAIError(w, http.StatusServiceUnavailable, "정책 목록을 불러오지 못해 컴플라이언스 검사를 수행할 수 없습니다: "+policyErr.Error(), "server_error", "k8s_policy_load_failed")
 		return
 	}
+	truncated := len(items) > complianceScanBudget
+	if truncated {
+		items = items[:complianceScanBudget]
+	}
 	violations := analyzer.CheckPolicyCompliance(items, toAnalyzerPolicies(policies))
 	// Compliance sign-off reads this endpoint, and "0 violations" from an empty
 	// rule set looks exactly like "0 violations" from a passing one. Say which.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"violations": violations, "count": len(violations),
-		"policy_check": policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items)),
+		"policy_check": policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items), truncated),
 	})
 }
