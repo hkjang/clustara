@@ -665,5 +665,5 @@ func ssoLogoutDetail(sessionRevoked bool) string {
 // one that also revokes the account's live sessions. The IdP authenticating
 // someone means they exist there; it does not overrule that decision.
 func authUserDisabled(user store.AuthUser) bool {
-	return strings.EqualFold(strings.TrimSpace(user.Status), "disabled")
+	return accountStatusDisabled(user.Status)
 }

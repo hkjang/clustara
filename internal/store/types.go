@@ -44,6 +44,12 @@ type APIKeyRecord struct {
 	ExpiresAt        time.Time
 	RevokedAt        time.Time
 	CreatedAt        time.Time
+	// OwnerStatus is the account status of the user this key belongs to, resolved
+	// alongside the key so authentication can refuse a disabled owner's key
+	// without a second round trip. Empty when the key has no owning user
+	// (service accounts, external/passthrough keys) or the row predates the
+	// column. Only FindActiveAPIKeyByHash populates it.
+	OwnerStatus string
 }
 
 type APIKeyPublic struct {

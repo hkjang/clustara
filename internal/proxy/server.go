@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.211"
+const AppVersion = "v0.9.212"
 
 type Server struct {
 	cfg            config.Config
@@ -1536,6 +1536,16 @@ func (s *Server) authenticateProxyContext(r *http.Request) (string, *store.AuthC
 		}
 		if !key.ExpiresAt.IsZero() && key.ExpiresAt.Before(time.Now().UTC()) {
 			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "api_key_denied", APIKeyID: key.ID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: "expired", CreatedAt: time.Now().UTC()})
+			return "", nil, false
+		}
+		// Disabling an account revokes its sessions, so the browser stops working
+		// at once — but a personal API key carried no such check, and nothing
+		// revoked it either. A departing user's programmatic access to models,
+		// spend and MCP tools therefore outlived their offboarding entirely.
+		// Enforced here rather than by revoking keys on disable, so it cannot be
+		// missed by a new disable path and so re-enabling restores the keys.
+		if accountStatusDisabled(key.OwnerStatus) {
+			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "api_key_denied", APIKeyID: key.ID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: "owner_disabled", CreatedAt: time.Now().UTC()})
 			return "", nil, false
 		}
 		if !ipAllowed(clientIP(r), key.AllowedIPs) {

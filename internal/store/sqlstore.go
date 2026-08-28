@@ -3209,15 +3209,21 @@ func (s *SQLStore) FindActiveAPIKeyByHash(ctx context.Context, keyHash string) (
 	var key APIKeyRecord
 	var scopes, allowedIPs, allowedModels, deniedModels, allowedProviders, deniedProviders string
 	var createdAt, expiresAt, revokedAt string
-	err := s.db.QueryRowContext(ctx, s.bind(`SELECT id, name, key_hash, COALESCE(owner, ''), COALESCE(team, ''),
-			COALESCE(user_id, ''), COALESCE(service_account_id, ''), COALESCE(role, ''), status,
-			COALESCE(scopes, '[]'), COALESCE(allowed_ips, '[]'), COALESCE(allowed_models, '[]'), COALESCE(denied_models, '[]'),
-			COALESCE(allowed_providers, '[]'), COALESCE(denied_providers, '[]'), COALESCE(budget_limit_krw, 0),
-			COALESCE(expires_at, ''), COALESCE(revoked_at, ''), created_at
-		FROM api_keys
-		WHERE key_hash = ? AND status = 'active'`), keyHash).Scan(&key.ID, &key.Name, &key.KeyHash, &key.Owner, &key.Team,
+	// The owner's account status is joined in rather than fetched separately:
+	// authentication must be able to refuse a disabled user's key, and a second
+	// round trip on every request is both slower and easy to forget at a new
+	// call site. LEFT JOIN so service-account and external keys, which carry no
+	// user_id, are unaffected.
+	err := s.db.QueryRowContext(ctx, s.bind(`SELECT k.id, k.name, k.key_hash, COALESCE(k.owner, ''), COALESCE(k.team, ''),
+			COALESCE(k.user_id, ''), COALESCE(k.service_account_id, ''), COALESCE(k.role, ''), k.status,
+			COALESCE(k.scopes, '[]'), COALESCE(k.allowed_ips, '[]'), COALESCE(k.allowed_models, '[]'), COALESCE(k.denied_models, '[]'),
+			COALESCE(k.allowed_providers, '[]'), COALESCE(k.denied_providers, '[]'), COALESCE(k.budget_limit_krw, 0),
+			COALESCE(k.expires_at, ''), COALESCE(k.revoked_at, ''), k.created_at, COALESCE(u.status, '')
+		FROM api_keys k
+		LEFT JOIN users u ON u.id = k.user_id
+		WHERE k.key_hash = ? AND k.status = 'active'`), keyHash).Scan(&key.ID, &key.Name, &key.KeyHash, &key.Owner, &key.Team,
 		&key.UserID, &key.ServiceAccountID, &key.Role, &key.Status, &scopes, &allowedIPs, &allowedModels, &deniedModels,
-		&allowedProviders, &deniedProviders, &key.BudgetLimitKRW, &expiresAt, &revokedAt, &createdAt)
+		&allowedProviders, &deniedProviders, &key.BudgetLimitKRW, &expiresAt, &revokedAt, &createdAt, &key.OwnerStatus)
 	if err == sql.ErrNoRows {
 		return APIKeyRecord{}, false, nil
 	}

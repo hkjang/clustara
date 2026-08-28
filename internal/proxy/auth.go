@@ -551,3 +551,12 @@ func parseAPITime(raw string) time.Time {
 	}
 	return time.Time{}
 }
+
+// accountStatusDisabled reports an explicit administrative disable.
+//
+// The test is for the exact value an administrator sets, not "anything that is
+// not active": rows predating the status column carry an empty value, and
+// treating those as disabled would lock out accounts nobody ever disabled.
+func accountStatusDisabled(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "disabled")
+}
