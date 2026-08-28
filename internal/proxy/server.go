@@ -31,7 +31,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.236"
+const AppVersion = "v0.9.237"
 
 type Server struct {
 	cfg            config.Config
@@ -2649,7 +2649,15 @@ func withTrace(next http.Handler) http.Handler {
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	// The status is already on the wire, so a failure here cannot be turned into
+	// an error response — the client receives a success code and a truncated
+	// body. It must at least not be invisible on this side: json.Encoder refuses
+	// NaN and +Inf outright, so an unguarded ratio anywhere in a report would
+	// otherwise produce a silent partial write with a 200.
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		slog.Error("response encoding failed after the status was written; the client received a truncated body",
+			"status", status, "error", err)
+	}
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, message string, typ string, code string) {
