@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"sync"
 	"sync/atomic"
@@ -31,7 +32,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.238"
+const AppVersion = "v0.9.239"
 
 type Server struct {
 	cfg            config.Config
@@ -91,8 +92,9 @@ type Server struct {
 	dwCache          *dwQueryCache            // short-TTL cache for DW dashboard ClickHouse reads
 	sessions         *sessionInferer
 	sessionGCAt      atomic.Int64
-	extSeen          sync.Map // external key id -> struct{}; dedupes lazy registration
-	mcpConns         sync.Map // upstream id -> *mcpUpstreamConn (MCP gateway session state)
+	extSeen          sync.Map     // external key id -> struct{}; dedupes lazy registration
+	extSeenCount     atomic.Int64 // entries in extSeen, so the dedupe cache can be bounded
+	mcpConns         sync.Map     // upstream id -> *mcpUpstreamConn (MCP gateway session state)
 	mcpTools         atomic.Pointer[mcpToolsSnapshot]
 	lastReloadNano   atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
 	lastReloadTok    atomic.Pointer[string] // admin_settings change token this pod last applied
@@ -1598,7 +1600,11 @@ func (s *Server) attributeExternalKey(r *http.Request, keyHash string) string {
 	}
 	id := "key_" + keyHash[:16]
 	if _, seen := s.extSeen.Load(id); !seen {
-		name := firstNonEmptyHeader(r, "X-Vibe-User", "X-User-Id", "X-Title")
+		// Name and team come from client headers on the passthrough path, which
+		// runs before any credential check — they are display labels, not
+		// identity, and they land in a database column. Clamp them so a single
+		// oversized header cannot write an oversized row.
+		name := clampExternalLabel(firstNonEmptyHeader(r, "X-Vibe-User", "X-User-Id", "X-Title"))
 		if name == "" {
 			name = "external-" + keyHash[:8]
 		}
@@ -1606,16 +1612,56 @@ func (s *Server) attributeExternalKey(r *http.Request, keyHash string) string {
 			ID:      id,
 			Name:    name,
 			KeyHash: keyHash,
-			Team:    firstNonEmptyHeader(r, "X-Vibe-Team", "X-Team"),
+			Team:    clampExternalLabel(firstNonEmptyHeader(r, "X-Vibe-Team", "X-Team")),
 			Status:  "external",
 		}
 		if err := s.db.EnsureExternalAPIKey(r.Context(), rec); err != nil {
 			slog.Warn("register external api key failed", "error", err)
 		} else {
-			s.extSeen.Store(id, struct{}{})
+			s.rememberExternalKey(id)
 		}
 	}
 	return id
+}
+
+const (
+	// extSeenCap bounds the lazy-registration dedupe cache. Unbounded it grows
+	// with the number of DISTINCT bearer tokens the gateway has ever seen, and
+	// this path runs when AUTH_ENABLED is false — the documented passthrough mode
+	// for editor clients — so that input is unauthenticated.
+	extSeenCap = 10000
+	// externalLabelMax bounds a header-supplied display label. Long enough for a
+	// real username or team, short enough that a header cannot become a large row.
+	externalLabelMax = 120
+)
+
+// rememberExternalKey caches one registration, clearing the cache wholesale when
+// it grows past the cap.
+//
+// Clearing rather than evicting carefully is deliberate: this cache sits in front
+// of an INSERT ... ON CONFLICT DO NOTHING, so a dropped entry costs one redundant
+// idempotent write and nothing else. There is no correctness attached to a hit.
+func (s *Server) rememberExternalKey(id string) {
+	s.extSeen.Store(id, struct{}{})
+	if s.extSeenCount.Add(1) <= extSeenCap {
+		return
+	}
+	s.extSeen.Range(func(key, _ any) bool {
+		s.extSeen.Delete(key)
+		return true
+	})
+	s.extSeenCount.Store(0)
+}
+
+// clampExternalLabel bounds a client-supplied label by runes, so a multi-byte
+// value is cut on a character boundary rather than mid-rune.
+func clampExternalLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) <= externalLabelMax {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:externalLabelMax])
 }
 
 type resolvedProvider struct {
