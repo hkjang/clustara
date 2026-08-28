@@ -70,6 +70,7 @@ func (s *Server) handleAIGatewayGovernanceOverview(w http.ResponseWriter, r *htt
 	providers, _ := s.db.ListProviders(r.Context())
 	rules, _ := s.db.ListRoutingRules(r.Context())
 	budgets, _ := s.db.BudgetStatuses(r.Context(), now)
+	quotas, _ := s.db.ListQuotas(r.Context())
 	modelAnomalies, _ := s.db.ModelAnomalies(r.Context(), 7*24*time.Hour, 6*time.Hour, 3)
 	costAnomalies, _ := s.db.CostAnomalies(r.Context(), 7*24*time.Hour, 6*time.Hour, 3)
 	requests, cost, tokens, _ := s.db.UsageSince(r.Context(), store.UsageFilter{Scope: "global", Since: now.AddDate(0, 0, -30)})
@@ -87,11 +88,11 @@ func (s *Server) handleAIGatewayGovernanceOverview(w http.ResponseWriter, r *htt
 		} else if strings.EqualFold(key.Status, "revoked") || key.RevokedAt != "" {
 			summary.RevokedKeys++
 		}
-		row := aiGovernanceKeyRisk(key, now)
+		row := aiGovernanceKeyRisk(key, now, spendCappedByQuota(quotas, key))
 		if active {
 			for _, reason := range row.Reasons {
 				switch reason {
-				case "budget_not_set":
+				case "cumulative_spend_not_capped":
 					summary.UnboundedKeys++
 				case "model_allowlist_not_set":
 					summary.UnscopedModelKeys++
@@ -149,14 +150,28 @@ func (s *Server) handleAIGatewayGovernanceOverview(w http.ResponseWriter, r *htt
 	})
 }
 
-func aiGovernanceKeyRisk(key store.APIKeyPublic, now time.Time) aiGatewayKeyRisk {
+// aiGovernanceKeyRisk grades one key's posture. spendCapped says whether an
+// enabled cost quota covers the key.
+//
+// The two cost controls are reported separately because they are not
+// interchangeable, and conflating them was the point of this report going wrong:
+// budget_limit_krw caps a SINGLE request's estimated cost, so a key carrying one
+// looked "budgeted" while its total spend stayed unbounded — it can run forever
+// in small calls. Only a cost quota (quotas.krw_limit, enforced in stepQuota
+// against accumulated usage) actually bounds what a key can spend, so that is
+// the one graded high.
+func aiGovernanceKeyRisk(key store.APIKeyPublic, now time.Time, spendCapped bool) aiGatewayKeyRisk {
 	reasons := []string{}
 	risk := "low"
 	active := strings.EqualFold(key.Status, "active") || key.Status == ""
 	if active {
+		if !spendCapped {
+			reasons = append(reasons, "cumulative_spend_not_capped")
+			risk = maxAIGovernanceRisk(risk, "high")
+		}
 		if key.BudgetLimitKRW <= 0 {
-			reasons = append(reasons, "budget_not_set")
-			risk = "medium"
+			reasons = append(reasons, "per_request_cost_cap_not_set")
+			risk = maxAIGovernanceRisk(risk, "medium")
 		}
 		if len(key.AllowedModels) == 0 {
 			reasons = append(reasons, "model_allowlist_not_set")
@@ -202,7 +217,7 @@ func aiGovernanceProviderPosture(p store.ProviderPublic) aiGatewayProviderPostur
 func aiGovernanceRecommendations(s aiGatewayGovernanceSummary) []string {
 	out := []string{}
 	if s.UnboundedKeys > 0 {
-		out = append(out, "active keys without budget should get team or key budget limits")
+		out = append(out, "active keys with no cost quota can spend without limit — add a quota at key, team or global scope (a key budget_limit_krw only caps one request)")
 	}
 	if s.UnscopedModelKeys > 0 || s.UnscopedProviderKeys > 0 {
 		out = append(out, "active keys should use model and provider allowlists for production traffic")
@@ -242,4 +257,28 @@ func aiGovernanceRiskRank(risk string) int {
 	default:
 		return 0
 	}
+}
+
+// spendCappedByQuota reports whether an enabled cost quota bounds what this key
+// can spend, at key, team or global scope. Token-only quotas do not count: they
+// bound volume, not money, and a model price change moves one without the other.
+func spendCappedByQuota(quotas []store.QuotaPublic, key store.APIKeyPublic) bool {
+	for _, q := range quotas {
+		if !q.Enabled || q.KRWLimit <= 0 {
+			continue
+		}
+		switch q.Scope {
+		case "global":
+			return true
+		case "api_key":
+			if q.ScopeValue == key.ID {
+				return true
+			}
+		case "team":
+			if key.Team != "" && q.ScopeValue == key.Team {
+				return true
+			}
+		}
+	}
+	return false
 }

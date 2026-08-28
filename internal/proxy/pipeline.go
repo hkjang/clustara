@@ -345,6 +345,12 @@ func (rc *requestPipeline) stepCost() bool {
 		if est.LatencyMS > 0 {
 			w.Header().Set("X-Estimated-Latency-MS", strconv.Itoa(int(est.LatencyMS+0.5)))
 		}
+		// BudgetLimitKRW caps the estimated cost of a SINGLE request; it is not a
+		// running budget. A key with a 10,000 KRW "budget" can spend without limit
+		// so long as no individual call is estimated above that, which for ordinary
+		// traffic is never. Cumulative spend is bounded by cost quotas
+		// (quotas.krw_limit), checked in stepQuota against actual usage —
+		// aiGovernanceKeyRisk reports the two separately for that reason.
 		if rc.authCtx != nil && rc.authCtx.BudgetLimitKRW > 0 && est.Priced && est.CostKRW > rc.authCtx.BudgetLimitKRW {
 			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "budget_denied", APIKeyID: rc.authCtx.APIKeyID, TeamID: rc.authCtx.TeamID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: formatKRW(est.CostKRW) + " > " + formatKRW(rc.authCtx.BudgetLimitKRW), CreatedAt: time.Now().UTC()})
 			writeOpenAIError(w, http.StatusPaymentRequired, "estimated cost exceeds key budget limit", "budget_error", "budget_denied")
