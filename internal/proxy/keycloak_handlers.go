@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -318,7 +319,16 @@ func (s *Server) handleKeycloakBackchannelLogout(w http.ResponseWriter, r *http.
 	}
 	if sid != "" {
 		// Targeted: revoke only the session(s) linked to this Keycloak sid.
-		if users, _ := s.db.RevokeAuthSessionsByKeycloakSID(r.Context(), sid); len(users) > 0 {
+		// Same contract as the sub branch below: a 200 tells the OP the logout
+		// is done and it will not retry, so a failed revocation must answer 500.
+		users, err := s.db.RevokeAuthSessionsByKeycloakSID(r.Context(), sid)
+		if err != nil {
+			slog.Error("sso backchannel logout: revoke by sid failed; sessions remain active", "sid", sid, "error", err)
+			s.auditAuthEvent(r.Context(), "session_revocation_failed", "", "", "", "sso_backchannel_logout sid="+sid+": "+err.Error())
+			writeOpenAIError(w, http.StatusInternalServerError, "session revocation failed", "server_error", "logout_revocation_failed")
+			return
+		}
+		if len(users) > 0 {
 			s.auditAuthEvent(r.Context(), "sso_backchannel_logout", users[0], "", "", "keycloak sid="+sid+" sub="+sub)
 		}
 	} else if id, found, _ := s.db.AuthIdentityBySubject(r.Context(), "keycloak", s.keycloakConfig().IssuerURL, sub); found {
@@ -353,7 +363,15 @@ func (s *Server) handleKeycloakFrontchannelLogout(w http.ResponseWriter, r *http
 		return
 	}
 	if sid != "" {
-		if users, _ := s.db.RevokeAuthSessionsByKeycloakSID(r.Context(), sid); len(users) > 0 {
+		// Unlike the back-channel, there is no retry to trigger here: the OP
+		// renders this in an iframe and ignores the outcome. An error page would
+		// buy nothing, so the failure is logged and audited instead of hidden —
+		// the back-channel is the reliable path and will answer 500.
+		users, err := s.db.RevokeAuthSessionsByKeycloakSID(r.Context(), sid)
+		if err != nil {
+			slog.Error("sso frontchannel logout: revoke by sid failed; sessions remain active", "sid", sid, "error", err)
+			s.auditAuthEvent(r.Context(), "session_revocation_failed", "", "", "", "sso_frontchannel_logout sid="+sid+": "+err.Error())
+		} else if len(users) > 0 {
 			s.auditAuthEvent(r.Context(), "sso_frontchannel_logout", users[0], "", "", "keycloak sid="+sid)
 		}
 	}
@@ -375,14 +393,27 @@ func (s *Server) handleKeycloakLogout(w http.ResponseWriter, r *http.Request) {
 		IDTokenHint  string `json:"id_token_hint"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&p)
-	// Local logout: revoke the internal refresh token / session.
+	// Local logout. The session row is what actually kills an issued access
+	// token — verifyAccessToken re-checks AuthSessionActive on every request —
+	// so revoking only the presented refresh token would leave the caller
+	// logged in for the remainder of the access-token TTL, and leave the
+	// session listed as active. handleAuthLogout has always revoked the
+	// session; this path must match it.
+	sessionRevoked := true
+	if claims, ok := s.currentAccessClaims(r); ok {
+		if err := s.db.RevokeAuthSession(r.Context(), claims.SessionID); err != nil {
+			slog.Error("sso logout: revoke session failed; the access token remains valid",
+				"session_id", claims.SessionID, "error", err)
+			sessionRevoked = false
+		}
+		s.auditAuthEvent(r.Context(), "sso_logout", claims.Subject, "", claims.TeamID, ssoLogoutDetail(sessionRevoked))
+	}
 	if strings.TrimSpace(p.RefreshToken) != "" {
 		if rec, found, err := s.db.RefreshTokenByHash(r.Context(), hashProxyKey(p.RefreshToken)); err == nil && found {
-			_ = s.db.RevokeRefreshToken(r.Context(), rec.ID)
+			if err := s.db.RevokeRefreshToken(r.Context(), rec.ID); err != nil {
+				slog.Warn("sso logout: revoke refresh token failed", "error", err)
+			}
 		}
-	}
-	if claims, ok := s.currentAccessClaims(r); ok {
-		s.auditAuthEvent(r.Context(), "sso_logout", claims.Subject, "", claims.TeamID, "keycloak")
 	}
 	endSession := ""
 	if disc, err := keycloakDiscover(r.Context(), s.keycloakConfig().IssuerURL); err == nil && disc.EndSessionEndpoint != "" {
@@ -594,4 +625,13 @@ func strClaim(claims map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+// ssoLogoutDetail keeps the audit record honest about whether the internal
+// session was actually killed, rather than recording the intent.
+func ssoLogoutDetail(sessionRevoked bool) string {
+	if sessionRevoked {
+		return "keycloak; session revoked"
+	}
+	return "keycloak; SESSION REVOCATION FAILED — the access token remains valid until it expires"
 }

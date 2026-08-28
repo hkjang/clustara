@@ -114,8 +114,18 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
+	// Revoking the session is what stops the already-issued access token, since
+	// verifyAccessToken re-checks AuthSessionActive on every request. Answering
+	// "logged_out" without checking tells someone on a shared machine they are
+	// signed out while their token still works.
 	if claims, ok := s.verifyAccessToken(r.Context(), bearerToken(r.Header.Get("Authorization"))); ok {
-		_ = s.db.RevokeAuthSession(r.Context(), claims.SessionID)
+		if err := s.db.RevokeAuthSession(r.Context(), claims.SessionID); err != nil {
+			slog.Error("logout: revoke session failed; the access token remains valid",
+				"session_id", claims.SessionID, "error", err)
+			s.auditAuthEvent(r.Context(), "session_revocation_failed", claims.Subject, "", claims.TeamID, "logout: "+err.Error())
+			writeOpenAIError(w, http.StatusInternalServerError, "logout failed; the session is still active", "server_error", "logout_failed")
+			return
+		}
 	}
 	var p struct {
 		RefreshToken string `json:"refresh_token"`
@@ -123,7 +133,9 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&p)
 	if p.RefreshToken != "" {
 		if rec, found, _ := s.db.RefreshTokenByHash(r.Context(), hashProxyKey(p.RefreshToken)); found {
-			_ = s.db.RevokeRefreshToken(r.Context(), rec.ID)
+			if err := s.db.RevokeRefreshToken(r.Context(), rec.ID); err != nil {
+				slog.Warn("logout: revoke refresh token failed", "error", err)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
