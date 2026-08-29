@@ -635,6 +635,25 @@ func (rc *requestPipeline) stepUpstream() bool {
 			Source:           analysis.Usage.Source,
 			CreatedAt:        time.Now().UTC(),
 		}
+	} else if resp.StatusCode >= 400 {
+		// The provider rejected the request: a 429 it never admitted, a 400 it refused, a 5xx
+		// it failed. None of those are billed by any provider, but the estimate below keyed
+		// only on "there was a prompt", which is true whatever the status — so every rejection
+		// recorded a real cost. That cost is summed with no status filter by the cost-centre
+		// invoice, the anomaly detector, the credit score and the rollups, so a provider
+		// outage billed teams for it, and did so harder the worse the outage got, because
+		// clients retry.
+		//
+		// Recorded as an explicit zero rather than as no row at all. A missing usage row
+		// already means "we could not estimate"; letting it also mean "not billable" would
+		// merge two different facts into one silence.
+		meta.Usage = &store.TokenUsage{
+			ID:        newID("usage"),
+			RequestID: meta.Request.ID,
+			Currency:  "KRW",
+			Source:    "not_billed",
+			CreatedAt: time.Now().UTC(),
+		}
 	} else if promptEstimate, completionEstimate := promptTokenEstimate(meta.Prompts), analysis.CompletionTokensEstimate; promptEstimate > 0 || completionEstimate > 0 {
 		estimated := audit.Usage{
 			PromptTokens:     promptEstimate,

@@ -2952,6 +2952,9 @@ const adminHTML = `<!doctype html>
     function sourceLabel(source) {
       if (source === 'usage') return '실측';
       if (source === 'estimated') return '추정';
+      // An upstream rejection is billed by nobody. Distinct from '미집계', which means the
+      // gateway could not work out a number at all.
+      if (source === 'not_billed') return '과금 없음';
       return source || '미집계';
     }
     function scopeLabel(scope) {
