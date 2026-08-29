@@ -78,6 +78,13 @@ type governanceDecision struct {
 	Reason          string
 	ApprovalID      string
 	PolicyEvents    []store.PolicyDecisionEvent
+	// Unavailable reports that the rule set could not be loaded, so this decision is not a
+	// verdict — it is the absence of one. Without it a failed load produced a decision
+	// byte-identical to "every rule ran and none matched": deny lists unenforced, approval
+	// requirements skipped, and the secret firewall silently degraded from block to detect.
+	Unavailable bool
+	// UnavailableReason carries the load error for the operator surfaces.
+	UnavailableReason string
 }
 
 func (s *Server) enforceOpenAIGovernance(w http.ResponseWriter, r *http.Request, meta *store.LogRecord, body []byte, authCtx *store.AuthContext, routingPlan *intelligentRoutingPlan, costKRW float64, detectSecrets bool, phase string) ([]byte, bool) {
@@ -92,6 +99,30 @@ func (s *Server) enforceOpenAIGovernance(w http.ResponseWriter, r *http.Request,
 	}
 
 	decision := s.evaluateGovernance(r, gctx)
+	if decision.Unavailable {
+		// The rule set could not be loaded. The MCP path already treats this as blocking for
+		// destructive tools; this path threw the error away entirely, so a database problem
+		// silently switched governance off for every LLM request and nothing said so.
+		//
+		// Blocking all traffic on a transient read failure would turn a database blip into a
+		// full outage, so enforcement is selective, on the same principle as the MCP path:
+		// what we cannot afford to get wrong is a request carrying a credential. With the
+		// policy unknown we do not know whether the secret firewall was set to block or mask,
+		// and forwarding a secret upstream on that guess is the one irreversible option.
+		// Everything else proceeds, but marked, logged, and recorded.
+		slog.Error("governance policy set could not be loaded; enforcement did not run",
+			"request_id", gctx.RequestID, "phase", phase, "api_key_id", gctx.APIKeyID,
+			"error", decision.UnavailableReason)
+		w.Header().Set("X-Governance", "unavailable")
+		verdict := "unavailable"
+		if gctx.ContainsSecret {
+			verdict = "unavailable_block"
+			decision.Blocked = true
+			decision.Reason = "활성 정책을 불러오지 못했고 요청에 비밀정보가 포함돼 있어 차단했습니다. 이 차단은 정책 위반이 아니라 정책을 확인할 수 없다는 뜻입니다."
+		}
+		decision.PolicyEvents = append(decision.PolicyEvents,
+			governanceUnavailableEvent(gctx, decision.UnavailableReason, verdict))
+	}
 	s.recordPolicyDecisionEvents(r.Context(), decision.PolicyEvents)
 	action := strings.ToLower(strings.TrimSpace(decision.SecretAction))
 	if action == "" {
@@ -182,9 +213,21 @@ func (s *Server) evaluateGovernance(r *http.Request, g governanceContext) govern
 func (s *Server) evaluateGovernanceWithError(r *http.Request, g governanceContext) (governanceDecision, error) {
 	rules, err := s.db.ActivePolicyRules(r.Context())
 	if err != nil {
-		return governanceDecision{SecretAction: "detect"}, err
+		return governanceDecision{SecretAction: "detect", Unavailable: true, UnavailableReason: err.Error()}, err
 	}
 	return evaluatePolicyRules(rules, g), nil
+}
+
+// governanceUnavailableEvent records that enforcement ran without a rule set, so the
+// governance surfaces show the gap instead of showing nothing at all.
+func governanceUnavailableEvent(g governanceContext, reason, decision string) store.PolicyDecisionEvent {
+	e := defaultPolicyDecisionEvent(g)
+	e.PolicyID = "unavailable"
+	e.RuleID = "unavailable"
+	e.RuleName = "POLICY_UNAVAILABLE"
+	e.Decision = decision
+	e.Reason = "활성 정책을 불러오지 못해 거버넌스를 적용하지 못했습니다: " + reason
+	return e
 }
 
 // evaluatePolicyRules applies a rule set to one governance context and returns the
