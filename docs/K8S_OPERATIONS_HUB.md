@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.242** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.243** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.242)
+## 기능 상태 (v0.9.243)
 
 ### 터미널 정책 · 셸 표기와 denylist
 
@@ -594,34 +594,37 @@ kind: ClusterRole
 metadata:
   name: clustara-readonly
 rules:
+# 인벤토리 수집 대상 전부. configmaps/serviceaccounts 는 선택 항목이 아니어서
+# 권한이 없으면 수집 전체가 중단됩니다.
 - apiGroups: [""]
-  resources: ["namespaces", "nodes", "pods", "services", "persistentvolumeclaims", "events"]
+  resources: ["configmaps", "events", "namespaces", "nodes", "persistentvolumeclaims", "pods", "secrets", "serviceaccounts", "services"]
   verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods/log"]
-  verbs: ["get"]
 - apiGroups: ["apps"]
-  resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
+  resources: ["daemonsets", "deployments", "statefulsets"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["autoscaling"]
   resources: ["horizontalpodautoscalers"]
   verbs: ["get", "list", "watch"]
-# (선택) TLS 인증서 만료 분석(SEC-07)을 쓰려면 secrets read 추가 — 권한 없으면 해당 분석만 생략됨
+- apiGroups: ["batch"]
+  resources: ["cronjobs", "jobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses", "networkpolicies"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["policy"]
+  resources: ["poddisruptionbudgets"]
+  verbs: ["get", "list", "watch"]
+# RBAC 를 읽지 못하면 disallow_wildcard_rbac 정책이 검사 대상 0건으로 통과합니다.
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterrolebindings", "clusterroles", "rolebindings", "roles"]
+  verbs: ["get", "list", "watch"]
+# 인벤토리 외 기능: 로그 조회와 실사용 메트릭.
 - apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list"]
+  resources: ["pods/log"]
+  verbs: ["get"]
 - apiGroups: ["metrics.k8s.io"]
   resources: ["pods", "nodes"]
   verbs: ["get", "list"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles", "clusterroles", "rolebindings", "clusterrolebindings"]
-  verbs: ["get", "list", "watch"]
 "@ | kubectl apply -f -
 
 kubectl create clusterrolebinding clustara-reader `

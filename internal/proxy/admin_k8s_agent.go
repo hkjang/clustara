@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"clustara/internal/collector"
+	"clustara/internal/kube"
 	"clustara/internal/store"
 )
 
@@ -125,6 +126,29 @@ func yamlDoubleQuoted(value string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`).Replace(value) + `"`
 }
 
+// agentClusterRoleRules renders the agent's read-only ClusterRole rules from the watch
+// target list itself, so the manifest cannot drift from what the agent actually reads.
+//
+// The hand-written block this replaces had drifted both ways: it granted apps/replicasets,
+// which no target collects, and omitted configmaps, serviceaccounts, poddisruptionbudgets
+// and every RBAC kind, which targets do collect. The two halves fail differently and both
+// fail quietly — configmaps and serviceaccounts are non-optional targets, so a 403 there
+// aborts a whole HTTP collect, while the RBAC kinds are optional, so a 403 there is skipped
+// in silence and the wildcard-RBAC policy rule then passes over an inventory with no Role
+// in it at all (v0.9.242).
+func agentClusterRoleRules() string {
+	var b strings.Builder
+	for _, rule := range kube.WatchRBACRules() {
+		quoted := make([]string, 0, len(rule.Resources))
+		for _, resource := range rule.Resources {
+			quoted = append(quoted, yamlDoubleQuoted(resource))
+		}
+		fmt.Fprintf(&b, "  - apiGroups: [%s]\n    resources: [%s]\n    verbs: [\"get\", \"list\", \"watch\"]\n",
+			yamlDoubleQuoted(rule.APIGroup), strings.Join(quoted, ", "))
+	}
+	return b.String()
+}
+
 func agentInstallManifest(clusterID, clustaraURL, image, token string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Namespace
@@ -151,22 +175,7 @@ kind: ClusterRole
 metadata:
   name: clustara-agent-readonly
 rules:
-  - apiGroups: [""]
-    resources: ["namespaces", "nodes", "pods", "services", "persistentvolumeclaims", "secrets", "events"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch"]
----
+%s---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -238,7 +247,7 @@ spec:
       volumes:
         - name: state
           emptyDir: {}
-`, yamlDoubleQuoted(token), yamlDoubleQuoted(image), yamlDoubleQuoted(clusterID), yamlDoubleQuoted(AppVersion), yamlDoubleQuoted(clustaraURL))
+`, yamlDoubleQuoted(token), agentClusterRoleRules(), yamlDoubleQuoted(image), yamlDoubleQuoted(clusterID), yamlDoubleQuoted(AppVersion), yamlDoubleQuoted(clustaraURL))
 }
 
 // handleK8sAgentInstallManifest creates a ready-to-apply, least-privilege agent manifest.
