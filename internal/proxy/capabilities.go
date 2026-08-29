@@ -68,7 +68,7 @@ var capabilityRegistry = []Capability{
 		APIs:        []string{"GET /admin/governance/*", "POST /admin/policies/*"},
 		UITabs:      []string{"safety", "security"},
 		Scopes:      []string{"security:read"},
-		Tables:      []string{"policy_decisions", "secret_events", "approvals", "anomaly_events"},
+		Tables:      []string{"policy_decision_events", "secret_events", "approvals", "anomaly_events"},
 	},
 	{
 		Key: "k8s_security_vulnerability", Name: "K8s 취약점·SBOM·런타임 보안", Group: "security",
@@ -83,7 +83,7 @@ var capabilityRegistry = []Capability{
 			"k8s-security", "k8s-security-vulnerabilities", "k8s-security-sbom", "k8s-security-cluster-scan",
 			"k8s-security-admission", "k8s-security-runtime", "k8s-security-benchmark", "k8s-security-exceptions", "k8s-policy",
 		},
-		Scopes: []string{"security:read", "security:scan", "security:policy", "security:exception", "security:runtime"},
+		Scopes: []string{"security:read", "security:scan", "admin:read", "admin:write"},
 		Tables: []string{
 			"k8s_security_scan_runs", "k8s_image_vulnerabilities", "k8s_sboms", "k8s_sbom_packages",
 			"k8s_security_exceptions", "k8s_admission_decisions", "k8s_runtime_events", "k8s_benchmark_runs", "k8s_benchmark_results",
@@ -151,7 +151,7 @@ var capabilityRegistry = []Capability{
 		APIs:        []string{"GET/POST /admin/okf/*"},
 		UITabs:      []string{"okf"},
 		Scopes:      []string{"admin:read"},
-		Tables:      []string{"okf_frames", "okf_entries"},
+		Tables:      []string{"okf_documents", "okf_links"},
 	},
 	{
 		Key: "personalization", Name: "개인화", Group: "users",
@@ -159,7 +159,7 @@ var capabilityRegistry = []Capability{
 		APIs:        []string{"GET /me/dashboard", "GET /me/recommended-models", "GET /me/report", "GET /admin/personalization/*"},
 		UITabs:      []string{"me", "personalization"},
 		Scopes:      []string{"self"},
-		Tables:      []string{"personal_profiles", "personalization_recommendations"},
+		Tables:      []string{"personal_profiles", "personal_profile_snapshots", "personal_recommendations"},
 	},
 	{
 		Key: "work_apps", Name: "AI 업무 앱", Group: "users",
@@ -175,7 +175,7 @@ var capabilityRegistry = []Capability{
 		APIs:        []string{"GET/PUT /admin/settings", "POST /admin/settings/bulk", "GET/POST /admin/change-sets"},
 		UITabs:      []string{"settings", "runtimesettings", "changesets"},
 		Scopes:      []string{"admin:write"},
-		Tables:      []string{"admin_settings", "admin_settings_history", "change_sets"},
+		Tables:      []string{"admin_settings", "admin_audit_logs", "change_sets"},
 	},
 	{
 		Key: "sso", Name: "Keycloak SSO", Group: "security",

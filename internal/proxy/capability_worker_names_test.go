@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"clustara/internal/config"
 	"clustara/internal/store"
 )
 
@@ -120,5 +122,87 @@ func sortedBoardNames(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// The Workers field was not the only pointer the registry got wrong. Tables and Scopes hold
+// exact identifiers too — the table names tell an auditor where a capability's data lives
+// (retention review, export, DR) and the scope names tell an administrator what to grant —
+// and nothing checked either.
+//
+// Measured: five table names and four scope names referred to nothing. Four of the tables
+// were near-misses of real ones (policy_decisions vs policy_decision_events, okf_entries and
+// okf_frames vs okf_documents and okf_links, personalization_recommendations vs
+// personal_recommendations) and one, admin_settings_history, existed nowhere in the
+// codebase at all. Three scopes on the vulnerability capability (security:policy,
+// security:exception, security:runtime) can never be granted: role and key creation both
+// validate against allScopes, so an administrator following that list gets "unknown scope".
+//
+// APIs and SettingKeys are deliberately excluded: both use non-literal notation elsewhere in
+// the registry ("GET/POST /admin/okf/*", "clickhouse.*", "GET .../leaderboard"), so they are
+// documentation strings rather than exact identifiers and cannot be checked this way.
+func TestCapabilityTableAndScopeNamesResolve(t *testing.T) {
+	tables := migratedTableNames(t)
+	scopes := map[string]bool{}
+	for _, s := range allScopes {
+		scopes[s] = true
+	}
+
+	for _, capability := range capabilityRegistry {
+		for _, table := range capability.Tables {
+			if !tables[table] {
+				t.Errorf("capability %q lists table %q, which the migrated schema does not "+
+					"contain; anyone tracing where this capability's data lives is sent nowhere",
+					capability.Key, table)
+			}
+		}
+		for _, scope := range capability.Scopes {
+			// "self" is deliberate notation for /me routes, which authorize on the caller's
+			// own identity and require no scope at all. It is not a grantable scope and is
+			// not meant to be.
+			if scope == "self" {
+				continue
+			}
+			if !scopes[scope] {
+				t.Errorf("capability %q lists scope %q, which is not in allScopes; role and key "+
+					"creation validate against that list, so an administrator following this "+
+					"cannot grant it", capability.Key, scope)
+			}
+		}
+	}
+}
+
+func migratedTableNames(t *testing.T) map[string]bool {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "schema.db")
+	db, err := store.Open(context.Background(), config.DatabaseConfig{Driver: "sqlite", DSN: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	rows, err := raw.Query(`SELECT name FROM sqlite_master WHERE type='table'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = true
+	}
+	if len(out) < 20 {
+		t.Fatalf("only %d tables found after migration; the scan is looking at the wrong place", len(out))
+	}
 	return out
 }
