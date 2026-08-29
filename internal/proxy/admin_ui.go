@@ -5632,14 +5632,22 @@ const adminHTML = `<!doctype html>
     // result means nothing until you know the check actually ran over everything:
     // an empty rule set, an empty or truncated resource window, and a failed
     // lookup all produce "no findings" that must not read as a pass.
+    //
+    // A run that examined everything can still be untrustworthy: stale marks a
+    // verdict computed over inventory the collectors stopped refreshing, which is a
+    // statement about the past wearing the same clean face as a live pass.
     function scanNotice(s) {
-      if (!s || !s.status || s.status === 'checked') return '';
+      if (!s || !s.status) return '';
+      if (s.status === 'checked' && !s.stale) return '';
       const labels = { unavailable: '검사 수행 안 됨', no_rules: '검사할 규칙 없음', no_resources: '검사 대상 없음', partial: '일부만 검사' };
-      const label = labels[s.status] || s.status;
+      let label = labels[s.status] || s.status;
+      if (s.status === 'checked') label = '오래된 데이터로 판정';
+      else if (s.stale) label += ' · 오래된 데이터';
       const detail = s.reason || s.error || '이 결과는 전수 통과를 뜻하지 않습니다.';
       const counts = [];
       if (typeof s.rules === 'number') counts.push('규칙 ' + fmt(s.rules));
       if (typeof s.resources === 'number') counts.push('리소스 ' + fmt(s.resources));
+      if (typeof s.data_age_seconds === 'number' && s.data_age_seconds >= 0) counts.push('데이터 ' + fmt(Math.floor(s.data_age_seconds / 60)) + '분 전');
       const tail = counts.length ? ' <span class="muted">(' + escapeHTML(counts.join(' · ')) + ')</span>' : '';
       return sectionLead('<strong>' + escapeHTML(label) + ':</strong> ' + escapeHTML(detail) + tail, '⚠', 'warn');
     }

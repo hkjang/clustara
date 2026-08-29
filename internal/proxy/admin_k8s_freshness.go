@@ -14,7 +14,7 @@ import (
 // ObservedAt in the inventory, realtime-agent heartbeat liveness, and the cluster's adaptive
 // collect cadence — and returns a per-cluster (and, for a focused cluster, per-namespace and
 // per-kind) freshness score plus an overall summary. Other screens attach the same per-cluster
-// score as a stale-warning badge via clusterFreshnessBadge.
+// score as a stale-warning badge via inventoryFreshness.
 
 // clusterCollectSignals captures the timing inputs the freshness scorer needs for one cluster,
 // derived once so the cadence/agent lookups aren't repeated per scope.
@@ -94,15 +94,46 @@ func (s *Server) clusterFreshness(r *http.Request, cluster store.K8sCluster, now
 	})
 }
 
-// clusterFreshnessBadge returns a compact freshness badge for embedding in other screens
-// (Pod detail, RCA, Stack drift, Config impact) so they can show a data timestamp + stale
-// warning. Returns the zero value with band "unknown" on a missing cluster.
-func (s *Server) clusterFreshnessBadge(r *http.Request, clusterID string, now time.Time) analyzer.Freshness {
-	cluster, err := s.db.GetK8sCluster(r.Context(), clusterID)
-	if err != nil {
-		return analyzer.Freshness{Scope: "cluster", Key: clusterID, ClusterID: clusterID, Band: "unknown", Stale: true, Score: 0, AgeSeconds: -1, Reason: "클러스터를 찾을 수 없습니다."}
+// inventoryFreshness scores how current a specific set of inventory rows is — the rows a
+// verdict was actually computed from, rather than a refetch of the whole cluster. A report
+// spanning several clusters is only as trustworthy as its worst feed, so the rows are grouped
+// by cluster and the lowest-scoring group is returned. Returns the zero value (empty Band) when
+// there is nothing to score; callers already have a "nothing was examined" status for that.
+//
+// This replaces clusterFreshnessBadge, added with the freshness page (v0.9.12) so that "other
+// screens attach the same per-cluster score as a stale-warning badge" — and then never called
+// from anywhere. Freshness lived only on its own screen: every surface that turns inventory into
+// a judgement presented that judgement with no indication of how old its inputs were.
+func (s *Server) inventoryFreshness(r *http.Request, items []store.K8sInventoryItem, now time.Time) analyzer.Freshness {
+	byCluster := map[string][]store.K8sInventoryItem{}
+	order := []string{}
+	for _, it := range items {
+		if _, seen := byCluster[it.ClusterID]; !seen {
+			order = append(order, it.ClusterID)
+		}
+		byCluster[it.ClusterID] = append(byCluster[it.ClusterID], it)
 	}
-	return s.clusterFreshness(r, cluster, now)
+	var worst analyzer.Freshness
+	for i, clusterID := range order {
+		group := byCluster[clusterID]
+		sig := s.collectSignalsForCluster(r, clusterID, now)
+		f := analyzer.ScoreFreshness(analyzer.FreshnessInput{
+			Scope:            "cluster",
+			Key:              clusterID,
+			ClusterID:        clusterID,
+			LastCollectedAt:  newestObserved(group),
+			AgentAlive:       sig.agentAlive,
+			AgentAttached:    sig.agentAttached,
+			AgentLastSeen:    sig.agentLastSeen,
+			ExpectedInterval: sig.interval,
+			ResourceCount:    len(group),
+			Now:              now,
+		})
+		if i == 0 || f.Score < worst.Score {
+			worst = f
+		}
+	}
+	return worst
 }
 
 // handleK8sFreshness serves inventory freshness scores. Without cluster_id it returns one score

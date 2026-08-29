@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"clustara/internal/analyzer"
 	"clustara/internal/store"
@@ -366,10 +367,38 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 		items = items[:complianceScanBudget]
 	}
 	violations := analyzer.CheckPolicyCompliance(items, toAnalyzerPolicies(policies))
+	// The rules ran over whatever the collectors last wrote down. If the agent went
+	// offline an hour ago the inventory is an hour-old photograph, and a verdict over
+	// it is a statement about the past — indistinguishable, in this response, from a
+	// live pass. Score the freshness of the exact rows that were evaluated.
+	fresh := s.inventoryFreshness(r, items, time.Now().UTC())
 	// Compliance sign-off reads this endpoint, and "0 violations" from an empty
 	// rule set looks exactly like "0 violations" from a passing one. Say which.
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"violations": violations, "count": len(violations),
-		"policy_check": policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items), truncated),
-	})
+		"policy_check": markStaleData(policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items), truncated), fresh),
+	}
+	if fresh.Band != "" {
+		resp["freshness"] = fresh
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// markStaleData folds collection freshness into a scan-status block. The status is left
+// alone — the check really did run — but a verdict computed over inventory nobody has
+// refreshed is not a statement about the cluster now, and "checked" with no violations
+// reads as one. A block that already reported an incomplete run keeps its own reason and
+// gains the age.
+func markStaleData(check map[string]any, f analyzer.Freshness) map[string]any {
+	if check == nil || !f.Stale {
+		return check
+	}
+	check["stale"] = true
+	check["data_age_seconds"] = f.AgeSeconds
+	notice := "수집이 지연된 인벤토리로 판정했습니다 — " + f.Reason + " 이 결과는 클러스터의 현재 상태를 보장하지 않습니다."
+	if prev, ok := check["reason"].(string); ok && prev != "" {
+		notice = prev + " " + notice
+	}
+	check["reason"] = notice
+	return check
 }
