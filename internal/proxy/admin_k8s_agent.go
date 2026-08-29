@@ -140,23 +140,35 @@ func (s *Server) issueAgentToken(ctx context.Context, clusterID string, expiresA
 // only with TrimSpace. An agent token authorizes writing and DELETING that cluster's whole
 // inventory, which is what the compliance and incident surfaces read.
 func (s *Server) verifyAgentToken(ctx context.Context, token, clusterID string) bool {
+	ok, _ := s.verifyAgentTokenReason(ctx, token, clusterID)
+	return ok
+}
+
+// verifyAgentTokenReason also says WHY a token was refused. The reason is the whole point:
+// a rejected agent retries forever and the only symptom is that its cluster's data quietly
+// stops moving, which looks exactly like a crashed agent, a network partition, or a cluster
+// that genuinely has not changed. "Expired", "revoked", and "signed with a different
+// GATEWAY_SECRET" are three completely different repairs and were indistinguishable.
+//
+// The reason never contains the token or the signature.
+func (s *Server) verifyAgentTokenReason(ctx context.Context, token, clusterID string) (bool, string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] != "clustara_agent_v1" {
-		return false
+		return false, "토큰 형식이 올바르지 않습니다 (Authorization 헤더가 비었거나 다른 토큰일 수 있습니다)"
 	}
 	mac := hmac.New(sha256.New, []byte(s.cfg.Secret.GatewaySecret))
 	_, _ = mac.Write([]byte("clustara-agent-v1." + parts[1]))
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !hmac.Equal(sig, mac.Sum(nil)) {
-		return false
+		return false, "서명이 일치하지 않습니다 — GATEWAY_SECRET 이 교체된 뒤 install-manifest 를 다시 만들지 않았을 수 있습니다"
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return false
+		return false, "토큰 본문을 해석할 수 없습니다"
 	}
 	prefix := clusterID + "\n"
 	if len(raw) <= len(prefix) || subtle.ConstantTimeCompare(raw[:len(prefix)], []byte(prefix)) != 1 {
-		return false
+		return false, "다른 클러스터로 발급된 토큰입니다"
 	}
 	fields := strings.Split(string(raw[len(prefix):]), "\n")
 	var expires, generation int64
@@ -168,12 +180,74 @@ func (s *Server) verifyAgentToken(ctx context.Context, token, clusterID string) 
 			generation, err = strconv.ParseInt(fields[1], 10, 64)
 		}
 	default:
-		return false
+		return false, "토큰 본문 형식이 올바르지 않습니다"
 	}
 	if err != nil {
-		return false
+		return false, "토큰 본문 형식이 올바르지 않습니다"
 	}
-	return time.Now().Unix() < expires && generation == s.agentTokenGeneration(ctx, clusterID)
+	if time.Now().Unix() >= expires {
+		return false, "토큰이 만료됐습니다 — install-manifest 를 다시 생성하세요"
+	}
+	if current := s.agentTokenGeneration(ctx, clusterID); generation != current {
+		return false, fmt.Sprintf("폐기된 토큰입니다 (generation %d, 현재 %d) — install-manifest 를 다시 생성하세요", generation, current)
+	}
+	return true, ""
+}
+
+// agentAuthNoteInterval throttles how often one cluster's rejection is written down. A
+// rejected agent retries every couple of seconds forever, so recording per request would
+// turn one misconfigured agent into an unbounded write stream.
+const agentAuthNoteInterval = 30 * time.Second
+
+// agentAuthNotedCap bounds the throttle cache. It is only a throttle, so dropping it
+// wholesale costs one extra row write per cluster, never correctness.
+const agentAuthNotedCap = 1000
+
+// noteAgentAuthFailure records a rejected agent token against the cluster it claimed to be,
+// so a silent feed has a stated cause where collector health is already read.
+//
+// Only registered clusters are recorded. The rejection happens before authentication, so
+// keying a write on an unauthenticated cluster_id would let anyone create rows at will —
+// the row set stays bounded by the clusters an admin actually registered.
+func (s *Server) noteAgentAuthFailure(ctx context.Context, clusterID, reason string) {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" || s.db == nil {
+		return
+	}
+	if last, ok := s.agentAuthNoted.Load(clusterID); ok {
+		if at, fine := last.(time.Time); fine && time.Since(at) < agentAuthNoteInterval {
+			return
+		}
+	}
+	if _, err := s.db.GetK8sCluster(ctx, clusterID); err != nil {
+		return
+	}
+	if _, loaded := s.agentAuthNoted.Swap(clusterID, time.Now()); !loaded {
+		if s.agentAuthCount.Add(1) > agentAuthNotedCap {
+			s.agentAuthNoted.Range(func(key, _ any) bool {
+				s.agentAuthNoted.Delete(key)
+				return true
+			})
+			s.agentAuthCount.Store(0)
+		}
+	}
+	_ = s.db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{
+		ID: newID("k8scol"), ClusterID: clusterID, Collector: "agent_auth",
+		Status: "error", LastError: "에이전트 토큰이 거부됐습니다: " + reason,
+	})
+}
+
+// clearAgentAuthFailure removes a recorded rejection once a batch authenticates again. It
+// writes only on the transition, so the steady state costs nothing.
+func (s *Server) clearAgentAuthFailure(ctx context.Context, clusterID string) {
+	if _, noted := s.agentAuthNoted.LoadAndDelete(clusterID); !noted {
+		return
+	}
+	s.agentAuthCount.Add(-1)
+	_ = s.db.UpsertK8sCollectorStatus(ctx, store.K8sCollectorStatus{
+		ID: newID("k8scol"), ClusterID: clusterID, Collector: "agent_auth",
+		Status: "ok", LastSuccessAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 // issueLegacyAgentTokenForTest mints a token in the pre-generation payload format so a test
@@ -415,8 +489,12 @@ func (s *Server) handleK8sAgentEvents(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 		return
 	}
-	if !s.verifyAgentToken(r.Context(), bearerToken(r.Header.Get("Authorization")), batch.ClusterID) && !s.authorizeAdmin(r) {
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid agent token", "invalid_request_error", "invalid_api_key")
+	if ok, reason := s.verifyAgentTokenReason(r.Context(), bearerToken(r.Header.Get("Authorization")), batch.ClusterID); !ok && !s.authorizeAdmin(r) {
+		// Say so somewhere durable. Until now the only trace of a rejected agent was the
+		// absence of its data, which the freshness score reports as stale (v0.9.241) without
+		// ever naming the cause — identical to a crashed agent or a lost network.
+		s.noteAgentAuthFailure(r.Context(), batch.ClusterID, reason)
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid agent token: "+reason, "invalid_request_error", "invalid_api_key")
 		return
 	}
 	if _, err := s.db.GetK8sCluster(r.Context(), batch.ClusterID); errors.Is(err, store.ErrNotFound) {
@@ -426,6 +504,7 @@ func (s *Server) handleK8sAgentEvents(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_cluster_failed")
 		return
 	}
+	s.clearAgentAuthFailure(r.Context(), batch.ClusterID)
 	result, err := collector.ApplyAgentBatch(r.Context(), s.db, batch, newID)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "k8s_agent_batch_failed")
@@ -479,13 +558,41 @@ func (s *Server) handleK8sAgentStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	offsets, _ := s.db.ListK8sCollectorOffsets(r.Context(), r.URL.Query().Get("cluster_id"))
 	recent, _ := s.db.ListK8sWatchEvents(r.Context(), r.URL.Query().Get("cluster_id"), 50)
+	// A stale agent and a rejected agent look identical from the heartbeat alone: in both
+	// cases nothing arrives. Carry the recorded rejections so the screen that reports "stale"
+	// can also report why, instead of leaving the operator to guess between a crash, a
+	// network partition, an expired token and a revoked one.
+	rejections := s.agentAuthRejections(r.Context(), r.URL.Query().Get("cluster_id"))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agents":           views,
 		"offsets":          offsets,
 		"recent_events":    recent,
 		"count":            len(views),
 		"stale":            stale,
+		"auth_rejections":  rejections,
 		"stale_after_secs": int(agentStaleAfter.Seconds()),
-		"note":             "실시간 watch agent의 하트비트 — 마지막 수신 후 90초 경과 시 stale(오프라인)로 표시됩니다.",
+		"note":             "실시간 watch agent의 하트비트 — 마지막 수신 후 90초 경과 시 stale(오프라인)로 표시됩니다. auth_rejections 가 있으면 해당 클러스터의 agent는 죽은 것이 아니라 토큰이 거부되고 있는 것입니다.",
 	})
+}
+
+// agentAuthRejections returns the recorded agent-token rejections, optionally for one
+// cluster. Rejections are stored as an "agent_auth" collector row so they live next to the
+// rest of collector health and survive a restart of the gateway.
+func (s *Server) agentAuthRejections(ctx context.Context, clusterID string) []store.K8sCollectorStatus {
+	out := []store.K8sCollectorStatus{}
+	all, err := s.db.ListK8sCollectorStatus(ctx, 200)
+	if err != nil {
+		return out
+	}
+	clusterID = strings.TrimSpace(clusterID)
+	for _, st := range all {
+		if st.Collector != "agent_auth" || st.Status != "error" {
+			continue
+		}
+		if clusterID != "" && st.ClusterID != clusterID {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
 }

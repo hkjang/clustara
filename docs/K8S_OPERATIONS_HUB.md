@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.244** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.245** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.244)
+## 기능 상태 (v0.9.245)
 
 ### 터미널 정책 · 셸 표기와 denylist
 
@@ -528,7 +528,7 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | POST | `/admin/k8s/ai/ask` | 자연어 장애 질문 — RCA·이벤트·diff 근거 기반 답변(LLM 미구성 시 근거만) |
 | POST | `/admin/k8s/ai/report` | 클러스터 운영 상태 AI 요약 리포트 |
 | POST | `/admin/k8s/agent/events` | **실시간 수집** — 인클러스터 agent의 watch delta(ADDED/MODIFIED/DELETED) + 하트비트 배치 수신, watch 원장·offset 저장, 인벤토리/리비전/incident 즉시 갱신 |
-| GET | `/admin/k8s/agent/status` | Collector agent 하트비트(버전·resourceVersion·watch lag·재연결·수신수), stale(90s), resourceVersion checkpoint, 최근 watch 이벤트 |
+| GET | `/admin/k8s/agent/status` | Collector agent 하트비트(버전·resourceVersion·watch lag·재연결·수신수), stale(90s), resourceVersion checkpoint, 최근 watch 이벤트, `auth_rejections`(토큰이 거부되고 있는 클러스터와 그 사유 — 만료·폐기·서명 불일치·다른 클러스터) |
 | POST | `/admin/k8s/agent/revoke-tokens` | 한 클러스터에 발급된 모든 agent 토큰을 즉시 폐기(generation 증가). 유출된 토큰을 다른 클러스터에 영향 없이 무효화합니다 — 이후 해당 클러스터는 install-manifest 재생성이 필요합니다 |
 | GET | `/admin/k8s/freshness` | Inventory Freshness Score — scope(클러스터·namespace·kind)별 0~100 데이터 신선도/stale 판정 + summary. `?cluster_id=` 지정 시 namespace·kind 분해 |
 | POST | `/admin/k8s/dw/sink` | K8s fact(change/event/health/security/cost/action/metric)를 ClickHouse 적재 (미구성 시 no-op) |

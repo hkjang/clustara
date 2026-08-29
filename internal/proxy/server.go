@@ -32,7 +32,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.244"
+const AppVersion = "v0.9.245"
 
 type Server struct {
 	cfg            config.Config
@@ -94,6 +94,8 @@ type Server struct {
 	sessionGCAt      atomic.Int64
 	extSeen          sync.Map     // external key id -> struct{}; dedupes lazy registration
 	extSeenCount     atomic.Int64 // entries in extSeen, so the dedupe cache can be bounded
+	agentAuthNoted   sync.Map     // cluster id -> time.Time; last recorded agent-token rejection
+	agentAuthCount   atomic.Int64 // entries in agentAuthNoted, so the throttle cache stays bounded
 	mcpConns         sync.Map     // upstream id -> *mcpUpstreamConn (MCP gateway session state)
 	mcpTools         atomic.Pointer[mcpToolsSnapshot]
 	lastReloadNano   atomic.Int64           // unix nanos of this pod's last runtime-config reload (convergence observability)
