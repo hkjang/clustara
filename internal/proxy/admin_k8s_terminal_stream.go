@@ -147,8 +147,16 @@ func (s *Server) consumeTerminalTicket(r *http.Request, sessionID, ticket string
 	}
 	policy := s.currentAdminIPPolicy()
 	resolved := resolvePolicyClientIP(r, policy.TrustedProxies)
-	if policy.Enabled && !validBreakGlass(r, policy) && (policy.ConfigError != "" || !ipInNetworks(resolved.IP, policy.Allowed)) {
-		return terminalStreamAuth{}, false
+	if policy.Enabled {
+		if validBreakGlass(r, policy) {
+			// The same emergency header was recorded on the ordinary admin surface and on
+			// admin login, and silent here — on the path that opens a shell inside a pod.
+			// Recorded whether or not the ticket then turns out to be valid: the bypass of
+			// the IP policy is the event, and it happened.
+			s.auditIPPolicyDecision(r, "admin_ip_break_glass", "path=terminal_stream session="+sessionID+" resolved_ip="+resolved.Text)
+		} else if policy.ConfigError != "" || !ipInNetworks(resolved.IP, policy.Allowed) {
+			return terminalStreamAuth{}, false
+		}
 	}
 	value, ok, err := s.db.ConsumeK8sTerminalTicketAndClaimSession(
 		r.Context(), sessionID, ticket, resolved.Text, hashProxyKey(r.UserAgent()),

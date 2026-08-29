@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -182,11 +183,21 @@ func (s *Server) requestHasAdministratorIdentity(r *http.Request) bool {
 
 func (s *Server) auditIPPolicyDecision(r *http.Request, event, detail string) {
 	claims, _ := s.currentAccessClaims(r)
-	_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{
+	err := s.db.InsertAuditEvent(r.Context(), store.AuthEvent{
 		ID: newID("ae"), EventType: event, ActorUserID: claims.Subject, TeamID: claims.TeamID,
 		IP:        resolvePolicyClientIP(r, s.currentAdminIPPolicy().TrustedProxies).Text,
 		UserAgent: r.UserAgent(), Detail: detail, CreatedAt: time.Now().UTC(),
 	})
+	if err != nil {
+		// Loud, but not fatal. The cost-guard override refuses to proceed when it cannot be
+		// recorded (v0.9.255) because refusing an LLM call costs nothing. Break-glass is the
+		// opposite case: it is emergency access, and the database is very often the thing
+		// that is already degraded when it is reached. Requiring the audit write first would
+		// make the store a single point of administrator lockout during exactly the incident
+		// the mechanism exists for. So it proceeds — and says so where someone will see it.
+		slog.Error("administrator IP policy decision could not be recorded",
+			"event", event, "detail", detail, "error", err)
+	}
 }
 
 func (s *Server) writeAdminIPDenied(w http.ResponseWriter, r *http.Request, resolved resolvedClientIP) {
@@ -306,9 +317,15 @@ func (s *Server) handleAdminAccessPolicy(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
-	if !allowed && !validBreakGlass(r, s.currentAdminIPPolicy()) {
-		writeOpenAIError(w, http.StatusBadRequest, "현재 접속 IP가 새 허용 범위에 없어 정책을 활성화할 수 없습니다.", "invalid_request_error", "ip_policy_lockout_risk")
-		return
+	if !allowed {
+		if !validBreakGlass(r, s.currentAdminIPPolicy()) {
+			writeOpenAIError(w, http.StatusBadRequest, "현재 접속 IP가 새 허용 범위에 없어 정책을 활성화할 수 없습니다.", "invalid_request_error", "ip_policy_lockout_risk")
+			return
+		}
+		// Break-glass here overrides the lockout guard while REWRITING the allowlist itself,
+		// from an address the new policy would not admit. The setting change is audited; that
+		// the emergency token was what permitted it was not.
+		s.auditIPPolicyDecision(r, "admin_ip_break_glass", "path="+r.URL.Path+" reason=ip_policy_lockout_override resolved_ip="+resolved.Text)
 	}
 	// Persist fail-open for crash safety: write disabled first, then the networks, and enable
 	// last. The in-memory policy is swapped only after all writes complete.
