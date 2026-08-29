@@ -236,12 +236,20 @@ func schedulerWorkerStatus(st backgroundWorkerStatus) workerStatus {
 			" processed=" + itoaProxy(int(st.Processed)),
 	}
 	switch {
-	case !st.Running:
+	case !st.Running && !st.Enabled:
+		// Deliberately inert: switched off, or self-disabled with a stated reason.
 		ws.Status = "idle"
-		ws.Detail += " · 실행 중 아님(자동 비활성 또는 종료)"
-		if st.LastError != "" {
-			ws.Status = "warn"
+		ws.Detail += " · 비활성"
+		if st.DisabledReason != "" {
+			ws.Detail += "(" + st.DisabledReason + ")"
 		}
+	case !st.Running:
+		// Started and then stopped. Nothing restarts a scheduler, so this is permanent until
+		// the process is restarted — the same condition durableWorkerStatus calls critical.
+		// Both states used to render as "idle", so a dead scheduler and one that was never
+		// meant to run were the same line on the board.
+		ws.Status = "critical"
+		ws.Detail += " · 시작됐으나 실행 중이 아님 — 재시작 전까지 복구되지 않음"
 	case st.ConsecutiveFailures >= 3:
 		ws.Status = "critical"
 		ws.Detail += " · 연속 실패 " + itoaProxy(int(st.ConsecutiveFailures)) + "회"

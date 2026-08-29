@@ -39,6 +39,7 @@ func (s *Server) registerBackground(name string, interval time.Duration, enabled
 	}
 
 	s.background.Add(1)
+	observed.enabled.Store(true)
 	observed.running.Store(true)
 	go func() {
 		defer s.background.Done()
@@ -49,6 +50,21 @@ func (s *Server) registerBackground(name string, interval time.Duration, enabled
 				observed.lastError.Store(fmt.Sprintf("scheduler panicked: %v", recovered))
 				slog.Error("background scheduler panicked", "scheduler", name,
 					"panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+				return
+			}
+			// Returning while the process is still running means this scheduler gave up on
+			// its own: nothing restarts it, and until now that left no trace at all. The
+			// status board reported it exactly as it reported a scheduler the configuration
+			// had switched off.
+			//
+			// A cancelled base context is ordinary shutdown, not an exit — the same
+			// distinction runTick already makes for a cancelled tick.
+			// A scheduler that turned itself off said so through disable(); that is inert on
+			// purpose, not an exit.
+			if s.baseCtx.Err() == nil && observed.enabled.Load() {
+				observed.failures.Add(1)
+				observed.lastError.Store("scheduler returned before shutdown; it will not run again until the process restarts")
+				slog.Error("background scheduler exited before shutdown", "scheduler", name)
 			}
 		}()
 		run(s.baseCtx, observed)

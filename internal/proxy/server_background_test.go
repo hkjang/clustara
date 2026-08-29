@@ -167,11 +167,18 @@ func TestSchedulerWorkerStatusEscalatesByHealth(t *testing.T) {
 		status backgroundWorkerStatus
 		want   string
 	}{
+		// Enabled=false is the deliberately-inert case: switched off, or self-disabled with a
+		// stated reason. Not running and not enabled is a configuration, not a fault.
 		{"self-disabled", backgroundWorkerStatus{Name: "w"}, "idle"},
-		{"exited after an error", backgroundWorkerStatus{Name: "w", LastError: "boom"}, "warn"},
-		{"healthy", backgroundWorkerStatus{Name: "w", Running: true, LastSuccess: "t"}, "ok"},
-		{"one failed tick", backgroundWorkerStatus{Name: "w", Running: true, LastError: "boom", ConsecutiveFailures: 1}, "warn"},
-		{"repeatedly failing", backgroundWorkerStatus{Name: "w", Running: true, LastError: "boom", ConsecutiveFailures: 4}, "critical"},
+		// Enabled=true and not running means it started and then stopped. Nothing restarts a
+		// scheduler, so this is permanent until the process restarts — durableWorkerStatus
+		// already called the same condition critical, and this side used to say "warn" (and,
+		// with no LastError, "idle", rendering a dead scheduler exactly like a disabled one).
+		{"exited after an error", backgroundWorkerStatus{Name: "w", Enabled: true, LastError: "boom"}, "critical"},
+		{"exited silently", backgroundWorkerStatus{Name: "w", Enabled: true}, "critical"},
+		{"healthy", backgroundWorkerStatus{Name: "w", Enabled: true, Running: true, LastSuccess: "t"}, "ok"},
+		{"one failed tick", backgroundWorkerStatus{Name: "w", Enabled: true, Running: true, LastError: "boom", ConsecutiveFailures: 1}, "warn"},
+		{"repeatedly failing", backgroundWorkerStatus{Name: "w", Enabled: true, Running: true, LastError: "boom", ConsecutiveFailures: 4}, "critical"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

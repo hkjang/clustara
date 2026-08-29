@@ -32,7 +32,7 @@ import (
 )
 
 // AppVersion is the gateway build version, surfaced in /auth/me and the admin UI.
-const AppVersion = "v0.9.256"
+const AppVersion = "v0.9.257"
 
 type Server struct {
 	cfg            config.Config
@@ -177,7 +177,12 @@ func NewServer(cfg config.Config, db *store.SQLStore, logger *store.AsyncLogger,
 
 	// Multi-pod convergence: poll the admin_settings change token so a settings change made on any
 	// pod (or via direct DB edit) is applied on every pod within one interval, without a restart.
-	server.registerBackground("runtime_reload_loop", cfg.RuntimeReloadInterval, schedulersOn, func(ctx context.Context, _ *backgroundWorker) {
+	server.registerBackground("runtime_reload_loop", cfg.RuntimeReloadInterval, schedulersOn, func(ctx context.Context, observed *backgroundWorker) {
+		if cfg.RuntimeReloadInterval <= 0 {
+			// Single-pod deployments turn the settings-reload poll off. Deliberate, so it is
+			// stated rather than left to look like an exit.
+			observed.disable("설정 리로드 폴링 주기가 0 이하로 비활성")
+		}
 		server.runtimeReloadLoop(ctx, cfg.RuntimeReloadInterval)
 	})
 

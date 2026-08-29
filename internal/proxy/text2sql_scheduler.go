@@ -15,9 +15,10 @@ import (
 // execute DB is set — scheduled reports need a place to run.
 func (s *Server) text2sqlReportScheduler(parent context.Context, observed *backgroundWorker) {
 	if s.t2sConf().ExecDSN == "" {
-		// No execute DB: the scheduler is deliberately inert. Returning here
-		// clears the running flag so the ops page reports it as idle instead of
-		// claiming a healthy worker that never ticks.
+		// No execute DB: the scheduler is deliberately inert. Say so, rather than only
+		// returning — a bare return is what a scheduler that fell over also does, and the
+		// ops board would otherwise have to guess which happened.
+		observed.disable("Text2SQL 실행 DB가 설정되지 않아 비활성")
 		return
 	}
 	t := time.NewTicker(time.Minute)

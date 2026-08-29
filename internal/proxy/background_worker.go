@@ -15,7 +15,13 @@ import (
 // input to /admin/ops/workers and to the Prometheus worker gauges, so every
 // field must be safe to read while the worker is mid-tick.
 type backgroundWorkerStatus struct {
-	Name                string `json:"name"`
+	Name string `json:"name"`
+	// Enabled reports whether this worker is meant to be running. Without it a scheduler
+	// that died is indistinguishable from one deliberately inert: both are simply not
+	// running.
+	Enabled bool `json:"enabled"`
+	// DisabledReason says why a deliberately inert scheduler is inert.
+	DisabledReason      string `json:"disabled_reason,omitempty"`
 	Running             bool   `json:"running"`
 	Interval            string `json:"interval"`
 	CurrentDelay        string `json:"current_delay"`
@@ -41,19 +47,21 @@ type backgroundWorker struct {
 	interval   time.Duration
 	maxBackoff time.Duration
 
-	started     atomic.Bool
-	running     atomic.Bool
-	lastRun     atomic.Value // string, RFC3339Nano
-	lastSuccess atomic.Value // string, RFC3339Nano
-	lastError   atomic.Value // string
-	nextRunAt   atomic.Value // string, RFC3339Nano
-	ticks       atomic.Uint64
-	failures    atomic.Uint64
-	consecutive atomic.Uint64
-	processed   atomic.Uint64
-	delay       atomic.Int64 // current inter-tick delay in nanoseconds
-	done        chan struct{}
-	closeOnce   sync.Once
+	started        atomic.Bool
+	enabled        atomic.Bool
+	disabledReason atomic.Value // string
+	running        atomic.Bool
+	lastRun        atomic.Value // string, RFC3339Nano
+	lastSuccess    atomic.Value // string, RFC3339Nano
+	lastError      atomic.Value // string
+	nextRunAt      atomic.Value // string, RFC3339Nano
+	ticks          atomic.Uint64
+	failures       atomic.Uint64
+	consecutive    atomic.Uint64
+	processed      atomic.Uint64
+	delay          atomic.Int64 // current inter-tick delay in nanoseconds
+	done           chan struct{}
+	closeOnce      sync.Once
 }
 
 func newBackgroundWorker(name string, interval, maxBackoff time.Duration) *backgroundWorker {
@@ -191,6 +199,8 @@ func (w *backgroundWorker) status() backgroundWorkerStatus {
 	}
 	return backgroundWorkerStatus{
 		Name:                w.name,
+		Enabled:             w.enabled.Load(),
+		DisabledReason:      workerStringValue(&w.disabledReason),
 		Running:             w.running.Load(),
 		Interval:            w.interval.String(),
 		CurrentDelay:        time.Duration(w.delay.Load()).String(),
@@ -203,6 +213,18 @@ func (w *backgroundWorker) status() backgroundWorkerStatus {
 		ConsecutiveFailures: w.consecutive.Load(),
 		Processed:           w.processed.Load(),
 	}
+}
+
+// disable marks a scheduler as deliberately inert and says why. A scheduler that stops on
+// purpose and one that fell over both simply stop running, so the one that meant to has to
+// say so: otherwise the status board cannot tell them apart, and the exit detection in
+// registerBackground reports a healthy configuration as a failure.
+func (w *backgroundWorker) disable(reason string) {
+	if w == nil {
+		return
+	}
+	w.enabled.Store(false)
+	w.disabledReason.Store(reason)
 }
 
 func workerStringValue(v *atomic.Value) string {
