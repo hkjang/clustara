@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"hash/fnv"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -125,6 +126,13 @@ func (s *Server) enforceOpenAIGovernance(w http.ResponseWriter, r *http.Request,
 		if allowed {
 			w.Header().Set("X-Governance-Approval-ID", approvalID)
 			return body, false
+		}
+		if approvalID == "" {
+			// No approval was created, so there is nothing to wait for and nothing to
+			// announce. 423 Locked would tell the caller to go and get an approval that does
+			// not exist; this is a gateway failure, and retrying is the right response to it.
+			s.writeGovernanceOpenAIBlock(w, meta, http.StatusInternalServerError, "governance_policy_error", "approval_record_failed", reason)
+			return body, true
 		}
 		w.Header().Set("X-Governance-Approval-ID", approvalID)
 		decision.ApprovalID = approvalID
@@ -513,6 +521,10 @@ func (s *Server) writeGovernanceOpenAIBlock(w http.ResponseWriter, meta *store.L
 	writeOpenAIError(w, status, message, typ, code)
 }
 
+// governanceApprovalGate decides whether a request that policy says needs approval may
+// proceed. It returns (allowed, approvalID, reason). An EMPTY approvalID with allowed=false
+// means no approval exists to act on — the record could not be created — as distinct from a
+// refusal that names a real approval the caller can have decided.
 func (s *Server) governanceApprovalGate(r *http.Request, g governanceContext, reason string) (bool, string, string) {
 	headerID := strings.TrimSpace(r.Header.Get("X-Governance-Approval-ID"))
 	now := time.Now().UTC()
@@ -593,7 +605,17 @@ func (s *Server) governanceApprovalGate(r *http.Request, g governanceContext, re
 		ExpiresAt:   now.Add(24 * time.Hour),
 		CreatedAt:   now,
 	}
-	_ = s.db.InsertApproval(r.Context(), approval)
+	if err := s.db.InsertApproval(r.Context(), approval); err != nil {
+		// The 423 that follows tells the caller to have approval id X approved, and sets it
+		// as a response header. With the error discarded that id existed nowhere: an
+		// administrator looking it up got "approval not found", the request stayed blocked
+		// forever, and nothing recorded that the approval had never been created. Returning
+		// no id says so — the caller is still refused, because the policy did ask for an
+		// approval and we have no way to obtain one.
+		slog.Error("governance approval could not be recorded; the request is blocked with no approval to act on",
+			"request_id", g.RequestID, "api_key_id", g.APIKeyID, "reason", reason, "error", err)
+		return false, "", "승인 요청을 기록하지 못해 승인 절차를 시작할 수 없습니다: " + err.Error()
+	}
 	return false, approval.ID, "approval required: " + reason
 }
 
