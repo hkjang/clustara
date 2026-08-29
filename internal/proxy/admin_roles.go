@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -77,8 +78,29 @@ type roleInfo struct {
 // effectiveScopesForRole resolves a role's scopes through the custom-role overlay first,
 // falling back to the built-in map. Used at token issuance so custom roles take effect.
 func (s *Server) effectiveScopesForRole(ctx context.Context, role string) []string {
-	if cr, found, err := s.db.GetCustomRole(ctx, role); err == nil && found {
+	cr, found, err := s.db.GetCustomRole(ctx, role)
+	if err == nil && found {
 		return cr.Scopes
+	}
+	if err != nil && !validRole(role) {
+		// The definition of a custom role lives only in the table we just failed to read, so
+		// we do not know what it permits. The old fallback was scopesForRole, which for a name
+		// it does not recognise returns VIEWER's scopes — so a role deliberately created
+		// narrower than viewer was handed more than it was ever granted, including admin:read,
+		// the scope that reaches the operator surface. Measured: a custom role holding only
+		// chat:completion came back as viewer's seven scopes, without chat:completion.
+		//
+		// It is worse than a momentary slip: tokenScopesForUser and the SSO path mint access
+		// token scopes at login, so a read failure at that moment bakes the wrong grant into a
+		// JWT for its whole lifetime.
+		//
+		// Built-in names are excluded on purpose: they can never be custom roles (creation
+		// rejects them with 409), so the built-in table is authoritative and a custom_roles
+		// read failure says nothing about them — ordinary users must not be locked out by it.
+		// effectiveValidRole already fails closed on the same error; this makes the pair agree.
+		slog.Error("custom role definition could not be read; granting no scopes rather than a default",
+			"role", role, "error", err)
+		return []string{}
 	}
 	return scopesForRole(role)
 }
