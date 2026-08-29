@@ -526,7 +526,9 @@ func (s *Server) governanceApprovalGate(r *http.Request, g governanceContext, re
 			_ = s.db.SetApprovalStatus(r.Context(), approval.ID, "expired", "system")
 			return false, approval.ID, "approval expired"
 		}
-		if approval.Status != "approved" {
+		// "used" is a candidate, not a pass: ConsumeApproval below decides, atomically,
+		// whether this request is the one that already spent it.
+		if approval.Status != "approved" && approval.Status != "used" {
 			return false, approval.ID, "approval status is " + approval.Status
 		}
 		if !approval.ExpiresAt.IsZero() && approval.ExpiresAt.Before(now) {
@@ -535,17 +537,31 @@ func (s *Server) governanceApprovalGate(r *http.Request, g governanceContext, re
 		if approval.SubjectType != "" && approval.SubjectType != g.SubjectType {
 			return false, approval.ID, "approval subject type does not match this request"
 		}
-		if approval.APIKeyID != "" && g.APIKeyID != "" && approval.APIKeyID != g.APIKeyID {
+		// An approval bound to an identity is usable only by that identity. These used to
+		// carry "&& g.X != \"\"", which turned a request carrying no identity into a match
+		// for every bound approval — the caller least entitled to it passed most easily.
+		if approval.APIKeyID != "" && approval.APIKeyID != g.APIKeyID {
 			return false, approval.ID, "approval api key does not match this request"
 		}
-		if approval.UserID != "" && g.UserID != "" && approval.UserID != g.UserID {
+		if approval.UserID != "" && approval.UserID != g.UserID {
 			return false, approval.ID, "approval user does not match this request"
 		}
-		if approval.TeamID != "" && g.TeamID != "" && approval.TeamID != g.TeamID {
+		if approval.TeamID != "" && approval.TeamID != g.TeamID {
 			return false, approval.ID, "approval team does not match this request"
 		}
 		if approval.SubjectID != "" && approval.SubjectID != g.SubjectID {
 			return false, approval.ID, "approval subject does not match this request"
+		}
+		// Spend it. An approval authorizes one request; leaving it "approved" let the same
+		// header be replayed on every later request until it expired.
+		spent, err := s.db.ConsumeApproval(r.Context(), approval.ID, g.RequestID)
+		if err != nil {
+			// Fail closed: an approval we cannot mark as spent is one we cannot stop being
+			// replayed, and the whole point of the gate is that it is spent exactly once.
+			return false, approval.ID, "approval could not be recorded as used: " + err.Error()
+		}
+		if !spent {
+			return false, approval.ID, "approval has already been used"
 		}
 		return true, approval.ID, ""
 	}

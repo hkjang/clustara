@@ -392,6 +392,29 @@ func (s *SQLStore) SetApprovalStatus(ctx context.Context, id, status, decidedBy 
 	return err
 }
 
+// ConsumeApproval spends an approved approval on one request and reports whether it was
+// allowed to. An approval authorizes a single request; it was previously left "approved"
+// after use, so the same X-Governance-Approval-ID header replayed on every later request
+// for the whole 24-hour window — one human approval became unlimited authorization.
+//
+// The check and the spend are one conditional UPDATE, so two requests arriving with the
+// same header cannot both pass: exactly one of them matches status='approved'.
+//
+// requestID is the request spending it. A request may pass more than one governance phase
+// (the request phase and the cost phase both evaluate policies), so an approval already
+// consumed BY THIS REQUEST is still accepted; one consumed by any other request is not.
+func (s *SQLStore) ConsumeApproval(ctx context.Context, id, requestID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE approvals
+		SET status = 'used', consumed_by = ?, decided_at = ?
+		WHERE id = ? AND (status = 'approved' OR (status = 'used' AND consumed_by = ?))`),
+		requestID, formatTime(time.Now().UTC()), id, requestID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (s *SQLStore) SetPendingApprovalStatus(ctx context.Context, id, status, decidedBy string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, s.bind(`UPDATE approvals SET status = ?, decided_by = ?, decided_at = ?
 		WHERE id = ? AND status = 'pending'`), status, decidedBy, formatTime(time.Now().UTC()), id)

@@ -509,7 +509,7 @@ type Approval struct {
 	TeamID      string    `json:"team_id"`
 	SubjectType string    `json:"subject_type"`
 	SubjectID   string    `json:"subject_id"`
-	Status      string    `json:"status"` // pending | approved | rejected | expired
+	Status      string    `json:"status"` // pending | approved | rejected | expired | used
 	Reason      string    `json:"reason"`
 	RiskScore   int       `json:"risk_score"`
 	CostKRW     float64   `json:"cost_krw"`

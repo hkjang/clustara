@@ -535,6 +535,7 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			decided_at TEXT,
 			created_at TEXT NOT NULL
 		)`,
+		`ALTER TABLE approvals ADD COLUMN consumed_by TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_request ON approvals(request_id)`,
 		`CREATE TABLE IF NOT EXISTS secret_events (
