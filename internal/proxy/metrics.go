@@ -28,6 +28,7 @@ type Metrics struct {
 	knowledgeExpand    atomic.Uint64 // requests that expanded ≥1 knowledge snippet
 	knowledgeTokens    atomic.Uint64 // estimated tokens injected via knowledge expansion
 	costGuardBlock     atomic.Uint64 // requests blocked by the pre-call cost guard
+	costGuardBypass    atomic.Uint64 // requests that exceeded the guard and used X-Cost-Approve
 	promptInjection    atomic.Uint64 // requests where prompt-injection patterns were detected
 	t2sRequests        atomic.Uint64 // Text2SQL virtual-model requests handled
 	t2sCacheHit        atomic.Uint64 // Text2SQL preview cache hits
@@ -128,6 +129,7 @@ func (m *Metrics) AddKnowledgeExpansion(tokens int) {
 	}
 }
 func (m *Metrics) IncCostGuardBlock()        { m.costGuardBlock.Add(1) }
+func (m *Metrics) IncCostGuardBypass()       { m.costGuardBypass.Add(1) }
 func (m *Metrics) IncPromptInjection()       { m.promptInjection.Add(1) }
 func (m *Metrics) IncText2SQLRequest()       { m.t2sRequests.Add(1) }
 func (m *Metrics) IncText2SQLCacheHit()      { m.t2sCacheHit.Add(1) }
@@ -210,6 +212,7 @@ func (m *Metrics) Prometheus(queueDepth int, logDropped uint64, logWritten uint6
 		"# HELP proxy_cost_guard_blocked_total Requests blocked by the pre-call cost guard.",
 		"# TYPE proxy_cost_guard_blocked_total counter",
 		fmt.Sprintf("proxy_cost_guard_blocked_total %d", m.costGuardBlock.Load()),
+		fmt.Sprintf("proxy_cost_guard_bypassed_total %d", m.costGuardBypass.Load()),
 		"# HELP proxy_prompt_injection_total Requests where prompt-injection patterns were detected.",
 		"# TYPE proxy_prompt_injection_total counter",
 		fmt.Sprintf("proxy_prompt_injection_total %d", m.promptInjection.Load()),

@@ -25989,7 +25989,9 @@ const adminHTML = `<!doctype html>
       const eventTable = events.length ?
         '<table><thead><tr><th data-sort="str">시각</th><th data-sort="str">이벤트</th><th>대상</th><th>IP</th><th>상세</th></tr></thead><tbody>' +
         events.map(e => {
-          const bad = ['login_failed', 'api_key_denied', 'ip_denied', 'scope_denied', 'model_denied', 'budget_denied'].indexOf(e.event_type) >= 0;
+          // cost_guard_bypassed is not a denial but an override of an operator control, so it
+          // is highlighted for the same reason: a reviewer scanning this table must see it.
+          const bad = ['login_failed', 'api_key_denied', 'ip_denied', 'scope_denied', 'model_denied', 'budget_denied', 'cost_guard_bypassed'].indexOf(e.event_type) >= 0;
           return '<tr>' +
             '<td>' + ago(e.created_at) + '</td>' +
             '<td><span class="status ' + (bad ? 'error' : '') + '">' + escapeHTML(e.event_type) + '</span></td>' +

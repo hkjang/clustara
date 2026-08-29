@@ -402,8 +402,9 @@ func (rc *requestPipeline) stepCost() bool {
 		if blocked {
 			return false
 		}
-		if snap.guardEnabled && snap.guardThreshold > 0 && est.Priced && est.CostKRW > snap.guardThreshold &&
-			!strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Cost-Approve")), "1") {
+		overGuard := snap.guardEnabled && snap.guardThreshold > 0 && est.Priced && est.CostKRW > snap.guardThreshold
+		guardApproved := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Cost-Approve")), "1")
+		if overGuard && !guardApproved {
 			s.metrics.IncCostGuardBlock()
 			w.Header().Set("X-Cost-Guard", "blocked")
 			s.notifyMattermost(r.Context(), "cost", "비용 가드 차단: 예상 비용 "+formatKRW(est.CostKRW)+" > 임계값 "+formatKRW(snap.guardThreshold)+" (model "+rc.meta.Request.Model+")")
@@ -411,6 +412,36 @@ func (rc *requestPipeline) stepCost() bool {
 				"estimated cost "+formatKRW(est.CostKRW)+" exceeds the cost guard threshold "+formatKRW(snap.guardThreshold)+
 					"; resend with header 'X-Cost-Approve: 1' to proceed", "cost_guard_error", "cost_threshold_exceeded")
 			return false
+		}
+		if overGuard && guardApproved {
+			// The cost guard is an operator control and this header is the CALLER's own
+			// override of it. SAFETY_GUIDE promises the override is recorded ("해당 우회
+			// 이력은 별도 감사 로그로 집계됨") and nothing recorded it: an over-threshold call
+			// that used the header was indistinguishable from one that never approached the
+			// threshold — no event, no header, no marker on the request row.
+			//
+			// The write fails closed. An override nobody can review is not an override, and
+			// this is exactly the approval-bypass case auditAdminRequired's contract names:
+			// otherwise a caller who can make audit writes fail gets an unlogged bypass.
+			detail := formatKRW(est.CostKRW) + " > " + formatKRW(snap.guardThreshold) + " (model " + rc.meta.Request.Model + ")"
+			teamID := ""
+			if rc.authCtx != nil {
+				teamID = rc.authCtx.TeamID
+			}
+			if err := s.db.InsertAuditEvent(r.Context(), store.AuthEvent{
+				ID: newID("ae"), EventType: "cost_guard_bypassed", APIKeyID: rc.apiKeyID, TeamID: teamID,
+				IP: clientIP(r), UserAgent: r.UserAgent(), Detail: detail, CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				slog.Error("cost guard bypass could not be recorded; refusing the override",
+					"api_key_id", rc.apiKeyID, "detail", detail, "error", err)
+				writeOpenAIError(w, http.StatusInternalServerError,
+					"cost guard override could not be recorded, so it was not honoured; retry",
+					"server_error", "cost_guard_audit_failed")
+				return false
+			}
+			s.metrics.IncCostGuardBypass()
+			w.Header().Set("X-Cost-Guard", "approved")
+			s.notifyMattermost(r.Context(), "cost", "비용 가드 우회 승인(X-Cost-Approve): 예상 비용 "+formatKRW(est.CostKRW)+" > 임계값 "+formatKRW(snap.guardThreshold)+" (key "+rc.apiKeyID+", model "+rc.meta.Request.Model+")")
 		}
 	}
 	return true
