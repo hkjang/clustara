@@ -91,5 +91,12 @@ func (s *Server) handleSecretsRotate(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"rotated": counts,
 		"note":    "재시작 시 GATEWAY_SECRET 환경변수를 new_secret 값으로 설정하세요.",
+		// The rotated counts cover encrypted DB columns. Agent tokens are HMACs keyed by
+		// GATEWAY_SECRET, not ciphertext, so they cannot be re-signed here — and because this
+		// endpoint swaps the cipher but not cfg.Secret.GatewaySecret, they keep verifying until
+		// the restart and then all fail at once, far from the action that caused it.
+		"agent_tokens": "에이전트 토큰은 GATEWAY_SECRET 으로 서명되므로 재암호화 대상이 아닙니다. " +
+			"재시작 이후 기존 토큰이 모두 무효가 되니, 각 클러스터의 install-manifest 를 다시 생성해 에이전트를 재배포하세요. " +
+			"특정 클러스터의 토큰만 즉시 폐기하려면 POST /admin/k8s/agent/revoke-tokens?cluster_id= 를 쓰세요.",
 	})
 }

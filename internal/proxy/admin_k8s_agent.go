@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,14 +94,52 @@ func (s *Server) handleK8sAgentRuntimeConfig(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"cluster_id": clusterID, "runtime_config": cfg, "applies": "next agent heartbeat"})
 }
 
-func (s *Server) issueAgentToken(clusterID string, expiresAt time.Time) string {
-	payload := base64.RawURLEncoding.EncodeToString([]byte(clusterID + "\n" + fmt.Sprint(expiresAt.Unix())))
+// agentTokenGenPrefix keys the per-cluster agent token generation. Bumping it invalidates
+// every token ever issued for that cluster and nothing else — the only other way to kill a
+// leaked agent token was rotating GATEWAY_SECRET, which is the HMAC key for every cluster's
+// tokens at once (and, since the rotation endpoint only swaps the cipher, does not even take
+// effect until the next restart).
+const agentTokenGenPrefix = "k8s.agent.token_generation."
+
+// agentTokenGeneration reads a cluster's current token generation. Unreadable or absent is
+// generation 0, which is also what a token issued before this existed carries — those keep
+// working until the cluster is revoked at least once.
+func (s *Server) agentTokenGeneration(ctx context.Context, clusterID string) int64 {
+	if s.db == nil {
+		return 0
+	}
+	v, found, err := s.db.GetAdminSetting(ctx, agentTokenGenPrefix+clusterID)
+	if err != nil || !found {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v.ValueJSON), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+func (s *Server) issueAgentToken(ctx context.Context, clusterID string, expiresAt time.Time) string {
+	body := clusterID + "\n" + strconv.FormatInt(expiresAt.Unix(), 10) + "\n" +
+		strconv.FormatInt(s.agentTokenGeneration(ctx, clusterID), 10)
+	payload := base64.RawURLEncoding.EncodeToString([]byte(body))
 	mac := hmac.New(sha256.New, []byte(s.cfg.Secret.GatewaySecret))
 	_, _ = mac.Write([]byte("clustara-agent-v1." + payload))
 	return "clustara_agent_v1." + payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func (s *Server) verifyAgentToken(token, clusterID string) bool {
+// verifyAgentToken checks an agent token against the cluster the batch claims to be from.
+//
+// The cluster is matched by requiring the payload to START with exactly "<clusterID>\n" and
+// the remainder to be nothing but the numeric fields, rather than by parsing a cluster name
+// out of the payload and comparing it. The old code did the latter with
+// fmt.Sscanf("%s\n%d"), and %s stops at the first whitespace: a cluster registered with the
+// id "victim\n9999999999" produced a token whose payload parsed as cluster "victim" with an
+// expiry in the year 2286, so it authenticated as a DIFFERENT cluster — and, since the parse
+// never matched its own id, not as its own. Cluster ids are admin-supplied and were validated
+// only with TrimSpace. An agent token authorizes writing and DELETING that cluster's whole
+// inventory, which is what the compliance and incident surfaces read.
+func (s *Server) verifyAgentToken(ctx context.Context, token, clusterID string) bool {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] != "clustara_agent_v1" {
 		return false
@@ -114,12 +154,79 @@ func (s *Server) verifyAgentToken(token, clusterID string) bool {
 	if err != nil {
 		return false
 	}
-	var tokenCluster string
-	var expires int64
-	if _, err = fmt.Sscanf(string(raw), "%s\n%d", &tokenCluster, &expires); err != nil {
+	prefix := clusterID + "\n"
+	if len(raw) <= len(prefix) || subtle.ConstantTimeCompare(raw[:len(prefix)], []byte(prefix)) != 1 {
 		return false
 	}
-	return hmac.Equal([]byte(tokenCluster), []byte(clusterID)) && time.Now().Unix() < expires
+	fields := strings.Split(string(raw[len(prefix):]), "\n")
+	var expires, generation int64
+	switch len(fields) {
+	case 1: // issued before generations existed; treated as generation 0
+		expires, err = strconv.ParseInt(fields[0], 10, 64)
+	case 2:
+		if expires, err = strconv.ParseInt(fields[0], 10, 64); err == nil {
+			generation, err = strconv.ParseInt(fields[1], 10, 64)
+		}
+	default:
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	return time.Now().Unix() < expires && generation == s.agentTokenGeneration(ctx, clusterID)
+}
+
+// issueLegacyAgentTokenForTest mints a token in the pre-generation payload format so a test
+// can prove an upgrade does not silently stop every deployed agent.
+func (s *Server) issueLegacyAgentTokenForTest(clusterID string, expiresAt time.Time) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(clusterID + "\n" + strconv.FormatInt(expiresAt.Unix(), 10)))
+	mac := hmac.New(sha256.New, []byte(s.cfg.Secret.GatewaySecret))
+	_, _ = mac.Write([]byte("clustara-agent-v1." + payload))
+	return "clustara_agent_v1." + payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// handleK8sAgentRevokeTokens invalidates every agent token issued for one cluster by bumping
+// its generation. Scoped on purpose: a leaked token previously had no remedy short of
+// rotating GATEWAY_SECRET, which kills every cluster's agents and is also the encryption key
+// for stored cluster credentials.
+// POST /admin/k8s/agent/revoke-tokens?cluster_id=
+func (s *Server) handleK8sAgentRevokeTokens(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
+		return
+	}
+	clusterID := strings.TrimSpace(r.URL.Query().Get("cluster_id"))
+	if clusterID == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "cluster_id is required", "invalid_request_error", "cluster_id_required")
+		return
+	}
+	if _, err := s.db.GetK8sCluster(r.Context(), clusterID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeOpenAIError(w, status, "cluster not found: "+clusterID, "invalid_request_error", "cluster_not_found")
+		return
+	}
+	next := s.agentTokenGeneration(r.Context(), clusterID) + 1
+	err := s.db.UpsertAdminSetting(r.Context(), store.AdminSetting{
+		Key: agentTokenGenPrefix + clusterID, Category: "k8s_agent",
+		ValueJSON: strconv.FormatInt(next, 10), ValueType: "int", Source: "admin",
+	}, adminID(r), "agent token revocation")
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "agent_token_revoke_failed")
+		return
+	}
+	s.auditAdmin(r, "k8s.agent.token.revoke", "", auditJSON(map[string]any{"cluster_id": clusterID, "generation": next}))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster_id": clusterID, "generation": next,
+		"revoked": "이 클러스터에 발급된 모든 에이전트 토큰이 즉시 무효화됐습니다.",
+		"next":    "install-manifest 를 다시 생성해 새 토큰으로 에이전트를 재배포하세요. 그때까지 해당 클러스터의 실시간 수집은 중단됩니다.",
+	})
 }
 
 func yamlDoubleQuoted(value string) string {
@@ -288,7 +395,7 @@ func (s *Server) handleK8sAgentInstallManifest(w http.ResponseWriter, r *http.Re
 		return
 	}
 	expiresAt := time.Now().UTC().Add(agentTokenLifetime)
-	manifest := agentInstallManifest(req.ClusterID, req.ClustaraURL, req.Image, s.issueAgentToken(req.ClusterID, expiresAt))
+	manifest := agentInstallManifest(req.ClusterID, req.ClustaraURL, req.Image, s.issueAgentToken(r.Context(), req.ClusterID, expiresAt))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"manifest": manifest, "cluster_id": req.ClusterID, "clustara_url": req.ClustaraURL,
 		"image": req.Image, "agent_command": "/app/clustara-agent", "token_expires_at": expiresAt.Format(time.RFC3339),
@@ -308,7 +415,7 @@ func (s *Server) handleK8sAgentEvents(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 		return
 	}
-	if !s.verifyAgentToken(bearerToken(r.Header.Get("Authorization")), batch.ClusterID) && !s.authorizeAdmin(r) {
+	if !s.verifyAgentToken(r.Context(), bearerToken(r.Header.Get("Authorization")), batch.ClusterID) && !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid agent token", "invalid_request_error", "invalid_api_key")
 		return
 	}

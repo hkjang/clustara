@@ -410,6 +410,7 @@ var apiEndpoints = []apiEndpoint{
 	{"/admin/k8s/agent/status", []string{"get"}, "k8s", "Realtime collector agent heartbeat, offsets, and recent watch events", false},
 	{"/admin/k8s/agent/install-manifest", []string{"post"}, "k8s", "Generate a ready-to-apply collector agent manifest and scoped token", false},
 	{"/admin/k8s/agent/runtime-config", []string{"get", "post"}, "k8s", "Read or update cluster-scoped Agent runtime delivery settings", false},
+	{"/admin/k8s/agent/revoke-tokens", []string{"post"}, "k8s", "Revoke every agent token issued for one cluster", false},
 	{"/admin/k8s/home", []string{"get"}, "k8s", "Kubernetes operations home with risk, incident, change, and cost rollups", false},
 	{"/admin/k8s/ai/ask", []string{"post"}, "k8s", "Ask a grounded Kubernetes operations question over collected evidence", false},
 	{"/admin/k8s/ai/report", []string{"post"}, "k8s", "Generate a grounded Kubernetes operations report from collected evidence", false},

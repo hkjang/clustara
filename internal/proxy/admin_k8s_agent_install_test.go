@@ -67,14 +67,14 @@ func TestAgentInstallManifestUsesSameReleaseImageAndScopedToken(t *testing.T) {
 func TestAgentScopedTokenIsBoundToCluster(t *testing.T) {
 	cfg := testConfig("http://upstream.invalid", "secret")
 	server := &Server{cfg: cfg}
-	token := server.issueAgentToken("cluster-a", time.Now().Add(time.Hour))
-	if !server.verifyAgentToken(token, "cluster-a") {
+	token := server.issueAgentToken(context.Background(), "cluster-a", time.Now().Add(time.Hour))
+	if !server.verifyAgentToken(context.Background(), token, "cluster-a") {
 		t.Fatal("issued token should verify for its cluster")
 	}
-	if server.verifyAgentToken(token, "cluster-b") {
+	if server.verifyAgentToken(context.Background(), token, "cluster-b") {
 		t.Fatal("agent token must not authorize another cluster")
 	}
-	if server.verifyAgentToken(server.issueAgentToken("cluster-a", time.Now().Add(-time.Second)), "cluster-a") {
+	if server.verifyAgentToken(context.Background(), server.issueAgentToken(context.Background(), "cluster-a", time.Now().Add(-time.Second)), "cluster-a") {
 		t.Fatal("expired agent token must be rejected")
 	}
 }

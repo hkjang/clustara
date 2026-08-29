@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	k8saction "clustara/internal/action"
 	"clustara/internal/analyzer"
@@ -49,6 +50,24 @@ func (s *Server) handleK8sOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, overview)
 }
 
+// validClusterID rejects whitespace and control characters in a cluster id. The id was only
+// TrimSpace'd, and it is embedded in the agent token's newline-delimited payload: an id
+// containing a newline let a token issued for one cluster authenticate as another
+// (v0.9.244). The token parser no longer depends on this, but an id that cannot be typed
+// on one line has no legitimate use and every downstream key built from it — settings keys,
+// identity strings, log lines — is clearer without one.
+func validClusterID(id string) bool {
+	if id == "" || len(id) > 200 {
+		return false
+	}
+	for _, r := range id {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handleK8sClusters(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeAdmin(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid admin token", "invalid_request_error", "invalid_api_key")
@@ -76,6 +95,10 @@ func (s *Server) handleK8sClusters(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(p.ID)
 		if id == "" {
 			id = newID("k8scl")
+		}
+		if !validClusterID(id) {
+			writeOpenAIError(w, http.StatusBadRequest, "cluster id must not contain whitespace or control characters", "invalid_request_error", "invalid_cluster_id")
+			return
 		}
 		cluster := store.K8sCluster{
 			ID:          id,
