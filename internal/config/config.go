@@ -225,6 +225,13 @@ type CacheConfig struct {
 	ChatSemanticThreshold     float64 // cosine similarity required for a hit (0..1)
 	ChatSemanticMaxCandidates int     // max recent entries scanned per model
 	ChatSemanticMultiTurn     bool    // also embed multi-turn/tool requests (default off: single-turn only)
+	// ChatSemanticScope bounds who may be served one another's cached answers.
+	// The exact cache can be shared safely — an identical prompt returns an answer the
+	// caller could have obtained by sending it themselves. This cache matches on
+	// SIMILARITY, so a global pool serves one caller another caller's answer to a
+	// DIFFERENT question. "team" (default) and "key" confine reuse to a tenant; "global"
+	// restores the old shared pool and must only be set where every caller is one tenant.
+	ChatSemanticScope string // global | team | key
 	// Optional dedicated embedding endpoint for the semantic cache. When empty, embedding
 	// calls fall back to the normal provider selection (model glob → default upstream).
 	EmbeddingProvider string // force this configured provider for embedding calls
@@ -455,6 +462,7 @@ func Load() (Config, error) {
 			ChatSemanticThreshold:     floatEnv("CACHE_CHAT_SEMANTIC_THRESHOLD", 0.95),
 			ChatSemanticMaxCandidates: intEnv("CACHE_CHAT_SEMANTIC_MAX_CANDIDATES", 200),
 			ChatSemanticMultiTurn:     boolEnv("CACHE_CHAT_SEMANTIC_MULTITURN", false),
+			ChatSemanticScope:         getEnv("CACHE_CHAT_SEMANTIC_SCOPE", "team"),
 			EmbeddingProvider:         os.Getenv("CACHE_EMBEDDING_PROVIDER"),
 			EmbeddingBaseURL:          os.Getenv("CACHE_EMBEDDING_BASE_URL"),
 			EmbeddingAPIKey:           os.Getenv("CACHE_EMBEDDING_API_KEY"),
@@ -595,6 +603,14 @@ func Load() (Config, error) {
 	}
 	if cfg.HTTP.MaxHeaderBytes < 0 {
 		return Config{}, fmt.Errorf("HTTP_MAX_HEADER_BYTES must be non-negative")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Cache.ChatSemanticScope)) {
+	case "global", "team", "key":
+		cfg.Cache.ChatSemanticScope = strings.ToLower(strings.TrimSpace(cfg.Cache.ChatSemanticScope))
+	case "":
+		cfg.Cache.ChatSemanticScope = "team"
+	default:
+		return Config{}, fmt.Errorf("CACHE_CHAT_SEMANTIC_SCOPE must be one of global, team, key")
 	}
 	if cfg.Keycloak.Enabled && !cfg.Auth.Enabled {
 		return Config{}, fmt.Errorf("AUTH_ENABLED=true is required when SSO_KEYCLOAK_ENABLED=true")

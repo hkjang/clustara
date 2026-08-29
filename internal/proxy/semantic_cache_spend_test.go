@@ -144,6 +144,10 @@ func newSemanticCacheProxy(t *testing.T, upstreamURL string) (*store.SQLStore, *
 	cfg.Cache = config.CacheConfig{
 		ChatEnabled: true, ChatSemanticEnabled: true, ChatSemanticModel: "embed-model",
 		ChatSemanticThreshold: 0.9, ChatSemanticMaxCandidates: 50,
+		// These tests are about what the cache SPENDS, not who it is shared with. The
+		// harness has no authenticated caller, and the default "team" scope excludes an
+		// unidentified one, so ask for the shared pool explicitly.
+		ChatSemanticScope: "global",
 	}
 	cfg.Pricing["embed-model"] = config.ModelPrice{InputKRWPer1M: 1000}
 	server, err := NewServer(cfg, db, logger, nil)

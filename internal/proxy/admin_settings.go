@@ -77,6 +77,13 @@ func buildSettingRegistry() []settingDef {
 		}
 		return nil
 	}
+	semanticScopeValue := func(v string) error {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "global", "team", "key":
+			return nil
+		}
+		return fmt.Errorf("must be one of global, team, key")
+	}
 	rate01 := func(v string) error {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || f < 0 || f > 1 {
@@ -214,6 +221,7 @@ func buildSettingRegistry() []settingDef {
 		{Key: "cache.chat_semantic_threshold", Category: "cache", Type: stFloat, validate: rate01, envValue: func(c config.Config) string { return strconv.FormatFloat(c.Cache.ChatSemanticThreshold, 'f', -1, 64) }},
 		{Key: "cache.chat_semantic_max_candidates", Category: "cache", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Cache.ChatSemanticMaxCandidates) }},
 		{Key: "cache.chat_semantic_multiturn", Category: "cache", Type: stBool, envValue: func(c config.Config) string { return strconv.FormatBool(c.Cache.ChatSemanticMultiTurn) }},
+		{Key: "cache.chat_semantic_scope", Category: "cache", Type: stString, validate: semanticScopeValue, envValue: func(c config.Config) string { return c.Cache.ChatSemanticScope }},
 		{Key: "cache.embedding_provider", Category: "cache", Type: stString, envValue: func(c config.Config) string { return c.Cache.EmbeddingProvider }},
 		{Key: "cache.embedding_base_url", Category: "cache", Type: stString, envValue: func(c config.Config) string { return c.Cache.EmbeddingBaseURL }},
 		{Key: "cache.embedding_api_key", Category: "cache", Type: stString, Secret: true, envValue: func(c config.Config) string { return c.Cache.EmbeddingAPIKey }},
@@ -391,6 +399,7 @@ var settingDescriptions = map[string]string{
 	"cache.chat_semantic_threshold":      "시맨틱 캐시 적중 코사인 유사도 임계값(0~1).",
 	"cache.chat_semantic_max_candidates": "시맨틱 비교 후보 최대 개수.",
 	"cache.chat_semantic_multiturn":      "멀티턴/툴 요청도 임베딩할지 여부. 기본 off(단발성 요청만) — 멀티턴은 적중률이 낮고 잘못 적중 위험이 있어 임베딩 호출을 생략.",
+	"cache.chat_semantic_scope":          "시맨틱 캐시 재사용 범위: team(기본)·key·global. 이 캐시는 유사도로 맞추므로 global 은 다른 질문에 대한 남의 답이 서빙될 수 있습니다 — 모든 호출자가 한 테넌트일 때만 쓰세요. team/key 에서 신원이 없는 호출자는 캐시를 쓰지 않습니다.",
 	"cache.embedding_provider":           "임베딩 호출에 강제할 프로바이더 이름. 비우면 기존 라우팅(모델 glob→기본 업스트림) 사용.",
 	"cache.embedding_base_url":           "임베딩 전용 엔드포인트 base URL(예: 사내 임베딩 서버). 설정 시 {base_url}/v1/embeddings로 직접 호출. 비우면 프로바이더 라우팅 사용.",
 	"cache.embedding_api_key":            "임베딩 base URL용 인증 키. 암호화 저장·마스킹. 비우면 기본 업스트림 키로 폴백(또는 무인증).",
@@ -820,6 +829,8 @@ func applyRuntimeSetting(t2s *config.Text2SQLConfig, ch *config.ClickHouseConfig
 		cache.ChatSemanticThreshold = atof()
 	case "cache.chat_semantic_max_candidates":
 		cache.ChatSemanticMaxCandidates = atoi()
+	case "cache.chat_semantic_scope":
+		cache.ChatSemanticScope = strings.ToLower(strings.TrimSpace(val))
 	case "cache.chat_semantic_multiturn":
 		cache.ChatSemanticMultiTurn = atob()
 	case "cache.embedding_provider":

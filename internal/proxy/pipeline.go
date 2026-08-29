@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"clustara/internal/audit"
@@ -63,6 +64,9 @@ type requestPipeline struct {
 	chatCacheKey    string
 	chatCacheable   bool
 	chatSemanticVec []float64
+	// chatSemanticScope is the pool this caller may read from and write to; "" is the
+	// explicit global pool.
+	chatSemanticScope string
 
 	skillName    string
 	skillVersion string
@@ -299,6 +303,10 @@ func (rc *requestPipeline) stepGovernance() bool {
 // stepCache serves idempotent responses without an upstream call: the embedding
 // cache for /v1/embeddings and the opt-in deterministic chat cache. It also
 // records chat-cache eligibility so the upstream step can populate the cache.
+// semanticScopeWarnOnce keeps the "cache is on but nobody can use it" warning to one line
+// per process rather than one per request.
+var semanticScopeWarnOnce sync.Once
+
 func (rc *requestPipeline) stepCache() bool {
 	s, r, w := rc.s, rc.r, rc.w
 
@@ -317,10 +325,30 @@ func (rc *requestPipeline) stepCache() bool {
 		}
 		// Exact miss → try the embedding-based semantic cache (opt-in). The query vector
 		// is kept on rc so a fresh upstream response is stored under it.
-		if vec, served := s.serveChatSemantic(r.Context(), w, r, rc.body, rc.meta, rc.traceID); served {
-			return false
-		} else {
-			rc.chatSemanticVec = vec
+		//
+		// The scope decides which pool this caller shares. Unlike the exact cache, a
+		// similarity match can return an answer to someone else's question, so the pool is
+		// bounded by tenant unless the operator explicitly asks for one shared pool. An
+		// unidentified caller under a scoped mode gets no semantic cache at all rather than
+		// being pooled with every other unidentified caller.
+		scope, usable := semanticCacheScope(s.cacheConf().ChatSemanticScope, rc.authCtx)
+		rc.chatSemanticScope = scope
+		if !usable {
+			// Say it once. Otherwise an operator turns the feature on, sees zero hits and no
+			// embedding traffic, and has nothing to go on — the same silent-inaction shape
+			// this scoping was added to remove.
+			semanticScopeWarnOnce.Do(func() {
+				slog.Warn("semantic cache is enabled but inactive: callers cannot be identified under the configured scope",
+					"scope", s.cacheConf().ChatSemanticScope,
+					"fix", "authenticate callers, or set CACHE_CHAT_SEMANTIC_SCOPE=global if every caller is one tenant")
+			})
+		}
+		if usable {
+			if vec, served := s.serveChatSemantic(r.Context(), w, r, rc.body, rc.meta, rc.traceID, scope); served {
+				return false
+			} else {
+				rc.chatSemanticVec = vec
+			}
 		}
 	}
 	return true
@@ -586,7 +614,7 @@ func (rc *requestPipeline) stepUpstream() bool {
 	}
 	if captureForChatCache && analysis.Text != "" {
 		s.maybeStoreChatCache(r.Context(), rc.chatCacheKey, resp.StatusCode, resp.Header.Get("Content-Type"), []byte(analysis.Text))
-		s.maybeStoreChatSemantic(r.Context(), rc.body, rc.chatSemanticVec, resp.StatusCode, resp.Header.Get("Content-Type"), []byte(analysis.Text))
+		s.maybeStoreChatSemantic(r.Context(), rc.body, rc.chatSemanticVec, resp.StatusCode, resp.Header.Get("Content-Type"), []byte(analysis.Text), rc.chatSemanticScope)
 	}
 	if captureForCache || captureForChatCache {
 		s.metrics.IncCacheMiss()
