@@ -152,9 +152,22 @@ func (rc *requestPipeline) stepQuota() bool {
 	s, r, w := rc.s, rc.r, rc.w
 
 	clientAddr := clientIP(r)
-	if decision, err := s.checkQuotas(r.Context(), rc.apiKeyID, clientAddr); err != nil {
-		slog.Warn("quota check failed", "error", err)
-	} else if !decision.Allowed {
+	decision, err := s.checkQuotas(r.Context(), rc.apiKeyID, clientAddr)
+	if err != nil {
+		// A scope that could not be read is not a scope that was satisfied. The request is
+		// still allowed — a slow usage aggregate must not become a gateway outage, and that
+		// aggregate gets slower exactly as usage grows — but it must not look enforced.
+		slog.Warn("quota check incomplete; some scopes were not evaluated",
+			"error", err, "unevaluated", strings.Join(decision.Unevaluated, ","), "api_key_id", rc.apiKeyID)
+	}
+	if len(decision.Unevaluated) > 0 {
+		w.Header().Set("X-Quota", "partial")
+		w.Header().Set("X-Quota-Unevaluated", strings.Join(decision.Unevaluated, ","))
+	}
+	// A breach found by a readable scope is honoured even when another scope failed: the
+	// error used to suppress the whole decision, so one unreadable scope let a request
+	// through that a different, perfectly readable quota had already refused.
+	if !decision.Allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(quotaRetryAfterSeconds(decision.PeriodEnd)))
 		w.Header().Set("X-Quota-Scope", quotaHeaderTag(decision))
 		w.Header().Set("X-Quota-Tokens", strconv.FormatInt(decision.Tokens, 10))
