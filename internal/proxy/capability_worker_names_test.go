@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -206,3 +207,72 @@ func migratedTableNames(t *testing.T) map[string]bool {
 	}
 	return out
 }
+
+// UITabs is the registry's last reference field: it tells an operator which admin screen a
+// capability lives on, and the capability card renders the names as chips.
+//
+// Measured: the okf capability claimed a tab named "okf" and the admin SPA has no such
+// route — no case label, no render function, not one occurrence of the string anywhere in
+// the UI. The backend is real (eight registered routes, a store layer, okf_documents and
+// okf_links), so the catalog pointed at the one part of the feature that does not exist.
+//
+// Checked against the router switch specifically rather than every "case 'x':" in the file,
+// so an unrelated switch elsewhere cannot make a dead tab look alive. All 54 tab names
+// resolve there; only okf did not.
+func TestCapabilityUITabsExistInTheAdminRouter(t *testing.T) {
+	labels := adminRouterTabLabels(t)
+
+	for _, capability := range capabilityRegistry {
+		for _, tab := range capability.UITabs {
+			if !labels[tab] {
+				t.Errorf("capability %q lists UI tab %q, which the admin SPA router does not "+
+					"dispatch; the card sends an operator to a screen that does not exist",
+					capability.Key, tab)
+			}
+		}
+	}
+}
+
+// adminRouterTabLabels returns the tab names the admin SPA's route switch handles. The
+// router is identified by the case label for this very screen, so the anchor cannot drift
+// to some other switch.
+func adminRouterTabLabels(t *testing.T) map[string]bool {
+	t.Helper()
+	const anchor = "case 'capabilities':"
+	idx := strings.Index(adminHTML, anchor)
+	if idx < 0 {
+		t.Fatal("the admin router anchor is gone; this scan is looking at the wrong place")
+	}
+	start := strings.LastIndex(adminHTML[:idx], "switch (tab) {")
+	if start < 0 {
+		t.Fatal("no route switch found before the anchor")
+	}
+	depth, end := 0, -1
+	for i := start; i < len(adminHTML); i++ {
+		switch adminHTML[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatal("route switch is unbalanced")
+	}
+	labels := map[string]bool{}
+	for _, m := range routerCaseLabel.FindAllStringSubmatch(adminHTML[start:end], -1) {
+		labels[m[1]] = true
+	}
+	if len(labels) < 50 {
+		t.Fatalf("only %d route labels found; the scan is looking at the wrong place", len(labels))
+	}
+	return labels
+}
+
+var routerCaseLabel = regexp.MustCompile(`case '([a-z0-9\-_]+)':`)

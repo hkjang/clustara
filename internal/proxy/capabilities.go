@@ -147,11 +147,14 @@ var capabilityRegistry = []Capability{
 	},
 	{
 		Key: "okf", Name: "OKF 지식", Group: "data",
-		Description: "조직 지식 프레임(Org Knowledge Frame): Text2SQL/Clustara 지식 주입 + 자기개선 루프.",
+		Description: "조직 지식 프레임(Org Knowledge Frame): Text2SQL/Clustara 지식 주입 + 자기개선 루프. 이 빌드에서는 관리 UI 없이 API 전용입니다.",
 		APIs:        []string{"GET/POST /admin/okf/*"},
-		UITabs:      []string{"okf"},
-		Scopes:      []string{"admin:read"},
-		Tables:      []string{"okf_documents", "okf_links"},
+		// No UITabs: the admin SPA has no okf route. The catalog used to claim one, which
+		// sent an operator to a tab that does not exist — the backend (8 routes, store layer,
+		// okf_documents/okf_links) is real, the screen is not.
+		UITabs: nil,
+		Scopes: []string{"admin:read"},
+		Tables: []string{"okf_documents", "okf_links"},
 	},
 	{
 		Key: "personalization", Name: "개인화", Group: "users",
