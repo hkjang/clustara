@@ -86,7 +86,27 @@ func chatIsSingleTurn(body []byte) bool {
 // embedText calls the configured embedding model (via the normal provider selection)
 // to vectorize text. Best-effort with a short timeout; returns an error the caller
 // treats as "no semantic cache for this request".
-func (s *Server) embedText(ctx context.Context, r *http.Request, model, text string) ([]float64, error) {
+// embedSpend is what one semantic-cache embedding call actually cost. The call is made
+// per eligible chat request, hit or miss, and until now it was invisible: the identical
+// HTTP call made by a client against /v1/embeddings produces a request row with usage and
+// cost, and made here it produced nothing at all. The cache's savings were reported while
+// its running cost was not, so a semantic cache could cost more than it saved with no
+// report able to show it.
+type embedSpend struct {
+	model     string
+	provider  string
+	status    int
+	latencyMS int64
+	usage     audit.Usage
+	hasUsage  bool
+	inputText string
+	errText   string
+}
+
+func (s *Server) embedText(ctx context.Context, r *http.Request, model, text string) ([]float64, embedSpend, error) {
+	spend := embedSpend{model: model, inputText: text}
+	start := time.Now()
+	defer func() { spend.latencyMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cfg := s.cacheConf()
@@ -99,24 +119,29 @@ func (s *Server) embedText(ctx context.Context, r *http.Request, model, text str
 		if strings.TrimSpace(apiKey) == "" {
 			if provider, perr := s.selectProvider(ctx, r, model); perr == nil {
 				apiKey = provider.APIKey
+				spend.provider = provider.Name
 			}
 		}
 	} else {
 		// Optional provider override; empty → normal selection (model glob → default upstream).
 		provider, err := s.selectProviderForced(ctx, r, model, strings.TrimSpace(cfg.EmbeddingProvider))
 		if err != nil {
-			return nil, err
+			spend.errText = err.Error()
+			return nil, spend, err
 		}
 		baseURL, apiKey = provider.BaseURL, provider.APIKey
+		spend.provider = provider.Name
 	}
 	upstreamURL, err := s.upstreamURL(baseURL, &url.URL{Path: "/v1/embeddings"})
 	if err != nil {
-		return nil, err
+		spend.errText = err.Error()
+		return nil, spend, err
 	}
 	reqBody, _ := json.Marshal(map[string]any{"model": model, "input": text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, err
+		spend.errText = err.Error()
+		return nil, spend, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if strings.TrimSpace(apiKey) != "" {
@@ -124,25 +149,97 @@ func (s *Server) embedText(ctx context.Context, r *http.Request, model, text str
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		spend.errText = err.Error()
+		return nil, spend, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	spend.status = resp.StatusCode
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &cacheEmbedError{status: resp.StatusCode}
+		return nil, spend, &cacheEmbedError{status: resp.StatusCode}
 	}
 	var parsed struct {
 		Data []struct {
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
+		Usage struct {
+			PromptTokens int `json:"prompt_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, err
+		spend.errText = err.Error()
+		return nil, spend, err
+	}
+	if parsed.Usage.TotalTokens > 0 || parsed.Usage.PromptTokens > 0 {
+		spend.hasUsage = true
+		spend.usage = audit.Usage{
+			PromptTokens: parsed.Usage.PromptTokens,
+			TotalTokens:  parsed.Usage.TotalTokens,
+			Source:       "usage",
+		}
+		if spend.usage.TotalTokens == 0 {
+			spend.usage.TotalTokens = spend.usage.PromptTokens
+		}
 	}
 	if len(parsed.Data) == 0 || len(parsed.Data[0].Embedding) == 0 {
-		return nil, &cacheEmbedError{status: resp.StatusCode}
+		return nil, spend, &cacheEmbedError{status: resp.StatusCode}
 	}
-	return parsed.Data[0].Embedding, nil
+	return parsed.Data[0].Embedding, spend, nil
+}
+
+// recordSemanticEmbedSpend logs the semantic cache's embedding call as its own request,
+// carrying the triggering request's attribution (key, team tags, cost centre) so the spend
+// lands on whoever caused it rather than on nobody. An upstream rejection is recorded as
+// explicitly not billed, the same rule as the main path (v0.9.247).
+func (s *Server) recordSemanticEmbedSpend(ctx context.Context, trigger store.RequestLog, spend embedSpend) {
+	if strings.TrimSpace(spend.model) == "" {
+		return
+	}
+	req := store.RequestLog{
+		ID:          newID("req"),
+		TraceID:     trigger.TraceID,
+		APIKeyID:    trigger.APIKeyID,
+		ClientIP:    trigger.ClientIP,
+		Hostname:    trigger.Hostname,
+		Model:       spend.model,
+		Endpoint:    "/v1/embeddings",
+		Provider:    firstNonEmpty(spend.provider, "cache-semantic"),
+		StatusCode:  spend.status,
+		LatencyMS:   spend.latencyMS,
+		Error:       spend.errText,
+		RouteReason: "cache-semantic-embed",
+		Repo:        trigger.Repo,
+		Branch:      trigger.Branch,
+		Project:     trigger.Project,
+		Service:     trigger.Service,
+		CostCenter:  trigger.CostCenter,
+		CreatedAt:   time.Now().UTC(),
+	}
+	record := store.LogRecord{Request: req}
+	switch {
+	case spend.status >= 400 || spend.status == 0:
+		record.Usage = &store.TokenUsage{
+			ID: newID("usage"), RequestID: req.ID, Currency: "KRW",
+			Source: "not_billed", CreatedAt: time.Now().UTC(),
+		}
+	default:
+		usage := spend.usage
+		if !spend.hasUsage {
+			tokens := audit.EstimateTokens(spend.inputText)
+			usage = audit.Usage{PromptTokens: tokens, TotalTokens: tokens, Source: "estimated"}
+		}
+		record.Usage = &store.TokenUsage{
+			ID: newID("usage"), RequestID: req.ID,
+			PromptTokens:  usage.PromptTokens,
+			TotalTokens:   usage.TotalTokens,
+			EstimatedCost: audit.EstimateCostKRW(spend.model, usage, s.pricingMap(ctx)),
+			Currency:      "KRW",
+			Source:        usage.Source,
+			CreatedAt:     time.Now().UTC(),
+		}
+	}
+	s.enqueueDetached(record)
 }
 
 type cacheEmbedError struct{ status int }
@@ -176,12 +273,22 @@ func (s *Server) serveChatSemantic(ctx context.Context, w http.ResponseWriter, r
 	if semanticEmbedInputTooLarge(text) {
 		return nil, false
 	}
-	vec, err := s.embedText(ctx, r, cfg.ChatSemanticModel, text)
+	vec, spend, err := s.embedText(ctx, r, cfg.ChatSemanticModel, text)
+	// Recorded whether or not the embedding succeeded: a failing embedding endpoint still
+	// costs a round trip, and a semantic cache quietly failing every lookup is worth seeing.
+	s.recordSemanticEmbedSpend(ctx, meta.Request, spend)
 	if err != nil {
 		slog.Warn("semantic cache embed failed", "error", err)
 		return nil, false
 	}
 	_, model, _ := chatCacheKey(body)
+	// NOTE: the search is scoped by model only — not by key, team or cost centre. For the
+	// exact cache that is harmless (an identical prompt yields an answer the caller could
+	// have obtained themselves), but this one matches on SIMILARITY, so a caller can be
+	// served another caller's answer to a DIFFERENT question. Left as-is deliberately:
+	// scoping per tenant would cut the hit rate the feature exists for, and that is the
+	// operator's call, not a silent change. The feature is off by default
+	// (CACHE_CHAT_SEMANTIC_ENABLED=false); do not enable it across a trust boundary.
 	hit, found, err := s.db.SearchChatSemantic(ctx, model, vec, cfg.ChatSemanticThreshold, cfg.ChatSemanticMaxCandidates)
 	if err != nil || !found {
 		return vec, false
@@ -206,6 +313,22 @@ func (s *Server) serveChatSemantic(ctx context.Context, w http.ResponseWriter, r
 	meta.Response = &store.ResponseLog{
 		ID: newID("resp"), RequestID: meta.Request.ID, StatusCode: http.StatusOK,
 		FinishReason: "cache", ResponseHash: audit.HashText(string(hit.Body)), CreatedAt: time.Now().UTC(),
+	}
+	// The exact-cache path records a usage row with source "cache"; this one recorded none,
+	// so a semantic hit was invisible to the savings figure that keys on that source. The
+	// prompt tokens are what the call would have cost had it gone upstream — the same basis
+	// the exact path uses — and the cost stays zero because no completion was bought. What
+	// the request did cost, the embedding call, is its own row.
+	if promptEstimate := promptTokenEstimate(meta.Prompts); promptEstimate > 0 {
+		meta.Usage = &store.TokenUsage{
+			ID:           newID("usage"),
+			RequestID:    meta.Request.ID,
+			PromptTokens: promptEstimate,
+			TotalTokens:  promptEstimate,
+			Currency:     "KRW",
+			Source:       "cache",
+			CreatedAt:    time.Now().UTC(),
+		}
 	}
 	meta.Evaluations = buildLLMEvaluations(meta, ResponseAnalysis{Hash: meta.Response.ResponseHash, FinishReason: "cache"})
 	s.metrics.ObserveLLMEvaluations(meta.Evaluations)

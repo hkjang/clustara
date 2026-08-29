@@ -40,7 +40,7 @@ func TestEmbedTextUsesDedicatedEndpoint(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	vec, err := server.embedText(context.Background(), req, cfg.Cache.ChatSemanticModel, "hello world")
+	vec, _, err := server.embedText(context.Background(), req, cfg.Cache.ChatSemanticModel, "hello world")
 	if err != nil {
 		t.Fatalf("embedText errored: %v", err)
 	}
