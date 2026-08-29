@@ -533,9 +533,20 @@ func (rc *requestPipeline) stepUpstream() bool {
 		meta.Request.FirstChunkMS = firstChunkMS
 		s.metrics.ObserveFirstChunk(firstChunkMS)
 	}
+	// A caller that hangs up mid-stream cancels the request context, which surfaces here as
+	// either a cancelled read of the upstream body or a failed write to a closed socket.
+	// Neither is the provider's doing, and the surfaces that read this field to judge the
+	// model — the success rate in ModelQualityScores, the response.completed evaluation —
+	// have no other way to tell. A server shutdown cancels the same context; that is also
+	// not the provider's fault, so it lands in the same bucket.
+	clientGone := r.Context().Err() != nil
 	if copyErr != nil && !errors.Is(copyErr, context.Canceled) {
-		meta.Request.Error = copyErr.Error()
-		slog.Warn("downstream copy failed", "trace_id", traceID, "error", copyErr)
+		if clientGone {
+			meta.Request.Error = store.ClientDisconnectError
+		} else {
+			meta.Request.Error = copyErr.Error()
+		}
+		slog.Warn("downstream copy failed", "trace_id", traceID, "error", copyErr, "client_gone", clientGone)
 	}
 	meta.Request.LatencyMS = time.Since(start).Milliseconds()
 	s.metrics.ObserveLatency(meta.Request.LatencyMS)
@@ -557,9 +568,18 @@ func (rc *requestPipeline) stepUpstream() bool {
 	// endpoint with no choices such as embeddings) is left alone.
 	if stream && resp.StatusCode < 400 && meta.Request.Error == "" &&
 		analysis.FinishReason == "" && analysis.CompletionTokensEstimate > 0 {
-		meta.Request.Error = truncatedStreamError
-		slog.Warn("stream ended without a finish_reason; recording as truncated",
-			"trace_id", traceID, "model", meta.Request.Model)
+		if clientGone {
+			// The caller stopped reading. There is no finish_reason for exactly the same
+			// reason as a real truncation — the stream never reached its end — but the cause
+			// is the opposite one, and "stop generating" is a button, not an incident.
+			meta.Request.Error = store.ClientDisconnectError
+			slog.Info("caller closed the stream before it finished",
+				"trace_id", traceID, "model", meta.Request.Model)
+		} else {
+			meta.Request.Error = truncatedStreamError
+			slog.Warn("stream ended without a finish_reason; recording as truncated",
+				"trace_id", traceID, "model", meta.Request.Model)
+		}
 	}
 	if captureForCache && analysis.Text != "" {
 		s.maybeStoreEmbeddingCache(r.Context(), body, resp.StatusCode, resp.Header.Get("Content-Type"), []byte(analysis.Text))

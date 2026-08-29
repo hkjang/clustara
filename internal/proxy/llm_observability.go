@@ -189,7 +189,10 @@ func buildLLMEvaluations(record store.LogRecord, analysis ResponseAnalysis) []st
 		evalBool(record, "prompt.pii", "safety", !strings.Contains(promptText, "[REDACTED"), "no_pii_detected", "prompt redaction markers indicate sensitive data", now),
 		evalBool(record, "prompt.injection", "security", !keywordHit(promptText, promptInjectionKeywords), "no_injection_detected", "prompt contains jailbreak or instruction override keywords", now),
 		evalBool(record, "prompt.toxicity", "safety", !keywordHit(promptText, toxicKeywords), "no_toxicity_detected", "prompt contains toxic content keywords", now),
-		evalBool(record, "response.completed", "quality", record.Request.StatusCode >= 200 && record.Request.StatusCode < 300 && record.Request.Error == "" && analysis.FinishReason != "content_filter", "completed", "upstream returned error, copy error, or content_filter finish reason", now),
+		// A caller who pressed "stop generating" did not get an incomplete answer from the
+		// model; they asked for it to stop. Counting that as a failed quality evaluation
+		// makes every chat UI's stop button look like a provider defect.
+		evalBool(record, "response.completed", "quality", record.Request.StatusCode >= 200 && record.Request.StatusCode < 300 && (record.Request.Error == "" || store.IsCallerAttributedError(record.Request.Error)) && analysis.FinishReason != "content_filter", "completed", "upstream returned error, copy error, or content_filter finish reason", now),
 		evalBool(record, "cost.has_usage", "cost", analysis.HasUsage || record.Usage != nil, "usage_present", "provider did not return usage; gateway used estimates where possible", now),
 		evalScore(record, "performance.first_chunk_ms", "performance", latencyScore(record.Request.FirstChunkMS, 1500), latencyLabel(record.Request.FirstChunkMS, 1500), "first response chunk latency", now),
 	}

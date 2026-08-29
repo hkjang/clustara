@@ -49,25 +49,30 @@ func (s *SQLStore) ModelQualityScores(ctx context.Context, since time.Time) ([]M
 	}
 
 	// 1) Request volume + success rate.
+	// Requests the CALLER abandoned are counted in the volume but excluded from the success
+	// rate on both sides. A "stop generating" click says nothing about how the model
+	// performed, and it used to say the model failed: the caller's disconnect landed in the
+	// error column, so every one of them dragged the score down.
 	rows, err := s.db.QueryContext(ctx, s.bind(`
 		SELECT COALESCE(NULLIF(model, ''), 'unknown'),
 			COUNT(*),
-			SUM(CASE WHEN status_code BETWEEN 200 AND 299 AND COALESCE(error, '') = '' AND COALESCE(failover, 0) = 0 THEN 1 ELSE 0 END)
+			SUM(CASE WHEN status_code BETWEEN 200 AND 299 AND COALESCE(error, '') = '' AND COALESCE(failover, 0) = 0 THEN 1 ELSE 0 END),
+			SUM(CASE WHEN COALESCE(error, '') LIKE '`+ClientDisconnectPrefix+`%' THEN 1 ELSE 0 END)
 		FROM request_logs WHERE created_at >= ? GROUP BY COALESCE(NULLIF(model, ''), 'unknown')`), sinceStr)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var model string
-		var total, ok int64
-		if err := rows.Scan(&model, &total, &ok); err != nil {
+		var total, ok, abandoned int64
+		if err := rows.Scan(&model, &total, &ok, &abandoned); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		m := get(model)
 		m.Requests = total
-		if total > 0 {
-			m.SuccessRate = float64(ok) / float64(total)
+		if judged := total - abandoned; judged > 0 {
+			m.SuccessRate = float64(ok) / float64(judged)
 		}
 	}
 	rows.Close()
