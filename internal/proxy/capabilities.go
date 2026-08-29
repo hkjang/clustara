@@ -193,7 +193,12 @@ var capabilityRegistry = []Capability{
 		UITabs:      []string{"k8s", "k8s-collector", "k8s-resources", "k8s-workloads", "k8s-network", "k8s-storage", "k8s-components", "k8s-devtools", "k8s-auth", "k8s-pods", "k8s-terminal", "k8s-nodes", "k8s-developer", "k8s-stacks", "k8s-manifest-changes", "k8s-actions", "k8s-settings"},
 		Scopes:      []string{"admin:read", "admin:write"},
 		Tables:      []string{"k8s_clusters", "k8s_inventory", "k8s_events", "k8s_metrics_samples", "k8s_gpu_samples", "k8s_watch_events", "k8s_agent_heartbeats", "k8s_collector_offsets", "k8s_pod_bookmarks", "k8s_pod_accesses", "k8s_pod_log_queries", "k8s_pod_log_snapshots", "k8s_terminal_policies", "k8s_pod_exec_sessions", "k8s_debug_sessions", "k8s_security_findings", "k8s_action_requests", "k8s_rollout_actions", "k8s_rollout_pod_transitions", "k8s_pod_lifecycles", "k8s_manifest_change_requests", "k8s_collector_status"},
-		Workers:     []string{"k8s_snapshot_ingest", "k8s_agent_delta_ingest", "k8s_analyzer"},
+		// Named as the ops board names them. The collector rows are cluster-qualified
+		// ("k8s_collector:snapshot@prod"), so a capability points at the family prefix.
+		// These used to read k8s_snapshot_ingest / k8s_agent_delta_ingest / k8s_analyzer,
+		// which matched nothing the board can ever emit: an operator following the pointer
+		// from this capability to its worker health found no such worker.
+		Workers: []string{"k8s_collect_scheduler", "k8s_collector:snapshot", "k8s_collector:agent", "k8s_collector:analyzer"},
 	},
 	{
 		Key: "ops_visibility", Name: "운영 가시성", Group: "ops",
