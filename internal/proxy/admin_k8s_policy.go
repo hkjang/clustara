@@ -374,14 +374,43 @@ func (s *Server) handleK8sPolicyCompliance(w http.ResponseWriter, r *http.Reques
 	fresh := s.inventoryFreshness(r, items, time.Now().UTC())
 	// Compliance sign-off reads this endpoint, and "0 violations" from an empty
 	// rule set looks exactly like "0 violations" from a passing one. Say which.
+	check := markStaleData(policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items), truncated), fresh)
+	markUncoveredRules(check, analyzer.UncoveredPolicyRules(items, toAnalyzerPolicies(policies)))
 	resp := map[string]any{
 		"violations": violations, "count": len(violations),
-		"policy_check": markStaleData(policyCheckStatusOver(nil, policies, analyzer.CountPolicyEvaluable(items), truncated), fresh),
+		"policy_check": check,
 	}
 	if fresh.Band != "" {
 		resp["freshness"] = fresh
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// markUncoveredRules names the enabled rules that had no candidate resource in the
+// scanned inventory. The resource count cannot show this: a cluster whose workloads
+// were collected but whose RBAC objects were not reports plenty of evaluable
+// resources, so the run reads as complete while disallow_wildcard_rbac — the only
+// rule that looks at Role/ClusterRole — evaluates nothing and finds nothing.
+//
+// The status is deliberately left alone. Marking the whole run incomplete would hide
+// the workload violations that were found, which are real. What is wrong is narrower
+// and needs saying narrowly: these particular rules did not check anything.
+func markUncoveredRules(check map[string]any, uncovered []analyzer.UncoveredPolicyRule) map[string]any {
+	if check == nil || len(uncovered) == 0 {
+		return check
+	}
+	check["uncovered_rules"] = uncovered
+	names := make([]string, 0, len(uncovered))
+	for _, u := range uncovered {
+		names = append(names, u.RuleType+"("+strings.Join(u.Kinds, "/")+")")
+	}
+	notice := "다음 규칙은 대상 리소스가 인벤토리에 하나도 없어 아무것도 검사하지 못했습니다 — " +
+		strings.Join(names, ", ") + ". 수집 권한이나 수집 범위를 확인하세요. 이 규칙들에 대해서는 위반 없음이 통과를 뜻하지 않습니다."
+	if prev, ok := check["reason"].(string); ok && prev != "" {
+		notice = prev + " " + notice
+	}
+	check["reason"] = notice
+	return check
 }
 
 // markStaleData folds collection freshness into a scan-status block. The status is left

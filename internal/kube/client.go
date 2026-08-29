@@ -42,6 +42,13 @@ type CollectResult struct {
 	Events        []store.K8sEvent         `json:"events"`
 	Metrics       []store.K8sMetricSample  `json:"metrics"`
 	FullSyncKinds []string                 `json:"full_sync_kinds,omitempty"`
+	// SkippedKinds are the optional kinds whose list call failed, so nothing about
+	// them was collected. They are deliberately kept out of FullSyncKinds — pruning a
+	// kind we could not read would delete a live inventory — but the caller still has
+	// to be told, because "we saw none" and "we could not look" are the same silence
+	// downstream. RBAC is the one that matters: its lists are optional, and a policy
+	// rule that reads only Role/ClusterRole then passes over nothing.
+	SkippedKinds []string `json:"skipped_kinds,omitempty"`
 }
 
 type HTTPClientConfig struct {
@@ -131,6 +138,7 @@ func (c *HTTPClient) Collect(ctx context.Context) (CollectResult, error) {
 		items, err := c.list(ctx, target.Path)
 		if err != nil {
 			if target.Optional || isOptionalAPI(target.Path) {
+				out.SkippedKinds = append(out.SkippedKinds, target.Kind)
 				continue
 			}
 			return out, err

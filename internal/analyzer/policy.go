@@ -276,6 +276,73 @@ func CountPolicyEvaluable(items []store.K8sInventoryItem) int {
 	return n
 }
 
+// UncoveredPolicyRule is one enabled rule that had no candidate resource to run
+// against: the kinds it can fire on were entirely absent from the scanned inventory.
+type UncoveredPolicyRule struct {
+	RuleType string   `json:"rule_type"`
+	Kinds    []string `json:"kinds"`
+	Policies int      `json:"policies"`
+}
+
+// policyRuleKinds lists the kinds a rule type can ever fire on. Every rule but the
+// RBAC one reads a pod spec, so a workload is the only thing it can find anything in.
+func policyRuleKinds(ruleType string) []string {
+	if ruleType == "disallow_wildcard_rbac" {
+		return []string{"ClusterRole", "Role"}
+	}
+	kinds := make([]string, 0, len(workloadKinds))
+	for kind := range workloadKinds {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+// UncoveredPolicyRules returns the enabled rules that had nothing to look at, because
+// every kind they can fire on was missing from the inventory that was scanned.
+//
+// This is the gap the resource count cannot show. A cluster whose Deployments were
+// collected but whose RBAC objects were not still reports plenty of evaluable
+// resources, so the run looks complete — and disallow_wildcard_rbac, the only rule
+// that reads Role/ClusterRole, evaluates zero objects and contributes zero findings.
+// A ClusterRole granting */*/* is then reported as compliant. The collector reaches
+// this state normally, not exceptionally: RBAC lists are Optional, an authorization
+// failure on them is skipped silently, and the shipped agent ClusterRole does not
+// request rbac.authorization.k8s.io at all.
+func UncoveredPolicyRules(items []store.K8sInventoryItem, policies []Policy) []UncoveredPolicyRule {
+	present := map[string]bool{}
+	for _, it := range items {
+		present[it.Kind] = true
+	}
+	counts := map[string]int{}
+	order := []string{}
+	for _, p := range policies {
+		if !p.Enabled {
+			continue
+		}
+		covered := false
+		for _, kind := range policyRuleKinds(p.RuleType) {
+			if present[kind] {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		if counts[p.RuleType] == 0 {
+			order = append(order, p.RuleType)
+		}
+		counts[p.RuleType]++
+	}
+	sort.Strings(order)
+	out := make([]UncoveredPolicyRule, 0, len(order))
+	for _, ruleType := range order {
+		out = append(out, UncoveredPolicyRule{RuleType: ruleType, Kinds: policyRuleKinds(ruleType), Policies: counts[ruleType]})
+	}
+	return out
+}
+
 // PolicyEvaluableKinds lists the resource kinds a policy run examines, so a
 // caller can fetch only those rather than spending a row limit on kinds the
 // evaluation ignores.

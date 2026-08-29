@@ -5638,11 +5638,15 @@ const adminHTML = `<!doctype html>
     // statement about the past wearing the same clean face as a live pass.
     function scanNotice(s) {
       if (!s || !s.status) return '';
-      if (s.status === 'checked' && !s.stale) return '';
+      const uncovered = (s.uncovered_rules || []).length;
+      if (s.status === 'checked' && !s.stale && !uncovered) return '';
       const labels = { unavailable: '검사 수행 안 됨', no_rules: '검사할 규칙 없음', no_resources: '검사 대상 없음', partial: '일부만 검사' };
       let label = labels[s.status] || s.status;
-      if (s.status === 'checked') label = '오래된 데이터로 판정';
-      else if (s.stale) label += ' · 오래된 데이터';
+      const caveats = [];
+      if (s.stale) caveats.push('오래된 데이터');
+      if (uncovered) caveats.push('대상 없는 규칙 ' + fmt(uncovered) + '건');
+      if (s.status === 'checked') label = caveats.join(' · ');
+      else if (caveats.length) label += ' · ' + caveats.join(' · ');
       const detail = s.reason || s.error || '이 결과는 전수 통과를 뜻하지 않습니다.';
       const counts = [];
       if (typeof s.rules === 'number') counts.push('규칙 ' + fmt(s.rules));

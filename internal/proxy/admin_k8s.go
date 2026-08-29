@@ -262,6 +262,10 @@ type k8sCollectOutcome struct {
 	Result  collector.ApplyResult
 	Stage   string // client | probe | collect | snapshot | ok
 	Err     error
+	// SkippedKinds are the optional kinds the collector could not read. Nothing was
+	// stored for them and nothing was pruned for them, so an operator running a
+	// collect has no other way to learn that a whole kind is missing.
+	SkippedKinds []string
 }
 
 // collectClusterInventory probes a cluster, pulls a full inventory snapshot, and persists it
@@ -335,9 +339,9 @@ func (s *Server) runClusterCollect(ctx context.Context, cluster store.K8sCluster
 		FullSyncKinds: collected.FullSyncKinds,
 	}, newID)
 	if err != nil {
-		return k8sCollectOutcome{Cluster: cluster, Probe: probe, Stage: "snapshot", Err: err}
+		return k8sCollectOutcome{Cluster: cluster, Probe: probe, Stage: "snapshot", Err: err, SkippedKinds: collected.SkippedKinds}
 	}
-	return k8sCollectOutcome{Cluster: cluster, Probe: probe, Result: result, Stage: "ok"}
+	return k8sCollectOutcome{Cluster: cluster, Probe: probe, Result: result, Stage: "ok", SkippedKinds: collected.SkippedKinds}
 }
 
 func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request, cluster store.K8sCluster) {
@@ -357,7 +361,13 @@ func (s *Server) handleK8sClusterCollect(w http.ResponseWriter, r *http.Request,
 		writeOpenAIError(w, http.StatusInternalServerError, out.Err.Error(), "server_error", "k8s_snapshot_failed")
 	default:
 		s.auditAdmin(r, "k8s.cluster.collect", "", auditJSON(out.Result))
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cluster": out.Cluster, "probe": out.Probe, "result": out.Result})
+		body := map[string]any{"ok": true, "cluster": out.Cluster, "probe": out.Probe, "result": out.Result}
+		if len(out.SkippedKinds) > 0 {
+			body["skipped_kinds"] = out.SkippedKinds
+			body["skipped_note"] = "다음 종류는 조회에 실패해 수집되지 않았습니다(권한 또는 API 미제공): " + strings.Join(out.SkippedKinds, ", ") +
+				". 해당 종류만 읽는 정책 규칙은 검사 대상이 없어 아무것도 찾지 못합니다."
+		}
+		writeJSON(w, http.StatusOK, body)
 	}
 }
 
