@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,9 +79,14 @@ func NormalizeRegistryURL(raw string) string {
 
 func RegistryHost(raw string) string {
 	v := NormalizeRegistryURL(raw)
+	if v == "" {
+		// Without this, a blank URL fell through to the raw-input fallback and became a host of
+		// pure whitespace — which then keyed a dockerconfig entry and named a registry row.
+		return ""
+	}
 	u, err := url.Parse(v)
 	if err != nil || u.Host == "" {
-		return strings.TrimPrefix(strings.TrimPrefix(strings.TrimRight(raw, "/"), "https://"), "http://")
+		return strings.TrimPrefix(strings.TrimPrefix(strings.TrimRight(strings.TrimSpace(raw), "/"), "https://"), "http://")
 	}
 	return u.Host
 }
@@ -105,7 +111,13 @@ func DockerConfigHash(registry, username, token string) string {
 }
 
 func DefaultSecretName(project string) string {
-	base := sanitizeDNS("harbor-" + strings.TrimSpace(project) + "-pull")
+	// Sanitize the project first: "harbor-" + "" + "-pull" is a DNS-legal "harbor--pull", so the
+	// empty/garbage-project guard below never fired when it was applied to the joined string.
+	slug := sanitizeDNS(project)
+	if slug == "" {
+		return "harbor-pull"
+	}
+	base := sanitizeDNS("harbor-" + slug + "-pull")
 	if base == "" || base == "harbor-pull" {
 		return "harbor-pull"
 	}
@@ -139,6 +151,11 @@ func RedactedPullSecretManifest(name, namespace, registryURL, username string) s
 	name = firstNonEmpty(strings.TrimSpace(name), DefaultSecretName(""))
 	namespace = firstNonEmpty(strings.TrimSpace(namespace), "default")
 	registry := RegistryHost(registryURL)
+	// The note is one YAML scalar, so it is quoted once as a whole. Quoting the interpolated values
+	// individually (yamlScalar) broke the manifest for every real Harbor robot name: "robot$p+name"
+	// needs quoting, and its quotes landed inside the note's own quoted scalar.
+	note := fmt.Sprintf("Generated from Harbor robot account %s for %s. The real token is never returned by Clustara.",
+		firstNonEmpty(username, "(unknown)"), firstNonEmpty(registry, "(unknown)"))
 	return fmt.Sprintf(`apiVersion: v1
 kind: Secret
 metadata:
@@ -150,8 +167,8 @@ type: kubernetes.io/dockerconfigjson
 data:
   .dockerconfigjson: REDACTED_BY_CLUSTARA
 stringData:
-  note: "Generated from Harbor robot account %s for %s. The real token is never returned by Clustara."
-`, yamlScalar(name), yamlScalar(namespace), yamlScalar(username), yamlScalar(registry))
+  note: %s
+`, yamlScalar(name), yamlScalar(namespace), strconvQuote(note))
 }
 
 func LaunchManifests(in LaunchManifestInput) (string, string) {
@@ -239,21 +256,58 @@ func EvaluateLaunchPolicy(tag, digest, robotStatus, robotExpiresAt string) (stri
 		decision = maxDecision(decision, "approval_required")
 	}
 	if exp := strings.TrimSpace(robotExpiresAt); exp != "" {
-		if t, err := time.Parse(time.RFC3339, exp); err == nil {
-			if time.Until(t) < 7*24*time.Hour {
-				findings = append(findings, PolicyFinding{Rule: "robot_expiry_window", Decision: "warn", Severity: "medium", Message: "Robot Account 만료가 7일 이내입니다. 배포 전 회전을 권장합니다."})
-				decision = maxDecision(decision, "warn")
-			}
-			if time.Now().After(t) {
-				findings = append(findings, PolicyFinding{Rule: "robot_expired", Decision: "deny", Severity: "critical", Message: "Robot Account가 만료되어 image pull 실패 가능성이 큽니다."})
-				decision = maxDecision(decision, "deny")
-			}
+		t, never, err := parseRobotExpiry(exp)
+		switch {
+		case err != nil:
+			// An unreadable expiry used to be dropped silently, which read exactly like "never
+			// expires" — the one answer we cannot justify from an unparseable value.
+			findings = append(findings, PolicyFinding{Rule: "robot_expiry_unreadable", Decision: "approval_required", Severity: "medium", Message: "Robot Account 만료 시각을 해석할 수 없어 만료 여부를 판정하지 못했습니다. 값을 RFC3339 또는 unix seconds로 교정한 뒤 재평가하세요."})
+			decision = maxDecision(decision, "approval_required")
+		case never:
+			// Harbor's non-expiring sentinel: nothing to warn about.
+		case !time.Now().Before(t):
+			findings = append(findings, PolicyFinding{Rule: "robot_expired", Decision: "deny", Severity: "critical", Message: "Robot Account가 만료되어 image pull 실패 가능성이 큽니다."})
+			decision = maxDecision(decision, "deny")
+		case time.Until(t) < 7*24*time.Hour:
+			findings = append(findings, PolicyFinding{Rule: "robot_expiry_window", Decision: "warn", Severity: "medium", Message: "Robot Account 만료가 7일 이내입니다. 배포 전 회전을 권장합니다."})
+			decision = maxDecision(decision, "warn")
 		}
 	}
 	if len(findings) == 0 {
 		findings = append(findings, PolicyFinding{Rule: "harbor_launch_baseline", Decision: "allow", Severity: "low", Message: "digest, robot account, imagePullSecret 기본 조건을 만족합니다."})
 	}
 	return decision, findings
+}
+
+var robotExpiryLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// parseRobotExpiry reads the expiry shapes Harbor and its operators actually produce: the RFC3339
+// timestamp the admin UI stores, a bare date, and the unix-seconds value the Harbor v2 robot API
+// returns — where a non-positive value is the documented "never expires" sentinel. Anything else is
+// an error so the caller can say it does not know, instead of assuming the robot is good forever.
+func parseRobotExpiry(v string) (time.Time, bool, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}, false, fmt.Errorf("empty expiry")
+	}
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if n <= 0 {
+			return time.Time{}, true, nil
+		}
+		return time.Unix(n, 0).UTC(), false, nil
+	}
+	for _, layout := range robotExpiryLayouts {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t, false, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("unrecognized expiry %q", v)
 }
 
 func CheckSystemInfo(ctx context.Context, client *http.Client, registryURL string) SystemInfo {

@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.262** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.263** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.262)
+## 기능 상태 (v0.9.263)
 
 ### 터미널 정책 · 셸 표기와 denylist
 
@@ -430,7 +430,7 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | GET/POST/DELETE | `/admin/harbor/mappings/{id}` | Harbor project→namespace 매핑 개별 조회·수정·삭제 |
 | POST | `/admin/harbor/catalog/query` | 일회성 robot token 또는 `credential_id`로 Harbor projects/repositories/artifacts(tags·digest 포함)를 조회. token은 응답하지 않음 |
 | POST | `/admin/harbor/pull-secret/preview` | Robot 기반 imagePullSecret redacted YAML preview. 실제 `.dockerconfigjson` token은 Credential Vault에서 메모리 복호화하거나 요청 token으로만 사용하며 응답·감사 로그에 남기지 않음 |
-| POST | `/admin/harbor/launches/preview` | Harbor 이미지 기준 Deployment/Service YAML과 digest/latest/robot 만료 정책 판정 preview |
+| POST | `/admin/harbor/launches/preview` | Harbor 이미지 기준 Deployment/Service YAML과 digest/latest/robot 만료 정책 판정 preview. robot `expires_at`은 RFC3339·날짜·unix seconds·비만료 sentinel(`-1`)을 해석하며, 해석할 수 없는 값은 만료 없음이 아니라 `robot_expiry_unreadable`(승인 필요)로 판정 |
 | GET/POST | `/admin/harbor/launches` | 앱 런칭 요청 원장 조회·생성. blocked/approval_required/allow 판정과 manifest preview 저장 |
 | POST | `/admin/harbor/launches/{id}/manifest-change` | blocked가 아닌 런칭 요청의 Deployment/Service 문서를 Manifest Change Studio `operation=create` draft set으로 생성. 검증·승인·적용은 기존 YAML 변경/생성 원장에서만 진행 |
 | GET | `/admin/k8s/config-impact?kind=&namespace=&name=` | ConfigMap/Secret 변경 영향: 참조 워크로드(env/envFrom/volume) + 재시작 필요 여부 |
