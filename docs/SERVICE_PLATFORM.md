@@ -36,7 +36,7 @@ Deployment, StatefulSet, DaemonSet, Job, CronJob 중 등록 서비스에 귀속�
 
 - 기본 카탈로그: PostgreSQL, Redis, Tomcat, Spring Boot, JupyterLab, JupyterHub
 - 카탈로그 버전과 Small/Medium/Large 자원 프로파일
-- 서비스 값 검증, `latest` 차단, 운영 환경 digest 고정, DNS label/replica 검증
+- 서비스 값 검증, `latest`·무태그 이미지 차단, 운영 환경 digest 고정, DNS label/replica/port 범위와 0 초과 quantity 검증
 - 생성 리소스·정책 사전 미리보기와 manifest 생성
 - ServiceInstance 생성 시 기존 `k8s_application_stacks`와 append-only revision 생성
 - 시작·중지·확장·재시작을 기존 Action Center의 `scale`/`rollout_restart` 승인 요청으로 변환

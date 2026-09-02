@@ -24,6 +24,36 @@ var imageRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@+-]*$`)
 var cpuQuantity = regexp.MustCompile(`^[0-9]+m?$`)
 var byteQuantity = regexp.MustCompile(`^[0-9]+(Ki|Mi|Gi|Ti)?$`)
 
+// imageTagAndDigest splits `[registry[:port]/]repo[:tag][@digest]`. A `:` only introduces a tag
+// when it follows the last `/`, so a registry port is not mistaken for one.
+func imageTagAndDigest(ref string) (tag, digest string) {
+	rest := ref
+	if i := strings.Index(rest, "@"); i >= 0 {
+		digest = rest[i+1:]
+		rest = rest[:i]
+	}
+	name := rest
+	if i := strings.LastIndex(rest, "/"); i >= 0 {
+		name = rest[i+1:]
+	}
+	if i := strings.LastIndex(name, ":"); i > 0 {
+		tag = name[i+1:]
+	}
+	return tag, digest
+}
+
+// positiveQuantity reports whether a quantity that already matched its pattern is greater than
+// zero. "0", "0m" and "0Gi" are syntactically fine and semantically useless: a zero storage
+// request is rejected by the PVC validator, and a zero memory limit kills the container.
+func positiveQuantity(q string) bool {
+	for _, c := range q {
+		if c >= '1' && c <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateInput(in RenderInput) []string {
 	errs := []string{}
 	if len(in.Name) < 1 || len(in.Name) > 63 || !dnsLabel.MatchString(in.Name) {
@@ -36,21 +66,35 @@ func ValidateInput(in RenderInput) []string {
 		errs = append(errs, "digest 또는 승인된 내부 이미지가 필요합니다")
 	} else if !imageRef.MatchString(in.Image) {
 		errs = append(errs, "이미지 참조 형식이 올바르지 않습니다")
-	}
-	if strings.Contains(in.Image, ":latest") {
-		errs = append(errs, "mutable latest tag는 사용할 수 없습니다")
+	} else if tag, digest := imageTagAndDigest(in.Image); digest == "" {
+		// No digest means the reference is resolved at pull time, so the tag has to be a
+		// stable one. An omitted tag is Kubernetes-speak for `latest`.
+		if tag == "" {
+			errs = append(errs, "이미지에 태그나 digest가 없어 mutable latest로 해석됩니다")
+		} else if tag == "latest" {
+			errs = append(errs, "mutable latest tag는 사용할 수 없습니다")
+		}
 	}
 	if in.Replicas < 0 || in.Replicas > 100 {
 		errs = append(errs, "replicas는 0~100 범위여야 합니다")
 	}
+	if in.Port < 1 || in.Port > 65535 {
+		errs = append(errs, "port는 1~65535 범위여야 합니다")
+	}
 	if !cpuQuantity.MatchString(in.CPU) {
 		errs = append(errs, "CPU quantity 형식이 올바르지 않습니다")
+	} else if !positiveQuantity(in.CPU) {
+		errs = append(errs, "CPU quantity는 0보다 커야 합니다")
 	}
 	if !byteQuantity.MatchString(in.Memory) {
 		errs = append(errs, "Memory quantity 형식이 올바르지 않습니다")
+	} else if !positiveQuantity(in.Memory) {
+		errs = append(errs, "Memory quantity는 0보다 커야 합니다")
 	}
 	if !byteQuantity.MatchString(in.Storage) {
 		errs = append(errs, "Storage quantity 형식이 올바르지 않습니다")
+	} else if !positiveQuantity(in.Storage) {
+		errs = append(errs, "Storage quantity는 0보다 커야 합니다")
 	}
 	return errs
 }

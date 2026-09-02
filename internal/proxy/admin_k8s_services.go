@@ -359,7 +359,9 @@ func (s *Server) prepareServiceInstance(r *http.Request, in serviceInstanceInput
 	} else if _, clusterErr := s.db.GetK8sCluster(r.Context(), in.ClusterID); clusterErr != nil {
 		errList = append(errList, "등록된 cluster_id가 아닙니다")
 	}
-	if in.Environment == "production" && strings.Contains(input.Image, ":") && !strings.Contains(input.Image, "@sha256:") {
+	// An image with no `:` at all is still mutable (it resolves to `latest`), so it must not
+	// skip the digest requirement the way the earlier `Contains(":")` precondition let it.
+	if in.Environment == "production" && strings.TrimSpace(input.Image) != "" && !strings.Contains(input.Image, "@sha256:") {
 		errList = append(errList, "운영 환경 이미지는 digest 고정이 필요합니다")
 	}
 	if len(errList) > 0 {
