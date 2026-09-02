@@ -2,6 +2,8 @@ package action
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"clustara/internal/store"
@@ -22,11 +24,26 @@ func AssessImpact(actionName string, params map[string]any, target store.K8sInve
 	switch name {
 	case "scale":
 		cur := currentReplicas(target)
-		desired := num(params["replicas"])
-		return Impact{
+		desired, ok := replicaParam(params["replicas"])
+		if !ok {
+			// The executor refuses this request (intFromParams falls back to -1). Saying
+			// "→ 0" here would put a scale-to-zero in the approval record for a request
+			// that can never run.
+			return Impact{
+				Summary:  fmt.Sprintf("%s/%s scale — replicas 값을 읽을 수 없어 영향도를 산출할 수 없습니다(현재 %d).", target.Kind, target.Name, cur),
+				Blockers: []string{"replicas 파라미터가 없거나 0 이상의 정수가 아닙니다 — 실행기가 거절합니다."},
+				Details:  map[string]any{"current_replicas": cur, "desired_replicas": nil},
+			}
+		}
+		imp := Impact{
 			Summary: fmt.Sprintf("replicas %d → %d (%+d)", cur, desired, desired-cur),
 			Details: map[string]any{"current_replicas": cur, "desired_replicas": desired},
 		}
+		if desired == 0 {
+			imp.Summary += " — replica 0은 워크로드를 전면 중단시킵니다."
+			imp.Blockers = append(imp.Blockers, "replicas 0으로의 축소는 서비스 전면 중단이라 승인이 필요합니다.")
+		}
+		return imp
 	case "rollout_restart":
 		return Impact{
 			Summary: fmt.Sprintf("%s/%s 의 모든 Pod가 순차 재생성됩니다(rolling).", target.Kind, target.Name),
@@ -42,11 +59,17 @@ func AssessImpact(actionName string, params map[string]any, target store.K8sInve
 			imp.Blockers = append(imp.Blockers, "standalone Pod 삭제는 승인이 필요합니다(자동 복구 없음).")
 		}
 		return imp
-	case "cordon", "uncordon":
+	case "cordon":
 		pods := podsOnNode(target.Name, all)
 		return Impact{
-			Summary: fmt.Sprintf("노드 %s: 현재 %d개 Pod(%d개 namespace) 영향. cordon은 신규 스케줄만 차단합니다.", target.Name, len(pods), countNamespaces(pods)),
-			Details: map[string]any{"affected_pods": len(pods), "namespaces": namespaceList(pods)},
+			Summary: fmt.Sprintf("노드 %s cordon: 신규 스케줄만 차단합니다. 현재 실행 중인 %d개 Pod(%d개 namespace)는 evict되지 않고 그대로 유지됩니다.", target.Name, len(pods), countNamespaces(pods)),
+			Details: map[string]any{"running_pods": len(pods), "namespaces": namespaceList(pods)},
+		}
+	case "uncordon":
+		pods := podsOnNode(target.Name, all)
+		return Impact{
+			Summary: fmt.Sprintf("노드 %s uncordon: 신규 스케줄을 다시 허용합니다. 현재 실행 중인 %d개 Pod(%d개 namespace)는 영향받지 않습니다.", target.Name, len(pods), countNamespaces(pods)),
+			Details: map[string]any{"running_pods": len(pods), "namespaces": namespaceList(pods)},
 		}
 	case "drain":
 		pods := podsOnNode(target.Name, all)
@@ -76,6 +99,7 @@ func AssessImpact(actionName string, params map[string]any, target store.K8sInve
 				bad = append(bad, k)
 			}
 		}
+		sort.Strings(bad) // map iteration order must not reach the stored approval record
 		imp := Impact{Summary: fmt.Sprintf("%s/%s patch (허용 필드: image/replicas/annotations)", target.Kind, target.Name), Details: map[string]any{"fields": keysOf(params)}}
 		if len(bad) > 0 {
 			imp.Blockers = append(imp.Blockers, "허용되지 않은 patch 필드: "+strings.Join(bad, ", "))
@@ -161,7 +185,34 @@ func keysOf(m map[string]any) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
+}
+
+// replicaParam reads the replicas parameter exactly the way the executor does
+// (intFromParams in internal/proxy accepts the JSON string form too, and truncates
+// a fractional number), so the impact preview an operator approves and the value
+// that is actually applied cannot disagree. ok is false when the parameter is
+// absent, non-numeric, or negative — all of which the executor rejects.
+func replicaParam(v any) (int, bool) {
+	n := 0
+	switch t := v.(type) {
+	case float64:
+		n = int(t)
+	case int:
+		n = t
+	case int64:
+		n = int(t)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(t))
+		if err != nil {
+			return 0, false
+		}
+		n = parsed
+	default:
+		return 0, false
+	}
+	return n, n >= 0
 }
 
 func num(v any) int {
