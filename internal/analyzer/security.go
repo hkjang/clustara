@@ -191,6 +191,19 @@ func securityRelevantContainers(ps map[string]any) []any {
 	return append(out, asAnySlice(ps["ephemeralContainers"])...)
 }
 
+// resourceDeclaringContainers returns every container that is allowed to declare
+// resources.requests/limits — regular and init only.
+//
+// This is the counterpart securityRelevantContainers warns about. The API rejects
+// `resources` on an ephemeral container, so a rule that requires limits and walks
+// ephemeral containers marks every pod as violating for as long as a debug session
+// is attached to it — the operator sees the guardrail break on a container that
+// could not have satisfied it.
+func resourceDeclaringContainers(ps map[string]any) []any {
+	out := append([]any{}, asAnySlice(ps["containers"])...)
+	return append(out, asAnySlice(ps["initContainers"])...)
+}
+
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
 	res := PodSecurityResult{Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
 	priv := []string{}       // privileged-level violations (worst)
