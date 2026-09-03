@@ -128,7 +128,9 @@ func diffResource(doc map[string]any, item store.K8sInventoryItem) []StackFieldD
 			diffs = append(diffs, StackFieldDiff{Path: "containers[" + cn + "].image", Declared: di, Live: li, Type: "modified"})
 		}
 		if de, le := canonicalEnv(dc["env"]), canonicalEnv(lc["env"]); de != le {
-			diffs = append(diffs, StackFieldDiff{Path: "containers[" + cn + "].env", Declared: de, Live: le, Type: "modified"})
+			// Compared raw so the drift is still detected, reported masked so it is not the one
+			// diff view that prints an env value in clear text.
+			diffs = append(diffs, StackFieldDiff{Path: "containers[" + cn + "].env", Declared: maskEnvSummary(de), Live: maskEnvSummary(le), Type: "modified"})
 		}
 		if dr, lr := canonicalJSON(dc["resources"]), canonicalJSON(lc["resources"]); dr != lr {
 			diffs = append(diffs, StackFieldDiff{Path: "containers[" + cn + "].resources", Declared: dr, Live: lr, Type: "modified"})
@@ -151,13 +153,43 @@ func diffStringMap(prefix string, declared, live map[string]string) []StackField
 	for _, k := range sortedStringKeys(declared) {
 		dv := declared[k]
 		lv, ok := live[k]
+		// A label/annotation named after a credential carries one; compare raw, report masked.
+		show := func(v string) string {
+			if v != "" && looksSensitiveEnv(k) {
+				return maskedFieldValue
+			}
+			return v
+		}
 		if !ok {
-			out = append(out, StackFieldDiff{Path: prefix + "[" + k + "]", Declared: dv, Live: "", Type: "missing_in_live"})
+			out = append(out, StackFieldDiff{Path: prefix + "[" + k + "]", Declared: show(dv), Live: "", Type: "missing_in_live"})
 		} else if dv != lv {
-			out = append(out, StackFieldDiff{Path: prefix + "[" + k + "]", Declared: dv, Live: lv, Type: "modified"})
+			out = append(out, StackFieldDiff{Path: prefix + "[" + k + "]", Declared: show(dv), Live: show(lv), Type: "modified"})
 		}
 	}
 	return out
+}
+
+// maskedFieldValue replaces a value the drift report must not print. It matches the marker the
+// revision diff and the Manifest Viewer use for the same reason.
+const maskedFieldValue = "***"
+
+// maskEnvSummary hides the values of credential-shaped env vars in a canonicalEnv rendering,
+// keeping the names so the operator still sees which variables the two sides declare.
+func maskEnvSummary(canonical string) string {
+	if canonical == "" {
+		return canonical
+	}
+	pairs := strings.Split(canonical, ";")
+	for i, pair := range pairs {
+		name, value, ok := strings.Cut(pair, "=")
+		if !ok || value == "" {
+			continue
+		}
+		if looksSensitiveEnv(name) || looksSensitiveEnvValue(value) {
+			pairs[i] = name + "=" + maskedFieldValue
+		}
+	}
+	return strings.Join(pairs, ";")
 }
 
 // containersByName returns spec.template.spec.containers (workloads) or spec.containers (bare Pod)

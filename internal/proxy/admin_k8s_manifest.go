@@ -7,6 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -110,13 +111,17 @@ func stringMapToAny(in map[string]string) map[string]any {
 	return out
 }
 
+// maskStringMap masks metadata annotations. A sensitive key hides its whole value; every other
+// value is still scanned, because an annotation value is free-form text that routinely carries a
+// credential the key name says nothing about (a webhook URL with a token, a DSN, a bearer header).
+// The Pod fingerprint path already treats annotation values this way.
 func maskStringMap(in map[string]string) map[string]any {
 	out := map[string]any{}
 	for k, v := range in {
-		if isSensitivePath(k) {
+		if isSensitivePath(k) || store.IsObjectCopyAnnotation(k) {
 			out[k] = maskedValue
 		} else {
-			out[k] = v
+			out[k] = analyzer.MaskSensitive(v)
 		}
 	}
 	return out
