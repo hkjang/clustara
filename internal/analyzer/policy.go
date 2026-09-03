@@ -94,6 +94,19 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations 
 		}
 		return securityRelevantContainers(ps)
 	}
+	// The image supply-chain rules fire on the *absence* of an attestation annotation,
+	// so without a scope they fire on every resource that has none — and a Service, a
+	// ConfigMap or a ClusterRole never has one. On the deploy path that Denies a whole
+	// stack because its Service carries no image signature; on the compliance path every
+	// ClusterRole in the cluster contributes three findings about images it does not
+	// reference. Scope them to resources that actually pull an image, which is what the
+	// rule catalog (and the exported Kyverno/Rego form) already says they cover.
+	images := func() []string {
+		if ps == nil {
+			return nil
+		}
+		return ExtractImages(ps)
+	}
 	switch ruleType {
 	case "disallow_privileged":
 		for _, raw := range containers() {
@@ -112,27 +125,27 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations 
 			}
 		}
 	case "disallow_latest_tag":
-		for _, img := range ExtractImages(ps) {
-			if strings.HasSuffix(img, ":latest") || !strings.Contains(img, ":") {
+		for _, img := range images() {
+			if tag, digest := imageTagAndDigest(img); digest == "" && (tag == "" || tag == "latest") {
 				return true, "mutable 태그: " + img
 			}
 		}
 	case "require_image_digest":
-		for _, img := range ExtractImages(ps) {
+		for _, img := range images() {
 			if !strings.Contains(img, "@sha256:") {
 				return true, "digest 미고정 이미지: " + img
 			}
 		}
 	case "disallow_unsigned_image":
-		if annotations["cosign.sigstore.dev/signature"] == "" && annotations["clustara.io/image-signature"] == "" {
+		if len(images()) > 0 && annotations["cosign.sigstore.dev/signature"] == "" && annotations["clustara.io/image-signature"] == "" {
 			return true, "이미지 서명 attestation 없음"
 		}
 	case "require_sbom":
-		if annotations["clustara.io/sbom-ref"] == "" && annotations["clustara.io/sbom-digest"] == "" {
+		if len(images()) > 0 && annotations["clustara.io/sbom-ref"] == "" && annotations["clustara.io/sbom-digest"] == "" {
 			return true, "SBOM 연결 정보 없음"
 		}
 	case "require_vuln_scan_attestation":
-		if annotations["clustara.io/vuln-scan-id"] == "" && annotations["clustara.io/vuln-scan-attestation"] == "" {
+		if len(images()) > 0 && annotations["clustara.io/vuln-scan-id"] == "" && annotations["clustara.io/vuln-scan-attestation"] == "" {
 			return true, "취약점 스캔 attestation 없음"
 		}
 	case "deny_critical_vulnerability":
@@ -163,16 +176,25 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations 
 			}
 		}
 	case "require_resource_limits":
-		for _, raw := range containers() {
+		for _, raw := range resourceDeclaringContainers(ps) {
 			lim := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["limits"])
 			if len(lim) == 0 {
 				return true, str(asAnyMap(raw)["name"]) + ": resources.limits 미설정"
 			}
 		}
 	case "require_run_as_non_root":
+		// A container's own securityContext overrides the pod's, so runAsNonRoot=false
+		// on one container defeats runAsNonRoot=true on the pod — that container still
+		// runs as root. Reading only the pod value reports the workload as compliant.
 		podNonRoot := asBool(asAnyMap(ps["securityContext"])["runAsNonRoot"])
 		for _, raw := range containers() {
-			if !podNonRoot && !asBool(asAnyMap(asAnyMap(raw)["securityContext"])["runAsNonRoot"]) {
+			if set, ok := asAnyMap(asAnyMap(raw)["securityContext"])["runAsNonRoot"].(bool); ok {
+				if !set {
+					return true, str(asAnyMap(raw)["name"]) + ": runAsNonRoot=false (Pod 설정을 덮어씀)"
+				}
+				continue
+			}
+			if !podNonRoot {
 				return true, str(asAnyMap(raw)["name"]) + ": runAsNonRoot 미설정"
 			}
 		}
@@ -214,6 +236,30 @@ func policyAnnotations(kind string, spec map[string]any, own map[string]string) 
 		}
 	}
 	return out
+}
+
+// imageTagAndDigest splits `[registry[:port]/]repo[:tag][@digest]`. A `:` introduces a tag
+// only when it follows the last `/`, so a registry port is not mistaken for one.
+//
+// The substring test this replaces read any `:` as "carries a tag", so
+// `registry.corp.local:5000/app` — untagged, and therefore `:latest` as far as the
+// kubelet is concerned — passed the mutable-tag guardrail on the strength of its
+// registry port. Registries with an explicit port are the norm in the closed networks
+// this product targets.
+func imageTagAndDigest(ref string) (tag, digest string) {
+	rest := ref
+	if i := strings.Index(rest, "@"); i >= 0 {
+		digest = rest[i+1:]
+		rest = rest[:i]
+	}
+	name := rest
+	if i := strings.LastIndex(rest, "/"); i >= 0 {
+		name = rest[i+1:]
+	}
+	if i := strings.LastIndex(name, ":"); i > 0 {
+		tag = name[i+1:]
+	}
+	return tag, digest
 }
 
 func hasWildcard(v any) bool {
