@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"testing"
 
 	"clustara/internal/store"
@@ -100,5 +101,65 @@ func TestDetectStackFieldDriftSynced(t *testing.T) {
 	rep := DetectStackFieldDrift(docs, "default", inventory)
 	if !rep.Synced || rep.Drifted != 0 {
 		t.Fatalf("expected synced with no drift, got %+v", rep)
+	}
+}
+
+// The field drift report is rendered straight into the admin UI. Every sibling diff view masks
+// env values (maskRevisionDiff, the Manifest Viewer), so this one must not be the view that prints
+// a password — while still reporting that the two sides differ.
+func TestDetectStackFieldDriftMasksCredentialValues(t *testing.T) {
+	docs := []map[string]any{{
+		"kind": "Deployment", "apiVersion": "apps/v1",
+		"metadata": map[string]any{"name": "api", "namespace": "prod", "annotations": map[string]any{
+			"clustara.io/db-password": "declared-pw",
+			"owner":                   "platform-team",
+		}},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{
+			map[string]any{"name": "api", "env": []any{
+				map[string]any{"name": "DB_PASSWORD", "value": "declared-pw"},
+				map[string]any{"name": "DSN", "value": "postgres://app:declared-pw@db:5432/app"},
+				map[string]any{"name": "LOG_LEVEL", "value": "info"},
+			}},
+		}}}},
+	}}
+	inventory := []store.K8sInventoryItem{{
+		Kind: "Deployment", Namespace: "prod", Name: "api",
+		Annotations: map[string]string{"clustara.io/db-password": "live-pw", "owner": "sre-team"},
+		Spec: map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{
+			map[string]any{"name": "api", "env": []any{
+				map[string]any{"name": "DB_PASSWORD", "value": "live-pw"},
+				map[string]any{"name": "DSN", "value": "postgres://app:live-pw@db:5432/app"},
+				map[string]any{"name": "LOG_LEVEL", "value": "debug"},
+			}},
+		}}}},
+	}}
+
+	rep := DetectStackFieldDrift(docs, "default", inventory)
+	if rep.Drifted != 1 {
+		t.Fatalf("drifted = %d, want 1 (masking must not hide the drift itself)", rep.Drifted)
+	}
+	diffs := map[string]StackFieldDiff{}
+	for _, d := range rep.Entries[0].Diffs {
+		diffs[d.Path] = d
+	}
+	env, ok := diffs["containers[api].env"]
+	if !ok {
+		t.Fatalf("env drift not reported: %+v", diffs)
+	}
+	for _, secret := range []string{"declared-pw", "live-pw"} {
+		for _, rendered := range []string{env.Declared, env.Live, diffs["annotations[clustara.io/db-password]"].Declared, diffs["annotations[clustara.io/db-password]"].Live} {
+			if strings.Contains(rendered, secret) {
+				t.Fatalf("drift report leaked %q in %q", secret, rendered)
+			}
+		}
+	}
+	if !strings.Contains(env.Declared, "LOG_LEVEL=info") || !strings.Contains(env.Live, "LOG_LEVEL=debug") {
+		t.Fatalf("non-credential env values must stay readable: %q → %q", env.Declared, env.Live)
+	}
+	if !strings.Contains(env.Declared, "DB_PASSWORD=") {
+		t.Fatalf("masked env should keep the variable name: %q", env.Declared)
+	}
+	if owner, ok := diffs["annotations[owner]"]; !ok || owner.Declared != "platform-team" || owner.Live != "sre-team" {
+		t.Fatalf("harmless annotation drift should stay readable: %+v", owner)
 	}
 }

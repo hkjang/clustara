@@ -450,6 +450,7 @@ func (s *SQLStore) UpsertK8sInventory(ctx context.Context, item K8sInventoryItem
 	if item.RiskLevel == "" {
 		item.RiskLevel = "low"
 	}
+	item.Annotations = StripObjectCopyAnnotations(item.Annotations)
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO k8s_inventory
 		(id, cluster_id, kind, namespace, name, uid, api_version, status, health_score, risk_level, spec_json, status_json, labels_json, annotations_json, creation_timestamp, deletion_timestamp, observed_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1057,7 +1058,7 @@ func scanK8sInventory(rows k8sClusterScanner) (K8sInventoryItem, error) {
 	item.Spec = decodeAnyMap(spec)
 	item.StatusObject = decodeAnyMap(statusObj)
 	item.Labels = decodeStringMap(labels)
-	item.Annotations = decodeStringMap(annotations)
+	item.Annotations = StripObjectCopyAnnotations(decodeStringMap(annotations))
 	return item, nil
 }
 
