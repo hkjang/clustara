@@ -25,36 +25,49 @@ type PodResourceQuantities struct {
 	HasLim  bool
 }
 
-// PodResourceNumbers sums the regular containers' CPU/memory requests and limits as numeric totals
-// (.spec.containers or .spec.template.spec.containers; initContainers excluded). Pure.
+// PodResourceNumbers totals a pod's (or workload template's) CPU/memory requests and limits as
+// numeric values, using the same effective-request rule the scheduler applies — regular
+// containers sum, init containers contribute their largest single value. Reading only
+// .spec.containers, as this did, under-reports a pod whose init container is the biggest
+// consumer: the operator triaging an OOMKill saw a memory limit smaller than the one the pod
+// actually holds. Pure.
 func PodResourceNumbers(spec map[string]any) PodResourceQuantities {
 	var q PodResourceQuantities
-	for _, raw := range regularContainers(spec) {
-		res := asAnyMap(asAnyMap(raw)["resources"])
-		req := asAnyMap(res["requests"])
-		lim := asAnyMap(res["limits"])
-		if _, ok := req["cpu"]; ok {
-			q.ReqCPUm += qtyCPU(req["cpu"])
-			q.HasReq = true
-		}
-		if _, ok := req["memory"]; ok {
-			q.ReqMemB += qtyMem(req["memory"])
-			q.HasReq = true
-		}
-		if _, ok := lim["cpu"]; ok {
-			q.LimCPUm += qtyCPU(lim["cpu"])
-			q.HasLim = true
-		}
-		if _, ok := lim["memory"]; ok {
-			q.LimMemB += qtyMem(lim["memory"])
-			q.HasLim = true
-		}
-	}
+	q.ReqCPUm = int(effectivePodTotal(spec, func(c map[string]any) int64 {
+		return int64(qtyCPU(containerQuantity(c, "requests", "cpu")))
+	}))
+	q.ReqMemB = effectivePodTotal(spec, func(c map[string]any) int64 {
+		return qtyMem(containerQuantity(c, "requests", "memory"))
+	})
+	q.LimCPUm = int(effectivePodTotal(spec, func(c map[string]any) int64 {
+		return int64(qtyCPU(containerQuantity(c, "limits", "cpu")))
+	}))
+	q.LimMemB = effectivePodTotal(spec, func(c map[string]any) int64 {
+		return qtyMem(containerQuantity(c, "limits", "memory"))
+	})
+	q.HasReq = podDeclaresResources(spec, "requests")
+	q.HasLim = podDeclaresResources(spec, "limits")
 	return q
 }
 
-// SummarizePodResources sums the regular containers' CPU/memory requests and limits from a pod or
-// workload spec and formats them for display. initContainers are excluded. Pure.
+// podDeclaresResources reports whether any container states a cpu or memory value in the
+// given section. It is what drives the "no requests set" badge, so it must not be inferred
+// from the totals: a container declaring `cpu: 0` has stated a value.
+func podDeclaresResources(spec map[string]any, section string) bool {
+	for _, raw := range podContainers(spec) {
+		res := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])[section])
+		if _, ok := res["cpu"]; ok {
+			return true
+		}
+		if _, ok := res["memory"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// SummarizePodResources totals a pod or workload spec's CPU/memory requests and limits and
+// formats them for display. Pure.
 func SummarizePodResources(spec map[string]any) ResourceTags {
 	q := PodResourceNumbers(spec)
 	t := ResourceTags{HasReq: q.HasReq, HasLim: q.HasLim}
@@ -73,16 +86,6 @@ func SummarizePodResources(spec map[string]any) ResourceTags {
 // recommendations (e.g. Resource Request Advisor).
 func FormatCPUMillis(m int) string    { return formatCPUMillis(m) }
 func FormatMemBytes(b int64) string   { return formatMemBytes(b) }
-
-func regularContainers(spec map[string]any) []any {
-	ps := spec
-	if tmpl := asAnyMap(spec["template"]); tmpl != nil {
-		if inner := asAnyMap(tmpl["spec"]); inner != nil {
-			ps = inner
-		}
-	}
-	return asAnySlice(ps["containers"])
-}
 
 // formatCPUMillis renders millicores as "Nm" (<1 core), whole cores ("2"), or fractional ("1.5").
 func formatCPUMillis(m int) string {

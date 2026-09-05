@@ -96,8 +96,8 @@ func BuildCostForecast(items []store.K8sInventoryItem, metrics []store.K8sMetric
 			adjusted += cost
 			continue
 		}
-		if item.Kind != "Pod" {
-			continue
+		if item.Kind != "Pod" || !podReservesResources(item) {
+			continue // a finished or evicted pod releases its request; it costs nothing
 		}
 		forecast.TotalPods++
 		reqCPU := float64(podRequestCPU(item.Spec)) / 1000
@@ -195,6 +195,9 @@ func EstimateCost(items []store.K8sInventoryItem, prices CostPrices, nsTeam, nsC
 		cores, memGB, storageGB, gpu, pods := 0.0, 0.0, 0.0, 0.0, 0
 		switch it.Kind {
 		case "Pod":
+			if !podReservesResources(it) {
+				continue // a finished or evicted pod releases its request; it costs nothing
+			}
 			cores = float64(podRequestCPU(it.Spec)) / 1000.0
 			memGB = float64(podRequestMemBytes(it.Spec)) / float64(1<<30)
 			gpu = float64(podRequestGPU(it.Spec))

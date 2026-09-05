@@ -141,6 +141,9 @@ func AnalyzeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetricSa
 		case "HorizontalPodAutoscaler":
 			rep.HPAs = append(rep.HPAs, hpaStatus(it))
 		case "Pod":
+			if !podReservesResources(it) {
+				continue // finished/evicted: it holds no request to compare usage against
+			}
 			if f, ok := allocFinding(it, latestPodCPU); ok {
 				rep.Allocation = append(rep.Allocation, f)
 			}
@@ -209,7 +212,7 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 		}
 	}
 	for _, it := range items {
-		if it.Kind != "Pod" {
+		if it.Kind != "Pod" || !podReservesResources(it) {
 			continue
 		}
 		node := str(it.Spec["nodeName"])
@@ -238,32 +241,109 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 
 // --- pod request extraction ---
 
-func podContainers(spec map[string]any) []any {
-	ps := spec
+// podSpecRoot unwraps a workload spec (.template.spec) to the pod spec; a pod spec is
+// returned unchanged.
+func podSpecRoot(spec map[string]any) map[string]any {
 	if tmpl := asAnyMap(spec["template"]); tmpl != nil {
 		if inner := asAnyMap(tmpl["spec"]); inner != nil {
-			ps = inner
+			return inner
 		}
 	}
+	return spec
+}
+
+// podContainers enumerates every container declared by a pod or workload spec. It is for
+// callers that inspect containers one by one (images, names); resource totals must go
+// through effectivePodTotal, which knows that init requests are not additive.
+func podContainers(spec map[string]any) []any {
+	ps := podSpecRoot(spec)
 	return append(asAnySlice(ps["containers"]), asAnySlice(ps["initContainers"])...)
 }
 
-func podRequestCPU(spec map[string]any) int {
-	total := 0
-	for _, raw := range podContainers(spec) {
-		req := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["requests"])
-		total += qtyCPU(req["cpu"])
+// effectivePodTotal returns what the scheduler actually reserves for one resource, using
+// the Kubernetes effective-request rule: init containers run to completion one at a time
+// *before* the app containers start, so a pod reserves
+//
+//	max( sum over the regular containers, largest single init container )
+//
+// — not the sum of both, which is what every caller here used to compute. An init
+// container that pulls a 4Gi dataset next to a 256Mi app was booked at 4.25Gi against a
+// node the scheduler only charged 4Gi for, inflating node packing, cost and rightsizing.
+// A native sidecar (an initContainer with restartPolicy: Always, K8s 1.29+) stays up for
+// the pod's whole life, so it is added to the sum instead of competing for the max.
+func effectivePodTotal(spec map[string]any, value func(container map[string]any) int64) int64 {
+	ps := podSpecRoot(spec)
+	var sum, largestInit int64
+	for _, raw := range asAnySlice(ps["containers"]) {
+		sum += value(asAnyMap(raw))
 	}
-	return total
+	for _, raw := range asAnySlice(ps["initContainers"]) {
+		c := asAnyMap(raw)
+		v := value(c)
+		if strings.EqualFold(strings.TrimSpace(str(c["restartPolicy"])), "Always") {
+			sum += v
+			continue
+		}
+		if v > largestInit {
+			largestInit = v
+		}
+	}
+	if largestInit > sum {
+		return largestInit
+	}
+	return sum
+}
+
+// containerQuantity reads resources.<section>.<key> off one container.
+func containerQuantity(container map[string]any, section, key string) any {
+	return asAnyMap(asAnyMap(container["resources"])[section])[key]
+}
+
+// podReservesResources reports whether a Pod still holds a reservation on its node. A pod
+// that reached a terminal phase — Succeeded (a finished Job pod) or Failed (an evicted or
+// crashed-out pod) — has released its CPU, memory and GPU: the scheduler stops counting it
+// against the node and the kubelet frees the cgroup. The API server keeps those objects
+// around (a CronJob namespace accumulates hundreds), and the collector stores every one of
+// them, so counting their requests packs nodes past 100%, reports GPUs as busy while they
+// sit idle, and bills for pods that consume nothing.
+//
+// A pod that is merely unhealthy (CrashLoopBackOff, ImagePullBackOff, Pending) is *not*
+// terminal: it is still scheduled and still holds its request.
+func podReservesResources(it store.K8sInventoryItem) bool {
+	phase := strings.TrimSpace(str(it.StatusObject["phase"]))
+	if phase == "" {
+		phase = strings.TrimSpace(it.Status) // the collector summarizes a Pod's status as its phase
+	}
+	switch strings.ToLower(phase) {
+	case "succeeded", "failed":
+		return false
+	}
+	return true
+}
+
+func podRequestCPU(spec map[string]any) int {
+	return int(effectivePodTotal(spec, func(c map[string]any) int64 {
+		return int64(qtyCPU(containerQuantity(c, "requests", "cpu")))
+	}))
 }
 
 func podRequestMemBytes(spec map[string]any) int64 {
-	var total int64
-	for _, raw := range podContainers(spec) {
-		req := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["requests"])
-		total += qtyMem(req["memory"])
-	}
-	return total
+	return effectivePodTotal(spec, func(c map[string]any) int64 {
+		return qtyMem(containerQuantity(c, "requests", "memory"))
+	})
+}
+
+// memQuantityUnits are the suffixes a Kubernetes quantity may carry, binary first. The
+// decimal set is `k M G T P E` — note the lowercase `k`, which is the only spelling the
+// API accepts; `K` is kept as a tolerated alias for hand-written specs. Anything missing
+// from this table falls through to a plain number parse and, failing that, silently
+// reads as 0 bytes — so a container asking for "1T" used to be booked as free.
+var memQuantityUnits = []struct {
+	suf string
+	mul int64
+}{
+	{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50}, {"Ei", 1 << 60},
+	{"k", 1e3}, {"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15}, {"E", 1e18},
 }
 
 // qtyMem parses a Kubernetes memory quantity (e.g. "256Mi", "1Gi", 1048576) into bytes.
@@ -276,11 +356,7 @@ func qtyMem(v any) int64 {
 		if s == "" {
 			return 0
 		}
-		units := []struct {
-			suf string
-			mul int64
-		}{{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"K", 1000}, {"M", 1000 * 1000}, {"G", 1000 * 1000 * 1000}}
-		for _, u := range units {
+		for _, u := range memQuantityUnits {
 			if strings.HasSuffix(s, u.suf) {
 				f, _ := strconv.ParseFloat(strings.TrimSuffix(s, u.suf), 64)
 				return int64(f * float64(u.mul))
@@ -293,12 +369,9 @@ func qtyMem(v any) int64 {
 }
 
 func podRequestGPU(spec map[string]any) int {
-	total := 0
-	for _, raw := range podContainers(spec) {
-		req := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["requests"])
-		total += qtyInt(req["nvidia.com/gpu"])
-	}
-	return total
+	return int(effectivePodTotal(spec, func(c map[string]any) int64 {
+		return int64(qtyInt(containerQuantity(c, "requests", "nvidia.com/gpu")))
+	}))
 }
 
 // ScaleSimulation is the projected resource request total for a target replica count (SCALE-06).

@@ -50,8 +50,8 @@ func RecommendRightsizing(items []store.K8sInventoryItem, metrics []store.K8sMet
 	const mib = 1 << 20
 	out := []RightsizingRec{}
 	for _, it := range items {
-		if it.Kind != "Pod" {
-			continue
+		if it.Kind != "Pod" || !podReservesResources(it) {
+			continue // a finished or evicted pod has nothing left to right-size
 		}
 		reqCPU := podRequestCPU(it.Spec)
 		reqMem := podRequestMemBytes(it.Spec)
