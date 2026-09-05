@@ -61,12 +61,12 @@ func PlanDevRequest(in DevRequestInput) DevRequestPlan {
 		p.Flow, p.Action, p.RiskLevel, p.RequiresApproval, p.Executable = FlowAction, "rollout_restart", "medium", true, true
 		p.Summary = "롤아웃 재시작 요청 — " + target
 		p.TargetEndpoint = "/admin/k8s/actions"
-		p.Valid = in.ResourceName != ""
+		p.Valid = strings.TrimSpace(in.ResourceName) != ""
 	case DevReqScale:
 		p.Flow, p.Action, p.RiskLevel, p.RequiresApproval, p.Executable = FlowAction, "scale", "medium", true, true
 		p.Summary = "스케일 요청 — " + target
 		p.TargetEndpoint = "/admin/k8s/actions"
-		p.Valid = in.ResourceName != "" && in.Replicas >= 0
+		p.Valid = strings.TrimSpace(in.ResourceName) != "" && in.Replicas >= 0
 		if !p.Valid && in.Replicas < 0 {
 			p.Error = "scale 요청에는 replicas(>=0)가 필요합니다"
 		}
@@ -74,23 +74,23 @@ func PlanDevRequest(in DevRequestInput) DevRequestPlan {
 		p.Flow, p.Action, p.RiskLevel, p.RequiresApproval, p.Executable = FlowAction, in.Type, "high", true, true
 		p.Summary = in.Type + " 요청 — " + strings.TrimSpace(in.ResourceName)
 		p.TargetEndpoint = "/admin/k8s/actions"
-		p.Valid = in.ResourceName != ""
+		p.Valid = strings.TrimSpace(in.ResourceName) != ""
 	case DevReqRollback:
 		// No live rollback executor — tracked as an action request for manual operator handling.
 		p.Flow, p.Action, p.RiskLevel, p.RequiresApproval, p.Executable = FlowAction, "rollback", "high", true, false
 		p.Summary = "이전 리비전 롤백 요청(수동 처리) — " + target
 		p.TargetEndpoint = "/admin/k8s/actions"
-		p.Valid = in.ResourceName != ""
+		p.Valid = strings.TrimSpace(in.ResourceName) != ""
 	case DevReqConfigChange:
 		p.Flow, p.RiskLevel, p.RequiresApproval = FlowConfigChange, "high", true
 		p.Summary = "Config 변경 요청 — " + target
 		p.TargetEndpoint = "/admin/k8s/config-changes"
-		p.Valid = in.ResourceName != ""
+		p.Valid = strings.TrimSpace(in.ResourceName) != ""
 	case DevReqLogAccess:
 		p.Flow, p.RiskLevel, p.RequiresApproval = FlowReadOnly, "low", false
 		p.Summary = "로그 조회(읽기 전용) — " + target
 		p.TargetEndpoint = "/admin/k8s/pods/{ns}/{pod}/logs"
-		p.Valid = in.ResourceName != ""
+		p.Valid = strings.TrimSpace(in.ResourceName) != ""
 	default:
 		p.Error = "지원하지 않는 요청 유형: " + in.Type
 		return p

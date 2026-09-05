@@ -58,16 +58,31 @@ func (c *HTTPClient) Apply(ctx context.Context, apiVersion, kind, namespace, nam
 }
 
 // clusterScopedKinds are not namespaced; their REST path omits /namespaces/{ns}.
+//
+// resolveStackTargets fills every document's namespace with the stack's own, so a cluster-scoped
+// kind missing from this map is applied to /namespaces/{stack}/<plural>/<name> and can only fail —
+// one such document turns a stack apply into a partial apply. IngressClass and PodSecurityPolicy
+// were already carried by pluralizeKind's irregular list but never reached a cluster-scoped path.
 var clusterScopedKinds = map[string]bool{
-	"Namespace":                true,
-	"Node":                     true,
-	"PersistentVolume":         true,
-	"ClusterRole":              true,
-	"ClusterRoleBinding":       true,
-	"StorageClass":             true,
-	"CustomResourceDefinition": true,
-	"PriorityClass":            true,
-	"ClusterIssuer":            true,
+	"Namespace":                        true,
+	"Node":                             true,
+	"PersistentVolume":                 true,
+	"ClusterRole":                      true,
+	"ClusterRoleBinding":               true,
+	"StorageClass":                     true,
+	"CustomResourceDefinition":         true,
+	"PriorityClass":                    true,
+	"ClusterIssuer":                    true,
+	"IngressClass":                     true,
+	"PodSecurityPolicy":                true,
+	"RuntimeClass":                     true,
+	"CSIDriver":                        true,
+	"VolumeSnapshotClass":              true,
+	"APIService":                       true,
+	"ValidatingWebhookConfiguration":   true,
+	"MutatingWebhookConfiguration":     true,
+	"ValidatingAdmissionPolicy":        true,
+	"ValidatingAdmissionPolicyBinding": true,
 }
 
 // apiResourcePath builds the Kubernetes REST path for a resource from its apiVersion + kind. Core
@@ -80,22 +95,26 @@ func apiResourcePath(apiVersion, kind, namespace, name string) (string, error) {
 	if apiVersion == "" || kind == "" || name == "" {
 		return "", fmt.Errorf("apiVersion, kind and name are required (got %q/%q/%q)", apiVersion, kind, name)
 	}
+	// apiVersion, kind and name are copied verbatim out of a stored manifest document, so every
+	// segment is escaped before it is joined — the read paths in this package (podLogRequest,
+	// podExecURL) already do this, and here a slash in a value would retarget a force=true
+	// server-side apply at a resource the operator never reviewed.
 	var base string
 	if strings.Contains(apiVersion, "/") {
 		parts := strings.SplitN(apiVersion, "/", 2)
-		base = fmt.Sprintf("/apis/%s/%s", parts[0], parts[1])
+		base = fmt.Sprintf("/apis/%s/%s", url.PathEscape(parts[0]), url.PathEscape(parts[1]))
 	} else {
-		base = fmt.Sprintf("/api/%s", apiVersion)
+		base = fmt.Sprintf("/api/%s", url.PathEscape(apiVersion))
 	}
-	plural := pluralizeKind(kind)
+	plural := url.PathEscape(pluralizeKind(kind))
 	if clusterScopedKinds[kind] {
-		return fmt.Sprintf("%s/%s/%s", base, plural, name), nil
+		return fmt.Sprintf("%s/%s/%s", base, plural, url.PathEscape(name)), nil
 	}
 	ns := strings.TrimSpace(namespace)
 	if ns == "" {
 		ns = "default"
 	}
-	return fmt.Sprintf("%s/namespaces/%s/%s/%s", base, ns, plural, name), nil
+	return fmt.Sprintf("%s/namespaces/%s/%s/%s", base, url.PathEscape(ns), plural, url.PathEscape(name)), nil
 }
 
 // pluralizeKind lowercases a Kind and pluralizes it following the conventional Kubernetes rules used

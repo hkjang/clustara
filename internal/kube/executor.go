@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -57,7 +58,13 @@ func normalizeWorkloadKind(kind string) string {
 	k = strings.TrimPrefix(k, "app/")
 	k = strings.TrimSuffix(k, ".apps")
 	k = strings.TrimSuffix(k, ".apps/v1")
-	k = strings.TrimSuffix(k, "s")
+	// kubectl's short names are the exception to the plural trim: it turns "sts" into "st" and
+	// "ds" into "d", which made the two cases below unreachable and rejected both short names.
+	switch k {
+	case "sts", "ds":
+	default:
+		k = strings.TrimSuffix(k, "s")
+	}
 	switch k {
 	case "deploy", "deployment":
 		return "deployment"
@@ -75,6 +82,24 @@ func unsupportedWorkloadKindError(action, kind string) error {
 		return fmt.Errorf("%s unsupported for kind %q: Pod는 직접 rollout restart할 수 없습니다. owner Deployment/StatefulSet/DaemonSet을 대상으로 요청하세요", action, kind)
 	}
 	return fmt.Errorf("%s unsupported for kind %q: supported kinds are Deployment, StatefulSet, DaemonSet", action, kind)
+}
+
+// requireTarget rejects a blank namespace or resource name before any URL is built.
+//
+// A blank name does not produce a harmless 404: dropping it leaves the resource *collection* URL,
+// and the Kubernetes API serves DELETE on a collection as deletecollection — a delete_pod action
+// with no name would delete every Pod in the namespace. PATCH on a collection is merely rejected,
+// but the same class of mistake. ResourceName reaches here straight from a stored action request,
+// so the executor refuses rather than trusting every request path to have validated it.
+func requireTarget(action, namespace, name string) (string, string, error) {
+	namespace, name = strings.TrimSpace(namespace), strings.TrimSpace(name)
+	if namespace == "" {
+		return "", "", fmt.Errorf("%s: namespace is required", action)
+	}
+	if name == "" {
+		return "", "", fmt.Errorf("%s: resource name is required", action)
+	}
+	return url.PathEscape(namespace), url.PathEscape(name), nil
 }
 
 // write performs a mutating request (PATCH/DELETE) and returns an error for non-2xx responses.
@@ -115,8 +140,17 @@ func (c *HTTPClient) Scale(ctx context.Context, kind, namespace, name string, re
 	if !ok {
 		return unsupportedWorkloadKindError("scale", kind)
 	}
+	// apps/v1 DaemonSet has no /scale subresource — one Pod per eligible node is the whole point.
+	// Without this the request only fails at the API server, after approval has already been given.
+	if plural == "daemonsets" {
+		return fmt.Errorf("scale unsupported for kind %q: DaemonSet은 노드마다 1개씩 실행되어 replicas가 없습니다. 대상 노드를 줄이려면 spec.template.spec.nodeSelector를 변경하세요", kind)
+	}
 	if replicas < 0 {
 		return fmt.Errorf("replicas must be >= 0")
+	}
+	namespace, name, err := requireTarget("scale", namespace, name)
+	if err != nil {
+		return err
 	}
 	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", namespace, plural, name)
 	body := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
@@ -131,6 +165,10 @@ func (c *HTTPClient) RolloutRestartWithMetadata(ctx context.Context, kind, names
 	plural, ok := workloadResourcePlural(kind)
 	if !ok {
 		return unsupportedWorkloadKindError("rollout restart", kind)
+	}
+	namespace, name, err := requireTarget("rollout restart", namespace, name)
+	if err != nil {
+		return err
 	}
 	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, plural, name)
 	ts := strings.TrimSpace(meta.RestartedAt)
@@ -160,6 +198,10 @@ func (c *HTTPClient) RolloutRestartWithMetadata(ctx context.Context, kind, names
 func (c *HTTPClient) RollbackDeploymentTemplate(ctx context.Context, namespace, name string, template map[string]any, meta RolloutRestartMetadata) error {
 	if len(template) == 0 {
 		return errors.New("rollback template is empty")
+	}
+	namespace, name, err := requireTarget("rollback", namespace, name)
+	if err != nil {
+		return err
 	}
 	cloned, err := json.Marshal(template)
 	if err != nil {
@@ -204,12 +246,20 @@ func firstNonEmptyString(values ...string) string {
 }
 
 func (c *HTTPClient) SetCordon(ctx context.Context, node string, unschedulable bool) error {
-	path := fmt.Sprintf("/api/v1/nodes/%s", node)
+	// Node is cluster-scoped, so this checks the one segment requireTarget would have guarded.
+	if strings.TrimSpace(node) == "" {
+		return fmt.Errorf("cordon: node name is required")
+	}
+	path := fmt.Sprintf("/api/v1/nodes/%s", url.PathEscape(strings.TrimSpace(node)))
 	body := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
 	return c.write(ctx, http.MethodPatch, path, "application/merge-patch+json", body)
 }
 
 func (c *HTTPClient) DeletePod(ctx context.Context, namespace, name string) error {
+	namespace, name, err := requireTarget("delete pod", namespace, name)
+	if err != nil {
+		return err
+	}
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", namespace, name)
 	return c.write(ctx, http.MethodDelete, path, "", nil)
 }
