@@ -17,27 +17,59 @@ type Impact struct {
 	Details  map[string]any `json:"details"`
 }
 
+// unobservedTarget is the blocker for a target the collected inventory has no row for. The
+// handlers look the target up by cluster/kind/namespace/name and fall back to the zero value,
+// so every "current state" below would otherwise be an invented one (replicas 0, no labels).
+const unobservedTarget = "대상이 수집된 인벤토리에 없습니다 — 현재 상태를 확인할 수 없어 영향도를 요청 값만으로 산출했습니다."
+
 // AssessImpact summarizes the effect of an action on a target resource, using the full
 // inventory snapshot for fan-out actions (cordon/drain need the pods on the node).
-func AssessImpact(actionName string, params map[string]any, target store.K8sInventoryItem, all []store.K8sInventoryItem) Impact {
+//
+// observed says whether target came from the stored inventory. When it is false the caller
+// only filled in the requested identity (kind/namespace/name), and this must not report a
+// current state it never saw — an approval record reading "replicas 0 → 5" for a workload
+// currently running 5 replicas is a fabricated diff, not a conservative one.
+func AssessImpact(actionName string, params map[string]any, target store.K8sInventoryItem, observed bool, all []store.K8sInventoryItem) Impact {
 	name := strings.ToLower(strings.TrimSpace(actionName))
+	imp := assessImpact(name, params, target, observed, all)
+	// The executor addresses one fixed resource type per action while resource_kind is free
+	// input, so the mismatch has to surface on the approval screen too — not only when the
+	// executor refuses it after someone has already approved the request.
+	if issue := TargetKindIssue(name, target.Kind); issue != "" {
+		imp.Blockers = append([]string{issue}, imp.Blockers...)
+	}
+	if !observed {
+		imp.Summary += " (대상이 인벤토리에 없어 현재 상태는 미확인입니다.)"
+		imp.Blockers = append(imp.Blockers, unobservedTarget)
+	}
+	return imp
+}
+
+func assessImpact(name string, params map[string]any, target store.K8sInventoryItem, observed bool, all []store.K8sInventoryItem) Impact {
 	switch name {
 	case "scale":
 		cur := currentReplicas(target)
+		curText, curDetail := strconv.Itoa(cur), any(cur)
+		if !observed {
+			curText, curDetail = "미확인", nil
+		}
 		desired, ok := replicaParam(params["replicas"])
 		if !ok {
 			// The executor refuses this request (intFromParams falls back to -1). Saying
 			// "→ 0" here would put a scale-to-zero in the approval record for a request
 			// that can never run.
 			return Impact{
-				Summary:  fmt.Sprintf("%s/%s scale — replicas 값을 읽을 수 없어 영향도를 산출할 수 없습니다(현재 %d).", target.Kind, target.Name, cur),
+				Summary:  fmt.Sprintf("%s/%s scale — replicas 값을 읽을 수 없어 영향도를 산출할 수 없습니다(현재 %s).", target.Kind, target.Name, curText),
 				Blockers: []string{"replicas 파라미터가 없거나 0 이상의 정수가 아닙니다 — 실행기가 거절합니다."},
-				Details:  map[string]any{"current_replicas": cur, "desired_replicas": nil},
+				Details:  map[string]any{"current_replicas": curDetail, "desired_replicas": nil},
 			}
 		}
 		imp := Impact{
 			Summary: fmt.Sprintf("replicas %d → %d (%+d)", cur, desired, desired-cur),
-			Details: map[string]any{"current_replicas": cur, "desired_replicas": desired},
+			Details: map[string]any{"current_replicas": curDetail, "desired_replicas": desired},
+		}
+		if !observed {
+			imp.Summary = fmt.Sprintf("replicas %s → %d", curText, desired)
 		}
 		if desired == 0 {
 			imp.Summary += " — replica 0은 워크로드를 전면 중단시킵니다."
@@ -50,6 +82,14 @@ func AssessImpact(actionName string, params map[string]any, target store.K8sInve
 			Details: map[string]any{"strategy": "rolling restart"},
 		}
 	case "delete_pod":
+		if !observed {
+			// podControllerOwned reads labels: an absent target has none, which would read
+			// as "standalone, nothing recreates it" — a claim about a Pod we never saw.
+			return Impact{
+				Summary: fmt.Sprintf("Pod %s 삭제 — 컨트롤러 재생성 여부를 확인할 수 없습니다.", target.Name),
+				Details: map[string]any{"controller_owned": nil},
+			}
+		}
 		owned := podControllerOwned(target)
 		imp := Impact{Summary: fmt.Sprintf("Pod %s 삭제", target.Name), Details: map[string]any{"controller_owned": owned}}
 		if owned {

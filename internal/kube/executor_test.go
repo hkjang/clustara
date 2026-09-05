@@ -147,7 +147,7 @@ func TestExecutorCordonAndDelete(t *testing.T) {
 		t.Fatalf("cordon wrong: %+v", cap)
 	}
 
-	if err := c.DeletePod(context.Background(), "default", "p1"); err != nil {
+	if err := c.DeletePod(context.Background(), "Pod", "default", "p1"); err != nil {
 		t.Fatal(err)
 	}
 	if cap.method != http.MethodDelete || cap.path != "/api/v1/namespaces/default/pods/p1" {
@@ -214,6 +214,44 @@ func TestExecutorScaleRejectsDaemonSet(t *testing.T) {
 	}
 }
 
+// TestExecutorDeletePodRejectsNonPodKind covers the target this URL always addresses. The action
+// request carries a free-form resource_kind, so a record approved as "Deployment/web delete_pod"
+// used to issue DELETE /api/v1/namespaces/{ns}/pods/web — a different object than the approver
+// reviewed, with the deletion recorded against the Deployment's name in the audit trail.
+func TestExecutorDeletePodRejectsNonPodKind(t *testing.T) {
+	for _, kind := range []string{"Deployment", "StatefulSet", "Node", "Service"} {
+		t.Run(kind, func(t *testing.T) {
+			var cap capturedReq
+			srv := executorTestServer(t, &cap)
+			defer srv.Close()
+			c := newExecClient(t, srv.URL)
+			err := c.DeletePod(context.Background(), kind, "prod", "web")
+			if err == nil {
+				t.Fatalf("delete pod must reject kind %q", kind)
+			}
+			if !strings.Contains(err.Error(), kind) {
+				t.Fatalf("error should name the requested kind, got %v", err)
+			}
+			if cap.method != "" {
+				t.Fatalf("rejected delete must not reach the API server, got %s %s", cap.method, cap.path)
+			}
+		})
+	}
+	// The Pod spellings a stored request actually carries still go through.
+	for _, kind := range []string{"Pod", "pods", "po", "v1/Pod", ""} {
+		var cap capturedReq
+		srv := executorTestServer(t, &cap)
+		c := newExecClient(t, srv.URL)
+		if err := c.DeletePod(context.Background(), kind, "prod", "web"); err != nil {
+			t.Fatalf("kind %q should be accepted as a Pod: %v", kind, err)
+		}
+		if cap.method != http.MethodDelete || cap.path != "/api/v1/namespaces/prod/pods/web" {
+			t.Fatalf("kind %q: wrong request %+v", kind, cap)
+		}
+		srv.Close()
+	}
+}
+
 func TestExecutorRejectsBlankTarget(t *testing.T) {
 	// A blank name does not produce a 404: it produces the resource *collection* URL, and the
 	// Kubernetes API serves DELETE on a Pod collection as deletecollection — every Pod in the
@@ -222,8 +260,8 @@ func TestExecutorRejectsBlankTarget(t *testing.T) {
 		name string
 		call func(*HTTPClient) error
 	}{
-		{"delete pod without name", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "prod", "  ") }},
-		{"delete pod without namespace", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "", "api-0") }},
+		{"delete pod without name", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "Pod", "prod", "  ") }},
+		{"delete pod without namespace", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "Pod", "", "api-0") }},
 		{"scale without name", func(c *HTTPClient) error { return c.Scale(context.Background(), "Deployment", "prod", "", 0) }},
 		{"restart without name", func(c *HTTPClient) error { return c.RolloutRestart(context.Background(), "Deployment", "prod", " ") }},
 		{"cordon without node", func(c *HTTPClient) error { return c.SetCordon(context.Background(), " ", true) }},

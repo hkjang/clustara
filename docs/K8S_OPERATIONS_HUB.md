@@ -1,8 +1,23 @@
 # K8s Operations Hub
 
-> **버전: v0.9.270** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.271** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.270)
+## 기능 상태 (v0.9.271)
+
+### 액션 대상 kind · 승인한 리소스와 실행한 리소스
+
+액션 요청의 `resource_kind` 는 이제 액션이 실제로 addressing 하는 리소스 종류와
+대조됩니다. `delete_pod` 은 Pod, `cordon`·`uncordon`·`drain` 은 Node,
+`scale` 은 Deployment/StatefulSet, `rollout_restart` 은 Deployment/StatefulSet/DaemonSet
+만 대상으로 할 수 있으며, 다른 kind 로 들어온 요청은 영향도 화면에 승인 사유로
+표시되고 실행 단계에서 거절됩니다(Kubernetes API 로 전송되지 않습니다).
+`Pod`·`pods`·`po`·`v1/Pod` 처럼 같은 대상의 다른 표기는 그대로 통과하고,
+kind 가 비어 있으면 주장하는 바가 없으므로 판정하지 않습니다.
+
+인벤토리에 없는 대상은 영향도에서 "미확인" 으로 표시되고 승인 대상이 됩니다.
+이전에는 수집되지 않은 대상이 zero value 로 읽혀 `replicas 0 → 5` 처럼 관측한 적
+없는 현재 상태가 승인 기록에 남았고, Pod 는 라벨이 없다는 이유로 "standalone Pod"
+로 단정됐습니다.
 
 ### 터미널 정책 · 셸 표기와 denylist
 

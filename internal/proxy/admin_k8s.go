@@ -742,11 +742,17 @@ func (s *Server) handleK8sActions(w http.ResponseWriter, r *http.Request) {
 		decision := k8saction.Classify(p.Action)
 		// Read-only impact assessment from the stored inventory (ACT-01~07 안전장치).
 		all, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: p.ClusterID, Limit: 2000})
-		var target store.K8sInventoryItem
-		if t, err := s.db.GetK8sInventoryItem(r.Context(), p.ClusterID, p.ResourceKind, p.Namespace, p.ResourceName); err == nil {
-			target = t
+		// A target the inventory has no row for stays identified by the request alone, so the
+		// impact preview reports "미확인" instead of the zero value's invented current state.
+		target := store.K8sInventoryItem{
+			ClusterID: strings.TrimSpace(p.ClusterID), Kind: strings.TrimSpace(p.ResourceKind),
+			Namespace: strings.TrimSpace(p.Namespace), Name: strings.TrimSpace(p.ResourceName),
 		}
-		impact := k8saction.AssessImpact(p.Action, p.Parameters, target, all)
+		observed := false
+		if t, err := s.db.GetK8sInventoryItem(r.Context(), p.ClusterID, p.ResourceKind, p.Namespace, p.ResourceName); err == nil {
+			target, observed = t, true
+		}
+		impact := k8saction.AssessImpact(p.Action, p.Parameters, target, observed, all)
 		status := "pending"
 		if decision.RequiresApproval || len(impact.Blockers) > 0 {
 			status = "approval_required"
@@ -950,33 +956,39 @@ func (s *Server) runApprovedK8sAction(ctx context.Context, actor string, act sto
 	cancelBegin()
 
 	execCtx, cancelExec := context.WithTimeout(ctx, k8sActionExecutionTimeout)
-	var execErr error
-	switch strings.ToLower(act.Action) {
-	case "scale":
-		replicas := intFromParams(act.Parameters, "replicas", -1)
-		if replicas < 0 {
-			execErr = errors.New("scale 액션에 replicas 파라미터가 필요합니다")
-		} else {
-			execErr = exec.Scale(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
+	// Each action below addresses one fixed resource type, but the approved record's
+	// resource_kind is free input: cordon reaches the Node named resource_name and delete_pod
+	// the Pod named resource_name whatever kind the record claims. Refuse rather than touch a
+	// different object than the approver reviewed.
+	execErr := k8saction.TargetKindIssueErr(act.Action, act.ResourceKind)
+	if execErr == nil {
+		switch strings.ToLower(act.Action) {
+		case "scale":
+			replicas := intFromParams(act.Parameters, "replicas", -1)
+			if replicas < 0 {
+				execErr = errors.New("scale 액션에 replicas 파라미터가 필요합니다")
+			} else {
+				execErr = exec.Scale(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, replicas)
+			}
+		case "rollout_restart":
+			if detailed, ok := client.(kube.DetailedRolloutExecutor); ok {
+				execErr = detailed.RolloutRestartWithMetadata(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, kube.RolloutRestartMetadata{
+					RestartedBy: actor,
+					ActionID:    act.ID,
+					Reason:      strings.TrimSpace(k8sActionString(act.Parameters["reason"])),
+				})
+			} else {
+				execErr = exec.RolloutRestart(execCtx, act.ResourceKind, act.Namespace, act.ResourceName)
+			}
+		case "cordon":
+			execErr = exec.SetCordon(execCtx, act.ResourceName, true)
+		case "uncordon":
+			execErr = exec.SetCordon(execCtx, act.ResourceName, false)
+		case "delete_pod":
+			execErr = exec.DeletePod(execCtx, act.ResourceKind, act.Namespace, act.ResourceName)
+		default:
+			execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
 		}
-	case "rollout_restart":
-		if detailed, ok := client.(kube.DetailedRolloutExecutor); ok {
-			execErr = detailed.RolloutRestartWithMetadata(execCtx, act.ResourceKind, act.Namespace, act.ResourceName, kube.RolloutRestartMetadata{
-				RestartedBy: actor,
-				ActionID:    act.ID,
-				Reason:      strings.TrimSpace(k8sActionString(act.Parameters["reason"])),
-			})
-		} else {
-			execErr = exec.RolloutRestart(execCtx, act.ResourceKind, act.Namespace, act.ResourceName)
-		}
-	case "cordon":
-		execErr = exec.SetCordon(execCtx, act.ResourceName, true)
-	case "uncordon":
-		execErr = exec.SetCordon(execCtx, act.ResourceName, false)
-	case "delete_pod":
-		execErr = exec.DeletePod(execCtx, act.Namespace, act.ResourceName)
-	default:
-		execErr = errors.New("실행 가능한 액션이 아닙니다: " + act.Action)
 	}
 	cancelExec()
 

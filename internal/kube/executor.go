@@ -20,7 +20,7 @@ type Executor interface {
 	Scale(ctx context.Context, kind, namespace, name string, replicas int) error
 	RolloutRestart(ctx context.Context, kind, namespace, name string) error
 	SetCordon(ctx context.Context, node string, unschedulable bool) error
-	DeletePod(ctx context.Context, namespace, name string) error
+	DeletePod(ctx context.Context, kind, namespace, name string) error
 }
 
 type RolloutRestartMetadata struct {
@@ -75,6 +75,20 @@ func normalizeWorkloadKind(kind string) string {
 	default:
 		return k
 	}
+}
+
+// isPodKind accepts the spellings a stored resource_kind arrives in. A blank kind states
+// nothing about the target, so it cannot contradict the Pod this URL addresses.
+func isPodKind(kind string) bool {
+	k := strings.ToLower(strings.TrimSpace(kind))
+	if i := strings.LastIndex(k, "/"); i >= 0 {
+		k = k[i+1:] // v1/Pod
+	}
+	switch k {
+	case "", "pod", "pods", "po":
+		return true
+	}
+	return false
 }
 
 func unsupportedWorkloadKindError(action, kind string) error {
@@ -255,7 +269,14 @@ func (c *HTTPClient) SetCordon(ctx context.Context, node string, unschedulable b
 	return c.write(ctx, http.MethodPatch, path, "application/merge-patch+json", body)
 }
 
-func (c *HTTPClient) DeletePod(ctx context.Context, namespace, name string) error {
+// DeletePod takes the requested kind for the same reason Scale and RolloutRestart do: this URL
+// always addresses a Pod, so a request whose approval record names another kind would delete a
+// different object than the one that was reviewed (a Pod that happens to share the workload's
+// name, or nothing at all — either way the audit trail is wrong).
+func (c *HTTPClient) DeletePod(ctx context.Context, kind, namespace, name string) error {
+	if !isPodKind(kind) {
+		return fmt.Errorf("delete pod unsupported for kind %q: delete_pod은 Pod만 삭제합니다. 대상을 Pod로 지정하거나 owner 워크로드에는 rollout restart를 사용하세요", kind)
+	}
 	namespace, name, err := requireTarget("delete pod", namespace, name)
 	if err != nil {
 		return err

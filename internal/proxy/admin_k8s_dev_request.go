@@ -90,11 +90,15 @@ func (s *Server) handleK8sDevRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		decision := k8saction.Classify(plan.Action)
 		all, _ := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: in.ClusterID, Limit: 2000})
-		var target store.K8sInventoryItem
-		if t, err := s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, in.ResourceKind, in.Namespace, in.ResourceName); err == nil {
-			target = t
+		target := store.K8sInventoryItem{
+			ClusterID: strings.TrimSpace(in.ClusterID), Kind: strings.TrimSpace(in.ResourceKind),
+			Namespace: strings.TrimSpace(in.Namespace), Name: strings.TrimSpace(in.ResourceName),
 		}
-		impact := k8saction.AssessImpact(plan.Action, params, target, all)
+		observed := false
+		if t, err := s.db.GetK8sInventoryItem(r.Context(), in.ClusterID, in.ResourceKind, in.Namespace, in.ResourceName); err == nil {
+			target, observed = t, true
+		}
+		impact := k8saction.AssessImpact(plan.Action, params, target, observed, all)
 		status := "pending"
 		if decision.RequiresApproval || len(impact.Blockers) > 0 || plan.RequiresApproval {
 			status = "approval_required"
