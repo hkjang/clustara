@@ -169,3 +169,77 @@ func TestExecutorRolloutRestartRejectsPodWithGuidance(t *testing.T) {
 		t.Fatalf("pod rollout restart should explain owner target guidance, got %v", err)
 	}
 }
+
+func TestExecutorAcceptsKubectlShortNames(t *testing.T) {
+	// "sts" and "ds" have their own cases in normalizeWorkloadKind, so the executor is meant to
+	// accept them: ResourceKind is free-form request input and kubectl short names are what an
+	// operator (or the Ops Agent) types.
+	tests := []struct{ kind, path string }{
+		{"sts", "/apis/apps/v1/namespaces/ns/statefulsets/api"},
+		{"ds", "/apis/apps/v1/namespaces/ns/daemonsets/api"},
+		{"deploy", "/apis/apps/v1/namespaces/ns/deployments/api"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			var cap capturedReq
+			srv := executorTestServer(t, &cap)
+			defer srv.Close()
+			c := newExecClient(t, srv.URL)
+			if err := c.RolloutRestart(context.Background(), tt.kind, "ns", "api"); err != nil {
+				t.Fatal(err)
+			}
+			if cap.path != tt.path {
+				t.Fatalf("path = %s, want %s", cap.path, tt.path)
+			}
+		})
+	}
+}
+
+func TestExecutorScaleRejectsDaemonSet(t *testing.T) {
+	// apps/v1 DaemonSet has no /scale subresource, so the request can only 404 — and it does so
+	// after the whole request → impact → approval workflow has already completed.
+	var cap capturedReq
+	srv := executorTestServer(t, &cap)
+	defer srv.Close()
+	c := newExecClient(t, srv.URL)
+	err := c.Scale(context.Background(), "DaemonSet", "ns", "fluentd", 3)
+	if err == nil {
+		t.Fatal("scale should reject DaemonSet up front")
+	}
+	if !strings.Contains(err.Error(), "DaemonSet") {
+		t.Fatalf("error should name the kind, got %v", err)
+	}
+	if cap.method != "" {
+		t.Fatalf("rejected scale must not reach the API server, got %+v", cap)
+	}
+}
+
+func TestExecutorRejectsBlankTarget(t *testing.T) {
+	// A blank name does not produce a 404: it produces the resource *collection* URL, and the
+	// Kubernetes API serves DELETE on a Pod collection as deletecollection — every Pod in the
+	// namespace. Nothing may be sent for a target the caller did not name.
+	cases := []struct {
+		name string
+		call func(*HTTPClient) error
+	}{
+		{"delete pod without name", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "prod", "  ") }},
+		{"delete pod without namespace", func(c *HTTPClient) error { return c.DeletePod(context.Background(), "", "api-0") }},
+		{"scale without name", func(c *HTTPClient) error { return c.Scale(context.Background(), "Deployment", "prod", "", 0) }},
+		{"restart without name", func(c *HTTPClient) error { return c.RolloutRestart(context.Background(), "Deployment", "prod", " ") }},
+		{"cordon without node", func(c *HTTPClient) error { return c.SetCordon(context.Background(), " ", true) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var cap capturedReq
+			srv := executorTestServer(t, &cap)
+			defer srv.Close()
+			c := newExecClient(t, srv.URL)
+			if err := tc.call(c); err == nil {
+				t.Fatal("blank target must be rejected")
+			}
+			if cap.method != "" {
+				t.Fatalf("blank target must not reach the API server, got %s %s", cap.method, cap.path)
+			}
+		})
+	}
+}

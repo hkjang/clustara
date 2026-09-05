@@ -43,3 +43,14 @@ func TestPlanDevRequest(t *testing.T) {
 		t.Fatalf("unknown type should error: %+v", un)
 	}
 }
+
+func TestPlanDevRequestRejectsBlankResourceName(t *testing.T) {
+	// The handler stores strings.TrimSpace(ResourceName), so a whitespace-only name that passes
+	// here becomes an action request with no target at all.
+	for _, typ := range []string{DevReqRestart, DevReqScale, DevReqCordon, DevReqUncordon, DevReqRollback, DevReqConfigChange, DevReqLogAccess} {
+		p := PlanDevRequest(DevRequestInput{Type: typ, ClusterID: "c1", Namespace: "prod", ResourceKind: "Deployment", ResourceName: "  ", Replicas: 2})
+		if p.Valid {
+			t.Errorf("%s: whitespace-only resource_name accepted", typ)
+		}
+	}
+}
