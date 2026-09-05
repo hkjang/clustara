@@ -127,7 +127,9 @@ func AnalyzeNodeMonitoring(items []store.K8sInventoryItem, metrics []store.K8sMe
 			nodes[key] = item
 		case "pod":
 			nodeName := strings.TrimSpace(str(item.Spec["nodeName"]))
-			if nodeName != "" {
+			// A finished or evicted pod has given its GPUs back; counting it reports a
+			// node's accelerators as fully allocated while they sit idle.
+			if nodeName != "" && podReservesResources(item) {
 				gpuRequested[nodeKey(item.ClusterID, nodeName)] += podGPURequests(item.Spec)
 			}
 		}
@@ -500,14 +502,13 @@ func nodeGPUInventory(capacity, alloc map[string]any, requested int) NodeGPUUsag
 }
 
 func podGPURequests(spec map[string]any) int {
-	total := 0
-	for _, raw := range podContainers(spec) {
-		requests := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["requests"])
+	return int(effectivePodTotal(spec, func(c map[string]any) int64 {
+		total := int64(0)
 		for _, key := range []string{"nvidia.com/gpu", "amd.com/gpu", "intel.com/gpu"} {
-			total += qtyInt(requests[key])
+			total += int64(qtyInt(containerQuantity(c, "requests", key)))
 		}
-	}
-	return total
+		return total
+	}))
 }
 
 func recentNodeWarnings(events []store.K8sEvent, now time.Time, window time.Duration) (int, string) {
