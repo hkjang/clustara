@@ -9,7 +9,7 @@ import (
 
 func TestAssessImpactScale(t *testing.T) {
 	target := store.K8sInventoryItem{Kind: "Deployment", Namespace: "default", Name: "api", Spec: map[string]any{"replicas": float64(2)}}
-	imp := AssessImpact("scale", map[string]any{"replicas": float64(5)}, target, nil)
+	imp := AssessImpact("scale", map[string]any{"replicas": float64(5)}, target, true, nil)
 	if !strings.Contains(imp.Summary, "2 → 5") {
 		t.Fatalf("scale summary should show replica diff, got %q", imp.Summary)
 	}
@@ -21,12 +21,12 @@ func TestAssessImpactScale(t *testing.T) {
 func TestAssessImpactDeleteStandalonePod(t *testing.T) {
 	// Controller-owned pod -> no blocker.
 	owned := store.K8sInventoryItem{Kind: "Pod", Namespace: "default", Name: "api-abc-1", Labels: map[string]string{"pod-template-hash": "abc"}}
-	if imp := AssessImpact("delete_pod", nil, owned, nil); len(imp.Blockers) != 0 {
+	if imp := AssessImpact("delete_pod", nil, owned, true, nil); len(imp.Blockers) != 0 {
 		t.Fatalf("controller-owned pod delete should not be blocked, got %+v", imp.Blockers)
 	}
 	// Standalone pod -> blocker.
 	standalone := store.K8sInventoryItem{Kind: "Pod", Namespace: "default", Name: "debug", Labels: map[string]string{"app": "x"}}
-	imp := AssessImpact("delete_pod", nil, standalone, nil)
+	imp := AssessImpact("delete_pod", nil, standalone, true, nil)
 	if len(imp.Blockers) == 0 {
 		t.Fatalf("standalone pod delete must be blocked, got %+v", imp)
 	}
@@ -39,7 +39,7 @@ func TestAssessImpactDrainCountsPodsAndLocalStorage(t *testing.T) {
 		{Kind: "Pod", Namespace: "c", Name: "p3", Spec: map[string]any{"nodeName": "node-2"}}, // other node
 	}
 	node := store.K8sInventoryItem{Kind: "Node", Name: "node-1"}
-	imp := AssessImpact("drain", nil, node, all)
+	imp := AssessImpact("drain", nil, node, true, all)
 	if imp.Details["affected_pods"].(int) != 2 {
 		t.Fatalf("expected 2 pods on node-1, got %v", imp.Details["affected_pods"])
 	}
@@ -53,7 +53,7 @@ func TestAssessImpactDrainCountsPodsAndLocalStorage(t *testing.T) {
 
 func TestAssessImpactPatchDisallowedField(t *testing.T) {
 	target := store.K8sInventoryItem{Kind: "Deployment", Name: "api"}
-	imp := AssessImpact("patch", map[string]any{"image": "x:2", "command": []any{"sh"}}, target, nil)
+	imp := AssessImpact("patch", map[string]any{"image": "x:2", "command": []any{"sh"}}, target, true, nil)
 	if len(imp.Blockers) == 0 {
 		t.Fatalf("patch with disallowed field 'command' must be blocked, got %+v", imp)
 	}
@@ -64,7 +64,7 @@ func TestAssessImpactPatchDisallowedField(t *testing.T) {
 // request carrying {"replicas":"5"} scales to 5 — the approval record must not say "→ 0".
 func TestAssessImpactScaleStringReplicasMatchesExecutor(t *testing.T) {
 	target := store.K8sInventoryItem{Kind: "Deployment", Namespace: "default", Name: "api", Spec: map[string]any{"replicas": float64(2)}}
-	imp := AssessImpact("scale", map[string]any{"replicas": "5"}, target, nil)
+	imp := AssessImpact("scale", map[string]any{"replicas": "5"}, target, true, nil)
 	if !strings.Contains(imp.Summary, "2 → 5") {
 		t.Fatalf("string replicas must read as 5 like the executor does, got %q", imp.Summary)
 	}
@@ -80,7 +80,7 @@ func TestAssessImpactScaleStringReplicasMatchesExecutor(t *testing.T) {
 // approval: scaling to 0 replicas is a full outage, so it must reach the approval queue.
 func TestAssessImpactScaleToZeroIsBlocked(t *testing.T) {
 	target := store.K8sInventoryItem{Kind: "Deployment", Namespace: "default", Name: "api", Spec: map[string]any{"replicas": float64(3)}}
-	imp := AssessImpact("scale", map[string]any{"replicas": float64(0)}, target, nil)
+	imp := AssessImpact("scale", map[string]any{"replicas": float64(0)}, target, true, nil)
 	if len(imp.Blockers) == 0 {
 		t.Fatalf("scale to zero replicas must be blocked, got %+v", imp)
 	}
@@ -106,7 +106,7 @@ func TestAssessImpactScaleUnreadableReplicas(t *testing.T) {
 		{"negative", map[string]any{"replicas": float64(-1)}},
 		{"wrong type", map[string]any{"replicas": true}},
 	} {
-		imp := AssessImpact("scale", tc.params, target, nil)
+		imp := AssessImpact("scale", tc.params, target, true, nil)
 		if len(imp.Blockers) == 0 {
 			t.Fatalf("%s: unreadable replicas must be blocked, got %+v", tc.name, imp)
 		}
@@ -127,7 +127,7 @@ func TestAssessImpactUncordonDoesNotDescribeCordon(t *testing.T) {
 	}
 	node := store.K8sInventoryItem{Kind: "Node", Name: "node-1"}
 
-	up := AssessImpact("uncordon", nil, node, all)
+	up := AssessImpact("uncordon", nil, node, true, all)
 	if strings.Contains(up.Summary, "차단") {
 		t.Fatalf("uncordon summary must not say scheduling is blocked, got %q", up.Summary)
 	}
@@ -138,7 +138,7 @@ func TestAssessImpactUncordonDoesNotDescribeCordon(t *testing.T) {
 		t.Fatalf("expected 1 running pod on node-1, got %v", up.Details["running_pods"])
 	}
 
-	down := AssessImpact("cordon", nil, node, all)
+	down := AssessImpact("cordon", nil, node, true, all)
 	if !strings.Contains(down.Summary, "차단") {
 		t.Fatalf("cordon summary should say new scheduling is blocked, got %q", down.Summary)
 	}
@@ -149,9 +149,9 @@ func TestAssessImpactUncordonDoesNotDescribeCordon(t *testing.T) {
 func TestAssessImpactPatchBlockerIsDeterministic(t *testing.T) {
 	target := store.K8sInventoryItem{Kind: "Deployment", Name: "api"}
 	params := map[string]any{"image": "x:2", "command": []any{"sh"}, "nodeSelector": map[string]any{}, "tolerations": []any{}, "securityContext": map[string]any{}}
-	first := AssessImpact("patch", params, target, nil)
+	first := AssessImpact("patch", params, target, true, nil)
 	for i := 0; i < 50; i++ {
-		got := AssessImpact("patch", params, target, nil)
+		got := AssessImpact("patch", params, target, true, nil)
 		if strings.Join(got.Blockers, "|") != strings.Join(first.Blockers, "|") {
 			t.Fatalf("blocker text is not stable: %q vs %q", got.Blockers, first.Blockers)
 		}
