@@ -13,8 +13,9 @@ func violatingPodFor(rule string) (doc map[string]any, spec map[string]any, anno
 	podSpec := map[string]any{
 		"containers": []any{map[string]any{
 			"name": "app", "image": "app@sha256:0123456789abcdef",
-			"securityContext": map[string]any{"runAsNonRoot": true},
-			"resources":       map[string]any{"limits": map[string]any{"cpu": "1"}},
+			"securityContext": map[string]any{"runAsNonRoot": true, "allowPrivilegeEscalation": false,
+				"capabilities": map[string]any{"drop": []any{"ALL"}}},
+			"resources": map[string]any{"limits": map[string]any{"cpu": "1", "memory": "256Mi"}},
 		}},
 	}
 	c := podSpec["containers"].([]any)[0].(map[string]any)

@@ -175,11 +175,35 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations 
 				return true, str(asAnyMap(raw)["name"]) + ": privileged/privesc"
 			}
 		}
+		// Up to here the two rules are the same check, and that is all
+		// enforce_pss_restricted used to do — it was a byte-for-byte alias of
+		// deny_privileged_runtime, a strictly weaker guardrail. A pod with no
+		// securityContext at all (root, full default capability set, privilege
+		// escalation allowed) passed a Deny gate named "Pod Security Restricted 강제",
+		// while the posture report listed exactly those Restricted-level violations for
+		// the same pod. Run the real Restricted controls, from the shared helper.
+		if ruleType == "enforce_pss_restricted" && ps != nil {
+			if v := restrictedProfileViolations(ps); len(v) > 0 {
+				return true, strings.Join(v, ", ")
+			}
+		}
 	case "require_resource_limits":
+		// `limits` being non-empty is not the check: a container with only a CPU limit
+		// has no memory ceiling, so it can consume the whole node and get *other* pods
+		// evicted — the failure this guardrail exists to prevent, and the one operators
+		// hit most. Both the exported Kyverno pattern (memory: "?*", cpu: "?*") and the
+		// rule's own description ("CPU·메모리 limits 누락 탐지") already require both.
+		// A key present with a blank value is not a limit either; Kyverno's "?*" rejects it.
 		for _, raw := range resourceDeclaringContainers(ps) {
 			lim := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["limits"])
-			if len(lim) == 0 {
-				return true, str(asAnyMap(raw)["name"]) + ": resources.limits 미설정"
+			missing := []string{}
+			for _, key := range []string{"cpu", "memory"} {
+				if !quantitySet(lim[key]) {
+					missing = append(missing, key)
+				}
+			}
+			if len(missing) > 0 {
+				return true, str(asAnyMap(raw)["name"]) + ": resources.limits." + strings.Join(missing, "/") + " 미설정"
 			}
 		}
 	case "require_run_as_non_root":
@@ -236,6 +260,21 @@ func policyAnnotations(kind string, spec map[string]any, own map[string]string) 
 		}
 	}
 	return out
+}
+
+// quantitySet reports whether a resources.requests/limits entry actually carries a
+// quantity. `memory: ""` and `memory: null` leave the key present, so a check that only
+// asks whether the map is non-empty reads them as configured; Kyverno's "?*" does not.
+// A YAML scalar that decoded to a number (`cpu: 1`) is a quantity.
+func quantitySet(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(t) != ""
+	default:
+		return true
+	}
 }
 
 // imageTagAndDigest splits `[registry[:port]/]repo[:tag][@digest]`. A `:` introduces a tag
