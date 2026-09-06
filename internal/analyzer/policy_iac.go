@@ -52,7 +52,7 @@ var policyRuleCatalog = map[string]PolicyRuleMeta{
 	"require_resource_limits": {
 		RuleType: "require_resource_limits", Title: "리소스 limits 필수",
 		kyvernoValidate: "      message: \"CPU/메모리 limits를 설정해야 합니다\"\n      pattern:\n        spec:\n          containers:\n          - resources:\n              limits:\n                memory: \"?*\"\n                cpu: \"?*\"",
-		regoBody:        "  some c\n  not input.spec.containers[c].resources.limits\n  msg := sprintf(\"container %v has no resource limits\", [input.spec.containers[c].name])",
+		regoBody:        "  some c, i\n  key := [\"cpu\", \"memory\"][i]\n  not input.spec.containers[c].resources.limits[key]\n  msg := sprintf(\"container %v has no %v limit\", [input.spec.containers[c].name, key])",
 		keywords:        []string{"require-limits", "resource limits", "resources.limits", "require-requests-limits"},
 	},
 	"require_run_as_non_root": {
@@ -117,8 +117,8 @@ var policyRuleCatalog = map[string]PolicyRuleMeta{
 	},
 	"enforce_pss_restricted": {
 		RuleType: "enforce_pss_restricted", Title: "Pod Security Restricted 강제",
-		kyvernoValidate: "      message: \"Restricted Pod Security 기준을 만족해야 합니다\"\n      pattern:\n        spec:\n          =(hostNetwork): \"false\"\n          =(hostPID): \"false\"\n          =(hostIPC): \"false\"\n          =(volumes):\n          - X(hostPath): \"null\"",
-		regoBody:        "  input.spec.hostPID == true\n  msg := \"PSS restricted violation\"",
+		kyvernoValidate: "      message: \"Restricted Pod Security 기준을 만족해야 합니다\"\n      pattern:\n        spec:\n          =(hostNetwork): \"false\"\n          =(hostPID): \"false\"\n          =(hostIPC): \"false\"\n          =(volumes):\n          - X(hostPath): \"null\"\n          containers:\n          - securityContext:\n              runAsNonRoot: \"true\"\n              allowPrivilegeEscalation: \"false\"\n              capabilities:\n                drop:\n                - ALL",
+		regoBody:        "  some c\n  not input.spec.containers[c].securityContext.allowPrivilegeEscalation == false\n  msg := sprintf(\"container %v allows privilege escalation (PSS restricted)\", [input.spec.containers[c].name])",
 		keywords:        []string{"pod security restricted", "pss restricted", "enforce-pss"},
 	},
 }

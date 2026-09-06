@@ -228,8 +228,8 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 	}
 
 	containers := securityRelevantContainers(ps)
-	podSC := asAnyMap(ps["securityContext"])
-	podRunAsNonRoot := asBool(podSC["runAsNonRoot"])
+
+	restricted = append(restricted, restrictedProfileViolations(ps)...)
 
 	for _, raw := range containers {
 		c := asAnyMap(raw)
@@ -240,17 +240,6 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 		}
 		if numVal(sc["runAsUser"]) == 0 && hasKey(sc, "runAsUser") {
 			baseline = append(baseline, cname+": runAsUser=0")
-		}
-		// restricted-level expectations
-		if !asBool(sc["runAsNonRoot"]) && !podRunAsNonRoot {
-			restricted = append(restricted, cname+": runAsNonRoot 미설정")
-		}
-		if !hasKey(sc, "allowPrivilegeEscalation") || asBool(sc["allowPrivilegeEscalation"]) {
-			restricted = append(restricted, cname+": allowPrivilegeEscalation!=false")
-		}
-		caps := asAnyMap(sc["capabilities"])
-		if !dropsAll(caps) {
-			restricted = append(restricted, cname+": capabilities drop ALL 아님")
 		}
 		for _, ad := range stringSlice(asAnyMap(sc["capabilities"])["add"]) {
 			if up := strings.ToUpper(ad); up != "NET_BIND_SERVICE" {
@@ -266,15 +255,54 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 	}
 
 	res.Violations = append(append(append([]string{}, priv...), baseline...), restricted...)
+	// Pod Security Standards are cumulative: a workload is at the Restricted level only
+	// when it satisfies the Restricted controls too. Ranking on priv/baseline alone
+	// labelled every pod that merely avoided host namespaces and privileged=true as
+	// "restricted" — which is nearly every unhardened pod, since running as root with
+	// the default capability set violates nothing at the baseline level. That label is
+	// the one thing consumers key on: the Pod Security table drops `level === 'restricted'`
+	// rows, the warehouse export skips them, and the summary counts them as the goal
+	// state. So the pods with the least hardening were reported as the most hardened and
+	// their violations — already computed, right here in res.Violations — were never shown.
 	switch {
 	case len(priv) > 0:
 		res.Level = "privileged"
-	case len(baseline) > 0:
+	case len(baseline) > 0, len(restricted) > 0:
 		res.Level = "baseline"
 	default:
 		res.Level = "restricted"
 	}
 	return res
+}
+
+// restrictedProfileViolations lists the Pod Security "Restricted" controls this pod
+// spec fails. It is shared by the posture report and the enforce_pss_restricted
+// guardrail so the screen and the admission gate cannot disagree about whether one
+// pod meets the standard.
+func restrictedProfileViolations(ps map[string]any) []string {
+	out := []string{}
+	podRunAsNonRoot := asBool(asAnyMap(ps["securityContext"])["runAsNonRoot"])
+	for _, raw := range securityRelevantContainers(ps) {
+		c := asAnyMap(raw)
+		sc := asAnyMap(c["securityContext"])
+		cname := str(c["name"])
+		// A container's securityContext overrides the pod's, so an explicit false on the
+		// container means that container runs as root however the pod is configured.
+		if set, ok := sc["runAsNonRoot"].(bool); ok {
+			if !set {
+				out = append(out, cname+": runAsNonRoot=false (Pod 설정을 덮어씀)")
+			}
+		} else if !podRunAsNonRoot {
+			out = append(out, cname+": runAsNonRoot 미설정")
+		}
+		if !hasKey(sc, "allowPrivilegeEscalation") || asBool(sc["allowPrivilegeEscalation"]) {
+			out = append(out, cname+": allowPrivilegeEscalation!=false")
+		}
+		if !dropsAll(asAnyMap(sc["capabilities"])) {
+			out = append(out, cname+": capabilities drop ALL 아님")
+		}
+	}
+	return out
 }
 
 func imageFindings(it store.K8sInventoryItem, ps map[string]any) []SecFinding {
