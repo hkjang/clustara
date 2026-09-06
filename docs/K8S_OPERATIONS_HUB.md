@@ -1,8 +1,28 @@
 # K8s Operations Hub
 
-> **버전: v0.9.273** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.274** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.273)
+## 기능 상태 (v0.9.274)
+
+### 스캔 결과 ingest 정규화 · 스캐너 라벨과 severity 등급
+
+취약점 스캔 import 는 이제 아티팩트 형식을 인식하지 못해도 **실제로 실행된 리더**
+(`trivy`)로 스캔 행을 라벨링하고, 요청에 적힌 스캐너 이름은 `summary.requested_scanner`
+로 따로 남깁니다. 인식 여부는 `summary.scanner_detected` 이며, 형식 미인식 상태에서
+findings 가 0건이면 `summary.parse_notice` 가 "깨끗한 이미지" 와 "읽지 못한 파일" 을
+구분해 줍니다.
+
+severity 정규화는 Grype 의 `Negligible` 을 자체 등급으로 유지하고, RPM 권고 등급
+`Important`·`Moderate` 를 각각 High·Medium 으로 매핑합니다(이전에는 셋 다 `Unknown`
+= 랭크 0 이어서 벤더가 High 로 매긴 CVE 가 Admission 승인 임계를 통과했습니다).
+Admission 게이트 임계값(`>= 3` 승인, `>= 4` 거절)은 저장된 계약이므로 등급 번호는
+바뀌지 않았습니다 — `Negligible` 은 Low 와 같은 랭크를 공유합니다. severity 카운트
+맵은 `analyzer.SeverityLevels()` 에서 키를 만듭니다.
+
+kube-bench 결과는 control 자신의 `section`(`1.1`)을 Section 으로 기록하고,
+`scored` 를 JSON bool 로 읽으며, `Controls[].version` 에서 CIS 벤치마크 버전을
+채웁니다.
+
 
 ### 액션 대상 kind · 승인한 리소스와 실행한 리소스
 
