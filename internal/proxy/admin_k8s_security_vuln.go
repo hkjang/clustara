@@ -103,7 +103,12 @@ func (s *Server) handleK8sSecurityVulnWorkloads(w http.ResponseWriter, r *http.R
 			row = map[string]any{
 				"cluster_id": v.ClusterID, "namespace": v.Namespace, "workload_kind": v.WorkloadKind,
 				"workload_name": v.WorkloadName, "image": v.Image, "image_digest": v.ImageDigest,
-				"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0, "fixable": 0, "cves": []string{},
+				"fixable": 0, "cves": []string{},
+			}
+			// Keyed from the normalizer's own level list: the increment below is a
+			// `.(int)` assertion, so a level this map does not declare panics the handler.
+			for _, level := range analyzer.SeverityLevels() {
+				row[strings.ToLower(level)] = 0
 			}
 			rows[key] = row
 		}
@@ -1063,7 +1068,10 @@ func securityPodContainers(it store.K8sInventoryItem) []map[string]string {
 }
 
 func securitySeverityCounts(vulns []store.K8sImageVulnerability) map[string]any {
-	out := map[string]any{"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Unknown": 0, "fixable": 0, "total": len(vulns)}
+	out := map[string]any{"fixable": 0, "total": len(vulns)}
+	for _, level := range analyzer.SeverityLevels() {
+		out[level] = 0
+	}
 	for _, v := range vulns {
 		sec := analyzer.NormalizeSeverity(v.Severity)
 		out[sec] = out[sec].(int) + 1

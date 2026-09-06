@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -587,5 +588,37 @@ spec:
 	}
 	if eval.Decision != "approval_required" {
 		t.Fatalf("multi-doc high vulnerability should require approval, got %+v", eval)
+	}
+}
+
+// The severity count maps increment with a `.(int)` assertion, so every level the
+// normalizer can emit has to be declared up front — a level the map is missing is a
+// panicking handler, not a wrong number. Both maps are now keyed from
+// analyzer.SeverityLevels(); this holds that contract for whatever it grows to hold.
+func TestSecuritySeverityCountsCoverEveryNormalizedLevel(t *testing.T) {
+	vulns := []store.K8sImageVulnerability{}
+	for _, level := range analyzer.SeverityLevels() {
+		vulns = append(vulns, store.K8sImageVulnerability{CVEID: "CVE-" + level, Severity: level})
+	}
+	// Grype's own wording, and the RPM advisory grades, must land on real levels too.
+	vulns = append(vulns,
+		store.K8sImageVulnerability{CVEID: "CVE-neg", Severity: "negligible", FixedVersion: "1.2.3"},
+		store.K8sImageVulnerability{CVEID: "CVE-imp", Severity: "Important"},
+	)
+
+	counts := securitySeverityCounts(vulns)
+	for _, level := range analyzer.SeverityLevels() {
+		if _, ok := counts[level].(int); !ok {
+			t.Fatalf("severity counts missing level %q: %+v", level, counts)
+		}
+	}
+	if counts["Negligible"].(int) != 2 {
+		t.Fatalf("Negligible = %v, want 2", counts["Negligible"])
+	}
+	if counts["High"].(int) != 2 {
+		t.Fatalf("High = %v, want 2 (Important is a High)", counts["High"])
+	}
+	if counts["Unknown"].(int) != 1 || counts["fixable"].(int) != 1 || counts["total"].(int) != len(vulns) {
+		t.Fatalf("counts wrong: %+v", counts)
 	}
 }
