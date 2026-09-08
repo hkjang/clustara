@@ -1,8 +1,33 @@
 # K8s Operations Hub
 
-> **버전: v0.9.277** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.278** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.277)
+## 기능 상태 (v0.9.278)
+
+### 연결성 점검·SEC-06 · 교차 참조는 클러스터 안에서만
+
+`/admin/k8s/connectivity` 와 `/admin/k8s/security` 는 `cluster_id` 가 선택 파라미터라,
+전 클러스터 보기에서는 인벤토리와 이벤트가 여러 클러스터를 담습니다. 네임스페이스 이름은
+클러스터를 건너면 같은 네임스페이스가 아니므로, 이 두 분석의 교차 참조는 이제 모두
+**클러스터 + 네임스페이스**로 대상을 묶습니다.
+
+`analyzeServices` 의 selector 대조는 자기 클러스터의 Pod 안에서만 endpoint 를 찾습니다
+(이전에는 dr 클러스터의 Pod 가 prod Service 의 endpoint 로 계산돼, 실제로 비어 있는
+Service 가 전 클러스터 보기에서 사라졌습니다). 같은 이유로 `IngressBackendMissing` 은
+다른 클러스터의 동명 Service 로 통과되지 않고, `IngressDuplicateHost` 는 host 를
+클러스터 안에서만 비교합니다 — 액티브/스탠바이 한 쌍이 같은 host 를 서비스하는 DR 구성은
+라우팅 충돌이 아닙니다. PVC Pending 증적도 같은 클러스터의 이벤트만 인용합니다.
+
+endpoint 판정은 **종료된 Pod(Succeeded/Failed)를 세지 않습니다.** endpoints 컨트롤러가
+빼는 Pod 지만 GC 전까지 인벤토리에 남기 때문에, 완료된 Job Pod 만 남은 Service 가
+"endpoint 있음" 으로 통과했습니다. 아직 정상이 아닐 뿐인 Pod(Pending·CrashLoopBackOff)는
+not-ready 주소로 게시되므로 그대로 셉니다.
+
+SEC-06(NetworkPolicy 공백)은 네임스페이스 집합의 차집합이라 클러스터별로 판정합니다.
+한 클러스터의 `prod` NetworkPolicy 가 다른 모든 클러스터의 `prod` 를 덮어 보호되지 않은
+네임스페이스가 리포트에서 통째로 빠지던 fail-open 이 사라집니다. `SecFinding` 에는
+`cluster_id` 가 담기고(빈 값은 `omitempty` 로 기존 응답 모양 유지), map 순회라 실행마다
+달라지던 findings 순서를 정렬로 고정했습니다.
 
 ### 외부 노출 점검(Exposure Center) · 와일드카드 인증서와 소유자 단위 집계
 

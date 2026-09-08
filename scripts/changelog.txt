@@ -1,3 +1,12 @@
+v0.9.278:
+- **다른 클러스터의 Pod 가 이 클러스터 Service 의 endpoint 로 계산됐습니다 (v0.9.278)**: `/admin/k8s/connectivity` 는 `cluster_id` 가 선택 파라미터라 전 클러스터 보기에서 인벤토리가 여러 클러스터를 담는데, `analyzeServices` 는 selector 를 **네임스페이스 이름만** 맞춰 대조했습니다. 네임스페이스 이름은 클러스터를 건너면 같은 네임스페이스가 아니므로, dr 클러스터의 Pod 가 prod Service 의 endpoint 로 계산되면서 **실제로 endpoint 가 비어 있는 Service 가 목록에서 사라졌습니다**. 이제 Pod 를 클러스터+네임스페이스로 묶어 자기 클러스터 안에서만 찾습니다.
+- **다른 클러스터에 같은 이름의 Service 가 있으면 `IngressBackendMissing` 이 조용히 사라졌습니다 (v0.9.278)**: Ingress backend 조회도 같은 네임스페이스-이름 대조였기 때문에, 이 클러스터에 존재하지 않는 backend Service 가 다른 클러스터의 동명 Service 로 통과됐습니다. backend 도 소유 클러스터 안에서만 찾습니다.
+- **액티브/스탠바이 DR 구성이 라우팅 충돌로 잡혔습니다 (v0.9.278)**: `IngressDuplicateHost` 는 반대 방향의 오탐이었습니다 — 두 클러스터의 Ingress 가 같은 host 를 서비스하는 것은 DR 구성의 정상 형태지 충돌이 아닌데 중복 host 로 보고됐습니다. 이제 host 는 클러스터 안에서만 비교합니다.
+- **A 클러스터의 이벤트가 B 클러스터 PVC 의 증적으로 붙었습니다 (v0.9.278)**: 이벤트 피드도 전 클러스터를 담으므로, 다른 클러스터의 같은 네임스페이스에서 난 프로비저닝 오류가 이 청구의 Pending 근거로 인용됐습니다. 이제 같은 클러스터의 이벤트만 증적이 됩니다.
+- **보호되지 않은 네임스페이스가 SEC-06 리포트에서 통째로 빠졌습니다 (v0.9.278)**: 영향이 가장 큰 지점입니다. NetworkPolicy 공백 점검은 네임스페이스 집합의 **차집합**이라, 한 클러스터의 `prod` NetworkPolicy 가 다른 모든 클러스터의 `prod` 를 덮어 정책이 하나도 없는 네임스페이스가 리포트에 나타나지 않았습니다(fail-open). 이제 클러스터별로 판정하고, 어느 클러스터인지 알 수 있도록 `SecFinding` 에 `cluster_id` 를 담으며(빈 값은 `omitempty` 로 기존 응답 모양 유지), map 순회라 실행마다 달라지던 findings 순서를 정렬로 고정했습니다.
+- **완료된 Job Pod 만 남은 Service 가 "endpoint 있음" 으로 통과했습니다 (v0.9.278)**: 같은 함수의 endpoint 판정이 종료된 Pod 까지 셌습니다. API 서버는 Succeeded/Failed Pod 를 GC 전까지 인벤토리에 남기지만 endpoints 컨트롤러는 빼므로, 트래픽을 받을 Pod 가 하나도 없는 Service 가 정상으로 보였습니다. 아직 정상이 아닐 뿐인 Pod(Pending·CrashLoopBackOff)는 not-ready 주소로 게시되므로 그대로 셉니다.
+- 신규 테스트 6개 중 5개를 **고치기 전 코드에 되돌려 붙여** 각 결함을 지목하며 실패하는 것을 확인했고, 6번째는 정상이 아닐 뿐인 Pod 가 계속 endpoint 로 남는지 지키는 오탐 회귀입니다. `go build ./...`, `go vet ./...`, `go test ./...` 전부 통과.
+
 v0.9.277:
 - **와일드카드 인증서로 정상 서비스되는 Ingress 가 "평문 노출" 로 채점됐습니다 (v0.9.277)**: `analyzer.AnalyzeExposure` 는 host 가 TLS 로 덮이는지를 `spec.tls[].hosts` 와 **문자열 그대로** 대조했습니다. 그런데 Kubernetes 는 여기에 와일드카드를 허용하고 `*.example.com` 은 DNS 라벨 하나를 덮으므로, `*.example.com` 인증서로 정상 서비스되는 `app.example.com` 이 "TLS 미적용(평문 노출)" +30점으로 채점돼 노출 위험 목록에서 **진짜 평문 Ingress 와 나란히** 올라왔습니다. 이제 라벨 하나를 덮는 규칙으로 대조하고(DNS 이름이므로 대소문자 무시), `a.b.example.com` 은 종전대로 미커버로 남습니다.
 - **와일드카드 host 3개짜리 Ingress 하나가 `Total=1` 인데 `Wildcard=3` 이었습니다 (v0.9.277)**: `SummarizeExposure` 의 `Plaintext`·`Wildcard` 가 finding 이 아니라 `RiskReasons` 를 세어, host 를 여러 개 가진 Ingress 하나가 요약에서 여러 건으로 잡혔습니다. 이제 finding(Ingress) 개수를 세고, 사유 문자열을 상수로 묶어 **문구를 바꾸면 집계가 조용히 0이 되던** 결합도 끊었습니다.
