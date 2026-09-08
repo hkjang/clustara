@@ -1,8 +1,38 @@
 # K8s Operations Hub
 
-> **버전: v0.9.276** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.277** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.276)
+## 기능 상태 (v0.9.277)
+
+### 외부 노출 점검(Exposure Center) · 와일드카드 인증서와 소유자 단위 집계
+
+`analyzer.AnalyzeExposure` 는 Ingress 의 `spec.tls[].hosts` 를 **와일드카드 규칙**으로
+대조합니다. Kubernetes 가 여기에 허용하는 `*.example.com` 은 DNS 라벨 하나를 덮으므로
+`app.example.com` 은 커버된 것으로, `a.b.example.com` 은 커버되지 않은 것으로 판정합니다
+(DNS 이름이므로 대소문자는 무시합니다). 이전에는 문자열을 그대로 비교해 와일드카드
+인증서로 정상 서비스되는 host 가 "TLS 미적용(평문 노출)" +30점으로 채점됐습니다.
+
+`SummarizeExposure` 의 `Plaintext`·`Wildcard` 는 위험 사유 문자열이 아니라 **finding
+(Ingress) 개수**를 셉니다. 와일드카드 host 를 여러 개 가진 Ingress 하나가 `Total=1` 인데
+`Wildcard=3` 을 만들던 문제가 사라지고, 사유 문구를 바꿔도 집계가 조용히 0이 되지
+않습니다(사유 문자열은 상수로 고정). 노출 분석의 `TargetServices` 에는
+`spec.defaultBackend` 의 Service 도 포함됩니다.
+
+### Ingress/PVC 연결성 점검(K8S-23/24) · 소유자 확인과 결정적 순서
+
+`IngressDuplicateHost` 는 host 를 **Ingress 단위로 한 번만** 셉니다. 같은 host 아래 path 를
+rule 두 개로 나눠 적은 하나의 Ingress 가 자기 자신과 충돌하는 것으로 잡히지 않으며,
+finding 에는 소유자의 `cluster_id` 가 담기고 host 를 정렬해 실행마다 달라지던 findings
+순서를 고정했습니다.
+
+`IngressBackendMissing` 은 rule 에 일치하지 않는 모든 요청을 받는 `spec.defaultBackend` 의
+Service 도 검사하고, 같은 Service 를 여러 path 가 참조해도 finding 을 한 번만 냅니다
+(이전에는 동일한 finding 이 path 수만큼 반복돼 응답의 `count` 가 부풀려졌습니다).
+
+PVC Pending 증적은 이벤트의 **involved object** 로 대상을 확인합니다 — PVC 자신에 기록되는
+provisioning/binding 이벤트와, 청구 이름을 message 에 적는 Pod 의 mount/attach 실패만
+붙습니다. 이전에는 (볼륨 실패 reason) **또는** (message 에 이름 포함) 이라, 같은
+네임스페이스의 다른 PVC 가 낸 `ProvisioningFailed` 가 그대로 증적에 섞였습니다.
 
 ### TLS 인증서 만료 점검(SEC-07) · 번들 전체와 실제 시각 기준 판정
 
