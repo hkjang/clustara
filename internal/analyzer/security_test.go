@@ -89,6 +89,29 @@ func TestAnalyzeSecurityImageAndNetwork(t *testing.T) {
 	}
 }
 
+// SEC-06 is a set difference over namespaces, and a posture run without a cluster_id covers
+// every cluster — so one cluster's NetworkPolicy must not cover another cluster's namespace of
+// the same name, which would drop the unprotected namespace from the report entirely.
+func TestAnalyzeSecurityNetworkGapIsPerCluster(t *testing.T) {
+	prod := deployWithPodSpec("shop", "api", map[string]any{
+		"containers": []any{map[string]any{"name": "c", "image": "registry/api:1.2.3"}},
+	})
+	prod.ClusterID = "prod"
+	dr := prod
+	dr.ClusterID = "dr"
+	items := []store.K8sInventoryItem{
+		prod, dr,
+		{ClusterID: "prod", Kind: "NetworkPolicy", Namespace: "shop", Name: "default-deny"},
+	}
+	rep := AnalyzeSecurity(items)
+	if len(rep.Network) != 1 {
+		t.Fatalf("expected exactly the dr gap, got %+v", rep.Network)
+	}
+	if rep.Network[0].ClusterID != "dr" || rep.Network[0].Namespace != "shop" {
+		t.Fatalf("expected the gap on dr/shop, got %+v", rep.Network[0])
+	}
+}
+
 func TestDetectActionAnomalies(t *testing.T) {
 	now := mustTime("2026-06-24T10:00:00Z")
 	mk := func(user, risk, at string) store.K8sActionRequest {

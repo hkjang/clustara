@@ -33,10 +33,15 @@ func AnalyzeConnectivity(items []store.K8sInventoryItem, events []store.K8sEvent
 // analyzeServices matches each Service's selector against Pod labels in the same namespace.
 // A selector that matches no Pod means the Service has no endpoints (K8S-22).
 func analyzeServices(items []store.K8sInventoryItem) []ConnFinding {
-	pods := []store.K8sInventoryItem{}
+	// Pods are indexed per cluster+namespace: this analysis runs over the whole inventory when
+	// the caller passes no cluster_id, and a Service only ever selects Pods inside its own
+	// cluster. Matching on the namespace alone let another cluster's identically-named
+	// namespace supply the endpoints, hiding a broken Service in the multi-cluster view.
+	podsByNS := map[string][]store.K8sInventoryItem{}
 	for _, it := range items {
 		if it.Kind == "Pod" {
-			pods = append(pods, it)
+			key := it.ClusterID + "\x00" + it.Namespace
+			podsByNS[key] = append(podsByNS[key], it)
 		}
 	}
 	out := []ConnFinding{}
@@ -57,19 +62,32 @@ func analyzeServices(items []store.K8sInventoryItem) []ConnFinding {
 			})
 			continue
 		}
-		matches := 0
-		for _, p := range pods {
-			if p.Namespace == svc.Namespace && labelsMatch(p.Labels, selector) {
-				matches++
+		matches, serving := 0, 0
+		for _, p := range podsByNS[svc.ClusterID+"\x00"+svc.Namespace] {
+			if !labelsMatch(p.Labels, selector) {
+				continue
+			}
+			matches++
+			if !podReachedTerminalPhase(p) {
+				serving++
 			}
 		}
-		if matches == 0 {
+		switch {
+		case matches == 0:
 			out = append(out, ConnFinding{
 				ClusterID: svc.ClusterID, Namespace: svc.Namespace, ResourceKind: "Service", ResourceName: svc.Name,
 				Check: "ServiceNoEndpoints", Severity: "high",
 				Message:  "Service selector와 일치하는 Pod가 없어 endpoint가 비어 있습니다.",
 				Evidence: []string{"selector: " + selectorString(selector)},
 				Actions:  []string{"selector와 Pod label이 일치하는지 확인합니다.", "대상 워크로드가 실행 중인지(Ready Pod) 확인합니다."},
+			})
+		case serving == 0:
+			out = append(out, ConnFinding{
+				ClusterID: svc.ClusterID, Namespace: svc.Namespace, ResourceKind: "Service", ResourceName: svc.Name,
+				Check: "ServiceNoEndpoints", Severity: "high",
+				Message:  "Service selector와 일치하는 Pod가 모두 종료(Succeeded/Failed) 상태라 endpoint가 비어 있습니다.",
+				Evidence: []string{"selector: " + selectorString(selector), fmt.Sprintf("일치 Pod %d개가 모두 종료 상태", matches)},
+				Actions:  []string{"완료된 Job/CronJob Pod만 남아 있는지 확인합니다.", "대상 워크로드가 실행 중인지(Ready Pod) 확인합니다."},
 			})
 		}
 	}
@@ -86,17 +104,35 @@ type ingressHostOwner struct {
 
 func (o ingressHostOwner) ref() string { return o.namespace + "/" + o.name }
 
+// ingressHostKey identifies a claimed host inside one cluster. Two clusters routing the same
+// host (an active/standby pair mirrors its Ingresses) is the normal shape of a DR setup, not a
+// routing conflict, so hosts are only ever compared within a cluster.
+type ingressHostKey struct {
+	clusterID string
+	host      string
+}
+
+// ingressHostClaim is one Ingress's claim on a host, used to record a claim only once when the
+// same Ingress lists the host in several rules.
+type ingressHostClaim struct {
+	key ingressHostKey
+	ref string
+}
+
 // analyzeIngresses checks each Ingress backend Service exists, detects duplicate hosts across
 // Ingresses, and flags TLS entries without a secretName (K8S-23).
 func analyzeIngresses(items []store.K8sInventoryItem) []ConnFinding {
-	svcByNS := map[string]bool{} // "ns/name" -> exists
+	// Keyed by cluster as well as namespace: a Service that only exists in another cluster does
+	// not resolve this Ingress's backend, and treating it as one silently cleared a real
+	// IngressBackendMissing whenever the report covered every cluster.
+	svcByNS := map[string]bool{} // "cluster\x00ns/name" -> exists
 	for _, it := range items {
 		if it.Kind == "Service" {
-			svcByNS[it.Namespace+"/"+it.Name] = true
+			svcByNS[it.ClusterID+"\x00"+it.Namespace+"/"+it.Name] = true
 		}
 	}
-	hostOwners := map[string][]ingressHostOwner{} // host -> claiming Ingresses
-	hostClaimed := map[string]bool{}              // host + owner -> already recorded
+	hostOwners := map[ingressHostKey][]ingressHostOwner{} // cluster+host -> claiming Ingresses
+	hostClaimed := map[ingressHostClaim]bool{}            // cluster+host+owner -> already recorded
 	out := []ConnFinding{}
 	for _, ing := range items {
 		if ing.Kind != "Ingress" {
@@ -108,7 +144,7 @@ func analyzeIngresses(items []store.K8sInventoryItem) []ConnFinding {
 		reportedBackend := map[string]bool{}
 		checkBackend := func(svc map[string]any, where string) {
 			name := str(svc["name"])
-			if name == "" || svcByNS[ing.Namespace+"/"+name] || reportedBackend[name] {
+			if name == "" || svcByNS[ing.ClusterID+"\x00"+ing.Namespace+"/"+name] || reportedBackend[name] {
 				return
 			}
 			reportedBackend[name] = true
@@ -125,9 +161,10 @@ func analyzeIngresses(items []store.K8sInventoryItem) []ConnFinding {
 			if host := str(rule["host"]); host != "" {
 				// One Ingress may list the same host in several rules (a legal way to group
 				// paths); only distinct Ingresses claiming it are a routing conflict.
-				if key := host + "\x00" + owner.ref(); !hostClaimed[key] {
-					hostClaimed[key] = true
-					hostOwners[host] = append(hostOwners[host], owner)
+				hostKey := ingressHostKey{clusterID: ing.ClusterID, host: host}
+				if claim := (ingressHostClaim{key: hostKey, ref: owner.ref()}); !hostClaimed[claim] {
+					hostClaimed[claim] = true
+					hostOwners[hostKey] = append(hostOwners[hostKey], owner)
 				}
 			}
 			http := asAnyMap(rule["http"])
@@ -154,13 +191,19 @@ func analyzeIngresses(items []store.K8sInventoryItem) []ConnFinding {
 		}
 	}
 	// Sorted so the findings (and the report the UI renders in input order) are stable across runs.
-	hosts := make([]string, 0, len(hostOwners))
-	for host := range hostOwners {
-		hosts = append(hosts, host)
+	hostKeys := make([]ingressHostKey, 0, len(hostOwners))
+	for key := range hostOwners {
+		hostKeys = append(hostKeys, key)
 	}
-	sort.Strings(hosts)
-	for _, host := range hosts {
-		owners := hostOwners[host]
+	sort.Slice(hostKeys, func(i, j int) bool {
+		if hostKeys[i].clusterID != hostKeys[j].clusterID {
+			return hostKeys[i].clusterID < hostKeys[j].clusterID
+		}
+		return hostKeys[i].host < hostKeys[j].host
+	})
+	for _, key := range hostKeys {
+		host := key.host
+		owners := hostOwners[key]
 		if len(owners) > 1 {
 			// Attribute the duplicate to the first owner; list the rest as evidence.
 			refs := make([]string, 0, len(owners))
@@ -195,7 +238,10 @@ func analyzePVCs(items []store.K8sInventoryItem, events []store.K8sEvent) []Conn
 			evidence = append(evidence, "storageClassName: "+sc)
 		}
 		for _, e := range events {
-			if e.Namespace != pvc.Namespace || !eventConcernsPVC(e, pvc.Name) {
+			// The cluster has to match too: the event feed spans clusters when the caller
+			// asks for every cluster, and another cluster's namespace-mate would otherwise
+			// be filed as this claim's provisioning error.
+			if e.ClusterID != pvc.ClusterID || e.Namespace != pvc.Namespace || !eventConcernsPVC(e, pvc.Name) {
 				continue
 			}
 			evidence = append(evidence, strings.TrimSpace(e.Reason+": "+e.Message))
@@ -237,6 +283,23 @@ func volumeFailureReason(reason string) bool {
 }
 
 // --- small helpers (local to avoid touching shared analyzer helpers) ---
+
+// podReachedTerminalPhase reports whether a Pod is in a terminal phase (Succeeded/Failed).
+//
+// The endpoints controller drops such Pods, but the API server keeps them in the inventory until
+// they are garbage-collected, so a Service left over from a finished Job or fronting only evicted
+// Pods looked like it still had endpoints. Pods that are merely unhealthy (Pending, CrashLoopBackOff)
+// stay counted: they are still published as (not-ready) addresses and this check only asks whether
+// the Service resolves to anything at all.
+func podReachedTerminalPhase(p store.K8sInventoryItem) bool {
+	phase := strings.TrimSpace(str(p.StatusObject["phase"]))
+	if phase == "" {
+		// The stored Status is the phase for Pods, except when a container waiting reason
+		// (ImagePullBackOff 등) takes its place — those are never terminal phases.
+		phase = strings.TrimSpace(p.Status)
+	}
+	return strings.EqualFold(phase, "Succeeded") || strings.EqualFold(phase, "Failed")
+}
 
 func labelsMatch(podLabels map[string]string, selector map[string]string) bool {
 	for k, v := range selector {

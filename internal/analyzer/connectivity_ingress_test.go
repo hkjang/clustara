@@ -141,9 +141,9 @@ func TestPVCEvidenceKeepsOwnEvents(t *testing.T) {
 		{Kind: "PersistentVolumeClaim", ClusterID: "c1", Namespace: "default", Name: "mine", Status: "Pending"},
 	}
 	events := []store.K8sEvent{
-		{Namespace: "default", InvolvedKind: "PersistentVolumeClaim", InvolvedName: "mine", Reason: "WaitForFirstConsumer",
+		{ClusterID: "c1", Namespace: "default", InvolvedKind: "PersistentVolumeClaim", InvolvedName: "mine", Reason: "WaitForFirstConsumer",
 			Message: "waiting for first consumer to be created", Type: "Normal"},
-		{Namespace: "default", InvolvedKind: "Pod", InvolvedName: "web-1", Reason: "FailedMount",
+		{ClusterID: "c1", Namespace: "default", InvolvedKind: "Pod", InvolvedName: "web-1", Reason: "FailedMount",
 			Message: "Unable to attach or mount volumes: unbound PVC mine", Type: "Warning"},
 	}
 	out := analyzePVCs(items, events)
