@@ -21,7 +21,8 @@ type securityClusterPosture struct {
 	RBACFindings     int    `json:"rbac_findings"`
 	ImageIssues      int    `json:"image_issues"`
 	NetworkGaps      int    `json:"network_gaps"`
-	TLSExpiring      int    `json:"tls_expiring"`
+	TLSExpiring      int    `json:"tls_expiring"` // 만료·만료 임박·확인 불가 (정상 인증서는 제외)
+	TLSExpired       int    `json:"tls_expired"`  // 지금 사용할 수 없는 인증서 (만료됨 또는 아직 유효 전)
 	MutableImages    int    `json:"mutable_images"`
 	TagDrifts        int    `json:"tag_drifts"`
 	OpenFindings     int    `json:"open_findings"`
@@ -65,6 +66,7 @@ func (s *Server) handleSecurityPosture(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		ledger := analyzer.BuildImageLedger(pods)
+		tlsAttention, tlsUnusable := analyzer.TLSAttentionCounts(tls)
 		row := securityClusterPosture{
 			ClusterID:       c.ID,
 			ClusterName:     c.Name,
@@ -77,7 +79,8 @@ func (s *Server) handleSecurityPosture(w http.ResponseWriter, r *http.Request) {
 			RBACFindings:    report.Summary.RBACFindings,
 			ImageIssues:     report.Summary.ImageIssues,
 			NetworkGaps:     report.Summary.NetGaps,
-			TLSExpiring:     len(tls),
+			TLSExpiring:     tlsAttention,
+			TLSExpired:      tlsUnusable,
 			MutableImages:   ledger.MutableCount,
 			TagDrifts:       ledger.TagDriftCount,
 			OpenFindings:    len(findingsByCluster[c.ID]),
@@ -112,6 +115,9 @@ func securityPostureRecommendation(row securityClusterPosture) string {
 	switch {
 	case row.CriticalFindings > 0:
 		return "critical/high finding 우선 조치"
+	case row.TLSExpired > 0:
+		// Not a hygiene item: the endpoint is failing handshakes right now.
+		return "만료된 TLS 인증서 즉시 교체"
 	case row.Privileged > 0:
 		return "privileged workload 제거 또는 예외 승인"
 	case row.RBACFindings > 0:
@@ -130,7 +136,7 @@ func securityPostureRecommendation(row securityClusterPosture) string {
 func countSecurityAttention(rows []securityClusterPosture) int {
 	n := 0
 	for _, row := range rows {
-		if row.Score < 85 || row.CriticalFindings > 0 || row.Privileged > 0 || row.MutableImages > 0 {
+		if row.Score < 85 || row.CriticalFindings > 0 || row.Privileged > 0 || row.MutableImages > 0 || row.TLSExpired > 0 {
 			n++
 		}
 	}

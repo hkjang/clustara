@@ -24,8 +24,10 @@ func makeCertPEM(t *testing.T, cn string, dns []string, notAfter time.Time) stri
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: cn},
 		DNSNames:     dns,
-		NotBefore:    notAfter.Add(-720 * time.Hour),
-		NotAfter:     notAfter,
+		// Already issued: anchoring notBefore to notAfter would put long-lived certificates'
+		// validity start in the future, which is its own (separately tested) finding.
+		NotBefore: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:  notAfter,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {

@@ -13537,7 +13537,8 @@ const adminHTML = `<!doctype html>
             '<td>' + escapeHTML((c.namespace || '-') + '/' + c.secret) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, 'Secret', c.namespace, c.secret, 'YAML') + '</div></td>' +
             '<td>' + escapeHTML(c.subject || '-') + '</td>' +
             '<td class="muted" style="font-size:11px">' + escapeHTML((c.dns_names || []).join(', ')) + '</td>' +
-            '<td>' + fmt(c.days_left) + '일</td></tr>').join('');
+            '<td>' + (c.days_left < 0 ? '<span class="status error">만료됨</span>' : fmt(c.days_left) + '일') +
+            '<div class="muted" style="font-size:11px">' + escapeHTML(c.message || '') + '</div></td></tr>').join('');
           return card('TLS 인증서 만료 (SEC-07)', '<div class="card-body"><table><thead><tr><th>심각도</th><th>Secret</th><th>CN</th><th>SAN</th><th>남은 일수</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })();
       if (focusId) {
