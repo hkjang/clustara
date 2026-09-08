@@ -42,6 +42,34 @@ type ExposureFinding struct {
 // sensitivePathPrefixes are paths that should rarely be publicly exposed.
 var sensitivePathPrefixes = []string{"/actuator", "/swagger", "/admin", "/metrics", "/debug", "/.env", "/api-docs", "/wp-admin"}
 
+// Risk reasons the fleet rollup counts. They are constants so SummarizeExposure tallies the same
+// text AnalyzeExposure writes — matching a hand-copied substring would silently count zero once
+// the wording changes.
+const (
+	exposureReasonPlaintext      = "TLS 미적용(평문 노출)"
+	exposureReasonWildcardPrefix = "wildcard host: "
+)
+
+// tlsHostCovered reports whether an Ingress TLS block covers one rule host.
+//
+// spec.tls[].hosts accepts wildcards, and a wildcard matches exactly one DNS label: with
+// "*.example.com" in the TLS block, "app.example.com" is served over TLS but "a.b.example.com" is
+// not. Comparing the literal strings would report a wildcard-certificate Ingress as plaintext.
+// DNS names are case-insensitive, so tlsHosts must hold lowercased entries.
+func tlsHostCovered(host string, tlsHosts map[string]bool) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return false
+	}
+	if tlsHosts[h] {
+		return true
+	}
+	if i := strings.Index(h, "."); i > 0 {
+		return tlsHosts["*"+h[i:]]
+	}
+	return false
+}
+
 // AnalyzeExposure scores one exposure resource.
 func AnalyzeExposure(in ExposureResourceInput) ExposureFinding {
 	f := ExposureFinding{
@@ -51,7 +79,9 @@ func AnalyzeExposure(in ExposureResourceInput) ExposureFinding {
 	score := 0
 	tlsHosts := map[string]bool{}
 	for _, h := range in.TLSHosts {
-		tlsHosts[h] = true
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			tlsHosts[h] = true
+		}
 	}
 
 	switch in.Kind {
@@ -59,17 +89,17 @@ func AnalyzeExposure(in ExposureResourceInput) ExposureFinding {
 		// Plaintext exposure: a host without TLS coverage.
 		plaintext := false
 		for _, h := range in.Hosts {
-			if !in.HasTLS || (len(tlsHosts) > 0 && !tlsHosts[h]) {
+			if !in.HasTLS || (len(tlsHosts) > 0 && !tlsHostCovered(h, tlsHosts)) {
 				plaintext = true
 			}
 			if strings.HasPrefix(h, "*.") || h == "*" {
 				score += 15
-				f.RiskReasons = append(f.RiskReasons, "wildcard host: "+h)
+				f.RiskReasons = append(f.RiskReasons, exposureReasonWildcardPrefix+h)
 			}
 		}
 		if plaintext || (len(in.Hosts) == 0 && !in.HasTLS) {
 			score += 30
-			f.RiskReasons = append(f.RiskReasons, "TLS 미적용(평문 노출)")
+			f.RiskReasons = append(f.RiskReasons, exposureReasonPlaintext)
 		}
 	case "Service":
 		switch strings.ToLower(in.ServiceType) {
@@ -131,13 +161,22 @@ func SummarizeExposure(findings []ExposureFinding) ExposureSummary {
 		default:
 			s.Low++
 		}
+		// Plaintext/Wildcard count findings, not reasons: one Ingress serving three wildcard
+		// hosts carries three wildcard reasons, and tallying those pushed Wildcard past Total.
+		plaintext, wildcard := false, false
 		for _, r := range f.RiskReasons {
-			if strings.Contains(r, "평문") {
-				s.Plaintext++
+			if r == exposureReasonPlaintext {
+				plaintext = true
 			}
-			if strings.Contains(r, "wildcard") {
-				s.Wildcard++
+			if strings.HasPrefix(r, exposureReasonWildcardPrefix) {
+				wildcard = true
 			}
+		}
+		if plaintext {
+			s.Plaintext++
+		}
+		if wildcard {
+			s.Wildcard++
 		}
 	}
 	return s
