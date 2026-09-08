@@ -211,13 +211,13 @@ func (c *HTTPClient) OpenPodTerminal(ctx context.Context, namespace, pod string,
 
 func podExecArgs(opts PodExecOptions) ([]string, error) {
 	if len(opts.CommandArg) > 0 {
-		out := []string{}
-		for _, arg := range opts.CommandArg {
-			if strings.TrimSpace(arg) != "" {
-				out = append(out, strings.TrimSpace(arg))
-			}
-		}
-		if len(out) == 0 {
+		// A caller that passes argv has already decided where each word goes:
+		// `sh -c <script> <argv0> <path> <query> <n>` positions user values as
+		// $1..$3. Dropping a blank one — or trimming its spaces away — shifts
+		// every later word one position forward, so the program runs with the
+		// wrong parameters. Only a program name (argv[0]) is required.
+		out := append([]string(nil), opts.CommandArg...)
+		if strings.TrimSpace(out[0]) == "" {
 			return nil, fmt.Errorf("command is required")
 		}
 		return out, nil
@@ -611,47 +611,76 @@ func maxExecResponseBytes(limitBytes int) int {
 	return 1024 * 1024
 }
 
+// splitCommandLine builds the argv for the exec API out of the command string a
+// terminal policy reviewed and an approver signed off on. Pod exec runs argv
+// directly — there is no shell on the other side — so every word this function
+// produces or drops is exactly what runs.
+//
+// It follows the POSIX quoting rules that analyzer.ShellWords documents for the
+// gate side; the two must agree, because a word one of them sees and the other
+// does not is a command that was reviewed as one thing and executed as another.
+// Two rules used to differ here: an explicitly empty word ("" as in `sh -c ""`)
+// was dropped, which slides every following argument one position forward, and a
+// backslash inside single quotes was treated as an escape even though a shell
+// keeps it literal (`grep 'a\.b' f` searched for a.b).
 func splitCommandLine(command string) ([]string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil, nil
 	}
+	runes := []rune(command)
 	out := []string{}
 	var b strings.Builder
 	var quote rune
-	escaped := false
-	for _, r := range command {
+	word := false
+	flush := func() {
+		if word {
+			out = append(out, b.String())
+			b.Reset()
+			word = false
+		}
+	}
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
-		case escaped:
-			b.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case quote != 0:
-			if r == quote {
+		case quote == '\'':
+			if r == '\'' {
 				quote = 0
 			} else {
 				b.WriteRune(r)
 			}
+		case quote == '"':
+			if r == '"' {
+				quote = 0
+				continue
+			}
+			if r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\", runes[i+1]) {
+				i++
+				b.WriteRune(runes[i])
+				continue
+			}
+			b.WriteRune(r)
+		case r == '\\':
+			if i+1 < len(runes) {
+				i++
+				b.WriteRune(runes[i])
+			} else {
+				b.WriteRune(r)
+			}
+			word = true
 		case r == '\'' || r == '"':
 			quote = r
+			word = true
 		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
-			if b.Len() > 0 {
-				out = append(out, b.String())
-				b.Reset()
-			}
+			flush()
 		default:
 			b.WriteRune(r)
+			word = true
 		}
-	}
-	if escaped {
-		b.WriteRune('\\')
 	}
 	if quote != 0 {
 		return nil, fmt.Errorf("unterminated quote in command")
 	}
-	if b.Len() > 0 {
-		out = append(out, b.String())
-	}
+	flush()
 	return out, nil
 }

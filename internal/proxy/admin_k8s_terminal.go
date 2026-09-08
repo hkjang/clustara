@@ -324,6 +324,14 @@ func terminalDenyMatches(pattern, command string) bool {
 	if terminalCommandMatches(pattern, command) {
 		return true
 	}
+	// Also match the command as the executor will build it. Quoting is resolved
+	// when argv is assembled, so `r"m" -rf /data` and `\rm -rf /data` run rm
+	// while the raw bytes match neither the "rm -rf" phrase nor the program
+	// token. Only the deny side reads this normalized form: the allow side must
+	// not become easier to satisfy.
+	if normalized := normalizedCommandLine(command); normalized != "" && terminalCommandMatches(pattern, normalized) {
+		return true
+	}
 	p := strings.ToLower(strings.TrimSpace(pattern))
 	if p == "" || strings.ContainsAny(p, " *") {
 		return false // multi-word and wildcard patterns are already handled above
@@ -331,17 +339,29 @@ func terminalDenyMatches(pattern, command string) bool {
 	return terminalProgramTokenMatches(p, strings.ToLower(command))
 }
 
+// normalizedCommandLine renders a command the way the exec argv builder resolves
+// it — quotes removed, backslash escapes applied — with the words rejoined by a
+// single space. An unterminated quote still yields the words parsed so far, which
+// is what the deny side wants to inspect.
+func normalizedCommandLine(command string) string {
+	words, _ := analyzer.ShellWords(strings.ToLower(strings.TrimSpace(command)))
+	return strings.Join(words, " ")
+}
+
 // terminalProgramTokenMatches reports whether pattern names the program in any
 // command position, ignoring a leading path and a dotted variant ("mkfs.ext4").
 // Only command positions count, so an argument that merely contains the word —
 // "cat halt.log" — is not a match.
 func terminalProgramTokenMatches(pattern, command string) bool {
-	tokens := strings.Fields(command)
+	// Quoting is resolved first (`re"boot"`, `\rm` and `sh -c "reboot"` all name
+	// the program the executor will run), then the resolved line is split on
+	// whitespace again so a quoted `-c` payload keeps its own command positions.
+	tokens := strings.Fields(normalizedCommandLine(command))
 	for i, raw := range tokens {
 		if !terminalCommandPosition(tokens, i) {
 			continue
 		}
-		tok := strings.Trim(raw, `"'`)
+		tok := raw
 		if idx := strings.LastIndex(tok, "/"); idx >= 0 {
 			tok = tok[idx+1:]
 		}

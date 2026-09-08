@@ -48,8 +48,12 @@ func shellBase(token string) string {
 // isInteractiveShell reports whether the command launches an interactive shell. A bare request
 // (empty command) is interactive; `sh`/`bash` alone (optionally with `-i`) is interactive; but
 // `sh -c "..."` runs a fixed command string and is NOT an interactive shell.
+//
+// The words come from ShellWords, not strings.Fields: full TTY is the tier that always demands
+// approval, and reading the raw bytes meant `"bash"` or `\bash` — which the executor resolves to
+// bash and runs as a shell — fell through to the low-risk read-only tier that needs none.
 func isInteractiveShell(command string) bool {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(command)))
+	fields, _ := ShellWords(strings.ToLower(strings.TrimSpace(command)))
 	if len(fields) == 0 {
 		return true
 	}
