@@ -39,8 +39,19 @@ func DetectActionAnomalies(actions []store.K8sActionRequest, now time.Time, wind
 	return out
 }
 
+// securityNamespaceKey identifies a namespace inside one cluster. A posture run may span
+// clusters, where the same namespace name is a different namespace per cluster.
+type securityNamespaceKey struct {
+	clusterID string
+	namespace string
+}
+
 // SecFinding is one security/policy issue (SEC-02/03/04/06).
 type SecFinding struct {
+	// ClusterID names the cluster the finding came from; empty for findings that are not tied
+	// to one (the audit-burst anomaly is per requester). It is omitted from the JSON when
+	// empty so single-cluster responses keep their existing shape.
+	ClusterID    string   `json:"cluster_id,omitempty"`
 	Namespace    string   `json:"namespace"`
 	ResourceKind string   `json:"resource_kind"`
 	ResourceName string   `json:"resource_name"`
@@ -86,11 +97,15 @@ var workloadKinds = map[string]bool{"Deployment": true, "StatefulSet": true, "Da
 func AnalyzeSecurity(items []store.K8sInventoryItem) SecurityReport {
 	rep := SecurityReport{PodSecurity: []PodSecurityResult{}, RBAC: []SecFinding{}, Images: []SecFinding{}, Secrets: []SecFinding{}, Network: []SecFinding{}}
 
-	nsWithWorkload := map[string]bool{}
-	nsWithNetPol := map[string]bool{}
+	// SEC-06 is a set difference over namespaces, and the posture runs over every cluster when
+	// the caller passes no cluster_id — so the namespace alone is not the identity of a
+	// namespace. Keyed that way, one cluster's `prod` NetworkPolicy covered every other
+	// cluster's `prod`, and an unprotected namespace disappeared from the report entirely.
+	nsWithWorkload := map[securityNamespaceKey]bool{}
+	nsWithNetPol := map[securityNamespaceKey]bool{}
 	for _, it := range items {
 		if it.Kind == "NetworkPolicy" {
-			nsWithNetPol[it.Namespace] = true
+			nsWithNetPol[securityNamespaceKey{clusterID: it.ClusterID, namespace: it.Namespace}] = true
 		}
 	}
 
@@ -102,7 +117,7 @@ func AnalyzeSecurity(items []store.K8sInventoryItem) SecurityReport {
 				continue
 			}
 			if it.Namespace != "" {
-				nsWithWorkload[it.Namespace] = true
+				nsWithWorkload[securityNamespaceKey{clusterID: it.ClusterID, namespace: it.Namespace}] = true
 			}
 			res := classifyPodSecurity(it, ps)
 			rep.PodSecurity = append(rep.PodSecurity, res)
@@ -114,15 +129,27 @@ func AnalyzeSecurity(items []store.K8sInventoryItem) SecurityReport {
 	}
 
 	// SEC-06: namespaces running workloads but with no NetworkPolicy (no default deny).
-	for ns := range nsWithWorkload {
-		if !nsWithNetPol[ns] {
-			rep.Network = append(rep.Network, SecFinding{
-				Namespace: ns, ResourceKind: "Namespace", ResourceName: ns,
-				Rule: "no-network-policy", Severity: "medium",
-				Message:  "워크로드가 있지만 NetworkPolicy가 없어 기본 deny가 적용되지 않습니다.",
-				Evidence: []string{"namespace에 NetworkPolicy 리소스 없음"},
-			})
+	// Sorted so the report is stable across runs (map iteration is not).
+	gaps := make([]securityNamespaceKey, 0, len(nsWithWorkload))
+	for key := range nsWithWorkload {
+		if !nsWithNetPol[key] {
+			gaps = append(gaps, key)
 		}
+	}
+	sort.Slice(gaps, func(i, j int) bool {
+		if gaps[i].clusterID != gaps[j].clusterID {
+			return gaps[i].clusterID < gaps[j].clusterID
+		}
+		return gaps[i].namespace < gaps[j].namespace
+	})
+	for _, key := range gaps {
+		rep.Network = append(rep.Network, SecFinding{
+			ClusterID: key.clusterID,
+			Namespace: key.namespace, ResourceKind: "Namespace", ResourceName: key.namespace,
+			Rule: "no-network-policy", Severity: "medium",
+			Message:  "워크로드가 있지만 NetworkPolicy가 없어 기본 deny가 적용되지 않습니다.",
+			Evidence: []string{"namespace에 NetworkPolicy 리소스 없음"},
+		})
 	}
 
 	rep.Summary = summarize(rep)
@@ -317,6 +344,7 @@ func imageFindings(it store.K8sInventoryItem, ps map[string]any) []SecFinding {
 		}
 		if len(bad) > 0 {
 			out = append(out, SecFinding{
+				ClusterID: it.ClusterID,
 				Namespace: it.Namespace, ResourceKind: it.Kind, ResourceName: it.Name,
 				Rule: "image-tag-policy", Severity: "medium",
 				Message:  "이미지 태그 정책 위반: " + img,
@@ -364,6 +392,7 @@ func secretRefFindings(it store.K8sInventoryItem, ps map[string]any) []SecFindin
 		names = append(names, n)
 	}
 	return []SecFinding{{
+		ClusterID: it.ClusterID,
 		Namespace: it.Namespace, ResourceKind: it.Kind, ResourceName: it.Name,
 		Rule: "secret-access", Severity: "low",
 		Message:  "워크로드가 Secret을 참조합니다.",
@@ -466,7 +495,7 @@ func sortStrings(ss []string) {
 }
 
 func secf(it store.K8sInventoryItem, rule, severity, msg string, evidence []string) SecFinding {
-	return SecFinding{Namespace: it.Namespace, ResourceKind: it.Kind, ResourceName: it.Name, Rule: rule, Severity: severity, Message: msg, Evidence: evidence}
+	return SecFinding{ClusterID: it.ClusterID, Namespace: it.Namespace, ResourceKind: it.Kind, ResourceName: it.Name, Rule: rule, Severity: severity, Message: msg, Evidence: evidence}
 }
 
 // --- helpers ---
