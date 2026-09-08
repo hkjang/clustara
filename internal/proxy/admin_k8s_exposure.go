@@ -70,6 +70,12 @@ func ingressExposureInput(it store.K8sInventoryItem) analyzer.ExposureResourceIn
 			}
 		}
 	}
+	// spec.defaultBackend serves every request that matches no rule, so it is exposed too.
+	if svc := asMapAny(asMapAny(spec["defaultBackend"])["service"]); len(svc) > 0 {
+		if n := strAny(svc["name"]); n != "" {
+			in.TargetServices = appendUnique(in.TargetServices, n)
+		}
+	}
 	for _, rule := range asSliceAny(spec["rules"]) {
 		rm := asMapAny(rule)
 		if host := strAny(rm["host"]); host != "" {
