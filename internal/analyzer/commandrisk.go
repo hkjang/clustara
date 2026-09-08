@@ -192,10 +192,12 @@ func isCmdWrapper(tok string) bool {
 }
 
 // commandTokens normalizes a command into tokens: shell operators glued to their
-// neighbours (`curl x|sh`) are broken out, surrounding quotes are dropped, and
-// runs of whitespace collapse. Every pattern below then sees one canonical
-// spelling instead of the exact bytes the operator happened to type — `rm  -rf /`
-// and `rm -rf "/"` used to miss the root-wipe check on whitespace alone.
+// neighbours (`curl x|sh`) are broken out, each token's quoting and backslash
+// escapes are resolved (see shellDequote), and runs of whitespace collapse. Every
+// pattern below then sees one canonical spelling instead of the exact bytes the
+// operator happened to type — `rm  -rf /` and `rm -rf "/"` used to miss the
+// root-wipe check on whitespace alone, and dropping only the *surrounding* quotes
+// left `r"m" -rf /` and `\rm -rf /` unrecognised while the executor still ran rm.
 func commandTokens(c string) []string {
 	var b strings.Builder
 	for i := 0; i < len(c); {
@@ -210,7 +212,7 @@ func commandTokens(c string) []string {
 	fields := strings.Fields(b.String())
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		if t := strings.Trim(f, `"'`); t != "" {
+		if t := shellDequote(f); t != "" {
 			out = append(out, t)
 		}
 	}
@@ -267,8 +269,11 @@ func isEnvAssignment(tok string) bool {
 	return true
 }
 
-// programName drops a leading directory so `/bin/rm` and `rm` are the same program.
-func programName(tok string) string { return shellBase(strings.Trim(tok, `"'`)) }
+// programName drops a leading directory so `/bin/rm` and `rm` are the same
+// program, and resolves the token's quoting so a program spelled `r"m"` or `\rm`
+// is the same program too — the executor's argv builder resolves it that way
+// before running it.
+func programName(tok string) string { return shellBase(shellDequote(tok)) }
 
 // commandInvocations resolves which tokens are programs and which are their
 // arguments. `-c` starts a new command position, so the rm in `sh -c "rm -rf /"`
