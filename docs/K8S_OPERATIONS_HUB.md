@@ -1,8 +1,26 @@
 # K8s Operations Hub
 
-> **버전: v0.9.275** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.276** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.275)
+## 기능 상태 (v0.9.276)
+
+### TLS 인증서 만료 점검(SEC-07) · 번들 전체와 실제 시각 기준 판정
+
+`analyzer.AnalyzeTLS` 는 `kubernetes.io/tls` Secret 의 공개 인증서로 만료를 판정합니다.
+남은 일수는 −∞ 방향으로 내림하므로 **이미 만료된 인증서는 음수 일수**가 되고, 만료
+여부는 잘라낸 일수가 아니라 실제 시각으로 판정합니다(24시간 이내에 만료된 인증서가
+`daysLeft=0` 이 되어 `critical` 이 아닌 `high` + "0일 후 만료" 로 분류되던 구간).
+만료 경과는 시/분 단위로 적습니다.
+
+`tls.crt` 는 leaf + 발급 체인 번들이므로 **번들에서 가장 먼저 만료되는 인증서**로
+만료를 판정합니다(CN/SAN 은 leaf 를 유지하고, 체인이 먼저 만료되면 메시지에 그 CN 을
+적습니다). `notBefore` 도 함께 읽어 아직 유효하지 않은 인증서를 별도로 보고하고,
+`tls.crt` 를 인증서로 읽지 못한 Secret 은 조용히 건너뛰지 않고 확인 불가로 보고합니다.
+리포트는 심각도·남은 일수 순으로 정렬되어 만료된 인증서가 목록 맨 앞에 옵니다.
+
+보안 posture 롤업은 TLS Secret 개수가 아니라 **조치가 필요한 건수**만 셉니다 —
+`tls_expiring`(만료 임박)과 `tls_expired`(지금 사용할 수 없음)로 나뉘며, 권고 사다리와
+`needs_attention` 이 이 두 값을 읽습니다(`analyzer.TLSAttentionCounts`).
 
 ### 터미널 게이트 · 따옴표 표기와 executor argv 의 단일 해석 규칙
 
