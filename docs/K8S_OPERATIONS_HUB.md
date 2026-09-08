@@ -1,8 +1,27 @@
 # K8s Operations Hub
 
-> **버전: v0.9.274** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.275** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.274)
+## 기능 상태 (v0.9.275)
+
+### 터미널 게이트 · 따옴표 표기와 executor argv 의 단일 해석 규칙
+
+exec/터미널 명령의 따옴표 해석은 이제 `analyzer.ShellWords` 한 곳에서 POSIX 규칙으로
+이뤄지고, Kubernetes exec argv 를 만드는 executor 의 분해기도 같은 규칙을 따릅니다.
+게이트(Command Risk Parser·access mode 분류기)가 읽는 프로그램 이름과 실제로 실행되는
+프로그램이 어긋나지 않으므로, `r"m" -rf /`·`\rm -rf /`·`re"boot"`·`shut'down' -h now`·
+`mkfs".ext4" /dev/sda` 같은 표기도 `critical` 로 채점됩니다(이전에는 모두 `low` 로
+분류되어 승인 없는 read_only 티어에 머물렀습니다).
+
+명령 denylist 는 원본 문자열과 **executor 가 해석한 형태** 양쪽으로 대조합니다.
+allowlist(허용 목록)는 종전대로 원본 문자열만 봅니다 — 정규화하면 허용 조건을 더
+쉽게 만족시키는 반대 방향이 되기 때문입니다. 인터랙티브 셸 판정(`full_tty`)도 같은
+분해기를 쓰므로 `"bash"`·`\bash`·`'sh'` 가 전부 전체 TTY 로 분류되어 승인을 거칩니다.
+
+executor 의 argv 조립은 명시적으로 빈 인자(`sh -c "" ls`)를 유지하고, 작은따옴표
+안의 백슬래시를 문자 그대로 다룹니다. `podExecArgs` 도 호출자가 넘긴 argv 의 빈
+요소를 버리거나 각 요소를 trim 하지 않으므로 `sh -c <script> <argv0> <path> <query> <n>`
+형태의 위치 파라미터가 밀리지 않습니다.
 
 ### 스캔 결과 ingest 정규화 · 스캐너 라벨과 severity 등급
 
