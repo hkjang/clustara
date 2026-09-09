@@ -1,8 +1,31 @@
 # K8s Operations Hub
 
-> **버전: v0.9.278** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.279** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.278)
+## 기능 상태 (v0.9.279)
+
+### 이미지 참조 파싱 · 레지스트리 포트를 태그로 읽지 않습니다
+
+하나의 이미지 참조를 네 곳이 읽습니다 — SEC-02 이미지 태그 정책, SEC-10 정책 게이트,
+Dockerfile 빌드 게이트, 이미지 사용 인벤토리·원장. 이제 네 곳 모두 `imageTagAndDigest`
+**한 파서**를 씁니다. 이전에는 정책 게이트만 올바르게 읽었고 나머지는 `:` 가 있는지만
+보는 substring 검사라, `registry.corp.local:5000/team/app` 처럼 **태그가 없는**(= 풀 시점에
+`:latest`) 참조가 레지스트리 포트 덕분에 고정된 것으로 통과했습니다. 포트를 명시한
+레지스트리는 이 제품이 겨냥하는 폐쇄망의 기본형이고, 그래서 같은 이미지를 포스처 리포트는
+정상으로, 정책 게이트는 위반으로 판정하고 있었습니다.
+
+Dockerfile 게이트는 `FROM [--flag...] <ref> [AS <stage>]` 를 문법대로 읽습니다. 이전에는
+`Fields()[1]` 을 참조로 썼기 때문에 `FROM --platform=linux/amd64 base:1.0` 은
+"--platform=linux/amd64" 라는 이미지가 태그 미고정이라고 보고되면서 **정작 실제 base 는
+검사되지 않았고**, 앞선 stage 를 가리키는 `FROM build` 는 고정할 태그가 존재하지 않는데도
+mutable base 로 잡혔습니다.
+
+이미지 사용 인벤토리는 `ephemeralContainers` 를 포함합니다. 고정되지 않은 debug 이미지를
+돌리는 Pod 가 "고정된 앱 이미지만 쓰는" 것으로 표시되던 공백이 사라집니다. 원장의 tag
+drift 판정은 registry 를 포함한 참조로 묶으므로, `harbor.corp/app:1.0` 과
+`docker.io/app:1.0` 이 한 항목으로 합쳐져 서로 다른 두 digest 가 "태그가 옮겨졌다" 로
+보고되지 않습니다 — 업스트림 옆에 미러 레지스트리를 두는 건 정확히 이 제품이 보는 폐쇄망
+구성입니다. init 컨테이너 이미지도 spec·status 양쪽에서 원장에 들어갑니다.
 
 ### 연결성 점검·SEC-06 · 교차 참조는 클러스터 안에서만
 
