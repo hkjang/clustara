@@ -203,7 +203,7 @@ func podSpecOf(it store.K8sInventoryItem) map[string]any {
 	return asAnyMap(tmpl["spec"])
 }
 
-// securityRelevantContainers returns every container in a pod spec that can carry a
+// SecurityRelevantContainers returns every container in a pod spec that can carry a
 // securityContext, an image or a secret reference — regular, init AND ephemeral.
 //
 // Ephemeral containers are the ones a debug session attaches to a running pod
@@ -212,7 +212,11 @@ func podSpecOf(it store.K8sInventoryItem) map[string]any {
 // containers+initContainers reports a pod with a privileged debug container as
 // clean. Callers that make a security judgement must use this; callers measuring
 // declared resources must not, since ephemeral containers cannot declare any.
-func securityRelevantContainers(ps map[string]any) []any {
+//
+// Exported because the runtime-security and workspace handlers extract the same
+// fields themselves; they answer the same question about the same pod and must not
+// disagree about which containers count.
+func SecurityRelevantContainers(ps map[string]any) []any {
 	out := append([]any{}, asAnySlice(ps["containers"])...)
 	out = append(out, asAnySlice(ps["initContainers"])...)
 	return append(out, asAnySlice(ps["ephemeralContainers"])...)
@@ -229,6 +233,41 @@ func securityRelevantContainers(ps map[string]any) []any {
 func resourceDeclaringContainers(ps map[string]any) []any {
 	out := append([]any{}, asAnySlice(ps["containers"])...)
 	return append(out, asAnySlice(ps["initContainers"])...)
+}
+
+// EffectiveRunAsUser resolves the UID a container actually starts as, from the pod's
+// securityContext and the container's own. ok is false when neither sets runAsUser —
+// the image's USER then applies and the spec makes no claim either way.
+//
+// The precedence matters in both directions. Reading only the container missed the
+// most common way a workload runs as root (`spec.securityContext.runAsUser: 0` with
+// containers that say nothing), and reading only the pod flagged containers that
+// override it with a real UID. An explicit null is the same as unset.
+func EffectiveRunAsUser(podSC, containerSC map[string]any) (int, bool) {
+	for _, sc := range []map[string]any{containerSC, podSC} {
+		if v, ok := sc["runAsUser"]; ok && v != nil {
+			return numVal(v), true
+		}
+	}
+	return 0, false
+}
+
+// PodRunsAsRoot reports whether any container of the pod spec resolves to UID 0.
+// A pod-level runAsUser: 0 counts only for the containers that do not override it.
+func PodRunsAsRoot(ps map[string]any) bool {
+	podSC := asAnyMap(ps["securityContext"])
+	containers := SecurityRelevantContainers(ps)
+	if len(containers) == 0 {
+		uid, ok := EffectiveRunAsUser(podSC, nil)
+		return ok && uid == 0
+	}
+	for _, raw := range containers {
+		sc := asAnyMap(asAnyMap(raw)["securityContext"])
+		if uid, ok := EffectiveRunAsUser(podSC, sc); ok && uid == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
@@ -254,7 +293,8 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 		}
 	}
 
-	containers := securityRelevantContainers(ps)
+	containers := SecurityRelevantContainers(ps)
+	podSC := asAnyMap(ps["securityContext"])
 
 	restricted = append(restricted, restrictedProfileViolations(ps)...)
 
@@ -265,8 +305,15 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 		if asBool(sc["privileged"]) {
 			priv = append(priv, cname+": privileged=true")
 		}
-		if numVal(sc["runAsUser"]) == 0 && hasKey(sc, "runAsUser") {
-			baseline = append(baseline, cname+": runAsUser=0")
+		// Root is inherited from the pod unless the container overrides it. Reading the
+		// container alone left the most common root workload — `spec.securityContext.
+		// runAsUser: 0` with containers that declare nothing — with no violation at all.
+		if uid, set := EffectiveRunAsUser(podSC, sc); set && uid == 0 {
+			if _, own := EffectiveRunAsUser(nil, sc); own {
+				baseline = append(baseline, cname+": runAsUser=0")
+			} else {
+				baseline = append(baseline, cname+": runAsUser=0 (Pod securityContext 상속)")
+			}
 		}
 		for _, ad := range stringSlice(asAnyMap(sc["capabilities"])["add"]) {
 			if up := strings.ToUpper(ad); up != "NET_BIND_SERVICE" {
@@ -309,7 +356,7 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 func restrictedProfileViolations(ps map[string]any) []string {
 	out := []string{}
 	podRunAsNonRoot := asBool(asAnyMap(ps["securityContext"])["runAsNonRoot"])
-	for _, raw := range securityRelevantContainers(ps) {
+	for _, raw := range SecurityRelevantContainers(ps) {
 		c := asAnyMap(raw)
 		sc := asAnyMap(c["securityContext"])
 		cname := str(c["name"])
@@ -369,7 +416,7 @@ func secretRefFindings(it store.K8sInventoryItem, ps map[string]any) []SecFindin
 			}
 		}
 	}
-	containers := securityRelevantContainers(ps)
+	containers := SecurityRelevantContainers(ps)
 	for _, raw := range containers {
 		c := asAnyMap(raw)
 		for _, ef := range asAnySlice(c["envFrom"]) {

@@ -132,15 +132,19 @@ func podHasRuntimeSecurityRisk(spec map[string]any) bool {
 			return true
 		}
 	}
-	for _, c := range asSliceAny(ps["containers"]) {
+	// Root is resolved with the pod-level securityContext as the default (the workspace
+	// count and the runtime-security screen must not disagree about the same pod), and
+	// init/ephemeral containers count too — a privileged debug container attached to a
+	// pod is exactly the risk this tally is for.
+	if analyzer.PodRunsAsRoot(ps) {
+		return true
+	}
+	for _, c := range analyzer.SecurityRelevantContainers(ps) {
 		sc := asMapAny(asMapAny(c)["securityContext"])
 		if len(sc) == 0 {
 			continue
 		}
 		if boolAny(sc["privileged"]) || boolAny(sc["allowPrivilegeEscalation"]) {
-			return true
-		}
-		if v, ok := sc["runAsUser"]; ok && intAny(v) == 0 {
 			return true
 		}
 	}
