@@ -78,6 +78,7 @@ func AnalyzeDockerfile(content string) DockerfileReport {
 	rep := DockerfileReport{Findings: []DockerfileFinding{}, RootUser: true}
 	lines := strings.Split(content, "\n")
 	lastUser := ""
+	stages := map[string]bool{} // `FROM x AS <stage>` names declared so far
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -87,8 +88,31 @@ func AnalyzeDockerfile(content string) DockerfileReport {
 		ln := i + 1
 		switch {
 		case strings.HasPrefix(up, "FROM "):
-			ref := strings.Fields(line)[1]
-			if !strings.Contains(ref, ":") || strings.HasSuffix(ref, ":latest") {
+			// `FROM [--flag...] <ref> [AS <stage>]`. Taking Fields()[1] as the reference read
+			// `FROM --platform=linux/amd64 base:1.0` as an image named "--platform=linux/amd64"
+			// — reported as an unpinned base while the actual base image went unchecked.
+			args := []string{}
+			for _, f := range strings.Fields(line)[1:] {
+				if strings.HasPrefix(f, "--") {
+					continue
+				}
+				args = append(args, f)
+			}
+			if len(args) == 0 {
+				break
+			}
+			ref := args[0]
+			fromStage := stages[strings.ToLower(ref)]
+			if len(args) >= 3 && strings.EqualFold(args[1], "AS") {
+				stages[strings.ToLower(args[2])] = true
+			}
+			// A `:` introduces a tag only after the last `/`, so a registry port is not one —
+			// the substring test this replaces read `registry.corp.local:5000/base` (untagged,
+			// and therefore `:latest` at pull time) as pinned on the strength of its port.
+			// Registries with an explicit port are the norm in the closed networks this product
+			// targets. A stage reference (`FROM builder`) is intra-file, not a registry pull, so
+			// there is no tag for the operator to pin.
+			if tag, digest := imageTagAndDigest(ref); !fromStage && digest == "" && (tag == "" || tag == "latest") {
 				rep.MutableBase = true
 				rep.Findings = append(rep.Findings, DockerfileFinding{Line: ln, Severity: "medium", Rule: "mutable-base", Message: "base image 태그 미고정(:latest) — 재현성 위험: " + ref})
 			}

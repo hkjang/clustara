@@ -335,12 +335,16 @@ func restrictedProfileViolations(ps map[string]any) []string {
 func imageFindings(it store.K8sInventoryItem, ps map[string]any) []SecFinding {
 	out := []SecFinding{}
 	for _, img := range ExtractImages(ps) {
+		// Judged with the same parser as the SEC-10 policy gate (disallow_latest_tag), which
+		// reads a `:` as a tag only after the last `/`. The substring test this replaces let
+		// `registry.corp.local:5000/app` — untagged, so `:latest` as far as the kubelet is
+		// concerned — pass the posture check on the strength of its registry port, while the
+		// policy gate flagged the very same image. Registries with an explicit port are the
+		// norm in the closed networks this product targets.
+		tag, digest := imageTagAndDigest(img)
 		bad := []string{}
-		if strings.HasSuffix(img, ":latest") || !strings.Contains(img, ":") {
-			bad = append(bad, "mutable/누락 태그(:latest 또는 태그 없음)")
-		}
-		if !strings.Contains(img, "@sha256:") && (strings.HasSuffix(img, ":latest") || !strings.Contains(img, ":")) {
-			bad = append(bad, "digest 고정 안 됨")
+		if digest == "" && (tag == "" || tag == "latest") {
+			bad = append(bad, "mutable/누락 태그(:latest 또는 태그 없음)", "digest 고정 안 됨")
 		}
 		if len(bad) > 0 {
 			out = append(out, SecFinding{
