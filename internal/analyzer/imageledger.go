@@ -64,7 +64,9 @@ func BuildImageLedger(items []store.K8sInventoryItem) ImageLedgerReport {
 		wl := it.Namespace + "/" + it.Name
 		// Resolved digests by container image, from status.containerStatuses.
 		resolved := map[string]string{} // image → digest
-		for _, cs := range asAnySliceLedger(it.StatusObject["containerStatuses"]) {
+		statuses := append([]any{}, asAnySliceLedger(it.StatusObject["containerStatuses"])...)
+		statuses = append(statuses, asAnySliceLedger(it.StatusObject["initContainerStatuses"])...)
+		for _, cs := range statuses {
 			csm := asAnyMapLedger(cs)
 			img := strLedger(csm["image"])
 			_, _, _, dig := ParseImageRef(strLedger(csm["imageID"]))
@@ -97,7 +99,11 @@ func BuildImageLedger(items []store.K8sInventoryItem) ImageLedgerReport {
 			acc.workloads[wl] = true
 
 			if repo != "" && tag != "" && dig != "" {
-				rt := repo + ":" + tag
+				// Keyed by repository alone, `harbor.corp/app:1.0` and `docker.io/app:1.0` —
+				// two different images that merely share a repository path — collided into one
+				// entry and their two digests were reported as a moved tag. A mirror registry
+				// alongside the upstream is exactly the closed-network setup this product sees.
+				rt := reg + "/" + repo + ":" + tag
 				if driftDigests[rt] == nil {
 					driftDigests[rt] = map[string]bool{}
 					driftWorkloads[rt] = map[string]bool{}
@@ -173,6 +179,10 @@ func strLedger(v any) string {
 	return ""
 }
 
+// specContainersLedger returns every container whose image the kubelet pulls — init
+// containers included. An init container is as much a supply-chain entry as an app
+// container (a `busybox:latest` bootstrap step is the classic unpinned one), and leaving
+// it out kept its image out of the ledger and out of the mutable-tag count entirely.
 func specContainersLedger(spec map[string]any) []any {
 	ps := spec
 	if tmpl := asAnyMapLedger(spec["template"]); len(tmpl) > 0 {
@@ -180,7 +190,8 @@ func specContainersLedger(spec map[string]any) []any {
 			ps = inner
 		}
 	}
-	return asAnySliceLedger(ps["containers"])
+	out := append([]any{}, asAnySliceLedger(ps["containers"])...)
+	return append(out, asAnySliceLedger(ps["initContainers"])...)
 }
 
 func sortedKeysLedger(m map[string]bool, max int) []string {
