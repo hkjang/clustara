@@ -74,7 +74,7 @@ func AnalyzeImageUsage(items []store.K8sInventoryItem) []ImageUsage {
 		// Ephemeral (debug) containers carry their own image and this is a supply-chain view,
 		// so they belong in the map — a walk over containers+initContainers alone reported a
 		// pod that is running an unpinned debug image as using only its pinned app images.
-		for _, raw := range securityRelevantContainers(ps) {
+		for _, raw := range SecurityRelevantContainers(ps) {
 			c := asAnyMap(raw)
 			img := strings.TrimSpace(str(c["image"]))
 			if img == "" {

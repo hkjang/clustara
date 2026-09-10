@@ -92,7 +92,7 @@ func evalPolicyRule(ruleType, kind string, spec, ps map[string]any, annotations 
 		if ps == nil {
 			return nil
 		}
-		return securityRelevantContainers(ps)
+		return SecurityRelevantContainers(ps)
 	}
 	// The image supply-chain rules fire on the *absence* of an attestation annotation,
 	// so without a scope they fire on every resource that has none — and a Service, a

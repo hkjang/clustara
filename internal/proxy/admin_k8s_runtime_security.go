@@ -78,15 +78,18 @@ func podSecurityInput(spec map[string]any) analyzer.PodSecurityInput {
 			in.HostPathVolumes++
 		}
 	}
-	// Pod-level securityContext.
+	// Pod-level securityContext is only the default: a container's own securityContext
+	// overrides it, so root is resolved per container by analyzer.EffectiveRunAsUser —
+	// the same resolution the SEC-01 posture uses, so the two screens agree.
 	podSC := asMapAny(ps["securityContext"])
-	if v, ok := podSC["runAsUser"]; ok && intAny(v) == 0 {
-		in.RunAsRoot = true
-	}
+	in.RunAsRoot = analyzer.PodRunsAsRoot(ps)
 	if v, ok := podSC["runAsNonRoot"]; ok && !boolAny(v) {
 		// explicitly allowed to run as root — only a signal when combined with root user; skip alone.
 	}
-	for _, c := range asSliceAny(ps["containers"]) {
+	// Init and ephemeral containers carry a securityContext of their own; walking only
+	// `containers` scored a pod with a privileged init container — or with a privileged
+	// debug container attached right now — as if it had none.
+	for _, c := range analyzer.SecurityRelevantContainers(ps) {
 		sc := asMapAny(asMapAny(c)["securityContext"])
 		if len(sc) == 0 {
 			continue
@@ -96,9 +99,6 @@ func podSecurityInput(spec map[string]any) analyzer.PodSecurityInput {
 		}
 		if boolAny(sc["allowPrivilegeEscalation"]) {
 			in.AllowPrivEsc = true
-		}
-		if v, ok := sc["runAsUser"]; ok && intAny(v) == 0 {
-			in.RunAsRoot = true
 		}
 		if caps := asMapAny(sc["capabilities"]); len(caps) > 0 {
 			for _, c := range asSliceAny(caps["add"]) {
