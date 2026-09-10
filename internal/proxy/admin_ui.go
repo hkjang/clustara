@@ -11200,8 +11200,8 @@ const adminHTML = `<!doctype html>
     function k8sNodePods(pods, nodeName, clusterId) {
       return (pods || []).filter(p => (!clusterId || p.cluster_id === clusterId) && String(((p.spec || {}).nodeName) || '') === nodeName);
     }
-    function k8sNodePacking(cap, nodeName) {
-      return (((cap || {}).report || {}).node_packing || []).find(x => x.node === nodeName) || {};
+    function k8sNodePacking(cap, nodeName, clusterId) {
+      return (((cap || {}).report || {}).node_packing || []).find(x => x.node === nodeName && (!clusterId || !x.cluster_id || x.cluster_id === clusterId)) || {};
     }
     function k8sNodeStatusBadge(n) {
       const ready = k8sNodeReady(n);
@@ -11407,7 +11407,7 @@ const adminHTML = `<!doctype html>
       const rows = nodes.length ? nodes.map(n => {
         const mon = monitorByNode[k8sNodeMonitorKey(n.cluster_id, n.name)] || {};
         const nodePods = k8sNodePods(pods, n.name, n.cluster_id);
-        const pack = k8sNodePacking(capResp, n.name);
+        const pack = k8sNodePacking(capResp, n.name, n.cluster_id);
         const yaml = k8sYamlChangeLink(n.cluster_id, 'Node', '', n.name, 'YAML');
         const podHref = '#/k8s-pods?' + new URLSearchParams({ cluster_id: n.cluster_id || '', node: n.name || '' }).toString();
         const tlHref = '#/k8s-timeline?' + new URLSearchParams({ cluster_id: n.cluster_id || '', kind: 'Node', name: n.name || '' }).toString();
@@ -11431,7 +11431,7 @@ const adminHTML = `<!doctype html>
           '</div></td></tr>';
       }).join('') : '<tr><td colspan="8" class="muted">노드가 없습니다. 클러스터 수집 또는 agent 상태를 확인하세요.</td></tr>';
       const packRows = (((capResp || {}).report || {}).node_packing || []).slice(0, 20).map(p =>
-        '<tr><td>' + escapeHTML(p.node || '-') + '</td><td>' + fmt(p.pods || 0) + '</td><td>' + fmt(p.requested_cpu_m || 0) + 'm / ' + fmt(p.allocatable_cpu_m || 0) + 'm</td><td><span class="status ' + ((p.cpu_request_pct || 0) >= 90 ? 'error' : ((p.cpu_request_pct || 0) >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(p.cpu_request_pct || 0) + '%</span></td></tr>'
+        '<tr><td>' + escapeHTML(p.node || '-') + (p.cluster_id ? '<div class="muted" style="font-size:10px">' + escapeHTML(p.cluster_id) + '</div>' : '') + '</td><td>' + fmt(p.pods || 0) + '</td><td>' + fmt(p.requested_cpu_m || 0) + 'm / ' + fmt(p.allocatable_cpu_m || 0) + 'm</td><td><span class="status ' + ((p.cpu_request_pct || 0) >= 90 ? 'error' : ((p.cpu_request_pct || 0) >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(p.cpu_request_pct || 0) + '%</span></td></tr>'
       ).join('') || '<tr><td colspan="4" class="muted">노드 packing 데이터 없음.</td></tr>';
       view.innerHTML =
         section('노드 관리', '<div class="kpis node-kpis">' +
@@ -15290,8 +15290,8 @@ const adminHTML = `<!doctype html>
       const r = data.report || {};
 
       const hpaRows = (r.hpas || []).length ? (r.hpas || []).map(h =>
-        '<tr><td>' + escapeHTML((h.namespace || '-') + '/' + h.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, 'HorizontalPodAutoscaler', h.namespace, h.name, 'YAML') + '</div></td>' +
-        '<td>' + escapeHTML(h.target_kind + '/' + h.target_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, h.target_kind, h.namespace, h.target_name, '대상 YAML') + '</div></td>' +
+        '<tr><td>' + escapeHTML((h.namespace || '-') + '/' + h.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(h.cluster_id || clusterId, 'HorizontalPodAutoscaler', h.namespace, h.name, 'YAML') + '</div></td>' +
+        '<td>' + escapeHTML(h.target_kind + '/' + h.target_name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(h.cluster_id || clusterId, h.target_kind, h.namespace, h.target_name, '대상 YAML') + '</div></td>' +
         '<td>' + fmt(h.min_replicas) + ' ~ ' + fmt(h.max_replicas) + '</td>' +
         '<td>' + fmt(h.current_replicas) + ' → ' + fmt(h.desired_replicas) + '</td>' +
         '<td>' + (h.at_max ? '<span class="status error" style="font-size:10px">확장 한계 도달</span>' : '<span class="status" style="font-size:10px">정상</span>') + '</td></tr>').join('')
@@ -15299,19 +15299,19 @@ const adminHTML = `<!doctype html>
 
       const allocRows = (r.allocation || []).length ? (r.allocation || []).map(a =>
         '<tr><td><span class="status ' + (a.issue === 'under_provisioned' ? 'error' : 'warn') + '" style="font-size:10px">' + escapeHTML(a.issue) + '</span></td>' +
-        '<td>' + escapeHTML((a.namespace || '-') + '/' + a.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(clusterId, a.kind || 'Pod', a.namespace, a.name, 'YAML') + '</div></td>' +
+        '<td>' + escapeHTML((a.namespace || '-') + '/' + a.name) + '<div style="font-size:11px;margin-top:2px">' + k8sYamlChangeLink(a.cluster_id || clusterId, a.kind || 'Pod', a.namespace, a.name, 'YAML') + '</div></td>' +
         '<td>' + fmt(a.cpu_usage_m) + 'm / ' + fmt(a.cpu_request_m) + 'm</td>' +
         '<td class="muted" style="font-size:11px">' + escapeHTML(a.message || '') + '</td></tr>').join('')
         : '<tr><td colspan="4" class="muted">할당 이상 없음.</td></tr>';
 
       const packRows = (r.node_packing || []).length ? (r.node_packing || []).map(n =>
-        '<tr><td>' + escapeHTML(n.node) + '</td><td>' + fmt(n.pods) + '</td>' +
+        '<tr><td>' + escapeHTML(n.node) + (n.cluster_id ? '<div class="muted" style="font-size:10px">' + escapeHTML(n.cluster_id) + '</div>' : '') + '</td><td>' + fmt(n.pods) + '</td>' +
         '<td>' + fmt(n.requested_cpu_m) + 'm / ' + fmt(n.allocatable_cpu_m) + 'm</td>' +
         '<td><span class="status ' + (n.cpu_request_pct >= 90 ? 'error' : (n.cpu_request_pct >= 70 ? 'warn' : '')) + '" style="font-size:10px">' + fmt(n.cpu_request_pct) + '%</span></td></tr>').join('')
         : '<tr><td colspan="4" class="muted">노드 데이터 없음.</td></tr>';
 
       const gpuRows = (r.gpu || []).length ? (r.gpu || []).map(g =>
-        '<tr><td>' + escapeHTML(g.node) + '</td><td>' + fmt(g.allocatable_gpu) + '</td><td>' + fmt(g.requested_gpu) + '</td>' +
+        '<tr><td>' + escapeHTML(g.node) + (g.cluster_id ? '<div class="muted" style="font-size:10px">' + escapeHTML(g.cluster_id) + '</div>' : '') + '</td><td>' + fmt(g.allocatable_gpu) + '</td><td>' + fmt(g.requested_gpu) + '</td>' +
         '<td>' + fmt(g.idle_gpu) + '</td></tr>').join('') : '';
       const gpuCard = gpuRows ? card('GPU 자원 (SCALE-08)',
         '<div class="card-body"><table><thead><tr><th>노드</th><th>가용</th><th>요청</th><th>유휴</th></tr></thead><tbody>' + gpuRows + '</tbody></table></div>') : '';

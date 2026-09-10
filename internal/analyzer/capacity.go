@@ -12,6 +12,7 @@ import (
 
 // HPAStatus is one HorizontalPodAutoscaler snapshot (SCALE-01 / SCALE-02).
 type HPAStatus struct {
+	ClusterID  string `json:"cluster_id,omitempty"`
 	Namespace  string `json:"namespace"`
 	Name       string `json:"name"`
 	TargetKind string `json:"target_kind"`
@@ -25,6 +26,7 @@ type HPAStatus struct {
 
 // AllocFinding flags under- or over-provisioned workloads (SCALE-03 / SCALE-04).
 type AllocFinding struct {
+	ClusterID string `json:"cluster_id,omitempty"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
@@ -37,15 +39,17 @@ type AllocFinding struct {
 
 // NodePacking summarizes per-node request packing vs allocatable (SCALE-07).
 type NodePacking struct {
-	Node     string `json:"node"`
-	Pods     int    `json:"pods"`
-	AllocCPU int    `json:"allocatable_cpu_m"`
-	ReqCPU   int    `json:"requested_cpu_m"`
-	CPUPct   int    `json:"cpu_request_pct"`
+	ClusterID string `json:"cluster_id,omitempty"`
+	Node      string `json:"node"`
+	Pods      int    `json:"pods"`
+	AllocCPU  int    `json:"allocatable_cpu_m"`
+	ReqCPU    int    `json:"requested_cpu_m"`
+	CPUPct    int    `json:"cpu_request_pct"`
 }
 
 // GPUSummary is per-node GPU allocation (SCALE-08).
 type GPUSummary struct {
+	ClusterID   string `json:"cluster_id,omitempty"`
 	Node        string `json:"node"`
 	Allocatable int    `json:"allocatable_gpu"`
 	Requested   int    `json:"requested_gpu"`
@@ -54,6 +58,7 @@ type GPUSummary struct {
 
 // NodeProjection is a linear capacity forecast for a node from its metric history (SCALE-05).
 type NodeProjection struct {
+	ClusterID       string  `json:"cluster_id,omitempty"`
 	Node            string  `json:"node"`
 	CurrentCPUm     int     `json:"current_cpu_m"`
 	AllocCPUm       int     `json:"allocatable_cpu_m"`
@@ -71,24 +76,32 @@ type CapacityReport struct {
 
 // ProjectNodeCapacity fits a simple two-point linear trend (oldest→newest sample) to each node's
 // CPU usage and projects days until allocatable is exhausted (SCALE-05). Pure over its inputs.
+//
+// Nodes are keyed by cluster + name: cluster_id is optional on the capacity endpoint, so a
+// whole-fleet view holds several clusters whose node names routinely repeat (worker-1, ...).
+// Keying by name alone interleaved two clusters' samples into one trend line — the oldest and
+// newest sample could come from different machines — and let one cluster's allocatable stand in
+// for another's.
 func ProjectNodeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetricSample) []NodeProjection {
 	allocByNode := map[string]int{}
 	for _, it := range items {
 		if it.Kind == "Node" {
-			allocByNode[it.Name] = qtyCPU(asAnyMap(it.StatusObject["allocatable"])["cpu"])
+			allocByNode[nodeKey(it.ClusterID, it.Name)] = qtyCPU(asAnyMap(it.StatusObject["allocatable"])["cpu"])
 		}
 	}
 	byNode := map[string][]store.K8sMetricSample{}
 	for _, m := range metrics {
 		if m.ResourceKind == "Node" {
-			byNode[m.ResourceName] = append(byNode[m.ResourceName], m)
+			key := nodeKey(m.ClusterID, m.ResourceName)
+			byNode[key] = append(byNode[key], m)
 		}
 	}
 	out := []NodeProjection{}
-	for node, samples := range byNode {
+	for key, samples := range byNode {
 		if len(samples) < 2 {
 			continue
 		}
+		clusterID, node := samples[0].ClusterID, samples[0].ResourceName
 		sort.SliceStable(samples, func(i, j int) bool { return samples[i].ObservedAt < samples[j].ObservedAt })
 		oldest, newest := samples[0], samples[len(samples)-1]
 		t0, e0 := time.Parse(time.RFC3339Nano, oldest.ObservedAt)
@@ -97,7 +110,7 @@ func ProjectNodeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetr
 			continue
 		}
 		days := t1.Sub(t0).Hours() / 24
-		proj := NodeProjection{Node: node, CurrentCPUm: int(newest.CPUMillicores), AllocCPUm: allocByNode[node], DaysToFull: -1}
+		proj := NodeProjection{ClusterID: clusterID, Node: node, CurrentCPUm: int(newest.CPUMillicores), AllocCPUm: allocByNode[key], DaysToFull: -1}
 		if days > 0 {
 			growth := (newest.CPUMillicores - oldest.CPUMillicores) / days
 			proj.DailyGrowthCPUm = int(growth)
@@ -112,7 +125,12 @@ func ProjectNodeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetr
 		}
 		out = append(out, proj)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Node < out[j].Node })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ClusterID != out[j].ClusterID {
+			return out[i].ClusterID < out[j].ClusterID
+		}
+		return out[i].Node < out[j].Node
+	})
 	return out
 }
 
@@ -121,14 +139,17 @@ func ProjectNodeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetr
 func AnalyzeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetricSample) CapacityReport {
 	rep := CapacityReport{HPAs: []HPAStatus{}, Allocation: []AllocFinding{}, NodePacking: []NodePacking{}, GPU: []GPUSummary{}}
 
-	// Latest metric per Pod (samples arrive newest-first).
+	// Latest metric per Pod (samples arrive newest-first). Keyed by cluster as well as
+	// namespace/name: the metric feed spans every cluster when cluster_id is not given, so a
+	// namespace/name key both collapsed the two clusters' samples into one and then compared
+	// that single reading against every same-named Pod's requests.
 	latestPodCPU := map[string]int{}
 	seen := map[string]bool{}
 	for _, m := range metrics {
 		if m.ResourceKind != "Pod" {
 			continue
 		}
-		key := m.Namespace + "/" + m.ResourceName
+		key := podMetricKey(m.ClusterID, m.Namespace, m.ResourceName)
 		if seen[key] {
 			continue
 		}
@@ -152,10 +173,15 @@ func AnalyzeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetricSa
 	return rep
 }
 
+// podMetricKey identifies a Pod metric sample across clusters (namespace/name repeats between them).
+func podMetricKey(clusterID, namespace, name string) string {
+	return clusterID + "\x00" + namespace + "/" + name
+}
+
 func hpaStatus(it store.K8sInventoryItem) HPAStatus {
 	ref := asAnyMap(it.Spec["scaleTargetRef"])
 	h := HPAStatus{
-		Namespace: it.Namespace, Name: it.Name,
+		ClusterID: it.ClusterID, Namespace: it.Namespace, Name: it.Name,
 		TargetKind: str(ref["kind"]), TargetName: str(ref["name"]),
 		Min:     numVal(it.Spec["minReplicas"]),
 		Max:     numVal(it.Spec["maxReplicas"]),
@@ -173,11 +199,11 @@ func allocFinding(pod store.K8sInventoryItem, usageByPod map[string]int) (AllocF
 	if reqCPU == 0 {
 		return AllocFinding{}, false // no requests set → nothing to compare
 	}
-	usage, ok := usageByPod[pod.Namespace+"/"+pod.Name]
+	usage, ok := usageByPod[podMetricKey(pod.ClusterID, pod.Namespace, pod.Name)]
 	if !ok {
 		return AllocFinding{}, false
 	}
-	f := AllocFinding{Namespace: pod.Namespace, Name: pod.Name, Kind: "Pod", CPUUsageM: usage, CPUReqM: reqCPU}
+	f := AllocFinding{ClusterID: pod.ClusterID, Namespace: pod.Namespace, Name: pod.Name, Kind: "Pod", CPUUsageM: usage, CPUReqM: reqCPU}
 	switch {
 	case usage > reqCPU:
 		f.Issue, f.Severity = "under_provisioned", "high"
@@ -191,8 +217,15 @@ func allocFinding(pod store.K8sInventoryItem, usageByPod map[string]int) (AllocF
 	return AllocFinding{}, false
 }
 
+// nodePackingAndGPU aggregates Pod requests onto the node that runs them (SCALE-07 / SCALE-08).
+//
+// Nodes are keyed by cluster + name, the way node_monitoring already keys them: a Pod only ever
+// runs on the node of its own cluster, so matching .spec.nodeName across clusters charged one
+// cluster's node with another cluster's Pods, and two same-named nodes shared a single row whose
+// allocatable came from whichever cluster the inventory listed last.
 func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSummary) {
 	type nodeAgg struct {
+		clusterID, name  string
 		allocCPU, reqCPU int
 		allocGPU, reqGPU int
 		pods             int
@@ -203,9 +236,11 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 			continue
 		}
 		alloc := asAnyMap(it.StatusObject["allocatable"])
-		nodes[it.Name] = &nodeAgg{
-			allocCPU: qtyCPU(alloc["cpu"]),
-			allocGPU: qtyInt(alloc["nvidia.com/gpu"]),
+		nodes[nodeKey(it.ClusterID, it.Name)] = &nodeAgg{
+			clusterID: it.ClusterID,
+			name:      it.Name,
+			allocCPU:  qtyCPU(alloc["cpu"]),
+			allocGPU:  qtyInt(alloc["nvidia.com/gpu"]),
 		}
 	}
 	for _, it := range items {
@@ -213,7 +248,7 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 			continue
 		}
 		node := str(it.Spec["nodeName"])
-		agg := nodes[node]
+		agg := nodes[nodeKey(it.ClusterID, node)]
 		if agg == nil {
 			continue
 		}
@@ -223,16 +258,29 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 	}
 	packing := []NodePacking{}
 	gpu := []GPUSummary{}
-	for name, agg := range nodes {
+	for _, agg := range nodes {
 		pct := 0
 		if agg.allocCPU > 0 {
 			pct = agg.reqCPU * 100 / agg.allocCPU
 		}
-		packing = append(packing, NodePacking{Node: name, Pods: agg.pods, AllocCPU: agg.allocCPU, ReqCPU: agg.reqCPU, CPUPct: pct})
+		packing = append(packing, NodePacking{ClusterID: agg.clusterID, Node: agg.name, Pods: agg.pods, AllocCPU: agg.allocCPU, ReqCPU: agg.reqCPU, CPUPct: pct})
 		if agg.allocGPU > 0 || agg.reqGPU > 0 {
-			gpu = append(gpu, GPUSummary{Node: name, Allocatable: agg.allocGPU, Requested: agg.reqGPU, Idle: agg.allocGPU - agg.reqGPU})
+			gpu = append(gpu, GPUSummary{ClusterID: agg.clusterID, Node: agg.name, Allocatable: agg.allocGPU, Requested: agg.reqGPU, Idle: agg.allocGPU - agg.reqGPU})
 		}
 	}
+	// Map iteration order is random, so both tables reshuffled on every request.
+	sort.SliceStable(packing, func(i, j int) bool {
+		if packing[i].ClusterID != packing[j].ClusterID {
+			return packing[i].ClusterID < packing[j].ClusterID
+		}
+		return packing[i].Node < packing[j].Node
+	})
+	sort.SliceStable(gpu, func(i, j int) bool {
+		if gpu[i].ClusterID != gpu[j].ClusterID {
+			return gpu[i].ClusterID < gpu[j].ClusterID
+		}
+		return gpu[i].Node < gpu[j].Node
+	})
 	return packing, gpu
 }
 
