@@ -1,8 +1,29 @@
 # K8s Operations Hub
 
-> **버전: v0.9.279** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.280** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.279)
+## 기능 상태 (v0.9.280)
+
+### root 판정 · Pod 레벨 `runAsUser` 를 세 화면이 같은 규칙으로 읽습니다
+
+`securityContext.runAsUser` 의 판정을 `analyzer.EffectiveRunAsUser` / `analyzer.PodRunsAsRoot`
+한 곳으로 모았습니다. Pod 레벨 값은 **덮어쓰지 않은 모든 컨테이너의 기본값**이므로
+`spec.securityContext.runAsUser: 0` 을 적고 컨테이너는 아무것도 적지 않은 Pod — 워크로드를
+root 로 돌리는 가장 흔한 형태 — 가 이제 SEC-01 Pod Security, Runtime Security
+Profile(CLU-OCP-03), Workspace 건강도 세 곳 모두에서 root 로 보고됩니다. 이전에는 세 화면이
+컨테이너 securityContext 만 읽어 그 Pod 를 root 아님으로 판정했습니다.
+
+우선순위는 **양방향**으로 적용됩니다. Runtime Security Profile 은 Pod 레벨을 읽되 무조건
+적용했기 때문에 컨테이너가 실제 UID 로 덮어쓴 Pod 까지 root 로 채점했습니다(반대 방향
+오탐). 이제 컨테이너 → Pod 순서로 해석하고, 명시적 `null` 은 미설정으로 봅니다(이미지의
+`USER` 가 적용되므로 spec 은 어느 쪽도 주장하지 않습니다).
+
+Runtime Security Profile 과 Workspace 건강도는 `analyzer.SecurityRelevantContainers`
+(regular + init + ephemeral)를 순회합니다 — 포스처와 정책 엔진이 이미 쓰던 같은 집합입니다.
+이전에는 두 화면만 `containers` 만 봤기 때문에 privileged init 컨테이너, 그 추가 capability,
+**지금 붙어 있는 privileged 디버그(ephemeral) 컨테이너**가 위험 설정이 하나도 없는 것으로
+채점됐고, 같은 Pod 를 정책 엔진·SEC-01 은 이미 위반으로 적고 있어 제품의 두 부분이 반대
+판정을 내놓았습니다.
 
 ### 이미지 참조 파싱 · 레지스트리 포트를 태그로 읽지 않습니다
 
