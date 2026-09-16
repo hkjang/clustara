@@ -478,53 +478,141 @@ func rbacFindings(it store.K8sInventoryItem) []SecFinding {
 	return out
 }
 
-// rbacPermissionSet flattens a Role/ClusterRole's rules into a set of "apiGroup|resource|verb"
-// triples for set-difference comparison.
-func rbacPermissionSet(spec map[string]any) map[string]bool {
-	set := map[string]bool{}
+// rbacGrant is one permission a Role/ClusterRole rule confers, flattened for comparison. A
+// resource grant is (group, resource, verb); a non-resource grant keeps the URL in resource with
+// nonResource set. names is the rule's resourceNames restriction — nil grants every object.
+type rbacGrant struct {
+	group, resource, verb string
+	nonResource           bool
+	names                 map[string]bool
+}
+
+// key renders the grant as "apiGroup|resource|verb", with a fourth "|name" segment when the
+// expansion is limited to one named object. Non-resource URLs sit in the resource slot with an
+// empty group; a URL always starts with "/" so it cannot collide with a core resource.
+func (g rbacGrant) key(name string) string {
+	k := g.group + "|" + g.resource + "|" + g.verb
+	if name != "" {
+		k += "|" + name
+	}
+	return k
+}
+
+// rbacGrants flattens a Role/ClusterRole's rules into the grants they confer.
+func rbacGrants(spec map[string]any) []rbacGrant {
+	out := []rbacGrant{}
 	for _, raw := range asAnySlice(spec["rules"]) {
 		rule := asAnyMap(raw)
+		verbs := stringSlice(rule["verbs"])
+		var names map[string]bool
+		if rn := stringSlice(rule["resourceNames"]); len(rn) > 0 {
+			names = map[string]bool{}
+			for _, n := range rn {
+				names[n] = true
+			}
+		}
 		groups := stringSlice(rule["apiGroups"])
 		if len(groups) == 0 {
 			groups = []string{""}
 		}
-		resources := stringSlice(rule["resources"])
-		verbs := stringSlice(rule["verbs"])
 		for _, g := range groups {
-			for _, r := range resources {
+			for _, r := range stringSlice(rule["resources"]) {
 				for _, v := range verbs {
-					set[g+"|"+r+"|"+v] = true
+					out = append(out, rbacGrant{group: g, resource: r, verb: v, names: names})
 				}
 			}
 		}
+		for _, u := range stringSlice(rule["nonResourceURLs"]) {
+			for _, v := range verbs {
+				out = append(out, rbacGrant{resource: u, verb: v, nonResource: true})
+			}
+		}
 	}
-	return set
+	return out
 }
 
-// RBACDiffExpansions returns the permission triples present in `to` but not in `from` — i.e.
-// the permissions a Role/ClusterRole change ADDED (SEC-08 RBAC Diff). Sorted; risky ones
-// (wildcard, secrets) are surfaced first by the handler.
+// rbacCovers reports whether grant have already confers what want asks for on the object
+// called name ("" = every object), using the API server's own matching: "*" in any slot matches
+// everything, "*/status" matches that subresource of every resource, and a non-resource URL
+// ending in "*" is a prefix. A grant limited by resourceNames covers only those names.
+func rbacCovers(have, want rbacGrant, name string) bool {
+	if have.nonResource != want.nonResource || (have.verb != "*" && have.verb != want.verb) {
+		return false
+	}
+	if have.nonResource {
+		return have.resource == "*" || have.resource == want.resource ||
+			(strings.HasSuffix(have.resource, "*") && strings.HasPrefix(want.resource, strings.TrimSuffix(have.resource, "*")))
+	}
+	if have.group != "*" && have.group != want.group {
+		return false
+	}
+	if have.names != nil && (name == "" || !have.names[name]) {
+		return false
+	}
+	if have.resource == "*" || have.resource == want.resource {
+		return true
+	}
+	// "*/scale" covers "deployments/scale" but nothing without that subresource.
+	if sub := strings.TrimPrefix(have.resource, "*/"); sub != have.resource {
+		return strings.HasSuffix(want.resource, "/"+sub)
+	}
+	return false
+}
+
+// RBACDiffExpansions returns the permissions `to` confers that `from` did not — i.e. what a
+// Role/ClusterRole change ADDED (SEC-08 RBAC Diff), as "apiGroup|resource|verb" keys (see
+// rbacGrant.key). Sorted; risky ones (wildcard, secrets) are surfaced first by the handler.
+//
+// Coverage, not string equality, decides what counts as new. Comparing rendered triples as a
+// set missed the expansion this screen exists for — a rule that dropped its resourceNames
+// (one named Secret → every Secret in the namespace) flattened to the same "|secrets|get" on
+// both sides — and reported the reverse of one: a change that narrowed `resources: ["*"]` to
+// `["secrets"]` showed "|secrets|get" as a risky addition. nonResourceURLs rules were not
+// read at all.
 func RBACDiffExpansions(from, to store.K8sResourceRevision) []string {
-	fromSet := rbacPermissionSet(from.Spec)
+	fromGrants := rbacGrants(from.Spec)
+	covered := func(want rbacGrant, name string) bool {
+		for _, have := range fromGrants {
+			if rbacCovers(have, want, name) {
+				return true
+			}
+		}
+		return false
+	}
 	added := []string{}
-	for k := range rbacPermissionSet(to.Spec) {
-		if !fromSet[k] {
+	seen := map[string]bool{}
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
 			added = append(added, k)
+		}
+	}
+	for _, want := range rbacGrants(to.Spec) {
+		if want.names == nil {
+			if !covered(want, "") {
+				add(want.key(""))
+			}
+			continue
+		}
+		for name := range want.names {
+			if !covered(want, name) {
+				add(want.key(name))
+			}
 		}
 	}
 	sortStrings(added)
 	return added
 }
 
-// IsRiskyPermission reports whether an "apiGroup|resource|verb" triple is high-risk (wildcards,
-// secret access, privilege escalation verbs).
+// IsRiskyPermission reports whether an "apiGroup|resource|verb[|name]" key from
+// RBACDiffExpansions is high-risk (wildcards, secret access, privilege escalation verbs).
 func IsRiskyPermission(triple string) bool {
 	parts := strings.Split(triple, "|")
-	if len(parts) != 3 {
+	if len(parts) != 3 && len(parts) != 4 {
 		return false
 	}
-	_, resource, verb := parts[0], parts[1], parts[2]
-	if resource == "*" || verb == "*" {
+	group, resource, verb := parts[0], parts[1], parts[2]
+	if group == "*" || resource == "*" || verb == "*" {
 		return true
 	}
 	if resource == "secrets" && (verb == "get" || verb == "list" || verb == "watch") {

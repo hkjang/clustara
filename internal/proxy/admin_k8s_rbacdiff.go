@@ -8,6 +8,9 @@ import (
 )
 
 type rbacDiffEntry struct {
+	// ClusterID is what the UI's YAML deep link keys on; without it the all-cluster view
+	// linked every row to whichever cluster the page happened to have selected.
+	ClusterID string   `json:"cluster_id,omitempty"`
 	Namespace string   `json:"namespace"`
 	Kind      string   `json:"kind"`
 	Name      string   `json:"name"`
@@ -57,13 +60,13 @@ func (s *Server) handleK8sRBACDiff(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entries = append(entries, rbacDiffEntry{
-			Namespace: it.Namespace, Kind: it.Kind, Name: it.Name,
+			ClusterID: it.ClusterID, Namespace: it.Namespace, Kind: it.Kind, Name: it.Name,
 			FromAt: revs[1].ObservedAt, ToAt: revs[0].ObservedAt, Added: added, Risky: risky,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"entries": entries,
 		"count":   len(entries),
-		"note":    "최근 2개 리비전 기준으로 Role/ClusterRole에 추가된 권한입니다. risky는 wildcard·secret·권한상승 verb 추가입니다.",
+		"note":    "최근 2개 리비전 기준으로 Role/ClusterRole에 추가된 권한입니다(apiGroup|resource|verb, resourceNames로 한정된 권한은 |이름). 이전 리비전의 wildcard·resourceNames가 이미 허용하던 권한은 세지 않습니다. risky는 wildcard·secret·권한상승 verb 추가입니다.",
 	})
 }

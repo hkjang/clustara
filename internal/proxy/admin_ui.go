@@ -13521,7 +13521,7 @@ const adminHTML = `<!doctype html>
             '<td class="muted" style="font-size:11px">' + ago(e.to_observed_at) + '</td>' +
             '<td>' + ((e.risky || []).length ? '<span class="status error" style="font-size:10px">위험 ' + (e.risky || []).length + '</span> ' : '') + escapeHTML((e.added || []).join(', ')) + '</td></tr>').join('')
             : '<tr><td colspan="3" class="muted">권한 확대 변경 없음.</td></tr>';
-          return card('RBAC 권한 변경 (SEC-08)', '<div class="card-body"><table><thead><tr><th>대상</th><th>변경 시각</th><th>추가된 권한(apiGroup|resource|verb)</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+          return card('RBAC 권한 변경 (SEC-08)', '<div class="card-body"><table><thead><tr><th>대상</th><th>변경 시각</th><th>추가된 권한(apiGroup|resource|verb[|resourceName])</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         })() +
         (function () {
           const an = (data && data.audit_anomalies) || [];
