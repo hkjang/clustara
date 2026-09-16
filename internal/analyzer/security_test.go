@@ -161,6 +161,129 @@ func TestRBACDiffExpansions(t *testing.T) {
 	}
 }
 
+func rbacRev(rules ...map[string]any) store.K8sResourceRevision {
+	raw := make([]any, 0, len(rules))
+	for _, r := range rules {
+		raw = append(raw, r)
+	}
+	return store.K8sResourceRevision{Spec: map[string]any{"rules": raw}}
+}
+
+// A rule that drops its resourceNames goes from one named Secret to every Secret in the
+// namespace — the textbook expansion SEC-08 exists to catch. Both sides used to flatten to
+// the same "|secrets|get", so the change was invisible.
+func TestRBACDiffExpansions_DroppingResourceNamesIsAnExpansion(t *testing.T) {
+	from := rbacRev(map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}, "resourceNames": []any{"tls-cert"}})
+	to := rbacRev(map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}})
+	added := RBACDiffExpansions(from, to)
+	if len(added) != 1 || added[0] != "|secrets|get" {
+		t.Fatalf("expected the unrestricted secrets/get to be reported, got %+v", added)
+	}
+	if !IsRiskyPermission(added[0]) {
+		t.Fatalf("unrestricted secrets/get should be risky")
+	}
+
+	// Adding a second name is an expansion limited to that name; the original name is not new.
+	wider := rbacRev(map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}, "resourceNames": []any{"tls-cert", "db-creds"}})
+	added = RBACDiffExpansions(from, wider)
+	if len(added) != 1 || added[0] != "|secrets|get|db-creds" {
+		t.Fatalf("expected only the newly named secret, got %+v", added)
+	}
+	if !IsRiskyPermission(added[0]) {
+		t.Fatalf("a named secrets/get should still count as secret access")
+	}
+
+	// The reverse — restricting an open rule to one name — is a narrowing, not an expansion.
+	if got := RBACDiffExpansions(to, from); len(got) != 0 {
+		t.Fatalf("adding resourceNames narrows the rule, got %+v", got)
+	}
+}
+
+// Narrowing "*" to a concrete list was reported as a risky addition of every listed item,
+// because the rendered triples differ even though the old rule already allowed them.
+func TestRBACDiffExpansions_WildcardAlreadyCoversNarrowerRule(t *testing.T) {
+	cases := []struct {
+		name     string
+		from, to map[string]any
+	}{
+		{"resources * → secrets",
+			map[string]any{"apiGroups": []any{""}, "resources": []any{"*"}, "verbs": []any{"get"}},
+			map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}}},
+		{"verbs * → get,list",
+			map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"*"}},
+			map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get", "list"}}},
+		{"apiGroups * → apps",
+			map[string]any{"apiGroups": []any{"*"}, "resources": []any{"deployments"}, "verbs": []any{"get"}},
+			map[string]any{"apiGroups": []any{"apps"}, "resources": []any{"deployments"}, "verbs": []any{"get"}}},
+		{"*/scale → deployments/scale",
+			map[string]any{"apiGroups": []any{"apps"}, "resources": []any{"*/scale"}, "verbs": []any{"update"}},
+			map[string]any{"apiGroups": []any{"apps"}, "resources": []any{"deployments/scale"}, "verbs": []any{"update"}}},
+		{"cluster-admin → anything",
+			map[string]any{"apiGroups": []any{"*"}, "resources": []any{"*"}, "verbs": []any{"*"}},
+			map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}, "resourceNames": []any{"x"}}},
+	}
+	for _, tc := range cases {
+		if got := RBACDiffExpansions(rbacRev(tc.from), rbacRev(tc.to)); len(got) != 0 {
+			t.Errorf("%s: narrowing reported as expansion: %+v", tc.name, got)
+		}
+		// And the opposite direction is an expansion — the wildcard is what got added.
+		if got := RBACDiffExpansions(rbacRev(tc.to), rbacRev(tc.from)); len(got) == 0 {
+			t.Errorf("%s: widening to the wildcard form was not reported", tc.name)
+		}
+	}
+}
+
+// "*/scale" is a subresource wildcard; it must not be read as covering "deployments".
+// A group wildcard on one resource does not cover a different resource either.
+func TestRBACDiffExpansions_WildcardDoesNotOverReach(t *testing.T) {
+	from := rbacRev(
+		map[string]any{"apiGroups": []any{"apps"}, "resources": []any{"*/scale"}, "verbs": []any{"update"}},
+		map[string]any{"apiGroups": []any{"*"}, "resources": []any{"pods"}, "verbs": []any{"get"}},
+	)
+	to := rbacRev(
+		map[string]any{"apiGroups": []any{"apps"}, "resources": []any{"deployments"}, "verbs": []any{"update"}},
+		map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}},
+	)
+	added := RBACDiffExpansions(from, to)
+	if len(added) != 2 || added[0] != "apps|deployments|update" || added[1] != "|secrets|get" {
+		t.Fatalf("expected both concrete grants reported, got %+v", added)
+	}
+}
+
+// nonResourceURLs rules were not read at all, so a ClusterRole that gained "*" on every
+// non-resource path showed no change.
+func TestRBACDiffExpansions_NonResourceURLs(t *testing.T) {
+	from := rbacRev(map[string]any{"nonResourceURLs": []any{"/healthz", "/metrics"}, "verbs": []any{"get"}})
+	to := rbacRev(map[string]any{"nonResourceURLs": []any{"*"}, "verbs": []any{"*"}})
+	added := RBACDiffExpansions(from, to)
+	if len(added) != 1 || added[0] != "|*|*" {
+		t.Fatalf("expected the non-resource wildcard reported, got %+v", added)
+	}
+	if !IsRiskyPermission(added[0]) {
+		t.Fatalf("non-resource wildcard should be risky")
+	}
+	// A trailing "*" is a prefix match: "/metrics*" already covers "/metrics/cadvisor".
+	prefix := rbacRev(map[string]any{"nonResourceURLs": []any{"/metrics*"}, "verbs": []any{"get"}})
+	sub := rbacRev(map[string]any{"nonResourceURLs": []any{"/metrics/cadvisor"}, "verbs": []any{"get"}})
+	if got := RBACDiffExpansions(prefix, sub); len(got) != 0 {
+		t.Fatalf("prefix URL rule already covers the sub-path, got %+v", got)
+	}
+	if got := RBACDiffExpansions(sub, prefix); len(got) != 1 || got[0] != "|/metrics*|get" {
+		t.Fatalf("expected the prefix URL reported as new, got %+v", got)
+	}
+}
+
+// An apiGroup wildcard is flagged high by the posture check (rbac-wildcard); the diff's risky
+// marker used to look only at the resource and verb slots.
+func TestIsRiskyPermission_APIGroupWildcard(t *testing.T) {
+	if !IsRiskyPermission("*|deployments|get") {
+		t.Fatalf("apiGroups=* should be risky")
+	}
+	if IsRiskyPermission("apps|deployments|get") {
+		t.Fatalf("plain deployments/get should not be risky")
+	}
+}
+
 func TestAnalyzeSecuritySecretRefs(t *testing.T) {
 	items := []store.K8sInventoryItem{
 		deployWithPodSpec("default", "api", map[string]any{
