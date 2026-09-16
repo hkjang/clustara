@@ -33,7 +33,15 @@ func (s *Server) handleK8sRBACDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 4000})
+	// Spend the row budget on RBAC objects only. The query orders by updated_at, and an
+	// unfiltered window on a busy cluster fills with churning Pods and Events-adjacent kinds
+	// before it reaches the stable Roles this handler is about — which were then skipped
+	// silently below, not reported as unscanned.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: clusterID,
+		Kinds:     []string{"Role", "ClusterRole"},
+		Limit:     4000,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
