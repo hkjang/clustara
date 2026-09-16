@@ -1,8 +1,31 @@
 # K8s Operations Hub
 
-> **버전: v0.9.281** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.282** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.281)
+## 기능 상태 (v0.9.282)
+
+### RBAC Diff · 이전 리비전이 이미 덮고 있던 권한인지로 확대를 판정합니다
+
+SEC-08 `RBACDiffExpansions` 는 Role/ClusterRole 의 최근 두 리비전을 `apiGroup|resource|verb`
+문자열로 펼쳐 집합 차이를 냈습니다. 그 표현이 볼 수 없는 것이 셋이었습니다. ① `resourceNames`
+가 문자열에 없어 **`tls-cert` 하나만 get 하던 규칙이 네임스페이스의 모든 Secret get 으로
+넓어져도** 양쪽이 같은 `|secrets|get` 이라 항목이 생기지 않았습니다 — 이 화면이 잡으라고 있는
+바로 그 확대입니다. ② wildcard 를 문자 그대로 비교해 `resources: ["*"]` → `["secrets"]`,
+`verbs: ["*"]` → `["get","list"]`, `apiGroups: ["*"]` → `["apps"]`, `*/scale` →
+`deployments/scale` 같은 **축소(하드닝)가 위험 확대로** 보고됐습니다. ③ `nonResourceURLs`
+규칙은 아예 읽지 않아 `*` 를 얻은 ClusterRole 이 변경 없음이었습니다.
+
+이제 이전 리비전이 각 grant 를 이미 **덮고 있는지**(`rbacCovers`)를 API 서버의 매칭 규칙 —
+모든 슬롯의 `*`, `*/subresource`, 끝 `*` URL prefix, resourceNames 는 객체 단위 제한 — 으로
+판정합니다. 이름으로 한정된 확대는 네 번째 `|name` 세그먼트로 표시되고(응답 `note` 와 UI 표
+머리글에 명시), `IsRiskyPermission` 은 그 형식을 받으며 포스처 검사(`rbac-wildcard` high)와
+맞춰 apiGroups `*` 도 risky 로 봅니다. 응답 항목에 `cluster_id` 가 `omitempty` 로 추가되어
+UI 의 YAML 딥링크가 전 클러스터 보기에서 페이지가 선택한 클러스터가 아니라 행 자신의
+클러스터로 연결됩니다.
+
+핸들러는 4000행 인벤토리 창을 kind 구분 없이 updated_at 순으로 받아 메모리에서 Role 만 남기던
+것을 `Kinds: [Role, ClusterRole]` 로 좁혔습니다 — 바쁜 클러스터에서 안정적인 Role 이 창 밖으로
+밀리면 표시 없이 건너뛰었습니다(포스처 핸들러의 `SecurityRelevantKinds` 와 같은 방식).
 
 ### 용량 리포트 · 노드와 Pod 를 클러스터까지 포함해 교차 참조합니다
 
