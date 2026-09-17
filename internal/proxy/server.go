@@ -746,6 +746,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/mcp/upstreams/", s.handleMCPUpstreamByID)
 	mux.HandleFunc("/mcp", s.handleMCPGateway)
 	mux.HandleFunc("/mcp/gateway", s.handleGatewayMCP)
+	// RFC 9728: where an MCP client refused with 401 learns to sign in (MCP 를 SSO 로).
+	mux.HandleFunc(mcpOAuthMetadataPath, s.handleMCPOAuthMetadata)
+	mux.HandleFunc(mcpOAuthMetadataPath+"/", s.handleMCPOAuthMetadata)
 	mux.HandleFunc("/admin/gateway-mcp/info", s.handleGatewayMCPInfo)
 	mux.HandleFunc("/admin/mcp/gateway/test", s.handleGatewayMCPTest)
 	mux.HandleFunc("/admin/mcp/contracts", s.handleAdminMCPContracts)
@@ -1575,6 +1578,29 @@ func (s *Server) authenticateProxyContext(r *http.Request) (string, *store.AuthC
 			return "", nil, false
 		}
 		return key.ID, &authCtx, true
+	}
+	// Not a key. On the MCP endpoints a bearer shaped like a JWT may be a
+	// Keycloak access token (MCP 를 SSO 로 — see mcp_oauth.go). The verdict
+	// is final either way: a JWT is never passed through as an external key,
+	// and the refusal reason is kept for the handler's 401. With SSO tokens
+	// off, the branch is not taken and the refusal is the one it always was.
+	if mcpOAuthPath(r.URL.Path) && looksLikeJWT(token) && s.mcpOAuthSettings(r.Context()).active() {
+		id, authCtx, err := s.mcpOAuthPrincipal(r, token)
+		if err != nil {
+			var refusal mcpOAuthRefusal
+			if errors.As(err, &refusal) {
+				rememberMCPOAuthRefusal(r, refusal)
+			}
+			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "mcp_oauth_denied", IP: clientIP(r), UserAgent: r.UserAgent(), Detail: err.Error(), CreatedAt: time.Now().UTC()})
+			return "", nil, false
+		}
+		scope := apiScopeForRequest(r)
+		if s.cfg.Auth.Enabled && scope != "" && !hasScope(authCtx.Scopes, scope) {
+			rememberMCPOAuthRefusal(r, mcpOAuthRefusal{"scope_denied", "SSO 토큰 주체에게 " + scope + " 범위가 없습니다. 관리자가 mcp.oauth.scopes 와 계정 역할을 확인해야 합니다."})
+			_ = s.db.InsertAuditEvent(r.Context(), store.AuthEvent{ID: newID("ae"), EventType: "scope_denied", ActorUserID: authCtx.UserID, TeamID: authCtx.TeamID, IP: clientIP(r), UserAgent: r.UserAgent(), Detail: scope, CreatedAt: time.Now().UTC()})
+			return "", nil, false
+		}
+		return id, authCtx, true
 	}
 	// 토큰이 proxy key(pcg_ 접두사)가 아니면 upstream API key passthrough 로 허용
 	// 이를 통해 Roo Code / Cursor 등이 upstream key 를 직접 보내도 프록시가 작동함

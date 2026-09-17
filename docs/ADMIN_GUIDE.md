@@ -24,6 +24,64 @@ Clustara(Kubernetes 운영 허브) 어드민 UI(`http://<host>:9090/admin`)의 �
 - 런타임 키: `security.admin_access.ip_allowlist_enabled`, `allowed_cidrs`, `trusted_proxy_cidrs`, `emergency_token`. 부트스트랩 환경변수는 각각 `ADMIN_IP_ALLOWLIST_ENABLED`, `ADMIN_IP_ALLOWED_CIDRS`, `ADMIN_TRUSTED_PROXY_CIDRS`, `ADMIN_IP_EMERGENCY_TOKEN`입니다.
 - API: `GET /admin/security/access-policy`, `POST`(입력값 dry-run), `PUT`(잠금 방지 후 적용).
 
+### MCP SSO(OAuth) — 개인 키 없이 Keycloak 토큰으로 MCP 접속
+
+MCP 인가 규격(2025-06-18 이후)은 OAuth 2.1 입니다. 이 기능을 켜면 MCP 클라이언트(Claude·Cursor 등)에 `/mcp/gateway` URL 하나만 주면 클라이언트가 스스로 Keycloak 로그인 화면을 띄워 토큰을 받아 옵니다. Clustara 는 **리소스 서버**로만 동작합니다 — 로그인·토큰 발급은 Keycloak 이 하고, Clustara 는 받은 토큰을 요청마다 검사할 뿐 authorize·token·동적 클라이언트 등록(RFC 7591) 엔드포인트를 제공하지 않습니다(이 서버에 그런 경로는 없습니다). 개인 proxy key 는 그대로 동작하고, 토큰은 **`/mcp`·`/mcp/gateway` 에서만** 받습니다(REST·WebSocket·관리 API 는 지금처럼 키와 세션만). 기본값은 **꺼짐**입니다.
+
+- 화면: **설정 → SSO (Keycloak) → MCP SSO (OAuth) 카드**. 발급자(Issuer URL)와 클라이언트는 같은 화면의 SSO 설정을 재사용합니다. 카드에서 MCP URL·메타데이터 URL·Audience 매퍼 값을 복사할 수 있습니다.
+- 켜지는 조건: `mcp.oauth.enabled=true` **이고** SSO Issuer URL 이 비어 있지 않을 때. 하나라도 없으면 켜 두어도 꺼진 것처럼 동작하고(메타데이터 404, 토큰 거부) 이유를 로그에 남깁니다.
+
+| 런타임 설정 키 | 환경변수 | 기본값 | 뜻 |
+|---|---|---|---|
+| `mcp.oauth.enabled` | `MCP_OAUTH_ENABLED` | `false` | SSO 액세스 토큰으로 `/mcp` 접속 허용 |
+| `mcp.oauth.resource` | `MCP_OAUTH_RESOURCE` | 빈 값 | 리소스 식별자(RFC 8707), 예 `https://gateway.example.com/mcp`. 비우면 SSO Redirect URI 의 origin + `/mcp`, 그것도 없으면 요청 Host 로 만듦(프록시 뒤에서는 반드시 적을 것) |
+| `mcp.oauth.audience` | `MCP_OAUTH_AUDIENCE` | 빈 값 | 공백 구분 허용 대상. 토큰의 `aud` 또는 `azp` 와 비교 |
+| `mcp.oauth.scopes` | `MCP_OAUTH_SCOPES` | `mcp:use` | 공백 구분. SSO 토큰 주체에게 주는 범위 — 계정 역할의 범위와 교집합만 적용 |
+| (재사용) SSO Issuer URL · Client ID · Redirect URI | `SSO_KEYCLOAK_ISSUER_URL` 등 | SSO 설정 | 새로 만들지 않음 |
+
+**토큰 검사 항목**: 서명(Keycloak JWKS, RS256 — `HS256`·`none` 거부) · `iss`(SSO Issuer URL 과 동일) · `exp`·`nbf` · `typ`(`ID` 면 거부 — ID 토큰은 로그인 증거이지 API 자격이 아님) · `cnf`(있으면 거부 — 검증할 수 없는 DPoP/mTLS 바인딩) · `sub`(비어 있으면 거부) · **대상**. 대상은 다음 중 하나여야 합니다: `aud` 에 리소스 식별자(또는 그 아래 `/mcp/gateway`)가 있거나, `aud` 또는 `azp` 가 `mcp.oauth.audience` 에 있거나. 실제 Keycloak 26 은 `aud` 에 `account` 만 싣고 클라이언트 ID 는 `azp` 에 담으므로, 매퍼 없이 쓰려면 MCP 클라이언트 ID 를 `mcp.oauth.audience` 에 적으면 됩니다.
+
+**계정 매핑**: 토큰의 `sub` 로 연결된 SSO 신원(웹 로그인이 남긴 것) → 없으면 토큰의 `email` 과 같은 계정 순으로 **이미 등록된 계정**만 찾습니다. 계정을 만들지 않고, 비활성 계정을 되살리지 않으며, 토큰의 role claim 으로 권한을 올리지 않습니다. 주체는 그 사용자가 키를 만들어 들어왔을 때와 같은 문(역할·범위·`mcp:use` 게이트·정책·쿼터)을 지나고, 감사 로그에는 `sso:<user id>` 로 남습니다.
+
+**Keycloak 쪽 할 일**
+
+1. MCP 클라이언트용 **공개(public) 클라이언트**를 만듭니다(웹 로그인 클라이언트와 **다른** 클라이언트). Standard Flow 켬, PKCE `S256`, Direct Access Grants·Implicit·Service accounts 끔.
+2. Valid Redirect URIs 에 쓰는 MCP 클라이언트의 콜백을 정확히 적습니다 — Claude 는 `https://claude.ai/api/mcp/auth_callback`, 로컬 클라이언트는 `http://127.0.0.1:*/callback` 류. `*` 하나로 다 여는 것은 금지.
+3. 정식 경로: 그 클라이언트(또는 전용 client scope)에 **Audience 매퍼** — Included Custom Audience = 리소스 식별자(카드의 "Audience 매퍼 값"), Add to access token 켬, Add to ID token 끔. 호환 경로: 매퍼 없이 `mcp.oauth.audience` 에 클라이언트 ID 를 적습니다.
+4. 액세스 토큰 수명은 짧게(5분 안팎). Clustara 는 introspection 을 하지 않으므로 Keycloak 에서 로그아웃해도 이미 발급된 토큰은 만료까지 삽니다.
+
+**확인 방법**
+
+```bash
+# 1) 메타데이터 — 인증 없이 맨 JSON, CORS * (꺼져 있으면 404)
+curl -s https://gateway.example.com/.well-known/oauth-protected-resource/mcp
+# {"resource":"https://gateway.example.com/mcp","authorization_servers":["https://keycloak/realms/<realm>"],
+#  "bearer_methods_supported":["header"],"scopes_supported":["mcp:use"],"resource_name":"Clustara MCP"}
+
+# 2) 토큰 없는 401 이 길을 가리키는지 (REST 401 에는 이 헤더가 붙지 않아야 정상)
+curl -si -X POST https://gateway.example.com/mcp/gateway -H 'Content-Type: application/json' -d '{}' | grep -i www-authenticate
+# WWW-Authenticate: Bearer realm="Clustara", resource_metadata="https://gateway.example.com/.well-known/oauth-protected-resource/mcp"
+
+# 3) Keycloak 에서 받은 액세스 토큰으로 tools/list
+curl -s -X POST https://gateway.example.com/mcp/gateway -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+**거부 메시지별 조치** (401 본문의 `error.message`; `error.code` 는 감사 이벤트 `mcp_oauth_denied` 에도 기록)
+
+| 메시지 | 조치 |
+|---|---|
+| 이 서버는 SSO 액세스 토큰을 받지 않습니다 | `mcp.oauth.enabled` 를 켜고 SSO Issuer URL 을 확인 |
+| Keycloak 발급자 정보를 읽지 못해… | Clustara 파드에서 Issuer URL 의 `/.well-known/openid-configuration` 에 도달하는지 확인(방화벽·TLS) |
+| 유효하지 않습니다(서명·발급자·만료: …) | 다른 realm 의 토큰, 만료, 키 회전 직후. 클라이언트에서 다시 로그인. `alg` 가 RS256 이 아니면 realm 의 기본 서명 알고리즘을 RS256 으로 |
+| 아직 유효하지 않습니다(nbf) | Clustara·Keycloak 서버 시계 동기화 |
+| ID 토큰은 로그인 증거이지… | 클라이언트가 `id_token` 을 보내고 있음. `access_token` 을 보내도록 설정 |
+| 소지자 증명(cnf…)이 묶인 토큰 | 클라이언트의 DPoP 를 끄거나 DPoP 를 요구하지 않는 클라이언트 사용 |
+| 이 서버를 위해 발급된 것이 아닙니다(aud=[…], azp="…") | 메시지에 적힌 `azp` 를 `mcp.oauth.audience` 에 더하거나, Keycloak 클라이언트에 메시지의 리소스 식별자로 Audience 매퍼 추가 |
+| 이 SSO 계정은 Clustara 에 등록되지 않았습니다 | 사용자가 웹 UI 에서 SSO 로 한 번 로그인(그때 계정·신원이 만들어짐) |
+| 이 SSO 계정은 … 비활성 상태입니다 | 관리자가 계정 상태를 확인(정지·비밀번호 변경 강제) |
+| SSO 토큰 주체에게 mcp:use 범위가 없습니다 | `mcp.oauth.scopes` 에 `mcp:use` 가 있는지, 계정 역할이 `mcp:use` 를 가지는지(viewer 는 없음) 확인 |
+
 ## 메뉴 구성
 
 내 영역(내 홈·내 업무 캘린더·개인 키 관리·나의 외부 연동·개인화 설정) · 서비스 플랫폼(서비스 홈·카탈로그·내/전체 서비스·Jupyter·DB·WAS/앱·작업 이력·템플릿) · 운영(운영 홈·클러스터·수집 상태·리소스 전체·워크로드·네트워크·스토리지·구성요소·개발자 도구·인증/권한·Pod 관리·노드 관리·앱 배포·YAML 변경·Harbor 레지스트리·Harbor Robot·앱 런처·런칭 이력·GitOps 변경관리·변경 타임라인·장애 분석·장애 워룸·리소스 그래프·연결성 점검·액션 승인함·용량·자동확장·그룹·오너십·AI 분석·리포트 센터·SLO 센터) · 비용 · 보안 · 정책 센터 · 운영 설정 · 외부연동 설정 · 설정(시스템 설정·런타임 설정·SSO·시스템 오류·설정 롤백 센터).
