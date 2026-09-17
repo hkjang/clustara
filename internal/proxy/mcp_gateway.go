@@ -128,7 +128,7 @@ func (s *Server) handleMCPGateway(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKeyID, authCtx, ok := s.authenticateProxyContext(r)
 	if !ok {
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid proxy API key", "invalid_request_error", "invalid_api_key")
+		s.writeMCPUnauthorized(w, r)
 		return
 	}
 	var raw json.RawMessage

@@ -247,6 +247,12 @@ func buildSettingRegistry() []settingDef {
 		{Key: "mcp.force_tool_first", Category: "mcp", Type: stBool, envValue: func(c config.Config) string { return strconv.FormatBool(c.MCP.ForceToolFirst) }},
 		{Key: "mcp.max_tools", Category: "mcp", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.MCP.MaxTools) }},
 
+		// ---- MCP SSO (OAuth resource server; issuer/client id reuse the SSO Keycloak settings) ----
+		{Key: "mcp.oauth.enabled", Category: "mcp.oauth", Type: stBool, envValue: func(config.Config) string { return envOr("MCP_OAUTH_ENABLED", "false") }},
+		{Key: "mcp.oauth.resource", Category: "mcp.oauth", Type: stString, validate: httpURL, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("MCP_OAUTH_RESOURCE")) }},
+		{Key: "mcp.oauth.audience", Category: "mcp.oauth", Type: stText, envValue: func(config.Config) string { return strings.TrimSpace(os.Getenv("MCP_OAUTH_AUDIENCE")) }},
+		{Key: "mcp.oauth.scopes", Category: "mcp.oauth", Type: stString, validate: validateMCPOAuthScopes, envValue: func(config.Config) string { return envOr("MCP_OAUTH_SCOPES", "mcp:use") }},
+
 		// ---- Limits (request guardrails) ----
 		{Key: "limits.max_output_tokens", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.MaxOutputTokens) }},
 		{Key: "limits.agent_max_tokens", Category: "limits", Type: stInt, validate: posInt, envValue: func(c config.Config) string { return strconv.Itoa(c.Limits.AgentMaxTokens) }},
@@ -420,6 +426,11 @@ var settingDescriptions = map[string]string{
 	"mcp.max_tokens":       "에이전틱 MCP 루프의 턴당 completion 토큰 예산(기본 2048). 너무 작으면 도구 호출 인자 JSON이나 최종 답변이 잘려 간헐적 실패의 원인이 됨.",
 	"mcp.force_tool_first": "true면 첫 턴에 MCP 도구를 최소 1회 호출하도록 강제(tool_choice=required)해 근거 기반 답변을 보장. false면 모델이 도구 사용 여부를 자유 판단(기본 true).",
 	"mcp.max_tools":        "에이전틱 루프에서 모델에 노출할 MCP 도구 최대 개수(기본 32). vibe/all-mcp처럼 도구가 많으면 선택 정확도·토큰 비용이 나빠지므로 상위 랭크 후보의 도구만 노출.",
+	// MCP SSO (OAuth)
+	"mcp.oauth.enabled":  "/mcp·/mcp/gateway 가 Keycloak 액세스 토큰(SSO)도 받을지 여부(기본 false). 발급자·클라이언트는 SSO(Keycloak) 설정을 재사용하며 Issuer URL 이 비어 있으면 켜도 동작하지 않음. 계정은 만들지 않고 이미 웹으로 로그인한 활성 계정만 인정.",
+	"mcp.oauth.resource": "이 서버가 주장하는 MCP 리소스 식별자(RFC 8707), 예: https://gateway.example.com/mcp. 비우면 SSO Redirect URI 의 origin + /mcp, 그것도 없으면 요청 Host 로 만듦. Keycloak Audience 매퍼에 넣을 값이자 메타데이터의 resource.",
+	"mcp.oauth.audience": "Audience 매퍼 없이 허용할 대상(공백 구분). 토큰의 aud 또는 azp 가 이 목록에 있으면 통과. 실제 Keycloak 26 은 aud 에 account 만 싣고 클라이언트 ID 는 azp 에 담으므로 MCP 클라이언트 ID 를 적으면 됨.",
+	"mcp.oauth.scopes":   "SSO 토큰 주체에게 주는 범위(공백 구분, 기본 mcp:use). 계정 역할의 범위와 교집합만 적용되어 키보다 넓어지지 않음. 토큰의 scope 에 Clustara 범위 어휘가 실려 오면 다시 교집합.",
 	// Limits
 	"limits.max_output_tokens": "응답 최대 출력 토큰 상한(0=비활성). >0이면 chat 요청의 max_tokens/max_completion_tokens를 이 값으로 클램프(없으면 주입). 런어웨이 생성·비용 폭주 가드.",
 	"limits.agent_max_tokens":  "Ops Agent 및 K8s AI 답변 생성의 최대 출력 토큰 제한 (기본 16384). 너무 작으면 답변이 잘립니다.",
@@ -898,6 +909,9 @@ func settingPermissionGroup(d settingDef) string {
 	}
 	if strings.HasPrefix(d.Category, "skills") {
 		return "security" // Skill policy enforcement is a governance gate
+	}
+	if strings.HasPrefix(d.Category, "mcp.oauth") {
+		return "security" // who may enter /mcp with an SSO token is an authentication decision
 	}
 	switch {
 	case strings.HasPrefix(d.Category, "clickhouse"), strings.HasPrefix(d.Category, "retention"), strings.HasPrefix(d.Category, "cache"), strings.HasPrefix(d.Category, "limits"), strings.HasPrefix(d.Category, "k8s.monitoring"), strings.HasPrefix(d.Category, "k8s.services"):

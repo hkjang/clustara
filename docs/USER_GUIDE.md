@@ -223,6 +223,20 @@ Clustara에는 이름이 비슷한 **두 가지 MCP 엔드포인트**가 있습�
 } } }
 ```
 
+### 3.13 키 없이 SSO 로 연결하기
+
+운영자가 **MCP SSO(OAuth)** 를 켜 둔 곳에서는 개인 키를 만들 필요가 없습니다. MCP 클라이언트에 URL 하나만 주면 됩니다 — 클라이언트가 401 응답에서 로그인 위치를 읽어 사내 SSO(Keycloak) 로그인 화면을 띄우고, 토큰을 받아 자동으로 붙입니다. 이미 SSO 에 로그인해 있으면 화면조차 거의 보지 않습니다.
+
+```jsonc
+{ "mcpServers": { "clustara": { "url": "https://<gateway>/mcp/gateway" } } }
+```
+
+- Claude(웹·데스크톱 커넥터)·Cursor 등 MCP 인가 규격(OAuth 2.1)을 지원하는 클라이언트에서 동작합니다. `headers` 에 키를 넣지 않습니다.
+- **먼저 Clustara 웹에 SSO 로 한 번 로그인해 두세요.** 토큰은 이미 등록된 계정에만 연결되며, "이 SSO 계정은 Clustara 에 등록되지 않았습니다" 가 뜨면 그 뜻입니다.
+- 권한은 키로 들어왔을 때와 같습니다 — 본인 역할·범위·정책·쿼터가 그대로 적용되고, 운영자가 정한 범위(기본 `mcp:use`)를 넘지 않습니다.
+- 키 없이 붙을 수 없는 자동화 스크립트나 폐쇄망 클라이언트는 지금처럼 개인 키(`Authorization: Bearer pcg_...`)를 씁니다. 두 방식은 같은 URL 에서 함께 동작합니다.
+- 켜져 있는지 확인: `https://<gateway>/.well-known/oauth-protected-resource/mcp` 가 JSON 을 돌려주면 켜진 것이고, 404 면 운영자에게 문의하세요.
+
 연결이 잘 안 되면 **내 홈 → "내 개발도구 연결하기 (MCP)" 카드**에서 클라이언트를 고르고 **연결 진단** 버튼으로 인증·scope·모델 허용·쿼터·`/v1/models`·`/mcp/gateway` 도달성을 한 번에 점검할 수 있습니다(CLI 는 `clustara-cli doctor --client cursor`). 설정 JSON 은 `clustara-cli mcp config` 로도 출력됩니다.
 
 LLM에는 서버 초기화 시 안전한 도구 선택 지침이 전달됩니다. 전체 API 계약은 `gateway://api/catalog`, MCP 커버리지는 `gateway://api/coverage`, 운영 순서는 `gateway://operator-guide` 리소스로 제공합니다. `reference_only` API는 기능 참고용이며 MCP에서 실행되었다고 간주하면 안 됩니다.

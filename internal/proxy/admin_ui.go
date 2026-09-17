@@ -23615,7 +23615,51 @@ const adminHTML = `<!doctype html>
           '<button type="button" id="sso-rm-reset">기본값으로 초기화</button></div>' +
         '<div id="sso-rm-out" style="margin-top:6px"></div>' +
         '<p class="muted" style="font-size:11px;margin-top:6px">/teams/&lt;name&gt; (group) → team:&lt;name&gt; 매핑은 고정. 매핑 실패 시 기본 Role(' + escapeHTML(c.default_role || '') + ')로 폴백, 기본 Role이 비어 있으면 로그인 차단. 가장 높은 권한의 매핑이 우선합니다.</p></div>');
-      view.innerHTML = section('SSO (Keycloak)', '') + cfgCard + mapCard;
+      // ── MCP SSO(OAuth): /mcp 를 개인 키 없이 Keycloak 액세스 토큰으로 ──
+      // Runtime settings (mcp.oauth.*), read through the settings API so every pod
+      // sees a save without restart. Issuer/client id are the SSO values above.
+      let mcpOAuth = {};
+      try {
+        const d = await api('/admin/settings/mcp.oauth');
+        (d.settings || []).forEach(s => { mcpOAuth[s.key] = s; });
+      } catch (e) { mcpOAuth = null; }
+      const origin = location.origin;
+      const ov = (key) => (mcpOAuth && mcpOAuth[key] && mcpOAuth[key].value != null) ? String(mcpOAuth[key].value) : '';
+      const oauthOn = ov('mcp.oauth.enabled') === 'true';
+      const resource = ov('mcp.oauth.resource') || (c.redirect_uri ? c.redirect_uri.replace(/^(https?:\/\/[^/]+).*$/, '$1') + '/mcp' : origin + '/mcp');
+      const metadataURL = resource.replace(/^(https?:\/\/[^/]+)(.*)$/, '$1/.well-known/oauth-protected-resource$2');
+      const canWriteOAuth = !mcpOAuth || Object.values(mcpOAuth).every(s => s.can_write !== false);
+      const copyRow = (label, val) => '<div style="display:flex;gap:6px;align-items:center;margin:4px 0"><span class="muted" style="min-width:120px">' + escapeHTML(label) + '</span><code style="flex:1;overflow:auto">' + escapeHTML(val) + '</code><button type="button" class="secondary" onclick="navigator.clipboard.writeText(' + JSON.stringify(val).replace(/"/g, '&quot;') + ')">복사</button></div>';
+      const oauthCard = mcpOAuth === null
+        ? card('MCP SSO (OAuth)', '<div class="card-body"><p class="muted">런타임 설정을 불러올 수 없습니다.</p></div>')
+        : card('MCP SSO (OAuth) ' + (oauthOn && c.enabled && c.issuer_url ? '<span class="status">사용</span>' : '<span class="status warn">미사용</span>'),
+        '<div class="card-body">' +
+        '<p class="muted" style="font-size:12px">MCP 클라이언트(Claude·Cursor 등)에 URL 하나만 주면 클라이언트가 Keycloak 으로 로그인해 토큰을 받아 옵니다(MCP 인가 규격 = OAuth 2.1). 개인 키는 그대로 동작하며, 토큰은 <code>/mcp</code>·<code>/mcp/gateway</code> 에서만 받습니다. 계정은 만들지 않고 이미 웹으로 로그인한 활성 계정만 인정합니다. 발급자는 위 Issuer URL 을 재사용합니다.</p>' +
+        '<label style="display:block;margin:6px 0"><input type="checkbox" id="mcp-oauth-enabled"' + (oauthOn ? ' checked' : '') + (canWriteOAuth ? '' : ' disabled') + '> SSO 액세스 토큰으로 MCP 접속 허용 (mcp.oauth.enabled)</label>' +
+        ti('mcp-oauth-resource', '리소스 식별자 (mcp.oauth.resource — 비우면 Redirect URI 의 origin + /mcp)', ov('mcp.oauth.resource'), resource) +
+        ti('mcp-oauth-audience', '허용 대상 (mcp.oauth.audience — 공백 구분, aud 또는 azp; 매퍼 없이 쓰려면 MCP 클라이언트 ID)', ov('mcp.oauth.audience'), 'claude-mcp cursor-mcp') +
+        ti('mcp-oauth-scopes', '범위 (mcp.oauth.scopes — 공백 구분, 계정 역할 범위와 교집합)', ov('mcp.oauth.scopes'), 'mcp:use') +
+        '<div style="margin-top:8px">' + copyRow('MCP URL', resource) + copyRow('메타데이터 URL', metadataURL) + copyRow('Audience 매퍼 값', resource) + '</div>' +
+        (c.issuer_url ? '' : '<p class="status warn" style="font-size:11px">Issuer URL 이 비어 있으면 켜도 동작하지 않습니다.</p>') +
+        '<div style="margin-top:10px"><button type="button" id="mcp-oauth-save-btn"' + (canWriteOAuth ? '' : ' disabled') + '>저장</button></div>' +
+        '<div id="mcp-oauth-out" style="margin-top:8px"></div>' +
+        '</div>');
+      view.innerHTML = section('SSO (Keycloak)', '') + cfgCard + mapCard + oauthCard;
+      const oauthSave = document.getElementById('mcp-oauth-save-btn');
+      if (oauthSave) oauthSave.addEventListener('click', async () => {
+        const out = document.getElementById('mcp-oauth-out');
+        const v = (id) => (document.getElementById(id).value || '').trim();
+        const put = (key, value) => api('/admin/settings/by-key/' + encodeURIComponent(key), { method: 'PUT', body: JSON.stringify({ value: value, reason: 'MCP SSO 설정' }) });
+        out.innerHTML = '<span class="muted">저장 중...</span>';
+        try {
+          await put('mcp.oauth.enabled', document.getElementById('mcp-oauth-enabled').checked ? 'true' : 'false');
+          await put('mcp.oauth.resource', v('mcp-oauth-resource'));
+          await put('mcp.oauth.audience', v('mcp-oauth-audience'));
+          await put('mcp.oauth.scopes', v('mcp-oauth-scopes') || 'mcp:use');
+          out.innerHTML = '<span class="status">저장됨 — 확인: curl -s ' + escapeHTML(metadataURL) + '</span>';
+          await renderSSOSettings();
+        } catch (e) { out.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
+      });
       const saveBtn = document.getElementById('sso-save-btn');
       if (saveBtn) saveBtn.addEventListener('click', async () => {
         const out = document.getElementById('sso-save-out');
