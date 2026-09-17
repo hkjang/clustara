@@ -1,8 +1,35 @@
 # K8s Operations Hub
 
-> **버전: v0.9.282** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.283** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.282)
+## 기능 상태 (v0.9.283)
+
+### MCP SSO(OAuth) · `/mcp`·`/mcp/gateway` 가 개인 키 옆에 Keycloak 액세스 토큰도 받습니다
+
+MCP 인가 규격(2025-06-18 이후)은 OAuth 2.1 입니다. 이제 MCP 클라이언트(Claude·Cursor 등)에
+`/mcp/gateway` URL 하나만 주면 클라이언트가 스스로 Keycloak 로그인을 띄워 토큰을 받아 옵니다.
+Clustara 는 **리소스 서버 절반만** 맡습니다 — 로그인·토큰 발급은 Keycloak 이 하고, 이 서버는
+받은 토큰을 요청마다 검사할 뿐 authorize·token·동적 클라이언트 등록 경로를 제공하지 않습니다.
+기본값은 **꺼짐**이며, 꺼져 있으면 분기 자체가 실행되지 않아 메타데이터는 404, 토큰은 이전과
+같은 `invalid_api_key` 로 거부됩니다. 켜져 있어도 토큰은 **MCP 두 경로에서만** 받고, REST
+401 에는 `WWW-Authenticate` 를 붙이지 않습니다.
+
+- 메타데이터: `GET /.well-known/oauth-protected-resource[/mcp[/gateway]]` 가 RFC 9728 문서
+  (`resource`, `authorization_servers`=[SSO 발급자], `bearer_methods_supported`,
+  `scopes_supported`)를 CORS `*` 로 냅니다. MCP 401 은 `WWW-Authenticate: Bearer
+  resource_metadata="…"` (토큰이 거부됐으면 `error="invalid_token"` 추가)를 실습니다.
+- 토큰 검사: 기존 `keycloakVerifyJWT` 재사용(JWKS 서명 RS256, `HS*`·`none` 거부) 위에 `iss`,
+  `exp`·`nbf`, `typ=ID` 거부, `cnf` 거부, `sub` 필수, **대상** — `aud` 에 리소스 식별자(또는 그
+  아래 `/mcp/gateway`)가 있거나 `aud`/`azp` 가 `mcp.oauth.audience` 에 있어야 합니다(Keycloak 26
+  은 클라이언트 ID 를 `aud` 가 아니라 `azp` 에 담음). 거부 메시지는 본 값과 고칠 값을 적습니다.
+- 주체: `sub` 로 연결된 SSO 신원 → `email` 순으로 **이미 등록된 활성 계정**만 찾습니다. 계정을
+  만들지 않고, 토큰의 role claim 으로 권한을 올리지 않으며, 범위는 `mcp.oauth.scopes` ∩ 계정
+  역할 범위 ∩ 토큰 `scope` 의 Clustara 어휘입니다. 감사 로그에는 `sso:<user id>` 로 남습니다.
+- 설정: 런타임 설정 `mcp.oauth.enabled/resource/audience/scopes`(환경변수 `MCP_OAUTH_*`,
+  카테고리 `mcp.oauth`, 권한 그룹 security) — 파드 재시작 없이 모든 파드에 적용. 발급자·클라이언트
+  ID·Redirect URI 는 SSO(Keycloak) 설정을 재사용하고, 리소스 식별자는 `mcp.oauth.resource` →
+  SSO Redirect URI 의 origin + `/mcp` → 요청 Host 순으로 정합니다. 관리 화면은 SSO(Keycloak)
+  페이지의 "MCP SSO (OAuth)" 카드, 절차는 ADMIN_GUIDE·USER_GUIDE §3.13.
 
 ### RBAC Diff · 이전 리비전이 이미 덮고 있던 권한인지로 확대를 판정합니다
 
