@@ -1,8 +1,31 @@
 # K8s Operations Hub
 
-> **버전: v0.9.283** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.284** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.283)
+## 기능 상태 (v0.9.284)
+
+### Action Center 영향도 · Pod 소유를 라벨 추정이 아니라 `ownerReferences` 로 판정합니다
+
+`delete_pod`·`drain` 승인 기록의 영향도(`internal/action/impact.go`)는 Pod 소유를 내장 컨트롤러가
+찍는 라벨(`pod-template-hash`·`controller-revision-hash`·`job-name`)로만 추정했습니다. 수집기
+(`kube.inventoryFromObject`)는 처음부터 `metadata.ownerReferences` 를 Spec 에 저장하고 있었고
+노드 drain 화면(`/admin/k8s/node-drain` → `podOwner`)은 이미 그것을 읽고 있어, 제품의 두 경로가
+같은 Pod 를 다르게 판정했습니다. ① 오퍼레이터 CR(SparkApplication 등)·bare ReplicaSet·static
+Pod(Node 소유)처럼 라벨 없이 ownerReferences 로만 소유된 Pod 의 delete_pod 승인 기록에
+**"standalone Pod 이라 자동 재생성되지 않습니다 / 자동 복구 없음"** 이 적혔습니다(fail-safe
+방향이지만 승인 기록이 거짓). ② StatefulSet Pod 와 DaemonSet Pod 는 라벨 모양이 같아
+(`controller-revision-hash` 있음·`pod-template-hash` 없음) drain 미리보기가 evict 되는 DB
+레플리카를 "DaemonSet N" 으로 셌습니다. ③ drain 이 건드리지 않는 DaemonSet Pod 를 evict 총계에
+넣고 그 hostPath(로그 수집기·node-exporter·CNI 가 늘 마운트)를 local-storage 로 세어 사실상
+모든 노드의 drain 에 "local storage Pod 데이터 유실" 차단 사유가 붙었습니다.
+
+이제 `analyzer.PodOwnerReference`(controller 참조 우선, 없으면 kind 가 있는 첫 참조) /
+`PodControllerKind`(ownerReferences → 없을 때만 라벨, `statefulset.kubernetes.io/pod-name` 으로
+StatefulSet 을 DaemonSet 과 구분)가 판정을 한 곳에서 맡고, proxy 의 `podOwner` 와 action 패키지가
+같은 함수를 씁니다. drain 미리보기는 `AnalyzeDrainImpact` 와 같이 DaemonSet 을 제외한 Pod 만
+evict·local-storage·namespace 로 세고, 요약문은 "DaemonSet Pod N개는 evict 대상이 아닙니다"
+와 PDB 는 노드 drain 영향 분석에서 확인하라는 안내를 적습니다. 응답 `details` 의 키
+(`affected_pods`·`local_storage_pods`·`daemonset_pods`·`namespaces`)는 그대로입니다.
 
 ### MCP SSO(OAuth) · `/mcp`·`/mcp/gateway` 가 개인 키 옆에 Keycloak 액세스 토큰도 받습니다
 
