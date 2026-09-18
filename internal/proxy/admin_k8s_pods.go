@@ -2132,14 +2132,10 @@ func containerState(state map[string]any) containerStateInfo {
 	return containerStateInfo{}
 }
 
+// podOwner reads the Pod's owner the same way the Action Center impact preview does, so the
+// node-drain screen and the drain approval record cannot name different controllers.
 func podOwner(spec map[string]any) (string, string) {
-	for _, raw := range asSliceAny(spec["ownerReferences"]) {
-		m := asMapAny(raw)
-		if boolAny(m["controller"]) || strAny(m["kind"]) != "" {
-			return strAny(m["kind"]), strAny(m["name"])
-		}
-	}
-	return "", ""
+	return analyzer.PodOwnerReference(spec)
 }
 
 func defaultContainerName(item store.K8sInventoryItem) string {

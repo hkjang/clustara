@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"clustara/internal/analyzer"
 	"clustara/internal/store"
 )
 
@@ -113,18 +114,28 @@ func assessImpact(name string, params map[string]any, target store.K8sInventoryI
 		}
 	case "drain":
 		pods := podsOnNode(target.Name, all)
+		// A drain leaves DaemonSet Pods in place (kubectl drain refuses without
+		// --ignore-daemonsets and then skips them), so they are neither evicted nor at
+		// risk of losing their volumes — and DaemonSets are the Pods that mount hostPath
+		// (log shippers, node exporters, CNI). Counting them raised the data-loss blocker on
+		// every node in the cluster, and telling StatefulSet Pods apart from them by label
+		// alone counted the database replicas a drain does evict as the DaemonSet Pods it
+		// leaves alone. The node-drain screen (AnalyzeDrainImpact) already reads it this way.
+		evicted := []store.K8sInventoryItem{}
 		local, ds := 0, 0
 		for _, p := range pods {
+			if podControllerKind(p) == "DaemonSet" {
+				ds++
+				continue
+			}
+			evicted = append(evicted, p)
 			if hasLocalStorage(p) {
 				local++
 			}
-			if podControllerKindIsDaemonSet(p) {
-				ds++
-			}
 		}
 		imp := Impact{
-			Summary: fmt.Sprintf("노드 %s drain: %d개 Pod evict(local-storage %d, DaemonSet %d). PDB는 미수집이라 별도 확인 필요.", target.Name, len(pods), local, ds),
-			Details: map[string]any{"affected_pods": len(pods), "local_storage_pods": local, "daemonset_pods": ds, "namespaces": namespaceList(pods)},
+			Summary: fmt.Sprintf("노드 %s drain: %d개 Pod evict(local-storage %d), DaemonSet Pod %d개는 evict 대상이 아닙니다. PDB는 이 미리보기에서 평가하지 않으니 노드 drain 영향 분석에서 확인 필요.", target.Name, len(evicted), local, ds),
+			Details: map[string]any{"affected_pods": len(evicted), "local_storage_pods": local, "daemonset_pods": ds, "namespaces": namespaceList(evicted)},
 		}
 		imp.Blockers = append(imp.Blockers, "drain은 다수 워크로드를 evict할 수 있어 승인이 필요합니다.")
 		if local > 0 {
@@ -170,20 +181,17 @@ func podsOnNode(node string, all []store.K8sInventoryItem) []store.K8sInventoryI
 	return out
 }
 
-func podControllerOwned(pod store.K8sInventoryItem) bool {
-	for _, k := range []string{"pod-template-hash", "controller-revision-hash", "job-name", "batch.kubernetes.io/job-name"} {
-		if _, ok := pod.Labels[k]; ok {
-			return true
-		}
-	}
-	return false
+// podControllerKind is the kind that recreates the Pod, "" for a standalone Pod. Read from the
+// stored ownerReferences first: the label guess that stood here alone called every Pod owned
+// through ownerReferences only (an operator's CR, a bare ReplicaSet, a static Pod) standalone
+// and put "no automatic recovery" in its approval record, and could not tell a StatefulSet Pod
+// from a DaemonSet Pod — both carry controller-revision-hash and neither pod-template-hash.
+func podControllerKind(pod store.K8sInventoryItem) string {
+	return analyzer.PodControllerKind(pod.Spec, pod.Labels)
 }
 
-func podControllerKindIsDaemonSet(pod store.K8sInventoryItem) bool {
-	// Heuristic: DaemonSet pods carry a controller-revision-hash but no pod-template-hash.
-	_, hasRev := pod.Labels["controller-revision-hash"]
-	_, hasTmpl := pod.Labels["pod-template-hash"]
-	return hasRev && !hasTmpl
+func podControllerOwned(pod store.K8sInventoryItem) bool {
+	return podControllerKind(pod) != ""
 }
 
 func hasLocalStorage(pod store.K8sInventoryItem) bool {
