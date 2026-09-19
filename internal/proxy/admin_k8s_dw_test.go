@@ -56,6 +56,41 @@ func TestK8sFactRowBuilders(t *testing.T) {
 	}
 }
 
+// A sink run without cluster_id analyzes every cluster at once. The change/event/workload_health
+// rows already carry each row's real cluster, so security_finding rows must too — otherwise
+// `/admin/k8s/dw/report?cluster_id=X` filters every security row out. The request's cluster_id
+// is only a fallback for findings that do not carry one.
+func TestK8sSecurityRowsUseFindingCluster(t *testing.T) {
+	ts := "2026-06-24T05:00:00Z"
+	sec := analyzer.SecurityReport{
+		RBAC:        []analyzer.SecFinding{{ClusterID: "dr", Namespace: "ns", ResourceKind: "ClusterRole", ResourceName: "admin", Rule: "rbac-cluster-admin", Severity: "critical"}},
+		Images:      []analyzer.SecFinding{{ClusterID: "prod", Namespace: "ns", ResourceKind: "Deployment", ResourceName: "api", Rule: "image-tag-policy", Severity: "medium"}},
+		Network:     []analyzer.SecFinding{{ClusterID: "dr", Namespace: "ns", ResourceKind: "Namespace", ResourceName: "ns", Rule: "no-network-policy", Severity: "medium"}},
+		PodSecurity: []analyzer.PodSecurityResult{{ClusterID: "dr", Namespace: "ns", Kind: "Deployment", Name: "bad", Level: "privileged", Violations: []string{"hostNetwork"}}},
+	}
+	want := map[string]string{"rbac-cluster-admin": "dr", "image-tag-policy": "prod", "no-network-policy": "dr", "pod-security-privileged": "dr"}
+	rows := k8sSecurityRows(ts, "", sec)
+	if len(rows) != len(want) {
+		t.Fatalf("expected %d rows, got %+v", len(want), rows)
+	}
+	for _, r := range rows {
+		if r["cluster_id"] != want[r["rule"].(string)] {
+			t.Fatalf("row must carry the finding's own cluster_id, got %+v", r)
+		}
+	}
+
+	// Findings without a cluster fall back to the request's cluster_id.
+	bare := analyzer.SecurityReport{
+		RBAC:        []analyzer.SecFinding{{Namespace: "ns", ResourceKind: "ClusterRole", ResourceName: "admin", Rule: "rbac-cluster-admin", Severity: "critical"}},
+		PodSecurity: []analyzer.PodSecurityResult{{Namespace: "ns", Kind: "Deployment", Name: "bad", Level: "baseline", Violations: []string{"hostPath volume"}}},
+	}
+	for _, r := range k8sSecurityRows(ts, "c1", bare) {
+		if r["cluster_id"] != "c1" {
+			t.Fatalf("finding without cluster_id must fall back to the request cluster, got %+v", r)
+		}
+	}
+}
+
 func TestK8sFactTableNameDefault(t *testing.T) {
 	if got := k8sFactTable("change"); got != "k8s_change_fact" {
 		t.Fatalf("default table = %q, want k8s_change_fact", got)

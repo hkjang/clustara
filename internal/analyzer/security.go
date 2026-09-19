@@ -63,6 +63,7 @@ type SecFinding struct {
 
 // PodSecurityResult is the Pod Security Standards classification of one workload (SEC-01).
 type PodSecurityResult struct {
+	ClusterID  string   `json:"cluster_id,omitempty"`
 	Namespace  string   `json:"namespace"`
 	Kind       string   `json:"kind"`
 	Name       string   `json:"name"`
@@ -271,7 +272,7 @@ func PodRunsAsRoot(ps map[string]any) bool {
 }
 
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
-	res := PodSecurityResult{Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
+	res := PodSecurityResult{ClusterID: it.ClusterID, Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
 	priv := []string{}       // privileged-level violations (worst)
 	baseline := []string{}   // baseline-level violations
 	restricted := []string{} // restricted-level violations

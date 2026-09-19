@@ -61,23 +61,26 @@ func k8sWorkloadHealthRows(ts string, items []store.K8sInventoryItem) []map[stri
 	return rows
 }
 
+// k8sSecurityRows builds security_finding rows. A sink run without cluster_id analyzes every
+// cluster at once, so each row carries the cluster the finding was made in; the request's
+// clusterID is only the fallback for a finding that does not carry one.
 func k8sSecurityRows(ts, clusterID string, rep analyzer.SecurityReport) []map[string]any {
 	rows := []map[string]any{}
-	emit := func(ns, kind, name, rule, sev, msg string) {
-		rows = append(rows, map[string]any{"ts": ts, "cluster_id": clusterID, "namespace": ns, "resource_kind": kind, "resource_name": name, "rule": rule, "severity": sev, "message": msg})
+	emit := func(cluster, ns, kind, name, rule, sev, msg string) {
+		rows = append(rows, map[string]any{"ts": ts, "cluster_id": firstNonEmpty(cluster, clusterID), "namespace": ns, "resource_kind": kind, "resource_name": name, "rule": rule, "severity": sev, "message": msg})
 	}
 	for _, f := range rep.RBAC {
-		emit(f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
+		emit(f.ClusterID, f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
 	}
 	for _, f := range rep.Images {
-		emit(f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
+		emit(f.ClusterID, f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
 	}
 	for _, f := range rep.Network {
-		emit(f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
+		emit(f.ClusterID, f.Namespace, f.ResourceKind, f.ResourceName, f.Rule, f.Severity, f.Message)
 	}
 	for _, p := range rep.PodSecurity {
 		if p.Level != "restricted" {
-			emit(p.Namespace, p.Kind, p.Name, "pod-security-"+p.Level, levelSeverity(p.Level), strings.Join(p.Violations, "; "))
+			emit(p.ClusterID, p.Namespace, p.Kind, p.Name, "pod-security-"+p.Level, levelSeverity(p.Level), strings.Join(p.Violations, "; "))
 		}
 	}
 	return rows
