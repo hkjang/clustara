@@ -1,8 +1,32 @@
 # K8s Operations Hub
 
-> **버전: v0.9.284** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.285** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.284)
+## 기능 상태 (v0.9.285)
+
+### 보안 점검·DW sink·notify scan · 전 클러스터 실행에서 각 finding 이 자기 클러스터를 갖습니다
+
+`/admin/k8s/security`·`/admin/k8s/dw/sink`·`/admin/k8s/notify/scan` 은 모두 `cluster_id` 가 선택
+파라미터라 비우면 전 클러스터를 한 번에 분석하는데, 세 자리가 결과에 **요청 파라미터의**
+cluster_id 를 적었습니다. ① `analyzer.PodSecurityResult` 에 ClusterID 가 없어 관리 UI 의 Pod
+Security 표가 이미 읽고 있는 `p.cluster_id`(YAML/토폴로지 딥링크)가 전 클러스터 보기에서 항상
+비었습니다(v0.9.282 의 rbacDiffEntry 와 같은 결함). ② `k8sSecurityRows` 가 finding 이 v0.9.278 부터
+가진 `f.ClusterID` 를 무시하고 요청 clusterID 를 모든 행에 적어, 전 클러스터 sink 에서
+change/event/workload_health 행은 실제 클러스터를 갖는데 security_finding 행만 `cluster_id=""` 로
+적재돼 `/admin/k8s/dw/report?cluster_id=X` 필터에서 보안 행이 통째로 사라졌습니다. ③
+`handleK8sNotifyScan` 의 dedup 키·namespace owner 조회(NOTI-04)·딥링크가 전부 요청 clusterID 라
+두 클러스터의 동명 privileged 워크로드가 한 알림으로 합쳐지고 그 링크·담당팀 채널이 빈
+클러스터로 갔습니다.
+
+이제 `PodSecurityResult` 가 `cluster_id`(omitempty)를 갖고 `classifyPodSecurity` 가 인벤토리
+항목의 클러스터를 채웁니다. DW 행 빌더와 notify 클로저는 finding 자신의 클러스터
+(RCAFinding·SecFinding·PodSecurityResult 모두 보유)를 dedup 키·owner 조회·딥링크·DW 행에 쓰고,
+비어 있을 때만 요청 clusterID 로 폴백합니다 — 단일 클러스터 요청에서는 두 값이 같아 기존
+dedup 기록·DW 행과 호환됩니다. `cluster_id` 없이 돌리던 전 클러스터 notify 스캔은 dedup 키가
+`|podsec/…` 에서 `<cluster>|podsec/…` 로 바뀌므로 배포 직후 6시간 창 안에서도 클러스터별로
+기존 finding 이 한 번 다시 알림됩니다(의도된 동작). Level/Violations 판정·`summarize` 점수·`k8sCostRows`·UI 는
+그대로입니다.
+
 
 ### Action Center 영향도 · Pod 소유를 라벨 추정이 아니라 `ownerReferences` 로 판정합니다
 
