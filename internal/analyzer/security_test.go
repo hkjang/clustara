@@ -112,6 +112,33 @@ func TestAnalyzeSecurityNetworkGapIsPerCluster(t *testing.T) {
 	}
 }
 
+// The Pod Security table is rendered for every cluster when the caller passes no cluster_id, and
+// the UI builds its YAML/topology deep links from each row's cluster_id — so a row must carry the
+// cluster of the inventory item it was classified from, not stay empty.
+func TestAnalyzeSecurityPodSecurityCarriesClusterID(t *testing.T) {
+	prod := deployWithPodSpec("shop", "api", map[string]any{
+		"hostNetwork": true,
+		"containers":  []any{map[string]any{"name": "c", "image": "registry/api:1.2.3"}},
+	})
+	prod.ClusterID = "prod"
+	dr := prod
+	dr.ClusterID = "dr"
+	rep := AnalyzeSecurity([]store.K8sInventoryItem{prod, dr})
+	if len(rep.PodSecurity) != 2 {
+		t.Fatalf("expected one row per cluster, got %+v", rep.PodSecurity)
+	}
+	got := map[string]bool{}
+	for _, p := range rep.PodSecurity {
+		if p.Namespace != "shop" || p.Name != "api" {
+			t.Fatalf("unexpected row %+v", p)
+		}
+		got[p.ClusterID] = true
+	}
+	if !got["prod"] || !got["dr"] {
+		t.Fatalf("each pod_security row must carry its own cluster_id, got %+v", rep.PodSecurity)
+	}
+}
+
 func TestDetectActionAnomalies(t *testing.T) {
 	now := mustTime("2026-06-24T10:00:00Z")
 	mk := func(user, risk, at string) store.K8sActionRequest {

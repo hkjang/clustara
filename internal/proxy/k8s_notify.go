@@ -101,18 +101,23 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	sec := analyzer.AnalyzeSecurity(items)
 
 	sent := 0
-	notify := func(category, dedupKey, ns, kind, name, text string) {
-		ok, derr := s.db.ShouldSendK8sNotification(r.Context(), clusterID+"|"+dedupKey, now, 6*time.Hour)
+	// A scan without cluster_id evaluates every cluster at once, so dedup, owner routing and the
+	// deep link are keyed by the cluster each finding was made in — keyed by the request's
+	// cluster_id, two clusters' workloads of the same name collapsed into one notification that
+	// linked to no cluster. The request's cluster_id remains the fallback for a finding without one.
+	notify := func(category, cluster, dedupKey, ns, kind, name, text string) {
+		cluster = firstNonEmpty(cluster, clusterID)
+		ok, derr := s.db.ShouldSendK8sNotification(r.Context(), cluster+"|"+dedupKey, now, 6*time.Hour)
 		if derr != nil || !ok {
 			return // NOTI-02 dedup
 		}
 		channel := ""
 		if ns != "" {
-			if owner, oerr := s.db.GetK8sNamespaceOwner(r.Context(), clusterID, ns); oerr == nil {
+			if owner, oerr := s.db.GetK8sNamespaceOwner(r.Context(), cluster, ns); oerr == nil {
 				channel = resolveTeamChannel(teamChannels, owner.Team) // NOTI-04
 			}
 		}
-		link := k8sDeepLink(requestBaseURL(r), clusterID, ns, kind, name)
+		link := k8sDeepLink(requestBaseURL(r), cluster, ns, kind, name)
 		s.notifyMattermostTo(r.Context(), category, channel, text+"\n"+link)
 		sent++
 	}
@@ -121,7 +126,7 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		if c.Severity != "high" && c.Severity != "critical" {
 			continue
 		}
-		notify("k8s_failure", "rca/"+c.Namespace+"/"+c.ResourceKind+"/"+c.ResourceName+"/"+c.Condition,
+		notify("k8s_failure", c.ClusterID, "rca/"+c.Namespace+"/"+c.ResourceKind+"/"+c.ResourceName+"/"+c.Condition,
 			c.Namespace, c.ResourceKind, c.ResourceName,
 			"장애 후보["+c.Severity+"] "+c.Condition+" — "+c.Namespace+"/"+c.ResourceKind+"/"+c.ResourceName+"\n"+c.Cause)
 	}
@@ -129,7 +134,7 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		if f.Severity != "critical" && f.Severity != "high" {
 			continue
 		}
-		notify("k8s_security", "rbac/"+f.Namespace+"/"+f.ResourceName+"/"+f.Rule,
+		notify("k8s_security", f.ClusterID, "rbac/"+f.Namespace+"/"+f.ResourceName+"/"+f.Rule,
 			f.Namespace, f.ResourceKind, f.ResourceName,
 			"보안["+f.Severity+"] "+f.Rule+" — "+f.ResourceKind+"/"+f.ResourceName+"\n"+f.Message)
 	}
@@ -137,7 +142,7 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		if p.Level != "privileged" {
 			continue
 		}
-		notify("k8s_security", "podsec/"+p.Namespace+"/"+p.Name,
+		notify("k8s_security", p.ClusterID, "podsec/"+p.Namespace+"/"+p.Name,
 			p.Namespace, p.Kind, p.Name,
 			"보안[high] Privileged 워크로드 — "+p.Namespace+"/"+p.Kind+"/"+p.Name+"\n"+strings.Join(p.Violations, ", "))
 	}
@@ -155,8 +160,8 @@ func (s *Server) handleK8sNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{
-			"quiet_hours":    s.flagValue(r.Context(), "k8s_quiet_hours"),
-			"team_channels":  s.flagValue(r.Context(), "mattermost_team_channels"),
+			"quiet_hours":   s.flagValue(r.Context(), "k8s_quiet_hours"),
+			"team_channels": s.flagValue(r.Context(), "mattermost_team_channels"),
 		})
 	case http.MethodPost:
 		var p struct {
