@@ -1,3 +1,8 @@
+v0.9.287:
+- **운영 홈의 동명 Pod CPU·메모리 태그가 다른 클러스터 값으로 덮였습니다 (v0.9.287)**: AttachFindingResources의 인덱스와 조회에 ClusterID를 포함한 기존 rcaKey를 사용해 자원 requests/limits를 같은 클러스터의 finding에 연결합니다. fixture의 ClusterID와 부정확한 owner fallback 주석도 정정했습니다.
+- 입력 역순·빈 ID·namespace/kind/name 구분·nil 유지·Deployment template 회귀와 실제 SQLite·Server.Routes·HTTP 홈 회귀로 검증합니다. 구현 단계에서 수정 전 잘못된 동일 태그로 실패하고 수정 후 통과했습니다.
+- go build ./..., go vet ./..., go test ./... 및 버전 일치·산출물 이름 릴리즈 게이트를 실행합니다. 실 Kubernetes·PostgreSQL·브라우저 렌더링은 미검증입니다. DB 스키마·설정 변경은 없으며 NodePressure 집계는 별도 과제입니다.
+
 v0.9.286:
 - **동명 리소스의 RCA·Deployment/Job 증적과 severity 에 다른 클러스터 이벤트가 섞였습니다 (v0.9.286)**: 공유 rcaKey 에 ClusterID 를 포함하고 workload 메시지 fallback 도 같은 클러스터로 제한합니다.
 - **probe/DNS finding 이 클러스터 사이에서 중복 제거되어 장애 알림이 빠졌습니다 (v0.9.286)**: 이벤트 중복 제거 키를 클러스터별로 분리합니다. 같은 클러스터 반복 이벤트와 재스캔 알림의 중복 억제는 유지합니다.

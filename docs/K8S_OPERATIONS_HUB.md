@@ -1,8 +1,19 @@
 # K8s Operations Hub
 
-> **버전: v0.9.286** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.287** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.286)
+## 기능 상태 (v0.9.287)
+
+### RCA 자원 태그 · 동명 Pod의 CPU·메모리를 클러스터별로 연결합니다
+
+여러 클러스터에 namespace·kind·name이 같은 Pod가 있으면 운영 홈의 RCA 자원 태그가
+다른 클러스터의 CPU·메모리 requests/limits로 덮였습니다. `AttachFindingResources`의
+인벤토리 인덱스와 finding 조회에 모두 ClusterID를 포함한 기존 `rcaKey`를 사용해,
+각 finding에 같은 클러스터의 자원 설정만 연결합니다.
+
+빈 ClusterID는 빈 값끼리만 연결합니다. namespace·kind·name 구분, kind 대소문자 처리,
+일치 항목이 없을 때의 nil 유지와 Deployment template 자원 추출은 기존 동작을 유지합니다.
+DB 스키마·설정 변경은 없으며 NodePressure 영향 Pod 집계는 이번 수정 범위 밖입니다.
 
 ### RCA·배포 분석 · 동명 리소스의 이벤트와 최근 변경을 클러스터별로 연결합니다
 
@@ -17,8 +28,8 @@ workload 이름이 메시지에 들어 있는 이벤트를 찾는 fallback 과 �
 같은 클러스터로 제한합니다. 빈 ClusterID 는 빈 값끼리만 연결하며 다른 클러스터에 매칭하지
 않습니다. 같은 클러스터의 반복 이벤트·재스캔 알림 중복 억제와 기존 시간·심각도 정책은 유지합니다.
 
-자원 태그 연결(`AttachFindingResources`)과 NodePressure 영향 Pod 집계는 이번 수정 범위에
-포함되지 않습니다. DB 스키마·설정 변경은 없습니다.
+v0.9.286에서 제외했던 자원 태그 연결(`AttachFindingResources`)은 v0.9.287에서 수정했습니다.
+NodePressure 영향 Pod 집계는 여전히 별도 과제입니다. DB 스키마·설정 변경은 없습니다.
 
 ### 보안 점검·DW sink·notify scan · 전 클러스터 실행에서 각 finding 이 자기 클러스터를 갖습니다
 
