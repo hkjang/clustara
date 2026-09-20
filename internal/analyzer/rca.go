@@ -23,16 +23,16 @@ type RCAFinding struct {
 
 // AttachFindingResources enriches findings with the target's container CPU/memory requests+limits
 // (e.g. so an OOMKilled finding shows its memory limit inline). Matches a finding to its inventory
-// item by cluster/kind/namespace/name; for Pods it also falls back to the owning workload's spec.
+// item by cluster/kind/namespace/name, ignoring kind case. Workloads use their template spec.
 // Pure over its inputs.
 func AttachFindingResources(findings []RCAFinding, items []store.K8sInventoryItem) {
 	byKey := map[string]store.K8sInventoryItem{}
 	for _, it := range items {
-		byKey[strings.ToLower(it.Kind)+"|"+it.Namespace+"|"+it.Name] = it
+		byKey[rcaKey(it.ClusterID, it.Namespace, strings.ToLower(it.Kind), it.Name)] = it
 	}
 	for i := range findings {
 		f := &findings[i]
-		key := strings.ToLower(f.ResourceKind) + "|" + f.Namespace + "|" + f.ResourceName
+		key := rcaKey(f.ClusterID, f.Namespace, strings.ToLower(f.ResourceKind), f.ResourceName)
 		item, ok := byKey[key]
 		if !ok {
 			continue

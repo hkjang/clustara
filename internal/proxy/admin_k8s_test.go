@@ -712,6 +712,100 @@ func TestK8sHomeAggregates(t *testing.T) {
 	}
 }
 
+func TestK8sHomeResourcesStayInCluster(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+	decode := func(resp *http.Response, status int, target any) {
+		t.Helper()
+		defer resp.Body.Close()
+		if resp.StatusCode != status {
+			t.Fatalf("%s: status = %d, want %d", resp.Request.URL, resp.StatusCode, status)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type resourceTags struct {
+		ReqCPU string `json:"req_cpu"`
+		LimCPU string `json:"lim_cpu"`
+		ReqMem string `json:"req_mem"`
+		LimMem string `json:"lim_mem"`
+	}
+	expected := map[string]resourceTags{}
+	for i, tags := range []resourceTags{
+		{ReqCPU: "250m", LimCPU: "500m", ReqMem: "128Mi", LimMem: "256Mi"},
+		{ReqCPU: "750m", LimCPU: "1", ReqMem: "512Mi", LimMem: "1Gi"},
+	} {
+		var created struct {
+			Cluster store.K8sCluster `json:"cluster"`
+		}
+		decode(postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+			"name": fmt.Sprintf("resources-c%d", i+1), "server_url": "https://k8s.example.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1",
+		}), http.StatusCreated, &created)
+		if created.Cluster.ID == "" {
+			t.Fatal("missing cluster ID")
+		}
+		if _, exists := expected[created.Cluster.ID]; exists {
+			t.Fatal("duplicate cluster ID")
+		}
+		expected[created.Cluster.ID] = tags
+		var snapshot map[string]any
+		decode(postJSON(t, proxy.URL+"/admin/k8s/snapshot", "", map[string]any{
+			"cluster_id": created.Cluster.ID,
+			"resources": []map[string]any{{"kind": "Pod", "namespace": "default", "name": "web", "status": "OOMKilled",
+				"spec": map[string]any{"containers": []map[string]any{{"name": "web", "resources": map[string]any{
+					"requests": map[string]any{"cpu": tags.ReqCPU, "memory": tags.ReqMem},
+					"limits":   map[string]any{"cpu": tags.LimCPU, "memory": tags.LimMem},
+				}}}},
+			}},
+		}), http.StatusOK, &snapshot)
+	}
+	resp, err := http.Get(proxy.URL + "/admin/k8s/home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var home struct {
+		FailureCandidates []struct {
+			ClusterID    string        `json:"cluster_id"`
+			Namespace    string        `json:"namespace"`
+			ResourceKind string        `json:"resource_kind"`
+			ResourceName string        `json:"resource_name"`
+			Condition    string        `json:"condition"`
+			Resources    *resourceTags `json:"resources"`
+		} `json:"failure_candidates"`
+	}
+	decode(resp, http.StatusOK, &home)
+	seen := map[string]bool{}
+	for _, finding := range home.FailureCandidates {
+		want, ok := expected[finding.ClusterID]
+		if !ok {
+			t.Fatalf("unexpected cluster %q", finding.ClusterID)
+		}
+		if finding.Namespace != "default" || finding.ResourceKind != "Pod" || finding.ResourceName != "web" || finding.Condition != "OOMKilled" {
+			t.Fatalf("unexpected finding: %+v", finding)
+		}
+		if seen[finding.ClusterID] {
+			t.Fatalf("duplicate finding for %s", finding.ClusterID)
+		}
+		seen[finding.ClusterID] = true
+		if finding.Resources == nil || *finding.Resources != want {
+			t.Errorf("cluster %s resources = %+v, want %+v", finding.ClusterID, finding.Resources, want)
+		}
+	}
+	if len(seen) != len(expected) {
+		t.Fatalf("got findings for %d clusters, want %d", len(seen), len(expected))
+	}
+}
+
 func TestK8sIncidentLifecycle(t *testing.T) {
 	db := openTestStore(t)
 	defer db.Close()
