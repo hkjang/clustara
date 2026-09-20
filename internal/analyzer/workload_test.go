@@ -93,3 +93,33 @@ func TestAnalyzeRCAIncludesRolloutAndJobs(t *testing.T) {
 		t.Fatalf("AnalyzeRCA should include Job findings, got %+v", findings)
 	}
 }
+
+func TestAnalyzeRolloutAndJobsClusterEvidence(t *testing.T) {
+	var items []store.K8sInventoryItem
+	var events []store.K8sEvent
+	for _, cluster := range []string{"prod", "dr", ""} {
+		for _, kind := range []string{"Deployment", "Job"} {
+			items = append(items, store.K8sInventoryItem{ClusterID: cluster, Namespace: "default", Kind: kind, Name: "api", StatusObject: map[string]any{"failed": float64(1)}})
+			events = append(events, store.K8sEvent{ClusterID: cluster, Namespace: "default", InvolvedKind: kind, InvolvedName: "api", Reason: "Failed", Message: cluster + "/" + kind})
+		}
+	}
+	findings := analyzeRolloutAndJobs(items, events)
+	seen := map[string]bool{}
+	for _, f := range findings {
+		key := f.ClusterID + "/" + f.Condition
+		if seen[key] {
+			t.Errorf("duplicate finding: %+v", f)
+		}
+		seen[key] = true
+		if len(f.Evidence) != 2 || f.Evidence[1] != "Failed: "+f.ClusterID+"/"+f.ResourceKind {
+			t.Errorf("cross-cluster workload evidence: %+v", f)
+		}
+	}
+	for _, cluster := range []string{"prod", "dr", ""} {
+		for _, cond := range []string{"RolloutStuck", "JobFailing"} {
+			if !seen[cluster+"/"+cond] {
+				t.Errorf("missing %q/%s", cluster, cond)
+			}
+		}
+	}
+}

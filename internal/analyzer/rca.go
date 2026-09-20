@@ -48,7 +48,7 @@ func AttachFindingResources(findings []RCAFinding, items []store.K8sInventoryIte
 func AnalyzeRCA(items []store.K8sInventoryItem, events []store.K8sEvent) []RCAFinding {
 	byKey := map[string][]store.K8sEvent{}
 	for _, e := range events {
-		key := rcaKey(e.Namespace, e.InvolvedKind, e.InvolvedName)
+		key := rcaKey(e.ClusterID, e.Namespace, e.InvolvedKind, e.InvolvedName)
 		byKey[key] = append(byKey[key], e)
 	}
 	out := []RCAFinding{}
@@ -57,7 +57,7 @@ func AnalyzeRCA(items []store.K8sInventoryItem, events []store.K8sEvent) []RCAFi
 		if item.Kind != "Pod" && item.Kind != "Deployment" && item.Kind != "StatefulSet" && item.Kind != "DaemonSet" {
 			continue
 		}
-		key := rcaKey(item.Namespace, item.Kind, item.Name)
+		key := rcaKey(item.ClusterID, item.Namespace, item.Kind, item.Name)
 		itemEvents := byKey[key]
 		if len(itemEvents) == 0 && item.Kind != "Pod" {
 			itemEvents = workloadRelatedEvents(item, events)
@@ -101,7 +101,7 @@ func analyzeProbeAndDNSEvents(events []store.K8sEvent) []RCAFinding {
 	seen := map[string]bool{}
 	out := []RCAFinding{}
 	emit := func(e store.K8sEvent, condition, severity, cause string, checks, actions []string) {
-		key := rcaKey(e.Namespace, e.InvolvedKind, e.InvolvedName) + "/" + condition
+		key := rcaKey(e.ClusterID, e.Namespace, e.InvolvedKind, e.InvolvedName) + "/" + condition
 		if seen[key] {
 			return
 		}
@@ -166,7 +166,7 @@ func AnalyzePostDeploymentErrors(revisions []store.K8sResourceRevision, events [
 		if err != nil || now.Sub(at) > lookback {
 			continue
 		}
-		key := rcaKey(rev.Namespace, rev.Kind, rev.Name)
+		key := rcaKey(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name)
 		if cur, ok := latest[key]; !ok || at.After(cur.at) {
 			latest[key] = dep{rev: rev, at: at}
 		}
@@ -175,7 +175,7 @@ func AnalyzePostDeploymentErrors(revisions []store.K8sResourceRevision, events [
 	for key, d := range latest {
 		errs := []store.K8sEvent{}
 		for _, e := range events {
-			if !strings.EqualFold(e.Type, "Warning") || e.Namespace != d.rev.Namespace {
+			if !strings.EqualFold(e.Type, "Warning") || e.Namespace != d.rev.Namespace || e.ClusterID != d.rev.ClusterID {
 				continue
 			}
 			// Pods of a workload are named "<workload>-<hash>...", so match the workload name
@@ -234,14 +234,14 @@ func EnrichWithConfigChanges(findings []RCAFinding, revisions []store.K8sResourc
 		if rev.ChangeKind != "updated" {
 			continue // only real changes, not the initial observation
 		}
-		key := rcaKey(rev.Namespace, rev.Kind, rev.Name)
+		key := rcaKey(rev.ClusterID, rev.Namespace, rev.Kind, rev.Name)
 		if cur, ok := latest[key]; !ok || rev.ObservedAt > cur.ObservedAt {
 			latest[key] = rev
 		}
 	}
 	for i := range findings {
 		f := &findings[i]
-		rev, ok := latest[rcaKey(f.Namespace, f.ResourceKind, f.ResourceName)]
+		rev, ok := latest[rcaKey(f.ClusterID, f.Namespace, f.ResourceKind, f.ResourceName)]
 		if !ok {
 			continue
 		}
@@ -295,7 +295,7 @@ func pendingCause(events []store.K8sEvent) string {
 func workloadRelatedEvents(item store.K8sInventoryItem, events []store.K8sEvent) []store.K8sEvent {
 	out := []store.K8sEvent{}
 	for _, e := range events {
-		if e.Namespace == item.Namespace && strings.Contains(e.Message, item.Name) {
+		if e.ClusterID == item.ClusterID && e.Namespace == item.Namespace && strings.Contains(e.Message, item.Name) {
 			out = append(out, e)
 		}
 	}
@@ -316,6 +316,6 @@ func eventEvidence(events []store.K8sEvent) []string {
 	return out
 }
 
-func rcaKey(namespace, kind, name string) string {
-	return namespace + "/" + kind + "/" + name
+func rcaKey(clusterID, namespace, kind, name string) string {
+	return clusterID + "/" + namespace + "/" + kind + "/" + name
 }

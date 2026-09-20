@@ -12,11 +12,11 @@ import (
 func analyzeRolloutAndJobs(items []store.K8sInventoryItem, events []store.K8sEvent) []RCAFinding {
 	byKey := map[string][]store.K8sEvent{}
 	for _, e := range events {
-		byKey[rcaKey(e.Namespace, e.InvolvedKind, e.InvolvedName)] = append(byKey[rcaKey(e.Namespace, e.InvolvedKind, e.InvolvedName)], e)
+		byKey[rcaKey(e.ClusterID, e.Namespace, e.InvolvedKind, e.InvolvedName)] = append(byKey[rcaKey(e.ClusterID, e.Namespace, e.InvolvedKind, e.InvolvedName)], e)
 	}
 	out := []RCAFinding{}
 	for _, it := range items {
-		evs := byKey[rcaKey(it.Namespace, it.Kind, it.Name)]
+		evs := byKey[rcaKey(it.ClusterID, it.Namespace, it.Kind, it.Name)]
 		switch it.Kind {
 		case "Deployment", "StatefulSet":
 			if f, ok := rolloutFinding(it, evs); ok {
