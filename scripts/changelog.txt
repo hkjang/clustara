@@ -1,3 +1,9 @@
+v0.9.286:
+- **동명 리소스의 RCA·Deployment/Job 증적과 severity 에 다른 클러스터 이벤트가 섞였습니다 (v0.9.286)**: 공유 rcaKey 에 ClusterID 를 포함하고 workload 메시지 fallback 도 같은 클러스터로 제한합니다.
+- **probe/DNS finding 이 클러스터 사이에서 중복 제거되어 장애 알림이 빠졌습니다 (v0.9.286)**: 이벤트 중복 제거 키를 클러스터별로 분리합니다. 같은 클러스터 반복 이벤트와 재스캔 알림의 중복 억제는 유지합니다.
+- **최근 설정 변경·배포 리비전이 다른 클러스터의 더 최신 변경으로 덮였습니다 (v0.9.286)**: 최신 리비전을 클러스터별로 선택하고 배포 후 Warning 도 같은 클러스터에서만 연결합니다. 빈 ClusterID 는 빈 값끼리만 매칭합니다.
+- 신규 회귀 6개(analyzer 5 + proxy 1)는 구현 단계에서 수정 전 실패를 확인했습니다. SQLite·httptest webhook 종단 회귀로 클러스터별 finding·링크·채널과 재스캔 중복 억제를 검증합니다. go build ./..., go vet ./..., go test ./... 및 버전 일치·산출물 이름 릴리즈 게이트를 실행합니다. 실 Kubernetes·PostgreSQL·Mattermost 는 미검증이며 자원 태그·NodePressure 조인은 범위 밖입니다.
+
 v0.9.285:
 - **전 클러스터 보안 점검에서 Pod Security 표의 YAML·토폴로지 딥링크가 빈 클러스터로 갔습니다 (v0.9.285)**: `/admin/k8s/security` 는 `cluster_id` 를 비우면 전 클러스터를 한 번에 분석하는데, `analyzer.PodSecurityResult` 에 ClusterID 가 없어 관리 UI 의 Pod Security 표가 이미 읽고 있는 `p.cluster_id` 가 전 클러스터 보기에서 항상 비었습니다(v0.9.282 의 rbacDiffEntry 와 같은 결함). `PodSecurityResult` 에 `cluster_id`(omitempty)를 더하고 `classifyPodSecurity` 가 인벤토리 항목의 클러스터를 채웁니다. Level/Violations 판정과 `summarize` 점수는 그대로입니다.
 - **전 클러스터 DW sink 에서 security_finding 행만 `cluster_id=""` 로 적재돼 클러스터별 리포트에서 보안 행이 통째로 사라졌습니다 (v0.9.285)**: `k8sSecurityRows` 가 finding 이 v0.9.278 부터 가진 `f.ClusterID` 를 무시하고 요청 파라미터의 clusterID 를 모든 행에 적었습니다. `/admin/k8s/dw/sink` 를 `cluster_id` 없이 돌리면 change/event/workload_health 행은 실제 클러스터를 갖는데 security_finding 행만 비어 `/admin/k8s/dw/report?cluster_id=X` 필터가 보안 행을 하나도 돌려주지 않았습니다. 이제 RBAC·Images·Network·PodSecurity 행 모두 finding 자신의 클러스터를 쓰고, 비어 있을 때만 요청 clusterID 로 폴백합니다 — 단일 클러스터 요청에서는 두 값이 같아 기존 행과 호환됩니다.
