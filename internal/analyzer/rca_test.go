@@ -81,9 +81,9 @@ func TestEnrichWithConfigChanges(t *testing.T) {
 	}
 	revs := []store.K8sResourceRevision{
 		// recent change to api -> should attach + bump severity
-		{Kind: "Deployment", Namespace: "default", Name: "api", ChangeKind: "updated", ImageSet: "ex/api:2.0", ObservedAt: now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
+		{ClusterID: "c1", Kind: "Deployment", Namespace: "default", Name: "api", ChangeKind: "updated", ImageSet: "ex/api:2.0", ObservedAt: now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
 		// initial observation -> ignored
-		{Kind: "Deployment", Namespace: "default", Name: "untouched", ChangeKind: "created", ObservedAt: now.Add(-1 * time.Hour).Format(time.RFC3339Nano)},
+		{ClusterID: "c1", Kind: "Deployment", Namespace: "default", Name: "untouched", ChangeKind: "created", ObservedAt: now.Add(-1 * time.Hour).Format(time.RFC3339Nano)},
 	}
 	out := EnrichWithConfigChanges(findings, revs, now, 24*time.Hour)
 
@@ -154,5 +154,156 @@ func TestEnrichWithConfigChangesRespectsLookback(t *testing.T) {
 	out := EnrichWithConfigChanges(findings, revs, now, 24*time.Hour)
 	if out[0].Severity != "medium" || len(out[0].Evidence) != 0 {
 		t.Fatalf("change older than lookback must not enrich: %+v", out[0])
+	}
+}
+
+// Include the empty cluster as a distinct identity, never as a wildcard.
+func TestAnalyzeRCAClusterEvidence(t *testing.T) {
+	for _, kind := range []string{"Pod", "Deployment"} {
+		for _, fallback := range []bool{false, true} {
+			if kind == "Pod" && fallback {
+				continue
+			}
+			t.Run(kind+map[bool]string{false: "/direct", true: "/fallback"}[fallback], func(t *testing.T) {
+				var items []store.K8sInventoryItem
+				var events []store.K8sEvent
+				messages := map[string]string{"prod": "api insufficient cpu", "dr": "api untolerated taint", "": "api pvc unbound"}
+				for _, cluster := range []string{"prod", "dr", ""} {
+					items = append(items, store.K8sInventoryItem{ClusterID: cluster, Namespace: "default", Kind: kind, Name: "api", Status: "Pending"})
+					e := store.K8sEvent{ClusterID: cluster, Namespace: "default", InvolvedKind: kind, InvolvedName: "api", Reason: "FailedScheduling", Message: messages[cluster]}
+					if fallback {
+						e.InvolvedKind, e.InvolvedName = "Pod", "api-child"
+					}
+					events = append(events, e)
+				}
+				seen := map[string]bool{}
+				for _, f := range AnalyzeRCA(items, events) {
+					if f.Condition != "Pending" {
+						continue
+					}
+					key := f.ClusterID + "/" + f.Condition
+					if seen[key] {
+						t.Fatalf("duplicate finding: %+v", f)
+					}
+					seen[key] = true
+					want := "FailedScheduling: " + messages[f.ClusterID]
+					if len(f.Evidence) != 1 || f.Evidence[0] != want {
+						t.Errorf("%s evidence=%v, want %q", key, f.Evidence, want)
+					}
+					if wantCause := pendingCause([]store.K8sEvent{{Message: messages[f.ClusterID]}}); f.Cause != wantCause {
+						t.Errorf("%s cause=%q, want %q", key, f.Cause, wantCause)
+					}
+				}
+				if len(seen) != 3 {
+					t.Fatalf("expected three Pending findings, got %v", seen)
+				}
+			})
+		}
+	}
+}
+
+func TestAnalyzeRCAProbeClusterDedup(t *testing.T) {
+	var events []store.K8sEvent
+	for _, cluster := range []string{"prod", "dr", ""} {
+		e := store.K8sEvent{ClusterID: cluster, Namespace: "default", InvolvedKind: "Pod", InvolvedName: "api", Type: "Warning", Reason: "Unhealthy", Message: "Liveness probe failed"}
+		events = append(events, e, e)
+		e.Type, e.InvolvedName = "Normal", "ignored"
+		events = append(events, e)
+	}
+	findings := AnalyzeRCA(nil, events)
+	seen := map[string]bool{}
+	for _, f := range findings {
+		key := f.ClusterID + "/" + f.Condition
+		if seen[key] || f.Condition != "LivenessProbeFailed" || f.ResourceName != "api" || len(f.Evidence) != 1 {
+			t.Fatalf("unexpected finding: %+v", f)
+		}
+		seen[key] = true
+	}
+	for _, cluster := range []string{"prod", "dr", ""} {
+		if !seen[cluster+"/LivenessProbeFailed"] {
+			t.Errorf("missing finding for cluster %q: %+v", cluster, findings)
+		}
+	}
+}
+
+func TestEnrichWithConfigChangesClusterIsolation(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	for _, revisionCluster := range []string{"prod", "dr", ""} {
+		t.Run("revision/"+revisionCluster, func(t *testing.T) {
+			var findings []RCAFinding
+			for _, cluster := range []string{"prod", "dr", ""} {
+				findings = append(findings, RCAFinding{ClusterID: cluster, Namespace: "default", ResourceKind: "Deployment", ResourceName: "api", Condition: "UnavailableReplicas", Severity: "medium"})
+			}
+			revs := []store.K8sResourceRevision{
+				{ClusterID: revisionCluster, Namespace: "default", Kind: "Deployment", Name: "api", ChangeKind: "updated", ImageSet: "latest:2", ObservedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+				{ClusterID: revisionCluster, Namespace: "default", Kind: "Deployment", Name: "api", ChangeKind: "updated", ImageSet: "older:1", ObservedAt: now.Add(-2 * time.Hour).Format(time.RFC3339Nano)},
+				{ClusterID: revisionCluster, Namespace: "default", Kind: "Deployment", Name: "api", ChangeKind: "created", ImageSet: "created:3", ObservedAt: now.Format(time.RFC3339Nano)},
+			}
+			for _, f := range EnrichWithConfigChanges(findings, revs, now, 24*time.Hour) {
+				if f.ClusterID == revisionCluster {
+					if f.Severity != "high" || len(f.Evidence) != 1 || !containsSub(f.Evidence, "latest:2") {
+						t.Errorf("latest same-cluster change missing: %+v", f)
+					}
+				} else if f.Severity != "medium" || len(f.Evidence) != 0 || len(f.Actions) != 0 {
+					t.Errorf("foreign revision enriched finding: %+v", f)
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyzePostDeploymentErrorsClusterIsolation(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var revs []store.K8sResourceRevision
+	var events []store.K8sEvent
+	deployTimes := map[string]string{}
+	for i, cluster := range []string{"prod", "dr", ""} {
+		at := now.Add(-time.Duration(i+1) * time.Hour)
+		deployTimes[cluster] = at.Format(time.RFC3339Nano)
+		rev := store.K8sResourceRevision{ClusterID: cluster, Namespace: "default", Kind: "Deployment", Name: "api", ChangeKind: "updated", ObservedAt: deployTimes[cluster]}
+		revs = append(revs, rev)
+		rev.ObservedAt = at.Add(-time.Hour).Format(time.RFC3339Nano)
+		revs = append(revs, rev)
+		e := store.K8sEvent{ClusterID: cluster, Namespace: "default", InvolvedKind: "Pod", InvolvedName: "api-child", Type: "Warning", Reason: "BackOff", Message: "after/" + cluster, LastSeen: at.Add(30 * time.Minute).Format(time.RFC3339Nano)}
+		events = append(events, e)
+		e.Message, e.LastSeen = "before", at.Add(-30*time.Minute).Format(time.RFC3339Nano)
+		events = append(events, e)
+		e.Message, e.LastSeen, e.Type = "normal", now.Format(time.RFC3339Nano), "Normal"
+		events = append(events, e)
+	}
+	findings := AnalyzePostDeploymentErrors(revs, events, now, 24*time.Hour)
+	seen := map[string]bool{}
+	for _, f := range findings {
+		key := f.ClusterID + "/" + f.Condition
+		if seen[key] || f.Condition != "PostDeploymentErrors" {
+			t.Errorf("unexpected finding: %+v", f)
+		}
+		seen[key] = true
+		if len(f.Evidence) != 2 || f.Evidence[0] != "배포 시각: "+deployTimes[f.ClusterID] || f.Evidence[1] != "BackOff: after/"+f.ClusterID {
+			t.Errorf("wrong revision or events: %+v", f)
+		}
+	}
+	if len(seen) != 3 {
+		t.Errorf("expected three cluster findings: %+v", findings)
+	}
+	// A lone revision cannot borrow another cluster's events (including the empty cluster).
+	for _, rev := range revs[:1] {
+		for _, cluster := range []string{"dr", ""} {
+			e := store.K8sEvent{ClusterID: cluster, Namespace: "default", InvolvedName: "api", Type: "Warning", LastSeen: now.Format(time.RFC3339Nano)}
+			if out := AnalyzePostDeploymentErrors([]store.K8sResourceRevision{rev}, []store.K8sEvent{e}, now, 24*time.Hour); len(out) != 0 {
+				t.Errorf("foreign event generated finding: %+v", out)
+			}
+		}
+	}
+	for _, change := range []string{"created", "old"} {
+		rev := revs[0]
+		if change == "created" {
+			rev.ChangeKind = "created"
+		} else {
+			rev.ObservedAt = now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
+		}
+		if out := AnalyzePostDeploymentErrors([]store.K8sResourceRevision{rev}, events, now, 24*time.Hour); len(out) != 0 {
+			t.Errorf("%s revision generated finding: %+v", change, out)
+		}
 	}
 }
