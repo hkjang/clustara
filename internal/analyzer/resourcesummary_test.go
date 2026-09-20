@@ -91,7 +91,7 @@ func TestAttachFindingResources(t *testing.T) {
 		{ClusterID: "c1", Namespace: "prod", ResourceKind: "Pod", ResourceName: "ghost", Condition: "X"},
 	}
 	items := []store.K8sInventoryItem{
-		{Kind: "Pod", Namespace: "prod", Name: "web-1", Spec: map[string]any{"containers": []any{
+		{ClusterID: "c1", Kind: "Pod", Namespace: "prod", Name: "web-1", Spec: map[string]any{"containers": []any{
 			map[string]any{"name": "web", "resources": map[string]any{"limits": map[string]any{"memory": "512Mi"}}},
 		}}},
 	}
@@ -101,5 +101,65 @@ func TestAttachFindingResources(t *testing.T) {
 	}
 	if findings[1].Resources != nil {
 		t.Fatalf("ghost (no inventory match) should have nil Resources")
+	}
+}
+
+func TestAttachFindingResourcesClusterIsolation(t *testing.T) {
+	tags1 := ResourceTags{ReqCPU: "250m", LimCPU: "500m", ReqMem: "128Mi", LimMem: "256Mi", HasReq: true, HasLim: true}
+	tags2 := ResourceTags{ReqCPU: "750m", LimCPU: "1", ReqMem: "512Mi", LimMem: "1Gi", HasReq: true, HasLim: true}
+	spec := func(tags ResourceTags) map[string]any {
+		return map[string]any{"containers": []any{map[string]any{"name": "web", "resources": map[string]any{
+			"requests": map[string]any{"cpu": tags.ReqCPU, "memory": tags.ReqMem},
+			"limits":   map[string]any{"cpu": tags.LimCPU, "memory": tags.LimMem},
+		}}}}
+	}
+	items := []store.K8sInventoryItem{
+		{ClusterID: "c1", Kind: "Pod", Namespace: "prod", Name: "web", Spec: spec(tags1)},
+		{ClusterID: "c2", Kind: "Pod", Namespace: "prod", Name: "web", Spec: spec(tags2)},
+		{ClusterID: "", Kind: "Pod", Namespace: "prod", Name: "web", Spec: spec(tags1)},
+		{ClusterID: "c1", Kind: "Pod", Namespace: "other", Name: "web", Spec: spec(tags2)},
+		{ClusterID: "c1", Kind: "Deployment", Namespace: "prod", Name: "web", Spec: map[string]any{"template": map[string]any{"spec": spec(tags2)}}},
+		{ClusterID: "c1", Kind: "Pod", Namespace: "prod", Name: "empty", Spec: map[string]any{"containers": []any{map[string]any{"name": "web"}}}},
+		{ClusterID: "", Kind: "Pod", Namespace: "prod", Name: "legacy", Spec: spec(tags1)},
+	}
+	cases := []struct {
+		name, cluster, namespace, kind, resource string
+		want                                     *ResourceTags
+	}{
+		{"c1", "c1", "prod", "pOd", "web", &tags1},
+		{"c2", "c2", "prod", "POD", "web", &tags2},
+		{"empty cluster matches only itself", "", "prod", "Pod", "web", &tags1},
+		{"other cluster", "c3", "prod", "Pod", "web", nil},
+		{"namespace", "c1", "other", "Pod", "web", &tags2},
+		{"namespace case", "c1", "Prod", "Pod", "web", nil},
+		{"name case", "c1", "prod", "Pod", "Web", nil},
+		{"deployment template", "c1", "prod", "deployment", "web", &tags2},
+		{"other kind", "c1", "prod", "StatefulSet", "web", nil},
+		{"no resources", "c1", "prod", "Pod", "empty", nil},
+		{"no inventory", "c1", "prod", "Pod", "ghost", nil},
+		{"empty finding is not wildcard", "", "prod", "Pod", "empty", nil},
+		{"empty inventory is not fallback", "c1", "prod", "Pod", "legacy", nil},
+		{"empty finding cannot match named cluster", "", "other", "Pod", "web", nil},
+	}
+	for _, order := range []string{"forward", "reverse"} {
+		if order == "reverse" {
+			for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+		for _, tc := range cases {
+			t.Run(order+"/"+tc.name, func(t *testing.T) {
+				findings := []RCAFinding{{ClusterID: tc.cluster, Namespace: tc.namespace, ResourceKind: tc.kind, ResourceName: tc.resource}}
+				AttachFindingResources(findings, items)
+				got := findings[0].Resources
+				if tc.want == nil {
+					if got != nil {
+						t.Fatalf("resources = %+v, want nil", got)
+					}
+				} else if got == nil || *got != *tc.want {
+					t.Fatalf("resources = %+v, want %+v", got, tc.want)
+				}
+			})
+		}
 	}
 }
