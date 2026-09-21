@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"clustara/internal/store"
@@ -71,7 +73,7 @@ func TestAnalyzeNodeConditions(t *testing.T) {
 		}}},
 		{Kind: "Pod", Namespace: "a", Name: "p1", Spec: map[string]any{"nodeName": "node-1"}},
 	}
-	out := analyzeNodeConditions(items)
+	out := AnalyzeRCA(items, nil)
 	if len(out) != 1 || out[0].ResourceName != "node-1" || out[0].Severity != "high" {
 		t.Fatalf("expected one high NodePressure for node-1, got %+v", out)
 	}
@@ -121,5 +123,104 @@ func TestAnalyzeRolloutAndJobsClusterEvidence(t *testing.T) {
 				t.Errorf("missing %q/%s", cluster, cond)
 			}
 		}
+	}
+}
+
+func TestAnalyzeRCANodePressureClusterIsolation(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reverse=%v", reverse), func(t *testing.T) {
+			var items []store.K8sInventoryItem
+			expected := map[string]map[string]bool{}
+			for i, cluster := range []string{"c1", "c2", ""} {
+				pods := map[string]bool{}
+				expected[cluster] = pods
+				conditions := []any{}
+				for _, pressure := range []string{"MemoryPressure", "DiskPressure", "PIDPressure"} {
+					conditions = append(conditions, map[string]any{"type": pressure, "status": "True"})
+				}
+				items = append(items, store.K8sInventoryItem{ClusterID: cluster, Kind: "Node", Name: "worker", StatusObject: map[string]any{"conditions": conditions}})
+				for j := 0; j < i+1; j++ {
+					name := fmt.Sprintf("pod-%d-%d", i, j)
+					pods["ns/"+name] = true
+					items = append(items, store.K8sInventoryItem{ClusterID: cluster, Kind: "Pod", Namespace: "ns", Name: name, Status: "Running", Spec: map[string]any{"nodeName": "worker"}})
+				}
+				for _, node := range []string{"other", ""} {
+					items = append(items, store.K8sInventoryItem{ClusterID: cluster, Kind: "Pod", Namespace: "ns", Name: "excluded-" + node, Status: "Running", Spec: map[string]any{"nodeName": node}})
+				}
+			}
+			if reverse {
+				for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+					items[i], items[j] = items[j], items[i]
+				}
+			}
+			findings := AnalyzeRCA(items, nil)
+			if len(findings) != len(expected) {
+				t.Fatalf("findings = %+v", findings)
+			}
+			seen := map[string]bool{}
+			for _, f := range findings {
+				want, ok := expected[f.ClusterID]
+				if !ok || seen[f.ClusterID] || f.ResourceKind != "Node" || f.ResourceName != "worker" || f.Condition != "NodePressure" || f.Severity != "high" {
+					t.Fatalf("unexpected finding: %+v", f)
+				}
+				seen[f.ClusterID] = true
+				if len(f.Evidence) != len(want)+2 || f.Evidence[1] != fmt.Sprintf("영향 Pod 수: %d", len(want)) {
+					t.Errorf("cluster %q evidence = %v, want %d pods", f.ClusterID, f.Evidence, len(want))
+				}
+				for _, pressure := range []string{"MemoryPressure", "DiskPressure", "PIDPressure"} {
+					if !strings.Contains(f.Evidence[0], pressure) {
+						t.Errorf("missing %s: %v", pressure, f.Evidence)
+					}
+				}
+				got := map[string]bool{}
+				for _, e := range f.Evidence[2:] {
+					pod := strings.TrimPrefix(e, "  pod: ")
+					if !want[pod] || got[pod] {
+						t.Errorf("foreign or duplicate pod %q for cluster %q", pod, f.ClusterID)
+					}
+					got[pod] = true
+				}
+				for pod := range want {
+					if !got[pod] {
+						t.Errorf("missing pod %q", pod)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyzeRCANodePressureEvidenceLimit(t *testing.T) {
+	for _, count := range []int{0, 7} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			items := []store.K8sInventoryItem{{ClusterID: "c1", Kind: "Node", Name: "worker", StatusObject: map[string]any{"conditions": []any{map[string]any{"type": "DiskPressure", "status": "True"}}}}}
+			allowed := map[string]bool{}
+			for i := 0; i < count; i++ {
+				name := fmt.Sprintf("p%d", i)
+				allowed["  pod: ns/"+name] = true
+				items = append(items, store.K8sInventoryItem{ClusterID: "c1", Kind: "Pod", Namespace: "ns", Name: name, Status: "Running", Spec: map[string]any{"nodeName": "worker"}})
+			}
+			for _, pressure := range []string{"MemoryPressure", "DiskPressure", "PIDPressure", "Ready"} {
+				for _, status := range []string{"False", "Unknown"} {
+					items = append(items, store.K8sInventoryItem{Kind: "Node", Name: pressure + status, StatusObject: map[string]any{"conditions": []any{map[string]any{"type": pressure, "status": status}}}})
+				}
+			}
+			items = append(items, store.K8sInventoryItem{Kind: "Node", Name: "ready", StatusObject: map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}})
+			findings := AnalyzeRCA(items, nil)
+			if len(findings) != 1 {
+				t.Fatalf("findings = %+v", findings)
+			}
+			f := findings[0]
+			if f.Condition != "NodePressure" || f.Severity != "high" || len(f.Evidence) != min(count, 5)+2 || f.Evidence[1] != fmt.Sprintf("영향 Pod 수: %d", count) {
+				t.Fatalf("unexpected finding: %+v", f)
+			}
+			seen := map[string]bool{}
+			for _, e := range f.Evidence[2:] {
+				if !allowed[e] || seen[e] {
+					t.Errorf("unexpected evidence %q", e)
+				}
+				seen[e] = true
+			}
+		})
 	}
 }
