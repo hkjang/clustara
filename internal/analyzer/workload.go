@@ -43,7 +43,8 @@ func analyzeNodeConditions(items []store.K8sInventoryItem) []RCAFinding {
 	for _, it := range items {
 		if it.Kind == "Pod" {
 			if n := str(it.Spec["nodeName"]); n != "" {
-				podsByNode[n] = append(podsByNode[n], it.Namespace+"/"+it.Name)
+				key := nodeKey(it.ClusterID, n)
+				podsByNode[key] = append(podsByNode[key], it.Namespace+"/"+it.Name)
 			}
 		}
 	}
@@ -63,7 +64,7 @@ func analyzeNodeConditions(items []store.K8sInventoryItem) []RCAFinding {
 		if len(pressures) == 0 {
 			continue
 		}
-		pods := podsByNode[it.Name]
+		pods := podsByNode[nodeKey(it.ClusterID, it.Name)]
 		ev := []string{"압박 condition: " + strings.Join(pressures, ", "), fmt.Sprintf("영향 Pod 수: %d", len(pods))}
 		for i, p := range pods {
 			if i >= 5 {

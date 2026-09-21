@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"clustara/internal/analyzer"
+	"clustara/internal/kube"
 	"clustara/internal/store"
 )
 
@@ -2900,4 +2902,116 @@ func TestK8sClusterDeletion(t *testing.T) {
 		t.Fatalf("cluster should be deleted, got err=%v", err)
 	}
 	_ = fmt.Sprintf("cluster %s successfully deleted", clusterID)
+}
+
+func TestK8sNodePressureStaysInCluster(t *testing.T) {
+	db := openTestStore(t)
+	defer db.Close()
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	defer logger.Stop(context.Background())
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	defer proxy.Close()
+	decode := func(resp *http.Response, status int, target any) {
+		t.Helper()
+		defer resp.Body.Close()
+		if resp.StatusCode != status {
+			t.Fatalf("%s: status = %d, want %d", resp.Request.URL, resp.StatusCode, status)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expected := map[string]map[string]bool{}
+	var clusterIDs []string
+	for i := 1; i <= 2; i++ {
+		var created struct {
+			Cluster store.K8sCluster `json:"cluster"`
+		}
+		decode(postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+			"name": fmt.Sprintf("pressure-c%d", i), "server_url": "https://k8s.example.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1",
+		}), http.StatusCreated, &created)
+		cid := created.Cluster.ID
+		if cid == "" || expected[cid] != nil {
+			t.Fatal("missing or duplicate cluster ID")
+		}
+		clusterIDs = append(clusterIDs, cid)
+		expected[cid] = map[string]bool{}
+		save := func(kind, name string, spec, status map[string]any) {
+			t.Helper()
+			metadata := map[string]any{"name": name}
+			if kind == "Pod" {
+				metadata["namespace"] = "default"
+			}
+			item := kube.InventoryFromObject(kind, "v1", map[string]any{"apiVersion": "v1", "kind": kind, "metadata": metadata, "spec": spec, "status": status})
+			item.ID = cid + "/" + kind + "/" + name
+			item.ClusterID = cid
+			if err := db.UpsertK8sInventory(context.Background(), item); err != nil {
+				t.Fatal(err)
+			}
+		}
+		save("Node", "worker", map[string]any{}, map[string]any{"conditions": []any{
+			map[string]any{"type": "Ready", "status": "True"},
+			map[string]any{"type": "MemoryPressure", "status": "True"},
+		}})
+		for j := 0; j < i; j++ {
+			name := fmt.Sprintf("c%d-pod-%d", i, j)
+			expected[cid]["  pod: default/"+name] = true
+			save("Pod", name, map[string]any{"nodeName": "worker"}, map[string]any{"phase": "Running"})
+		}
+	}
+	for _, path := range []string{"/admin/k8s/rca", "/admin/k8s/home?risk_scope=all", "/admin/k8s/rca?cluster_id=" + url.QueryEscape(clusterIDs[0])} {
+		t.Run(path, func(t *testing.T) {
+			resp, err := http.Get(proxy.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Candidates        []analyzer.RCAFinding `json:"candidates"`
+				FailureCandidates []analyzer.RCAFinding `json:"failure_candidates"`
+			}
+			decode(resp, http.StatusOK, &result)
+			findings := result.Candidates
+			if strings.Contains(path, "/home") {
+				findings = result.FailureCandidates
+			}
+			wantCount := 2
+			if strings.Contains(path, "cluster_id=") {
+				wantCount = 1
+			}
+			if len(findings) != wantCount {
+				t.Fatalf("findings = %+v, want %d", findings, wantCount)
+			}
+			seen := map[string]bool{}
+			for _, f := range findings {
+				want, ok := expected[f.ClusterID]
+				if !ok || seen[f.ClusterID] || f.Namespace != "" || f.ResourceKind != "Node" || f.ResourceName != "worker" || f.Condition != "NodePressure" || f.Severity != "high" {
+					t.Fatalf("unexpected finding: %+v", f)
+				}
+				if wantCount == 1 && f.ClusterID != clusterIDs[0] {
+					t.Errorf("wrong selected cluster: %q", f.ClusterID)
+				}
+				seen[f.ClusterID] = true
+				if len(f.Evidence) != len(want)+2 || f.Evidence[1] != fmt.Sprintf("영향 Pod 수: %d", len(want)) {
+					t.Errorf("cluster %s evidence = %v, want %d pods", f.ClusterID, f.Evidence, len(want))
+				}
+				got := map[string]bool{}
+				for _, e := range f.Evidence[2:] {
+					if !want[e] || got[e] {
+						t.Errorf("foreign or duplicate evidence for %s: %q", f.ClusterID, e)
+					}
+					got[e] = true
+				}
+				for e := range want {
+					if !got[e] {
+						t.Errorf("missing evidence %q", e)
+					}
+				}
+			}
+		})
+	}
 }
