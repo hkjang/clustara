@@ -1,8 +1,20 @@
 # K8s Operations Hub
 
-> **버전: v0.9.287** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.288** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.287)
+## 기능 상태 (v0.9.288)
+
+### notify scan · 전달할 수 없는 알림은 6시간 중복 제거 윈도우를 쓰지 않습니다
+
+`POST /admin/k8s/notify/scan` 이 finding 의 6시간 중복 제거 윈도우를 먼저 기록하고 나서야
+`notifyMattermostTo` 가 Mattermost 비활성·webhook 미설정·카테고리 mute 일 때 조용히 반환했습니다.
+알림을 켜기 전에 cron 으로 돈 스캔이 같은 finding 을 6시간 동안 억제했고, 그 사이 응답과 감사
+로그에는 `sent` 로 적혀 운영자는 알림이 나간 줄 알았습니다.
+
+전달 가능 판정을 `mattermostSnapshot.canNotify` 한 함수로 모아 `notifyMattermostTo` 와 스캔이
+같은 조건을 읽습니다. 스캔은 윈도우를 claim 하기 전에 물어보고, 보내지 못한 건수를 응답·감사
+로그의 새 필드 `undeliverable` 로 보고합니다. 전달 가능한 스캔의 중복 제거·조용한 시간·담당팀
+채널 라우팅·딥링크는 그대로이며, DB 스키마·설정 변경은 없습니다.
 
 ### RCA 자원 태그 · 동명 Pod의 CPU·메모리를 클러스터별로 연결합니다
 
