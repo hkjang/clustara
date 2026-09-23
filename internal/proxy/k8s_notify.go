@@ -100,12 +100,20 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	rca = analyzer.EnrichWithConfigChanges(rca, revisions, now.UTC(), 24*time.Hour)
 	sec := analyzer.AnalyzeSecurity(items)
 
-	sent := 0
+	sent, undeliverable := 0, 0
 	// A scan without cluster_id evaluates every cluster at once, so dedup, owner routing and the
 	// deep link are keyed by the cluster each finding was made in — keyed by the request's
 	// cluster_id, two clusters' workloads of the same name collapsed into one notification that
 	// linked to no cluster. The request's cluster_id remains the fallback for a finding without one.
 	notify := func(category, cluster, dedupKey, ns, kind, name, text string) {
+		// Ask whether the message can be delivered before recording it as sent. Mattermost being
+		// off, unconfigured or the category muted makes notifyMattermostTo a silent no-op, and
+		// claiming the dedup window for it suppressed the finding for the next 6h — so a scan
+		// scheduled before the webhook was configured produced no alert long after it worked.
+		if !s.mattermostConfig(r.Context()).canNotify(category) {
+			undeliverable++
+			return
+		}
 		cluster = firstNonEmpty(cluster, clusterID)
 		ok, derr := s.db.ShouldSendK8sNotification(r.Context(), cluster+"|"+dedupKey, now, 6*time.Hour)
 		if derr != nil || !ok {
@@ -146,8 +154,10 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 			p.Namespace, p.Kind, p.Name,
 			"보안[high] Privileged 워크로드 — "+p.Namespace+"/"+p.Kind+"/"+p.Name+"\n"+strings.Join(p.Violations, ", "))
 	}
-	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "sent": sent}))
-	writeJSON(w, http.StatusOK, map[string]any{"sent": sent, "evaluated_rca": len(rca), "evaluated_security": len(sec.RBAC) + len(sec.PodSecurity)})
+	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "sent": sent, "undeliverable": undeliverable}))
+	// undeliverable counts findings left unsent because Mattermost is off, unconfigured or the
+	// category is muted — they keep their dedup window and notify on the next scan once it works.
+	writeJSON(w, http.StatusOK, map[string]any{"sent": sent, "undeliverable": undeliverable, "evaluated_rca": len(rca), "evaluated_security": len(sec.RBAC) + len(sec.PodSecurity)})
 }
 
 // handleK8sNotifyConfig reads/sets K8s-specific notification config (quiet hours + team→channel

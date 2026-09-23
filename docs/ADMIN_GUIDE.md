@@ -368,6 +368,8 @@ namespace/service 단위 SLO와 에러버짓을 확인합니다. 현재는 incid
 
 `POST /admin/k8s/notify/scan`이 현재 high/critical 장애·보안을 평가해 알림을 보냅니다 — **중복 제거**(6h 윈도우)·**조용한 시간**·**담당팀 채널 라우팅**·리소스 **딥링크** 포함. cron/`/loop`으로 주기 호출하세요. Mattermost webhook은 기존 알림 설정에서 구성합니다.
 
+Mattermost가 꺼져 있거나 webhook 미설정, 해당 카테고리가 mute 된 동안의 스캔은 중복 제거 윈도우를 쓰지 않고 응답의 `undeliverable` 로만 집계됩니다 — 알림을 나중에 켜도 그 시점의 스캔에서 바로 통지됩니다.
+
 ## 장기 분석 (ClickHouse)
 
 `CLICKHOUSE_URL` 설정 후 `POST /admin/k8s/dw/bootstrap`(테이블 생성) → `POST /admin/k8s/dw/sink`(fact 적재, 주기 호출). 미설정 시 no-op.
