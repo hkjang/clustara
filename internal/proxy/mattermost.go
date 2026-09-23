@@ -60,6 +60,15 @@ func (s *Server) mattermostConfig(ctx context.Context) *mattermostSnapshot {
 
 func (s *Server) invalidateMattermostCache() { s.mmCache.Store(nil) }
 
+// canNotify reports whether a message in this category would actually reach Mattermost. It is the
+// single deliverability predicate: notifyMattermostTo gates on it, and so must any caller that
+// takes a side effect per message — the notify scan spends a 6h dedup window per finding, and
+// spending it on a message the integration silently drops leaves the operator with no alert at all
+// until that window expires.
+func (c *mattermostSnapshot) canNotify(category string) bool {
+	return c != nil && c.enabled && c.webhookURL != "" && c.events[category]
+}
+
 // notifyMattermost posts a Slack-compatible message to the configured Mattermost
 // incoming webhook for the given event category. Best-effort and asynchronous;
 // returns immediately (and does nothing) when notifications are disabled, the
@@ -72,7 +81,7 @@ func (s *Server) notifyMattermost(ctx context.Context, category, text string) {
 // routing). An empty channelOverride falls back to the configured default channel.
 func (s *Server) notifyMattermostTo(ctx context.Context, category, channelOverride, text string) {
 	cfg := s.mattermostConfig(ctx)
-	if !cfg.enabled || cfg.webhookURL == "" || !cfg.events[category] {
+	if !cfg.canNotify(category) {
 		return
 	}
 	payload := map[string]any{"text": "[Clustara] " + text}

@@ -143,6 +143,168 @@ func TestK8sNotifyScanRoutesEachFindingToItsOwnCluster(t *testing.T) {
 	}
 }
 
+// notifyScanFixture is a single-cluster notify scan wired end to end: a real SQLite store, the real
+// routes, an httptest Mattermost webhook and one privileged workload that produces exactly one
+// Pod Security finding per scan.
+type notifyScanFixture struct {
+	server    *Server
+	proxy     *httptest.Server
+	db        *store.SQLStore
+	hookURL   string
+	received  chan notifyDelivery
+	clusterID string
+}
+
+type notifyDelivery struct {
+	Text    string `json:"text"`
+	Channel string `json:"channel"`
+}
+
+func newNotifyScanFixture(t *testing.T) *notifyScanFixture {
+	t.Helper()
+	received := make(chan notifyDelivery, 8)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var d notifyDelivery
+		_ = json.Unmarshal(b, &d)
+		received <- d
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(hook.Close)
+
+	db := openTestStore(t)
+	t.Cleanup(func() { db.Close() })
+	logger := store.NewAsyncLogger(db, 32, filepath.Join(t.TempDir(), "fallback.ndjson"))
+	logger.Start()
+	t.Cleanup(func() { logger.Stop(context.Background()) })
+	server, err := NewServer(testConfig("http://upstream.invalid", "secret"), db, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server.Routes())
+	t.Cleanup(proxy.Close)
+	ctx := context.Background()
+
+	resp := postJSON(t, proxy.URL+"/admin/k8s/clusters", "", map[string]any{
+		"name": "prod", "server_url": "https://prod.example.test", "auth_mode": "kubeconfig", "kubeconfig": "apiVersion: v1\nclusters: []",
+	})
+	defer resp.Body.Close()
+	var created struct {
+		Cluster store.K8sCluster `json:"cluster"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	item := kube.InventoryFromObject("Pod", "v1", map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"namespace": "edge", "name": "agent", "uid": "uid-1"},
+		"spec": map[string]any{
+			"hostNetwork": true,
+			"containers":  []any{map[string]any{"name": "agent", "image": "agent:1", "securityContext": map[string]any{"privileged": true}}},
+		},
+		"status": map[string]any{"phase": "Running"},
+	})
+	item.ID, item.ClusterID = "k8sres_notify_gate", created.Cluster.ID
+	if err := db.UpsertK8sInventory(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	return &notifyScanFixture{server: server, proxy: proxy, db: db, hookURL: hook.URL, received: received, clusterID: created.Cluster.ID}
+}
+
+// setFlags writes runtime flags and invalidates the 15s Mattermost snapshot cache so the next scan
+// observes them.
+func (f *notifyScanFixture) setFlags(t *testing.T, flags map[string]string) {
+	t.Helper()
+	for k, v := range flags {
+		if err := f.db.SetFlag(context.Background(), store.RuntimeFlag{Key: k, Value: v, UpdatedAt: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.server.invalidateMattermostCache()
+}
+
+// scan runs one notify scan and returns its reported sent/undeliverable counts.
+func (f *notifyScanFixture) scan(t *testing.T) (sent, undeliverable int) {
+	t.Helper()
+	resp := postJSON(t, f.proxy.URL+"/admin/k8s/notify/scan", "", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("scan status=%d body=%s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Sent          int `json:"sent"`
+		Undeliverable int `json:"undeliverable"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Sent, out.Undeliverable
+}
+
+// A scan that runs while Mattermost is switched off must not spend the 6h dedup window: the
+// operator who schedules the scan first and configures the webhook afterwards (the order
+// docs/ADMIN_GUIDE.md describes) would otherwise get silence until every window expired.
+func TestK8sNotifyScanKeepsDedupWindowWhileNotificationsDisabled(t *testing.T) {
+	f := newNotifyScanFixture(t)
+	f.setFlags(t, map[string]string{"mattermost_enabled": "false", "mattermost_webhook_url": f.hookURL})
+
+	if sent, undeliverable := f.scan(t); sent != 0 || undeliverable != 1 {
+		t.Fatalf("disabled scan must report nothing sent and the finding as undeliverable, sent=%d undeliverable=%d", sent, undeliverable)
+	}
+	select {
+	case d := <-f.received:
+		t.Fatalf("notifications are disabled, webhook must not be called: %+v", d)
+	default:
+	}
+
+	f.setFlags(t, map[string]string{"mattermost_enabled": "true"})
+	if sent, _ := f.scan(t); sent != 1 {
+		t.Fatalf("the still-privileged workload must notify once Mattermost is enabled, sent=%d", sent)
+	}
+	select {
+	case d := <-f.received:
+		if !strings.Contains(d.Text, "Privileged 워크로드") || !strings.Contains(d.Text, "edge/Pod/agent") {
+			t.Fatalf("unexpected notification: %+v", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected the finding to be delivered after enabling Mattermost")
+	}
+}
+
+// Same guarantee for a muted category: k8s_security findings evaluated while the category is off
+// must still notify when the operator turns that category back on.
+func TestK8sNotifyScanKeepsDedupWindowWhileCategoryMuted(t *testing.T) {
+	f := newNotifyScanFixture(t)
+	f.setFlags(t, map[string]string{
+		"mattermost_enabled":     "true",
+		"mattermost_webhook_url": f.hookURL,
+		"mattermost_events":      "cost,approval", // k8s_security muted
+	})
+
+	if sent, undeliverable := f.scan(t); sent != 0 || undeliverable != 1 {
+		t.Fatalf("muted category must report nothing sent and the finding as undeliverable, sent=%d undeliverable=%d", sent, undeliverable)
+	}
+	select {
+	case d := <-f.received:
+		t.Fatalf("k8s_security is muted, webhook must not be called: %+v", d)
+	default:
+	}
+
+	f.setFlags(t, map[string]string{"mattermost_events": "cost,approval,k8s_security"})
+	if sent, _ := f.scan(t); sent != 1 {
+		t.Fatalf("unmuting k8s_security must deliver the finding, sent=%d", sent)
+	}
+	select {
+	case d := <-f.received:
+		if !strings.Contains(d.Text, "Privileged 워크로드") {
+			t.Fatalf("unexpected notification: %+v", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected the finding to be delivered after unmuting the category")
+	}
+}
+
 // Event-only reproduction avoids unrelated Pod Security findings.
 func TestK8sNotifyScanRoutesRCAProbeFindingsToEachCluster(t *testing.T) {
 	type delivery struct {
