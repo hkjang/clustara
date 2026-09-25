@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,19 +23,50 @@ func requestBaseURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// inQuietHours reports whether t (local hour) falls in a quiet window "HH-HH" (e.g. "22-08").
-// Empty/invalid spec means never quiet. Supports windows that wrap past midnight (NOTI-03).
-func inQuietHours(spec string, hour int) bool {
+// parseQuietHours splits a quiet window spec "HH-HH" (e.g. "22-08") into its two hours. ok reports
+// only that the spec is two integers separated by "-": the hours are deliberately left unchecked
+// here so the read path keeps interpreting specs stored before the POST handler validated them
+// (a saved "22-24" still suppresses 22:00-24:00). validateQuietHours adds the range check.
+func parseQuietHours(spec string) (start, end int, ok bool) {
 	parts := strings.SplitN(strings.TrimSpace(spec), "-", 2)
 	if len(parts) != 2 {
-		return false
+		return 0, 0, false
 	}
 	start, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
 	end, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
 	if err1 != nil || err2 != nil {
-		return false
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// validateQuietHours reports why a quiet window cannot be stored. An empty spec disables quiet
+// hours; anything else must be "HH-HH" with both hours in 0-23 and the two differing, so that what
+// the operator saves is a window inQuietHours can honour. Writing was looser than reading: "25-30"
+// or "22-22" was stored and echoed back by GET while every hour stayed loud (NOTI-03).
+func validateQuietHours(spec string) error {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil
+	}
+	start, end, ok := parseQuietHours(spec)
+	if !ok {
+		return errors.New(`quiet_hours must be "HH-HH", e.g. "22-08" (empty disables quiet hours)`)
+	}
+	if start < 0 || start > 23 || end < 0 || end > 23 {
+		return errors.New(`quiet_hours must use hours 0-23, e.g. "22-08" for 22:00-08:00`)
 	}
 	if start == end {
+		return errors.New("quiet_hours start and end must differ; leave it empty to disable quiet hours")
+	}
+	return nil
+}
+
+// inQuietHours reports whether t (local hour) falls in a quiet window "HH-HH" (e.g. "22-08").
+// Empty/invalid spec means never quiet. Supports windows that wrap past midnight (NOTI-03).
+func inQuietHours(spec string, hour int) bool {
+	start, end, ok := parseQuietHours(spec)
+	if !ok || start == end {
 		return false
 	}
 	if start < end {
@@ -182,22 +214,40 @@ func (s *Server) handleK8sNotifyConfig(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body", "invalid_request_error", "invalid_body")
 			return
 		}
+		// Validate every field the request carries before storing any of it: a rejected POST must
+		// leave the config exactly as it was, and a half-applied one is what GET then reports back.
+		quietHours, teamChannels := "", ""
+		if p.QuietHours != nil {
+			quietHours = strings.TrimSpace(*p.QuietHours)
+			if err := validateQuietHours(quietHours); err != nil {
+				writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_quiet_hours")
+				return
+			}
+		}
+		if p.TeamChannels != nil {
+			teamChannels = strings.TrimSpace(*p.TeamChannels)
+		}
+		if teamChannels != "" {
+			// resolveTeamChannel reads this flag as map[string]string, so store only what it can
+			// use: json.Valid also accepted `[1,2]`, `"x"` or `{"core":3}`, which then failed at read
+			// time and dropped every team's routing back to the default channel.
+			var m map[string]string
+			if err := json.Unmarshal([]byte(teamChannels), &m); err != nil || m == nil {
+				writeOpenAIError(w, http.StatusBadRequest, `team_channels must be a JSON object of team → channel, e.g. {"core":"#core-alerts"}`, "invalid_request_error", "invalid_team_channels")
+				return
+			}
+		}
 		setFlag := func(key, val string) error {
 			return s.db.SetFlag(r.Context(), store.RuntimeFlag{Key: key, Value: val, UpdatedAt: time.Now().UTC(), UpdatedBy: adminID(r)})
 		}
 		if p.QuietHours != nil {
-			if err := setFlag("k8s_quiet_hours", strings.TrimSpace(*p.QuietHours)); err != nil {
+			if err := setFlag("k8s_quiet_hours", quietHours); err != nil {
 				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
 				return
 			}
 		}
 		if p.TeamChannels != nil {
-			v := strings.TrimSpace(*p.TeamChannels)
-			if v != "" && !json.Valid([]byte(v)) {
-				writeOpenAIError(w, http.StatusBadRequest, "team_channels must be JSON object", "invalid_request_error", "invalid_team_channels")
-				return
-			}
-			if err := setFlag("mattermost_team_channels", v); err != nil {
+			if err := setFlag("mattermost_team_channels", teamChannels); err != nil {
 				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
 				return
 			}
