@@ -1,8 +1,24 @@
 # K8s Operations Hub
 
-> **버전: v0.9.288** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.289** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.288)
+## 기능 상태 (v0.9.289)
+
+### 알림 설정 저장 · `quiet_hours` 와 `team_channels` 를 읽는 쪽과 같은 계약으로 검증합니다
+
+`POST /admin/k8s/notify/config` 는 `quiet_hours` 를 TrimSpace 만 하고 저장했지만, 읽는 쪽인
+`inQuietHours` 는 형식이 깨졌거나 숫자가 아니거나 범위를 벗어난 값을 "조용한 시간 없음" 으로
+삼켰습니다. 그래서 `25-30`·`22`·`abc-8`·`-5`·`22-` 를 입력해도 200 과 GET 에코로 저장된 것처럼
+보이고 심야 알림은 계속 나갔습니다. `team_channels` 는 `json.Valid` 만 확인해 `[1,2]`·`"x"`·`3`·
+`null`·`{"core":3}` 가 통과한 뒤 `resolveTeamChannel` 의 `map[string]string` Unmarshal 에서 조용히
+실패했고, 담당팀 라우팅이 전부 기본 채널로 떨어졌습니다.
+
+이제 파싱은 `parseQuietHours` 한 곳에 모으고, 쓰기 경로에만 `validateQuietHours`(`HH-HH`·두 시각
+모두 0-23·start≠end, 빈 값은 해제)를 적용합니다. `team_channels` 는 읽는 쪽과 같은
+`map[string]string` 로 Unmarshal 되어야만 저장합니다. 두 필드를 모두 검증한 뒤에 플래그를 쓰므로
+거절된 POST 는 이전 설정을 그대로 남깁니다(부분 적용 없음). 읽기 경로는 의도적으로 관용적인
+동작을 유지해, 이미 저장된 값의 의미가 이번 릴리즈로 바뀌지 않습니다 — 갑자기 창이 생겨 운영
+알림이 사라지거나, 반대로 억제가 풀리는 일은 없습니다. DB 스키마 변경은 없습니다.
 
 ### notify scan · 전달할 수 없는 알림은 6시간 중복 제거 윈도우를 쓰지 않습니다
 
