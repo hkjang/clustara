@@ -870,7 +870,7 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | POST | `/admin/k8s/actions/{id}/execute` | 승인된 액션을 실클러스터에 실행 (scale/rollout_restart/cordon/uncordon/delete_pod) |
 | GET | `/healthz`, `/readyz`, `/admin/ops/workers`, `/admin/workers` | liveness/readiness와 background worker 상태(queue depth, last success, last error, error count, lag seconds) |
 | POST | `/admin/k8s/notify/scan` | 현재 high/critical 장애·보안을 평가해 Mattermost 알림(중복제거·조용한시간·담당팀 라우팅·딥링크) |
-| GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` HH-HH) + 팀→채널 매핑(`team_channels` JSON) |
+| GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` `HH-HH`, 0-23·빈 값은 해제) + 팀→채널 매핑(`team_channels` JSON 객체) — 저장 시 검증하며 잘못된 값은 400 |
 | GET/POST | `/admin/notifications/mattermost` | Mattermost 알림 설정(webhook/channel/events) + ChatOps slash 검증 토큰(`slash_token`) |
 | POST | `/integrations/mattermost/command` | **ChatOps 수신**(공개·토큰검증, x-www-form-urlencoded) — `incidents`/`rca [ns]`/`slo [목표] [일수]`/`cost`/`help` 읽기전용 조회, Mattermost 응답 포맷 |
 | GET | `/admin/k8s/events` | 이벤트 조회 |
