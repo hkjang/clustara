@@ -45,6 +45,14 @@ func AttachFindingResources(findings []RCAFinding, items []store.K8sInventoryIte
 	}
 }
 
+// RCARelevantKinds lists the inventory kinds AnalyzeRCA reads, so a caller with a row budget can
+// spend it on those instead of on kinds the analysis skips. The list must track the kind switches
+// in AnalyzeRCA, analyzeRolloutAndJobs and analyzeNodeConditions: a kind missing here is not
+// reported as unfetched, its findings simply never appear.
+func RCARelevantKinds() []string {
+	return []string{"CronJob", "DaemonSet", "Deployment", "Job", "Node", "Pod", "StatefulSet"}
+}
+
 func AnalyzeRCA(items []store.K8sInventoryItem, events []store.K8sEvent) []RCAFinding {
 	byKey := map[string][]store.K8sEvent{}
 	for _, e := range events {
