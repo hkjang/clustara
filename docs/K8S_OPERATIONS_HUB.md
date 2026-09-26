@@ -1,8 +1,8 @@
 # K8s Operations Hub
 
-> **버전: v0.9.289** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.290** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.289)
+## 기능 상태 (v0.9.290)
 
 ### 알림 설정 저장 · `quiet_hours` 와 `team_channels` 를 읽는 쪽과 같은 계약으로 검증합니다
 
