@@ -20,6 +20,20 @@
 동작을 유지해, 이미 저장된 값의 의미가 이번 릴리즈로 바뀌지 않습니다 — 갑자기 창이 생겨 운영
 알림이 사라지거나, 반대로 억제가 풀리는 일은 없습니다. DB 스키마 변경은 없습니다.
 
+### notify scan · 분석이 읽는 kind 만 조회하고 상한 초과를 보고합니다
+
+`POST /admin/k8s/notify/scan` 은 인벤토리를 kind 제한 없이 `updated_at` 역순 2000행만
+읽었습니다. 분석이 보지 않는 kind(예: 컨트롤러가 자주 고쳐 쓰는 ConfigMap)가 자주 갱신되는
+클러스터에서는 그 행들이 창을 채워 privileged 워크로드나 과도한 Role 이 창 밖으로 밀려났고,
+`/admin/k8s/security` 와 달리 이 경로는 사람이 결과를 보지 않으므로 알림이 그냥 나가지 않았습니다.
+
+이제 `AnalyzeRCA` 가 읽는 kind(`analyzer.RCARelevantKinds`: Pod·Deployment·StatefulSet·
+DaemonSet·Job·CronJob·Node)와 `AnalyzeSecurity` 가 읽는 kind(`analyzer.SecurityRelevantKinds`)
+의 합집합만 조회하고, 상한보다 한 행 더 요청해 잘림을 감지합니다. 잘린 스캔은 응답·감사 로그에
+`truncated: true` 와 평가한 행 수 `resources` 를 적고 응답에 `truncation_notice` 를 덧붙입니다 —
+`sent: 0` 이 "이상 없음"인지 "다 보지 못함"인지 구분되지 않던 문제입니다. 중복 제거·조용한
+시간·담당팀 채널 라우팅·딥링크와 DB 스키마·설정은 그대로입니다.
+
 ### notify scan · 전달할 수 없는 알림은 6시간 중복 제거 윈도우를 쓰지 않습니다
 
 `POST /admin/k8s/notify/scan` 이 finding 의 6시간 중복 제거 윈도우를 먼저 기록하고 나서야

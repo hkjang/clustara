@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +100,32 @@ func k8sDeepLink(base, clusterID, namespace, kind, name string) string {
 	return strings.TrimRight(base, "/") + "/admin#/k8s-timeline?" + q.Encode()
 }
 
+// notifyScanBudget caps how many inventory rows one notify scan evaluates. A var so tests can
+// exercise the truncation path without persisting thousands of rows.
+var notifyScanBudget = 2000
+
+// notifyScanKinds is the union of the kinds the two analyses this scan runs actually read.
+//
+// The fetch used to take rows of any kind ordered by updated_at. On a cluster whose churn is
+// dominated by kinds neither analysis reads, that window fills with those rows and a privileged
+// workload or an over-broad Role drops out of it — and unlike the posture report, nobody is looking
+// at this scan's output, so the missed finding is simply an alert that never fires.
+func notifyScanKinds() []string {
+	seen := map[string]bool{}
+	kinds := []string{}
+	for _, list := range [][]string{analyzer.RCARelevantKinds(), analyzer.SecurityRelevantKinds()} {
+		for _, kind := range list {
+			if seen[kind] {
+				continue
+			}
+			seen[kind] = true
+			kinds = append(kinds, kind)
+		}
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
 // handleK8sNotifyScan evaluates current high/critical RCA candidates and security findings for a
 // cluster and posts deduplicated, owner-routed, quiet-hours-aware notifications (NOTI-01~08).
 // POST /admin/k8s/notify/scan?cluster_id=
@@ -112,10 +139,20 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 2000})
+	// Fetch only the kinds the two analyses below read, and ask for one row past the budget so
+	// truncation is detectable rather than silent.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: clusterID,
+		Kinds:     notifyScanKinds(),
+		Limit:     notifyScanBudget + 1,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
+	}
+	truncated := len(items) > notifyScanBudget
+	if truncated {
+		items = items[:notifyScanBudget]
 	}
 	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 500)
 	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Limit: 1000})
@@ -186,10 +223,19 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 			p.Namespace, p.Kind, p.Name,
 			"보안[high] Privileged 워크로드 — "+p.Namespace+"/"+p.Kind+"/"+p.Name+"\n"+strings.Join(p.Violations, ", "))
 	}
-	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "sent": sent, "undeliverable": undeliverable}))
+	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "sent": sent, "undeliverable": undeliverable, "resources": len(items), "truncated": truncated}))
 	// undeliverable counts findings left unsent because Mattermost is off, unconfigured or the
 	// category is muted — they keep their dedup window and notify on the next scan once it works.
-	writeJSON(w, http.StatusOK, map[string]any{"sent": sent, "undeliverable": undeliverable, "evaluated_rca": len(rca), "evaluated_security": len(sec.RBAC) + len(sec.PodSecurity)})
+	out := map[string]any{
+		"sent": sent, "undeliverable": undeliverable, "resources": len(items), "truncated": truncated,
+		"evaluated_rca": len(rca), "evaluated_security": len(sec.RBAC) + len(sec.PodSecurity),
+	}
+	// A truncated scan reports `sent: 0` exactly as a clean cluster does, so say which one it was:
+	// the findings outside the window were not evaluated, not judged harmless.
+	if truncated {
+		out["truncation_notice"] = "검사 대상이 상한을 초과해 일부만 점검했습니다. 상한 밖 워크로드는 평가되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하세요."
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleK8sNotifyConfig reads/sets K8s-specific notification config (quiet hours + team→channel
