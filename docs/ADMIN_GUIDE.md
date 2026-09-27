@@ -370,6 +370,8 @@ namespace/service 단위 SLO와 에러버짓을 확인합니다. 현재는 incid
 
 Mattermost가 꺼져 있거나 webhook 미설정, 해당 카테고리가 mute 된 동안의 스캔은 중복 제거 윈도우를 쓰지 않고 응답의 `undeliverable` 로만 집계됩니다 — 알림을 나중에 켜도 그 시점의 스캔에서 바로 통지됩니다.
 
+**조용한 시간은 `timezone` 에 지정한 IANA 타임존(예: `Asia/Seoul`)의 시각으로 판정합니다.** 비워 두면 게이트웨이 컨테이너의 로컬 시각을 쓰는데, 폐쇄망 이미지에는 타임존 설정이 없어 UTC 가 되는 경우가 많으므로 K8s 운영 설정 화면에서 함께 지정하세요. 스캔 응답의 `timezone` 이 실제로 판정에 쓰인 시계입니다.
+
 ## 장기 분석 (ClickHouse)
 
 `CLICKHOUSE_URL` 설정 후 `POST /admin/k8s/dw/bootstrap`(테이블 생성) → `POST /admin/k8s/dw/sink`(fact 적재, 주기 호출). 미설정 시 no-op.

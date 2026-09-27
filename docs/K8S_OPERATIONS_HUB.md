@@ -4,6 +4,23 @@
 
 ## 기능 상태 (v0.9.290)
 
+### 조용한 시간을 운영자가 지정한 타임존으로 판정합니다
+
+`POST /admin/k8s/notify/scan` 은 조용한 시간을 `time.Now().Hour()` — 게이트웨이 컨테이너의 로컬
+시각 — 으로 판정했습니다. 폐쇄망 배포 이미지에는 타임존 데이터가 없는 경우가 많아 그 값이 사실상
+UTC 였고, 서울에서 `22-08` 을 저장한 운영자는 요청한 것의 반대를 얻었습니다: 밤새 알림이 나가고
+업무시간(07:00~17:00 KST)이 조용해졌습니다. 같은 제품의 노드 추세 "업무시간" 필터는 브라우저
+타임존을 쓰고 그 사실을 화면에 적는데, 조용한 시간만 어느 시계를 쓰는지 말하지 않았습니다.
+
+`GET/POST /admin/k8s/notify/config` 에 `timezone` 을 추가했습니다. IANA 이름(`Asia/Seoul`,
+`UTC` 등)만 저장하며, 읽는 쪽과 같은 계약으로 `time.LoadLocation` 이 불러올 수 없는 값은 400
+`invalid_timezone` 으로 거절하고 이전 설정을 그대로 남깁니다(부분 적용 없음). 빈 값은 서버 로컬
+시각을 쓰는 기존 동작이므로 이미 저장된 창의 의미는 이번 변경으로 바뀌지 않습니다. 스캔 응답은
+어느 시계로 판정했는지 `timezone` 으로 알려 주고, 저장된 타임존을 불러올 수 없어 로컬 시각으로
+되돌아간 경우에는 `timezone_notice` 를 덧붙입니다. 이미지에 `/usr/share/zoneinfo` 가 없어도
+이름이 해석되도록 게이트웨이는 Go 의 임베디드 타임존 DB(`time/tzdata`)를 포함합니다. DB 스키마
+변경은 없습니다.
+
 ### 알림 설정 저장 · `quiet_hours` 와 `team_channels` 를 읽는 쪽과 같은 계약으로 검증합니다
 
 `POST /admin/k8s/notify/config` 는 `quiet_hours` 를 TrimSpace 만 하고 저장했지만, 읽는 쪽인
@@ -900,7 +917,7 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | POST | `/admin/k8s/actions/{id}/execute` | 승인된 액션을 실클러스터에 실행 (scale/rollout_restart/cordon/uncordon/delete_pod) |
 | GET | `/healthz`, `/readyz`, `/admin/ops/workers`, `/admin/workers` | liveness/readiness와 background worker 상태(queue depth, last success, last error, error count, lag seconds) |
 | POST | `/admin/k8s/notify/scan` | 현재 high/critical 장애·보안을 평가해 Mattermost 알림(중복제거·조용한시간·담당팀 라우팅·딥링크) |
-| GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` `HH-HH`, 0-23·빈 값은 해제) + 팀→채널 매핑(`team_channels` JSON 객체) — 저장 시 검증하며 잘못된 값은 400 |
+| GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` `HH-HH`, 0-23·빈 값은 해제) + 판정 타임존(`timezone` IANA 이름·빈 값은 서버 로컬 시각) + 팀→채널 매핑(`team_channels` JSON 객체) — 저장 시 검증하며 잘못된 값은 400 |
 | GET/POST | `/admin/notifications/mattermost` | Mattermost 알림 설정(webhook/channel/events) + ChatOps slash 검증 토큰(`slash_token`) |
 | POST | `/integrations/mattermost/command` | **ChatOps 수신**(공개·토큰검증, x-www-form-urlencoded) — `incidents`/`rca [ns]`/`slo [목표] [일수]`/`cost`/`help` 읽기전용 조회, Mattermost 응답 포맷 |
 | GET | `/admin/k8s/events` | 이벤트 조회 |

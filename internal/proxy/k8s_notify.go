@@ -10,6 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	// The quiet-hours timezone below resolves IANA zone names, and this gateway ships into
+	// closed networks as a container image that need not carry /usr/share/zoneinfo. Embedding
+	// the database (~450KB) keeps "Asia/Seoul" resolvable there instead of making the setting
+	// unusable on exactly the deployments it exists for.
+	_ "time/tzdata"
 
 	"clustara/internal/analyzer"
 	"clustara/internal/store"
@@ -61,6 +66,39 @@ func validateQuietHours(spec string) error {
 		return errors.New("quiet_hours start and end must differ; leave it empty to disable quiet hours")
 	}
 	return nil
+}
+
+// validateNotifyTimezone reports why a quiet-hours timezone cannot be stored. An empty spec means
+// the server's local clock, which is what every scan used before this setting existed; anything else
+// must be a zone name notifyLocation can load, so the write cannot store a zone the scan would then
+// silently fall back from.
+func validateNotifyTimezone(spec string) error {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil
+	}
+	if _, err := time.LoadLocation(spec); err != nil {
+		return errors.New(`timezone must be an IANA zone name, e.g. "Asia/Seoul" or "UTC" (empty uses the server's local time)`)
+	}
+	return nil
+}
+
+// notifyLocation resolves the clock a quiet window is judged on. notice is non-empty when the stored
+// zone could not be loaded and the server's local time was used instead — the caller reports it,
+// because a quiet window judged on the wrong clock suppresses alerts at the wrong hours and there is
+// nothing in the counters to show it happened.
+func notifyLocation(spec string) (*time.Location, string) {
+	spec = strings.TrimSpace(spec)
+	// time.LoadLocation("") is UTC, which is not the same thing as "unset": before this setting
+	// existed the window was judged on the server's local clock and it must stay that way.
+	if spec == "" {
+		return time.Local, ""
+	}
+	loc, err := time.LoadLocation(spec)
+	if err != nil {
+		return time.Local, "설정된 타임존 '" + spec + "' 을 불러올 수 없어 서버 로컬 시각으로 조용한 시간을 판정했습니다."
+	}
+	return loc, ""
 }
 
 // inQuietHours reports whether t (local hour) falls in a quiet window "HH-HH" (e.g. "22-08").
@@ -160,8 +198,22 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	quiet := s.flagValue(r.Context(), "k8s_quiet_hours")
 	teamChannels := s.flagValue(r.Context(), "mattermost_team_channels")
-	if inQuietHours(quiet, now.Hour()) {
-		writeJSON(w, http.StatusOK, map[string]any{"sent": 0, "suppressed": "quiet_hours", "quiet_hours": quiet})
+	// Judging the window on time.Now().Hour() meant judging it on whichever clock the container
+	// happens to run — UTC in an image without tzdata. An operator in Seoul saving "22-08" then got
+	// the inverse of what they asked for: alerts all night, silence through the working day. The
+	// configured zone is the operator's clock; empty keeps the server's local time.
+	tz := s.flagValue(r.Context(), "k8s_notify_timezone")
+	loc, tzNotice := notifyLocation(tz)
+	clock := map[string]any{"timezone": loc.String()}
+	if tzNotice != "" {
+		clock["timezone_notice"] = tzNotice
+	}
+	if inQuietHours(quiet, now.In(loc).Hour()) {
+		out := map[string]any{"sent": 0, "suppressed": "quiet_hours", "quiet_hours": quiet}
+		for k, v := range clock {
+			out[k] = v
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 
@@ -230,6 +282,11 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		"sent": sent, "undeliverable": undeliverable, "resources": len(items), "truncated": truncated,
 		"evaluated_rca": len(rca), "evaluated_security": len(sec.RBAC) + len(sec.PodSecurity),
 	}
+	// Report the clock even when nothing was suppressed, so an operator checking why a window never
+	// fires can see which timezone the scan read rather than having to guess the container's.
+	for k, v := range clock {
+		out[k] = v
+	}
 	// A truncated scan reports `sent: 0` exactly as a clean cluster does, so say which one it was:
 	// the findings outside the window were not evaluated, not judged harmless.
 	if truncated {
@@ -249,11 +306,13 @@ func (s *Server) handleK8sNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{
 			"quiet_hours":   s.flagValue(r.Context(), "k8s_quiet_hours"),
+			"timezone":      s.flagValue(r.Context(), "k8s_notify_timezone"),
 			"team_channels": s.flagValue(r.Context(), "mattermost_team_channels"),
 		})
 	case http.MethodPost:
 		var p struct {
 			QuietHours   *string `json:"quiet_hours"`
+			Timezone     *string `json:"timezone"`
 			TeamChannels *string `json:"team_channels"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -262,11 +321,18 @@ func (s *Server) handleK8sNotifyConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		// Validate every field the request carries before storing any of it: a rejected POST must
 		// leave the config exactly as it was, and a half-applied one is what GET then reports back.
-		quietHours, teamChannels := "", ""
+		quietHours, timezone, teamChannels := "", "", ""
 		if p.QuietHours != nil {
 			quietHours = strings.TrimSpace(*p.QuietHours)
 			if err := validateQuietHours(quietHours); err != nil {
 				writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_quiet_hours")
+				return
+			}
+		}
+		if p.Timezone != nil {
+			timezone = strings.TrimSpace(*p.Timezone)
+			if err := validateNotifyTimezone(timezone); err != nil {
+				writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_timezone")
 				return
 			}
 		}
@@ -288,6 +354,12 @@ func (s *Server) handleK8sNotifyConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.QuietHours != nil {
 			if err := setFlag("k8s_quiet_hours", quietHours); err != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
+				return
+			}
+		}
+		if p.Timezone != nil {
+			if err := setFlag("k8s_notify_timezone", timezone); err != nil {
 				writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "flag_save_failed")
 				return
 			}
