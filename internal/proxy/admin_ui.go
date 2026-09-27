@@ -14608,7 +14608,9 @@ const adminHTML = `<!doctype html>
           '<button type="button" onclick="k8sSettingsSaveCost()">저장</button></div></div>') +
         card('알림 설정',
           '<div class="card-body"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">' +
-          '<input id="set-quiet" value="' + escapeAttr(noti.quiet_hours || '') + '" placeholder="조용한 시간 (예: 22-08)" style="width:200px"></div>' +
+          '<input id="set-quiet" value="' + escapeAttr(noti.quiet_hours || '') + '" placeholder="조용한 시간 (예: 22-08)" style="width:200px">' +
+          '<input id="set-tz" value="' + escapeAttr(noti.timezone || '') + '" placeholder="타임존 (예: Asia/Seoul)" style="width:200px"></div>' +
+          '<div class="muted" style="font-size:11px;margin-bottom:6px">조용한 시간은 여기 지정한 타임존의 시각으로 판정합니다. 비워 두면 서버(컨테이너) 로컬 시각을 쓰므로, 이미지에 타임존 설정이 없으면 UTC 기준이 됩니다.</div>' +
           '<textarea id="set-channels" rows="3" placeholder=\'{"core":"#core-alerts","data":"#data-ops"}\' style="width:100%">' + escapeHTML(noti.team_channels || '') + '</textarea>' +
           '<div class="muted" style="font-size:11px;margin-top:2px">팀→Mattermost 채널 매핑(JSON). 네임스페이스 오너십의 담당팀 기준으로 알림이 라우팅됩니다.</div>' +
           '<div style="margin-top:6px"><button type="button" onclick="k8sSettingsSaveNoti()">저장</button></div></div>') +
@@ -14830,6 +14832,7 @@ const adminHTML = `<!doctype html>
       try {
         await api('/admin/k8s/notify/config', { method: 'POST', body: JSON.stringify({
           quiet_hours: document.getElementById('set-quiet').value.trim(),
+          timezone: document.getElementById('set-tz').value.trim(),
           team_channels: document.getElementById('set-channels').value.trim() }) });
         msg.innerHTML = '<span class="status">알림 설정 저장됨</span>';
       } catch (e) { msg.innerHTML = '<span class="status error">' + escapeHTML(e.message) + '</span>'; }
