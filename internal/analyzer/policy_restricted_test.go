@@ -15,7 +15,8 @@ func hardenedContainer() map[string]any {
 		"name": "app", "image": "app@sha256:abc",
 		"securityContext": map[string]any{
 			"runAsNonRoot": true, "allowPrivilegeEscalation": false,
-			"capabilities": map[string]any{"drop": []any{"ALL"}},
+			"capabilities":   map[string]any{"drop": []any{"ALL"}},
+			"seccompProfile": map[string]any{"type": "RuntimeDefault"},
 		},
 		"resources": map[string]any{"limits": map[string]any{"cpu": "1", "memory": "256Mi"}},
 	}

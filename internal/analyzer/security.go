@@ -354,9 +354,18 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 // spec fails. It is shared by the posture report and the enforce_pss_restricted
 // guardrail so the screen and the admission gate cannot disagree about whether one
 // pod meets the standard.
+//
+// seccompProfile was missing from that list, so a workload running the unconfined
+// default — the state of every pod nobody has hardened yet — satisfied all three
+// controls checked here and came out labelled "restricted". That label is what the
+// Pod Security table and the warehouse export use to *drop* a row, so those pods were
+// invisible in the posture report and passed the Deny gate as well. Checking it moves
+// them down to baseline, where their violations are shown.
 func restrictedProfileViolations(ps map[string]any) []string {
 	out := []string{}
-	podRunAsNonRoot := asBool(asAnyMap(ps["securityContext"])["runAsNonRoot"])
+	podSC := asAnyMap(ps["securityContext"])
+	podRunAsNonRoot := asBool(podSC["runAsNonRoot"])
+	podSeccomp := str(asAnyMap(podSC["seccompProfile"])["type"])
 	for _, raw := range SecurityRelevantContainers(ps) {
 		c := asAnyMap(raw)
 		sc := asAnyMap(c["securityContext"])
@@ -375,6 +384,20 @@ func restrictedProfileViolations(ps map[string]any) []string {
 		}
 		if !dropsAll(asAnyMap(sc["capabilities"])) {
 			out = append(out, cname+": capabilities drop ALL 아님")
+		}
+		// Same precedence as runAsNonRoot: the container's own profile wins, and only a
+		// container that declares nothing falls back to the pod's. Restricted accepts
+		// RuntimeDefault or Localhost; the localhostProfile path itself is not our check.
+		seccomp := podSeccomp
+		if t := str(asAnyMap(sc["seccompProfile"])["type"]); t != "" {
+			seccomp = t
+		}
+		switch seccomp {
+		case "RuntimeDefault", "Localhost":
+		case "":
+			out = append(out, cname+": seccompProfile 미설정")
+		default:
+			out = append(out, cname+": seccompProfile="+seccomp)
 		}
 	}
 	return out
