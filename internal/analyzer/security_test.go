@@ -32,7 +32,8 @@ func TestAnalyzeSecurityPodSecurityLevels(t *testing.T) {
 		deployWithPodSpec("default", "hardened", map[string]any{
 			"securityContext": map[string]any{"runAsNonRoot": true},
 			"containers": []any{map[string]any{"name": "c", "image": "x@sha256:abc", "securityContext": map[string]any{
-				"runAsNonRoot": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}}},
+				"runAsNonRoot": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}},
+				"seccompProfile": map[string]any{"type": "RuntimeDefault"}}}},
 		}),
 	}
 	rep := AnalyzeSecurity(items)
