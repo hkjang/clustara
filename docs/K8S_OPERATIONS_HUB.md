@@ -1,8 +1,33 @@
 # K8s Operations Hub
 
-> **버전: v0.9.291** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.292** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.291)
+## 기능 상태 (v0.9.292)
+
+### PSS Restricted 검사가 `seccompProfile` 을 봅니다
+
+`restrictedProfileViolations`(포스처 표와 `enforce_pss_restricted` Deny 게이트가 공유하는 헬퍼)는
+Restricted 통제 중 runAsNonRoot·allowPrivilegeEscalation·capabilities drop ALL 만 보고
+`securityContext.seccompProfile` 은 전혀 읽지 않았습니다. Pod Security Restricted 는 유효 타입이
+`RuntimeDefault` 또는 `Localhost` 여야 하는데, seccomp 를 설정하지 않은 워크로드 — 아직 아무도
+하드닝하지 않은 파드의 기본 상태 — 는 이 헬퍼가 아는 세 통제를 모두 만족해 `Level="restricted"` 로
+분류됐습니다. 그 등급은 파드 시큐리티 표(`admin_ui.go` 의 `filter(p => p.level !== 'restricted')`)와
+DW 내보내기(`admin_k8s_dw.go` 의 `if p.Level != "restricted"`)가 **행을 버리는 데** 쓰는 값이라,
+seccomp 를 적용하지 않은 워크로드가 화면과 DW 에서 보이지 않고 Deny 게이트도 그대로 통과했습니다.
+
+이제 파드의 `securityContext.seccompProfile.type` 을 `podRunAsNonRoot` 처럼 루프 밖에서 한 번 읽고,
+컨테이너가 자신의 타입을 선언했으면 그것이 이기고 아무것도 선언하지 않은 컨테이너만 파드 값으로
+내려갑니다(runAsNonRoot 와 같은 선행 규칙). 유효 타입이 `RuntimeDefault`·`Localhost` 가 아니면
+위반을 컨테이너 이름과 함께 적습니다(`seccompProfile 미설정` / `seccompProfile=<값>`).
+`localhostProfile` 값 자체는 검사하지 않습니다 — PSS 규격이 요구하지 않습니다.
+
+**이번 릴리즈는 신호가 바뀝니다.** 헬퍼를 Deny 게이트가 공유하므로 seccomp 를 설정하지 않은
+워크로드는 `enforce_pss_restricted` 에 새로 막히고, 그런 파드가 restricted 에서 baseline 으로
+내려가는 만큼 포스처 점수가 떨어집니다(`summarize` 가 Baseline 하나당 2점을 뺍니다). 의도된
+변화이지만 적용 폭은 클러스터의 seccomp 미설정 비율에 비례하므로, 그 게이트를 Deny 로 켜 둔
+환경은 올리기 전에 `/admin/k8s/security` 에서 새로 baseline 으로 내려오는 워크로드를 먼저
+확인하십시오. 알림은 늘지 않습니다 — `k8s_notify.go` 는 `level == "privileged"` 만 알립니다.
+DB 스키마 변경은 없습니다.
 
 ### 조용한 시간을 운영자가 지정한 타임존으로 판정합니다
 
