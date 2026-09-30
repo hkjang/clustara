@@ -4,6 +4,31 @@
 
 ## 기능 상태 (v0.9.292)
 
+### notify scan · 이벤트·리비전 조회 실패와 창 포화를 보고합니다
+
+`POST /admin/k8s/notify/scan` 은 장애 상관분석에 쓰는 두 창을
+`events, _ := s.db.ListK8sEvents(ctx, clusterID, 500)` 와
+`revisions, _ := s.db.ListK8sRevisions(..., Limit: 1000)` 로 읽으면서 **오류를 `_` 로 버리고**
+결과가 상한에 찼는지도 보지 않았습니다. DB 조회가 깨져도, 창이 클러스터의 이벤트를 담기에
+작아도 `AnalyzeRCA` 는 빈/부분 이벤트로 돌아가고 응답은 정말 아무 문제 없는 클러스터의 것과
+한 글자도 다르지 않았습니다(`sent: 0`, `truncated: false`). v0.9.290 이 인벤토리에만
+`truncated`·`truncation_notice` 를 붙였고 이 두 창은 그 계약 밖에 남아 있었습니다.
+
+이제 두 조회의 오류를 받아서 응답·감사 로그에 `events_error`·`revisions_error` 로 적고, 실제로
+상관분석에 들어간 개수 `events`·`revisions` 와 포화 여부 `events_truncated`·`revisions_truncated`
+를 함께 보고합니다. 넷 중 하나라도 걸리면 `window_notice` 를 덧붙입니다 — 인벤토리의
+`truncation_notice` 와 같은 결입니다. 기존 `truncated` 는 인벤토리 잘림이라는 의미를 그대로
+유지합니다. 조회가 실패해도 스캔은 계속합니다: 인벤토리만 읽는 보안 분석은 여전히 유효하므로
+알림을 멈추는 대신 **저하된 실행을 깨끗한 실행으로 보고하지 않는** 쪽을 택했습니다.
+
+포화 판정은 "요청한 상한과 같은 개수가 돌아왔다"(`len(events) >= notifyScanEventBudget`)로
+합니다. 인벤토리가 쓰는 "상한보다 한 행 더 요청해 잘림을 감지" 트릭은 여기서는 쓸 수 없습니다 —
+`ListK8sEvents` 는 `boundedLimit(limit, 100, 500)`, `ListK8sRevisions` 는
+`boundedLimit(f.Limit, 100, 1000)` 로 하드 상한을 걸어 501 을 요청해도 조용히 500 으로 깎기
+때문에, 그 응답은 마침 500행이 들어찬 창과 구별되지 않습니다. 스토어 상한과 호출자 요청은
+이번 변경에서 건드리지 않았습니다. 알림 개수·중복 제거·조용한 시간·담당팀 라우팅·딥링크와
+DB 스키마·설정은 그대로이며, 이번 변경은 **보고만** 추가합니다.
+
 ### PSS Restricted 검사가 `seccompProfile` 을 봅니다
 
 `restrictedProfileViolations`(포스처 표와 `enforce_pss_restricted` Deny 게이트가 공유하는 헬퍼)는
