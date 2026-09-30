@@ -142,6 +142,19 @@ func k8sDeepLink(base, clusterID, namespace, kind, name string) string {
 // exercise the truncation path without persisting thousands of rows.
 var notifyScanBudget = 2000
 
+// notifyScanEventBudget and notifyScanRevisionBudget cap the correlation windows the scan reads.
+// Vars for the same reason as notifyScanBudget.
+//
+// These deliberately match the store's own hard ceilings (ListK8sEvents clamps to 500,
+// ListK8sRevisions to 1000), which is also why the trick the inventory fetch uses — ask for one row
+// past the budget and treat the extra row as proof of truncation — cannot be copied here: a request
+// for 501 comes back clamped to 500 and is indistinguishable from a window that happened to hold
+// exactly 500 rows. Saturation is therefore inferred from the window coming back full.
+var (
+	notifyScanEventBudget    = 500
+	notifyScanRevisionBudget = 1000
+)
+
 // notifyScanKinds is the union of the kinds the two analyses this scan runs actually read.
 //
 // The fetch used to take rows of any kind ordered by updated_at. On a cluster whose churn is
@@ -192,9 +205,6 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		items = items[:notifyScanBudget]
 	}
-	events, _ := s.db.ListK8sEvents(r.Context(), clusterID, 500)
-	revisions, _ := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Limit: 1000})
-
 	now := time.Now()
 	quiet := s.flagValue(r.Context(), "k8s_quiet_hours")
 	teamChannels := s.flagValue(r.Context(), "mattermost_team_channels")
@@ -215,6 +225,33 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, out)
 		return
+	}
+
+	// The two correlation windows. Their errors used to go to `_` and their sizes were never
+	// reported, so a failed lookup and a window too small to hold the cluster's rows both left
+	// AnalyzeRCA correlating against nothing and produced a healthy cluster's response byte for
+	// byte: `sent: 0`, `truncated: false`, no hint that half the input was missing. Nobody reads
+	// this endpoint's output, so the only symptom was an alert that never fired.
+	events, eventsErr := s.db.ListK8sEvents(r.Context(), clusterID, notifyScanEventBudget)
+	revisions, revisionsErr := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Limit: notifyScanRevisionBudget})
+	// A full window means rows were very likely dropped; see notifyScanEventBudget for why this is
+	// inferred from the count rather than detected with an extra row like the inventory fetch does.
+	window := map[string]any{
+		"events": len(events), "revisions": len(revisions),
+		"events_truncated":    len(events) >= notifyScanEventBudget,
+		"revisions_truncated": len(revisions) >= notifyScanRevisionBudget,
+	}
+	if eventsErr != nil {
+		window["events_error"] = eventsErr.Error()
+	}
+	if revisionsErr != nil {
+		window["revisions_error"] = revisionsErr.Error()
+	}
+	// The scan continues either way: the security half runs off inventory alone and is still valid.
+	// What must not happen is reporting the degraded run as a clean one.
+	if window["events_error"] != nil || window["revisions_error"] != nil ||
+		window["events_truncated"] == true || window["revisions_truncated"] == true {
+		window["window_notice"] = "장애 상관분석에 쓰는 이벤트·리비전 조회가 실패했거나 상한에 찼습니다. 창 밖 이벤트·설정 변경은 상관분석에 반영되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하고, 오류가 있으면 수집기·DB 상태를 확인하세요."
 	}
 
 	rca := analyzer.AnalyzeRCA(items, events)
@@ -275,7 +312,11 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 			p.Namespace, p.Kind, p.Name,
 			"보안[high] Privileged 워크로드 — "+p.Namespace+"/"+p.Kind+"/"+p.Name+"\n"+strings.Join(p.Violations, ", "))
 	}
-	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(map[string]any{"cluster_id": clusterID, "sent": sent, "undeliverable": undeliverable, "resources": len(items), "truncated": truncated}))
+	audit := map[string]any{"cluster_id": clusterID, "sent": sent, "undeliverable": undeliverable, "resources": len(items), "truncated": truncated}
+	for k, v := range window {
+		audit[k] = v
+	}
+	s.auditAdmin(r, "k8s.notify.scan", "", auditJSON(audit))
 	// undeliverable counts findings left unsent because Mattermost is off, unconfigured or the
 	// category is muted — they keep their dedup window and notify on the next scan once it works.
 	out := map[string]any{
@@ -285,6 +326,10 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	// Report the clock even when nothing was suppressed, so an operator checking why a window never
 	// fires can see which timezone the scan read rather than having to guess the container's.
 	for k, v := range clock {
+		out[k] = v
+	}
+	// Same facts the audit entry carries: how much of each correlation window the scan actually read.
+	for k, v := range window {
 		out[k] = v
 	}
 	// A truncated scan reports `sent: 0` exactly as a clean cluster does, so say which one it was:
