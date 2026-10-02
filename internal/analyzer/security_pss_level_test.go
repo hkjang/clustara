@@ -68,7 +68,19 @@ func TestPodSecurityLevelNamesTheWeakestAdmittingProfile(t *testing.T) {
 			evidence: "SYS_ADMIN",
 		},
 		{
-			why: "NET_BIND_SERVICE is the one capability Baseline allows",
+			// Baseline's capability control permits the whole default container set, not
+			// just NET_BIND_SERVICE: a workload that adds CHOWN back fails Restricted
+			// (which allows NET_BIND_SERVICE alone) and nothing more.
+			why: "a capability inside the Baseline allow-list fails Restricted only",
+			mutate: func(ps map[string]any) {
+				caps := asAnyMap(asAnyMap(asAnyMap(asAnySlice(ps["containers"])[0])["securityContext"])["capabilities"])
+				caps["add"] = []any{"CHOWN"}
+			},
+			want:     "baseline",
+			evidence: "CHOWN",
+		},
+		{
+			why: "NET_BIND_SERVICE is the one added capability Restricted still allows",
 			mutate: func(ps map[string]any) {
 				caps := asAnyMap(asAnyMap(asAnyMap(asAnySlice(ps["containers"])[0])["securityContext"])["capabilities"])
 				caps["add"] = []any{"NET_BIND_SERVICE"}
@@ -95,12 +107,43 @@ func TestPodSecurityLevelNamesTheWeakestAdmittingProfile(t *testing.T) {
 			evidence: "runAsUser=0",
 		},
 		{
-			why: "seccompProfile=Unconfined fails Restricted but not Baseline",
+			// Baseline's Seccomp control is "must not be explicitly set to Unconfined";
+			// leaving it undefined is permitted there and fails Restricted alone.
+			why: "seccompProfile unset fails Restricted but not Baseline",
+			mutate: func(ps map[string]any) {
+				delete(asAnyMap(asAnyMap(asAnySlice(ps["containers"])[0])["securityContext"]), "seccompProfile")
+			},
+			want:     "baseline",
+			evidence: "seccompProfile 미설정",
+		},
+		{
+			why: "an explicit seccompProfile=Unconfined fails Baseline",
 			mutate: func(ps map[string]any) {
 				asAnyMap(asAnyMap(asAnySlice(ps["containers"])[0])["securityContext"])["seccompProfile"] = map[string]any{"type": "Unconfined"}
 			},
-			want:     "baseline",
+			want:     "privileged",
 			evidence: "seccompProfile=Unconfined",
+		},
+		{
+			// Same precedence as every other container control: a container that declares
+			// no profile of its own inherits the pod's Unconfined one, so the Baseline
+			// failure is the pod's.
+			why: "a pod-level seccompProfile=Unconfined inherited by the container fails Baseline",
+			mutate: func(ps map[string]any) {
+				delete(asAnyMap(asAnyMap(asAnySlice(ps["containers"])[0])["securityContext"]), "seccompProfile")
+				asAnyMap(ps["securityContext"])["seccompProfile"] = map[string]any{"type": "Unconfined"}
+			},
+			want:     "privileged",
+			evidence: "seccompProfile=Unconfined",
+		},
+		{
+			// A container profile overrides the pod's, so RuntimeDefault on the container
+			// clears the Baseline failure the pod-level Unconfined would otherwise be.
+			why: "a container seccompProfile=RuntimeDefault overrides the pod's Unconfined",
+			mutate: func(ps map[string]any) {
+				asAnyMap(ps["securityContext"])["seccompProfile"] = map[string]any{"type": "Unconfined"}
+			},
+			want: "restricted",
 		},
 	}
 	for _, tc := range cases {

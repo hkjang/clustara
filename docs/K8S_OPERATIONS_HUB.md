@@ -17,22 +17,44 @@ Pod Security Standards 의 등급은 파드가 **깨뜨린 통제의 목록**이
 파일시스템을 마운트한 DaemonSet 이나 `SYS_ADMIN` 을 쥔 컨테이너는 **알림이 한 번도 나가지
 않았고**, DW 에는 Baseline 을 만족하는 워크로드의 낮은 심각도로 적혔습니다.
 
-이제 버킷을 세 개로 분리해 `hostLevel`(host namespace·privileged 컨테이너)과
-`failsBaseline`(hostPath·hostPort·허용 목록 밖 capability)은 `privileged` 로,
-`failsRestricted`(runAsNonRoot·allowPrivilegeEscalation·drop ALL·seccompProfile·runAsUser=0)만
-걸린 파드는 `baseline` 으로, 아무것도 걸리지 않은 파드는 `restricted` 로 등급을 매깁니다.
+이제 버킷을 세 개로 분리해 등급을 매깁니다. 통제별로 어느 버킷에 들어가는지는 PSS 가 그 통제를
+어느 프로파일에서 금지하는지로 정해집니다.
+
+| 등급 | 버킷 | 통제 |
+| --- | --- | --- |
+| `privileged` | `hostLevel` | `hostNetwork`·`hostPID`·`hostIPC`, 컨테이너 `privileged=true` |
+| `privileged` | `failsBaseline` | hostPath 볼륨, `hostPort`, **Baseline 허용 목록 밖**의 추가 capability, 명시적 `seccompProfile.type=Unconfined` |
+| `baseline` | `failsRestricted` | `runAsNonRoot` 미설정/false, `allowPrivilegeEscalation!=false`, `capabilities` drop ALL 아님, `seccompProfile` **미설정**, `runAsUser=0`, **Baseline 허용 목록 안**의 추가 capability |
+| `restricted` | — | 위 어느 것도 걸리지 않음 |
+
+경계를 가르는 두 줄이 PSS 원문과 어긋나기 쉬우므로 명시합니다.
+
+- **capability**: Baseline 은 기본 컨테이너 집합의 재추가를 허용합니다 —
+  `AUDIT_WRITE`·`CHOWN`·`DAC_OVERRIDE`·`FOWNER`·`FSETID`·`KILL`·`MKNOD`·`NET_BIND_SERVICE`·
+  `SETFCAP`·`SETGID`·`SETPCAP`·`SETUID`·`SYS_CHROOT`. 그래서 `CHOWN` 이나 `SETUID` 를 더한
+  워크로드는 **`baseline`** 이고 알림 대상이 아닙니다. Restricted 는 `NET_BIND_SERVICE` 하나만
+  허용하므로 `NET_BIND_SERVICE` 외의 이 목록 안 capability 는 Restricted 만 깨뜨립니다.
+  `SYS_ADMIN`·`NET_ADMIN` 처럼 목록 밖이면 Baseline 실패이므로 `privileged` 입니다.
+- **seccompProfile**: Baseline 통제는 "명시적으로 `Unconfined` 로 두지 말 것"입니다(허용값
+  미설정·`RuntimeDefault`·`Localhost`). 따라서 `Unconfined` 를 **명시한** 파드는 `privileged`,
+  아무것도 **설정하지 않은** 파드는 Restricted 만 깨뜨려 `baseline` 입니다. 컨테이너의 프로파일이
+  파드의 것을 덮으므로, 판정은 다른 컨테이너 통제와 같은 우선순위를 따릅니다.
+
 `runAsUser=0` 은 이 변경에서 Baseline 버킷에서 Restricted 버킷으로 옮겼습니다 — Baseline 은 root
 실행을 금지하지 않고 Restricted 가 `runAsNonRoot` 로 금지하며, root 는 하드닝하지 않은 워크로드의
 기본 상태이므로 Baseline 실패로 셌다면 전 함대가 `privileged` 로 올라가 알림이 폭주합니다.
 `Violations` 문자열과 `restrictedProfileViolations`(Deny 게이트 공용 헬퍼)의 판정 내용은
-바뀌지 않았습니다.
+바뀌지 않았습니다 — 프로파일은 누적이므로 Baseline 이 금지하는 것은 Restricted 실패이기도 해서
+Deny 게이트가 보는 목록은 그대로입니다.
 
-**이번 릴리즈는 신호가 바뀝니다.** hostPath·hostPort·추가 capability 워크로드가 `baseline` 에서
-`privileged` 로 올라가므로 (1) 그 워크로드가 **새로 알림을 받습니다**(dedup 창 6시간, 워크로드당
-1건), (2) 포스처 점수가 더 떨어집니다(`summarize` 는 Privileged 8점, Baseline 2점), (3) DW 의
+**이번 릴리즈는 신호가 바뀝니다.** hostPath·hostPort·허용 목록 밖 capability·명시적
+`seccompProfile=Unconfined` 워크로드가 `baseline` 에서 `privileged` 로 올라가므로 (1) 그
+워크로드가 **새로 알림을 받습니다**(dedup 창 6시간, 워크로드당 1건), (2) 포스처 점수가 더
+떨어집니다(`summarize` 는 Privileged 8점, Baseline 2점), (3) DW 의
 `pod-security-*` fact 이름과 심각도가 그만큼 올라갑니다. hostPath 는 로그·모니터링 DaemonSet 에서
 흔하므로, 올리기 전에 `/admin/k8s/security` 에서 새로 privileged 로 올라오는 워크로드를 먼저
-확인하십시오. `/admin/k8s/runtime-security`(CLU-OCP-03 `ScorePodSecurity`)는 PSS 분류가 아니라
+확인하십시오. 위 네 가지가 범위 전체입니다 — `CHOWN` 류 capability 추가나 seccomp 미설정만으로는
+등급이 올라가지 않습니다. `/admin/k8s/runtime-security`(CLU-OCP-03 `ScorePodSecurity`)는 PSS 분류가 아니라
 위험 점수 휴리스틱이라는 다른 계약이므로 이번 변경에서 건드리지 않았고, 두 화면은 hostPath 파드의
 프로파일을 다르게 표시합니다. DB 스키마·설정 변경은 없습니다.
 
