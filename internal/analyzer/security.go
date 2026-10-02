@@ -273,23 +273,26 @@ func PodRunsAsRoot(ps map[string]any) bool {
 
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
 	res := PodSecurityResult{ClusterID: it.ClusterID, Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
-	priv := []string{}       // privileged-level violations (worst)
-	baseline := []string{}   // baseline-level violations
-	restricted := []string{} // restricted-level violations
+	// The three buckets are the profile each violation breaks, worst first. hostLevel is
+	// kept apart from the rest of the Baseline failures only so the violation list reads
+	// worst-first; both mean the same thing for the level.
+	hostLevel := []string{}       // host namespaces / privileged containers
+	failsBaseline := []string{}   // controls the Baseline profile itself forbids
+	failsRestricted := []string{} // controls only Restricted adds on top of Baseline
 
 	if asBool(ps["hostNetwork"]) {
-		priv = append(priv, "hostNetwork=true")
+		hostLevel = append(hostLevel, "hostNetwork=true")
 	}
 	if asBool(ps["hostPID"]) {
-		priv = append(priv, "hostPID=true")
+		hostLevel = append(hostLevel, "hostPID=true")
 	}
 	if asBool(ps["hostIPC"]) {
-		priv = append(priv, "hostIPC=true")
+		hostLevel = append(hostLevel, "hostIPC=true")
 	}
 	for _, raw := range asAnySlice(ps["volumes"]) {
 		v := asAnyMap(raw)
 		if _, ok := v["hostPath"]; ok {
-			baseline = append(baseline, "hostPath volume")
+			failsBaseline = append(failsBaseline, "hostPath volume")
 			break
 		}
 	}
@@ -297,52 +300,80 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 	containers := SecurityRelevantContainers(ps)
 	podSC := asAnyMap(ps["securityContext"])
 
-	restricted = append(restricted, restrictedProfileViolations(ps)...)
+	// The per-container profile controls carry their own level: an explicitly Unconfined
+	// seccomp profile is a Baseline failure, while leaving it undefined — like every other
+	// control in that helper — is only forbidden by Restricted.
+	for _, v := range containerProfileViolations(ps) {
+		if v.failsBaseline {
+			failsBaseline = append(failsBaseline, v.msg)
+		} else {
+			failsRestricted = append(failsRestricted, v.msg)
+		}
+	}
 
 	for _, raw := range containers {
 		c := asAnyMap(raw)
 		sc := asAnyMap(c["securityContext"])
 		cname := str(c["name"])
 		if asBool(sc["privileged"]) {
-			priv = append(priv, cname+": privileged=true")
+			hostLevel = append(hostLevel, cname+": privileged=true")
 		}
 		// Root is inherited from the pod unless the container overrides it. Reading the
 		// container alone left the most common root workload — `spec.securityContext.
 		// runAsUser: 0` with containers that declare nothing — with no violation at all.
+		//
+		// Baseline does not prohibit running as root; only Restricted does, through
+		// runAsNonRoot. So this belongs in the Restricted bucket — and it has to, because
+		// root is the state of nearly every unhardened workload, and counting it as a
+		// Baseline failure would mean labelling the whole fleet "privileged".
 		if uid, set := EffectiveRunAsUser(podSC, sc); set && uid == 0 {
 			if _, own := EffectiveRunAsUser(nil, sc); own {
-				baseline = append(baseline, cname+": runAsUser=0")
+				failsRestricted = append(failsRestricted, cname+": runAsUser=0")
 			} else {
-				baseline = append(baseline, cname+": runAsUser=0 (Pod securityContext 상속)")
+				failsRestricted = append(failsRestricted, cname+": runAsUser=0 (Pod securityContext 상속)")
 			}
 		}
+		// The two profiles draw this line in different places and the bucket decides the
+		// level. Baseline permits the whole default container capability set to be added
+		// back; Restricted narrows that to NET_BIND_SERVICE alone. Judging every add
+		// against the Restricted allow-list promoted a hardened workload that asks for
+		// CHOWN — or SETUID, or KILL — all the way to "privileged", which is the same
+		// false page as the one runAsUser=0 would have produced.
 		for _, ad := range stringSlice(asAnyMap(sc["capabilities"])["add"]) {
-			if up := strings.ToUpper(ad); up != "NET_BIND_SERVICE" {
-				baseline = append(baseline, cname+": 추가 capability "+up)
+			up := strings.ToUpper(ad)
+			switch {
+			case up == "NET_BIND_SERVICE":
+			case baselineCapabilities[up]:
+				failsRestricted = append(failsRestricted, cname+": 추가 capability "+up)
+			default:
+				failsBaseline = append(failsBaseline, cname+": 추가 capability "+up)
 			}
 		}
 		// hostPort
 		for _, p := range asAnySlice(c["ports"]) {
 			if numVal(asAnyMap(p)["hostPort"]) > 0 {
-				baseline = append(baseline, cname+": hostPort 사용")
+				failsBaseline = append(failsBaseline, cname+": hostPort 사용")
 			}
 		}
 	}
 
-	res.Violations = append(append(append([]string{}, priv...), baseline...), restricted...)
-	// Pod Security Standards are cumulative: a workload is at the Restricted level only
-	// when it satisfies the Restricted controls too. Ranking on priv/baseline alone
-	// labelled every pod that merely avoided host namespaces and privileged=true as
-	// "restricted" — which is nearly every unhardened pod, since running as root with
-	// the default capability set violates nothing at the baseline level. That label is
-	// the one thing consumers key on: the Pod Security table drops `level === 'restricted'`
-	// rows, the warehouse export skips them, and the summary counts them as the goal
-	// state. So the pods with the least hardening were reported as the most hardened and
-	// their violations — already computed, right here in res.Violations — were never shown.
+	res.Violations = append(append(append([]string{}, hostLevel...), failsBaseline...), failsRestricted...)
+	// Pod Security Standards are cumulative, and the level names the *weakest policy that
+	// still admits the pod* — not the list of controls it breaks. So a pod that fails a
+	// Baseline control is admitted only by the Privileged policy, whatever else it got right.
+	//
+	// Both halves of that were wrong here. A pod that failed nothing but a Restricted
+	// control came out "restricted" — the goal state — which is what the Pod Security table
+	// and the warehouse export use to *drop* a row, so the least hardened pods were reported
+	// as the most hardened. Fixing that moved them to "baseline", but it left the genuine
+	// Baseline failures — a hostPath volume, a hostPort, a capability outside the Baseline
+	// allow-list — in that same "baseline" bucket, asserting those pods meet a profile they
+	// do not. The notify scan pages on "privileged" and nothing else, so a DaemonSet mounting
+	// the host filesystem or a container holding SYS_ADMIN never produced an alert at all.
 	switch {
-	case len(priv) > 0:
+	case len(hostLevel) > 0, len(failsBaseline) > 0:
 		res.Level = "privileged"
-	case len(baseline) > 0, len(restricted) > 0:
+	case len(failsRestricted) > 0:
 		res.Level = "baseline"
 	default:
 		res.Level = "restricted"
@@ -350,19 +381,45 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 	return res
 }
 
-// restrictedProfileViolations lists the Pod Security "Restricted" controls this pod
-// spec fails. It is shared by the posture report and the enforce_pss_restricted
-// guardrail so the screen and the admission gate cannot disagree about whether one
-// pod meets the standard.
+// baselineCapabilities is the set of capabilities the Pod Security "Baseline" profile
+// lets a container add back — the default container set, minus the ones that hand over
+// the node. Adding any of these fails Restricted (it allows NET_BIND_SERVICE only) but
+// is admitted by Baseline; adding anything outside the set fails Baseline itself.
+var baselineCapabilities = map[string]bool{
+	"AUDIT_WRITE": true, "CHOWN": true, "DAC_OVERRIDE": true, "FOWNER": true,
+	"FSETID": true, "KILL": true, "MKNOD": true, "NET_BIND_SERVICE": true,
+	"SETFCAP": true, "SETGID": true, "SETPCAP": true, "SETUID": true,
+	"SYS_CHROOT": true,
+}
+
+// profileViolation is one failed control together with the weakest profile that still
+// forbids it. Almost everything checked below is Restricted-only, but the Baseline
+// profile has its own say about seccomp, and classifyPodSecurity has to tell the two
+// apart to name the level — while the Deny gate, which enforces Restricted, wants both.
+type profileViolation struct {
+	msg           string
+	failsBaseline bool
+}
+
+// containerProfileViolations lists the per-container Pod Security controls this pod spec
+// fails, each tagged with the profile it breaks. restrictedProfileViolations flattens it
+// for the posture report and the enforce_pss_restricted guardrail; classifyPodSecurity
+// buckets it by level.
 //
 // seccompProfile was missing from that list, so a workload running the unconfined
 // default — the state of every pod nobody has hardened yet — satisfied all three
 // controls checked here and came out labelled "restricted". That label is what the
 // Pod Security table and the warehouse export use to *drop* a row, so those pods were
-// invisible in the posture report and passed the Deny gate as well. Checking it moves
-// them down to baseline, where their violations are shown.
-func restrictedProfileViolations(ps map[string]any) []string {
-	out := []string{}
+// invisible in the posture report and passed the Deny gate as well.
+//
+// The two seccomp states are not the same violation, though. Baseline's control is
+// "must not be explicitly set to Unconfined" — undefined is allowed there, and only
+// Restricted insists on an explicit RuntimeDefault or Localhost. Reporting both as
+// Restricted-only left an explicitly Unconfined pod at level "baseline", so it never
+// reached the notify scan's `level == "privileged"` filter: the very gap the rest of
+// this function's level work was closing stayed open on this one control.
+func containerProfileViolations(ps map[string]any) []profileViolation {
+	out := []profileViolation{}
 	podSC := asAnyMap(ps["securityContext"])
 	podRunAsNonRoot := asBool(podSC["runAsNonRoot"])
 	podSeccomp := str(asAnyMap(podSC["seccompProfile"])["type"])
@@ -374,16 +431,16 @@ func restrictedProfileViolations(ps map[string]any) []string {
 		// container means that container runs as root however the pod is configured.
 		if set, ok := sc["runAsNonRoot"].(bool); ok {
 			if !set {
-				out = append(out, cname+": runAsNonRoot=false (Pod 설정을 덮어씀)")
+				out = append(out, profileViolation{msg: cname + ": runAsNonRoot=false (Pod 설정을 덮어씀)"})
 			}
 		} else if !podRunAsNonRoot {
-			out = append(out, cname+": runAsNonRoot 미설정")
+			out = append(out, profileViolation{msg: cname + ": runAsNonRoot 미설정"})
 		}
 		if !hasKey(sc, "allowPrivilegeEscalation") || asBool(sc["allowPrivilegeEscalation"]) {
-			out = append(out, cname+": allowPrivilegeEscalation!=false")
+			out = append(out, profileViolation{msg: cname + ": allowPrivilegeEscalation!=false"})
 		}
 		if !dropsAll(asAnyMap(sc["capabilities"])) {
-			out = append(out, cname+": capabilities drop ALL 아님")
+			out = append(out, profileViolation{msg: cname + ": capabilities drop ALL 아님"})
 		}
 		// Same precedence as runAsNonRoot: the container's own profile wins, and only a
 		// container that declares nothing falls back to the pod's. Restricted accepts
@@ -395,10 +452,29 @@ func restrictedProfileViolations(ps map[string]any) []string {
 		switch seccomp {
 		case "RuntimeDefault", "Localhost":
 		case "":
-			out = append(out, cname+": seccompProfile 미설정")
+			out = append(out, profileViolation{msg: cname + ": seccompProfile 미설정"})
+		case "Unconfined":
+			// The one control here that Baseline forbids too, so it alone sets the level
+			// to privileged. The API server admits no other value, so the branch below
+			// stays Restricted-only rather than guessing at a profile PSS does not name.
+			out = append(out, profileViolation{msg: cname + ": seccompProfile=Unconfined", failsBaseline: true})
 		default:
-			out = append(out, cname+": seccompProfile="+seccomp)
+			out = append(out, profileViolation{msg: cname + ": seccompProfile=" + seccomp})
 		}
+	}
+	return out
+}
+
+// restrictedProfileViolations lists the Pod Security "Restricted" controls this pod spec
+// fails. It is shared by the posture report and the enforce_pss_restricted guardrail so
+// the screen and the admission gate cannot disagree about whether one pod meets the
+// standard. The profiles are cumulative, so everything Baseline forbids is a Restricted
+// failure as well and the tags above make no difference to this caller.
+func restrictedProfileViolations(ps map[string]any) []string {
+	violations := containerProfileViolations(ps)
+	out := make([]string, 0, len(violations))
+	for _, v := range violations {
+		out = append(out, v.msg)
 	}
 	return out
 }

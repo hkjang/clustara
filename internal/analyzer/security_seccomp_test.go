@@ -30,6 +30,13 @@ func seccompPodSpec(podType, containerType string) map[string]any {
 // profile at all was reported at the strictest tier — and `level === 'restricted'` is
 // the value the Pod Security table and the warehouse export use to *drop* a row, so
 // the workloads still running the unconfined default were the ones nobody could see.
+//
+// The posture level is a separate judgement from "fails Restricted", so each case
+// states it rather than deriving it from `violates`. Deriving it asserted that every
+// seccomp failure lands on "baseline", which is wrong in one direction that matters:
+// Baseline's own control is "must not be explicitly set to Unconfined", so an
+// explicitly Unconfined pod is admitted by the Privileged policy alone. Leaving the
+// profile undefined is the Restricted-only half.
 func TestRestrictedProfileChecksSeccompProfile(t *testing.T) {
 	cases := []struct {
 		why           string
@@ -37,15 +44,16 @@ func TestRestrictedProfileChecksSeccompProfile(t *testing.T) {
 		containerType string
 		violates      bool
 		detail        string
+		wantLevel     string
 	}{
-		{"neither pod nor container declares a profile", "", "", true, "seccompProfile 미설정"},
-		{"pod RuntimeDefault is inherited by a silent container", "RuntimeDefault", "", false, ""},
-		{"pod Localhost is inherited too", "Localhost", "", false, ""},
-		{"pod Unconfined is inherited by a silent container", "Unconfined", "", true, "seccompProfile=Unconfined"},
-		{"container Unconfined overrides a compliant pod", "RuntimeDefault", "Unconfined", true, "seccompProfile=Unconfined"},
-		{"container RuntimeDefault overrides an Unconfined pod", "Unconfined", "RuntimeDefault", false, ""},
-		{"container Localhost with no pod setting", "", "Localhost", false, ""},
-		{"container Unconfined with no pod setting", "", "Unconfined", true, "seccompProfile=Unconfined"},
+		{"neither pod nor container declares a profile", "", "", true, "seccompProfile 미설정", "baseline"},
+		{"pod RuntimeDefault is inherited by a silent container", "RuntimeDefault", "", false, "", "restricted"},
+		{"pod Localhost is inherited too", "Localhost", "", false, "", "restricted"},
+		{"pod Unconfined is inherited by a silent container", "Unconfined", "", true, "seccompProfile=Unconfined", "privileged"},
+		{"container Unconfined overrides a compliant pod", "RuntimeDefault", "Unconfined", true, "seccompProfile=Unconfined", "privileged"},
+		{"container RuntimeDefault overrides an Unconfined pod", "Unconfined", "RuntimeDefault", false, "", "restricted"},
+		{"container Localhost with no pod setting", "", "Localhost", false, "", "restricted"},
+		{"container Unconfined with no pod setting", "", "Unconfined", true, "seccompProfile=Unconfined", "privileged"},
 	}
 	for _, tc := range cases {
 		ps := seccompPodSpec(tc.podType, tc.containerType)
@@ -62,12 +70,8 @@ func TestRestrictedProfileChecksSeccompProfile(t *testing.T) {
 			t.Fatalf("%s: expected one pod security row, got %d", tc.why, len(rep.PodSecurity))
 		}
 		p := rep.PodSecurity[0]
-		wantLevel := "restricted"
-		if tc.violates {
-			wantLevel = "baseline"
-		}
-		if p.Level != wantLevel {
-			t.Errorf("%s: level %q, want %q (violations %v)", tc.why, p.Level, wantLevel, p.Violations)
+		if p.Level != tc.wantLevel {
+			t.Errorf("%s: level %q, want %q (violations %v)", tc.why, p.Level, tc.wantLevel, p.Violations)
 		}
 		if tc.violates && !strings.Contains(strings.Join(p.Violations, ", "), tc.detail) {
 			t.Errorf("%s: posture violations %v should cite %q", tc.why, p.Violations, tc.detail)
