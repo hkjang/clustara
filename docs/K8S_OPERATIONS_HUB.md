@@ -4,6 +4,38 @@
 
 ## 기능 상태 (v0.9.293)
 
+### Pod Security 등급이 "그 파드를 허용하는 가장 약한 프로파일" 을 가리킵니다
+
+Pod Security Standards 의 등급은 파드가 **깨뜨린 통제의 목록**이 아니라 **그 파드를 그래도
+허용하는 가장 약한 정책**의 이름입니다. 그래서 Baseline 통제를 하나라도 깨뜨린 파드는 다른 것을
+아무리 잘 지켰더라도 Privileged 정책만이 허용합니다.
+
+`classifyPodSecurity` 는 Baseline 이 금지하는 통제(hostPath 볼륨, hostPort, Baseline 허용 목록
+밖의 capability)와 Restricted 가 추가로 요구하는 통제를 **같은 버킷**에 모아 놓고 결과를
+`Level="baseline"` 으로 적었습니다 — 만족하지 않는 프로파일을 만족한다고 말한 것입니다. 이 등급은
+장식이 아닙니다: `k8s_notify.go` 는 `level == "privileged"` 인 워크로드만 알리므로, 호스트
+파일시스템을 마운트한 DaemonSet 이나 `SYS_ADMIN` 을 쥔 컨테이너는 **알림이 한 번도 나가지
+않았고**, DW 에는 Baseline 을 만족하는 워크로드의 낮은 심각도로 적혔습니다.
+
+이제 버킷을 세 개로 분리해 `hostLevel`(host namespace·privileged 컨테이너)과
+`failsBaseline`(hostPath·hostPort·허용 목록 밖 capability)은 `privileged` 로,
+`failsRestricted`(runAsNonRoot·allowPrivilegeEscalation·drop ALL·seccompProfile·runAsUser=0)만
+걸린 파드는 `baseline` 으로, 아무것도 걸리지 않은 파드는 `restricted` 로 등급을 매깁니다.
+`runAsUser=0` 은 이 변경에서 Baseline 버킷에서 Restricted 버킷으로 옮겼습니다 — Baseline 은 root
+실행을 금지하지 않고 Restricted 가 `runAsNonRoot` 로 금지하며, root 는 하드닝하지 않은 워크로드의
+기본 상태이므로 Baseline 실패로 셌다면 전 함대가 `privileged` 로 올라가 알림이 폭주합니다.
+`Violations` 문자열과 `restrictedProfileViolations`(Deny 게이트 공용 헬퍼)의 판정 내용은
+바뀌지 않았습니다.
+
+**이번 릴리즈는 신호가 바뀝니다.** hostPath·hostPort·추가 capability 워크로드가 `baseline` 에서
+`privileged` 로 올라가므로 (1) 그 워크로드가 **새로 알림을 받습니다**(dedup 창 6시간, 워크로드당
+1건), (2) 포스처 점수가 더 떨어집니다(`summarize` 는 Privileged 8점, Baseline 2점), (3) DW 의
+`pod-security-*` fact 이름과 심각도가 그만큼 올라갑니다. hostPath 는 로그·모니터링 DaemonSet 에서
+흔하므로, 올리기 전에 `/admin/k8s/security` 에서 새로 privileged 로 올라오는 워크로드를 먼저
+확인하십시오. `/admin/k8s/runtime-security`(CLU-OCP-03 `ScorePodSecurity`)는 PSS 분류가 아니라
+위험 점수 휴리스틱이라는 다른 계약이므로 이번 변경에서 건드리지 않았고, 두 화면은 hostPath 파드의
+프로파일을 다르게 표시합니다. DB 스키마·설정 변경은 없습니다.
+
 ### notify scan · 이벤트·리비전 조회 실패와 창 포화를 보고합니다
 
 `POST /admin/k8s/notify/scan` 은 장애 상관분석에 쓰는 두 창을

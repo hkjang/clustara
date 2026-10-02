@@ -273,23 +273,26 @@ func PodRunsAsRoot(ps map[string]any) bool {
 
 func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecurityResult {
 	res := PodSecurityResult{ClusterID: it.ClusterID, Namespace: it.Namespace, Kind: it.Kind, Name: it.Name}
-	priv := []string{}       // privileged-level violations (worst)
-	baseline := []string{}   // baseline-level violations
-	restricted := []string{} // restricted-level violations
+	// The three buckets are the profile each violation breaks, worst first. hostLevel is
+	// kept apart from the rest of the Baseline failures only so the violation list reads
+	// worst-first; both mean the same thing for the level.
+	hostLevel := []string{}       // host namespaces / privileged containers
+	failsBaseline := []string{}   // controls the Baseline profile itself forbids
+	failsRestricted := []string{} // controls only Restricted adds on top of Baseline
 
 	if asBool(ps["hostNetwork"]) {
-		priv = append(priv, "hostNetwork=true")
+		hostLevel = append(hostLevel, "hostNetwork=true")
 	}
 	if asBool(ps["hostPID"]) {
-		priv = append(priv, "hostPID=true")
+		hostLevel = append(hostLevel, "hostPID=true")
 	}
 	if asBool(ps["hostIPC"]) {
-		priv = append(priv, "hostIPC=true")
+		hostLevel = append(hostLevel, "hostIPC=true")
 	}
 	for _, raw := range asAnySlice(ps["volumes"]) {
 		v := asAnyMap(raw)
 		if _, ok := v["hostPath"]; ok {
-			baseline = append(baseline, "hostPath volume")
+			failsBaseline = append(failsBaseline, "hostPath volume")
 			break
 		}
 	}
@@ -297,52 +300,60 @@ func classifyPodSecurity(it store.K8sInventoryItem, ps map[string]any) PodSecuri
 	containers := SecurityRelevantContainers(ps)
 	podSC := asAnyMap(ps["securityContext"])
 
-	restricted = append(restricted, restrictedProfileViolations(ps)...)
+	failsRestricted = append(failsRestricted, restrictedProfileViolations(ps)...)
 
 	for _, raw := range containers {
 		c := asAnyMap(raw)
 		sc := asAnyMap(c["securityContext"])
 		cname := str(c["name"])
 		if asBool(sc["privileged"]) {
-			priv = append(priv, cname+": privileged=true")
+			hostLevel = append(hostLevel, cname+": privileged=true")
 		}
 		// Root is inherited from the pod unless the container overrides it. Reading the
 		// container alone left the most common root workload — `spec.securityContext.
 		// runAsUser: 0` with containers that declare nothing — with no violation at all.
+		//
+		// Baseline does not prohibit running as root; only Restricted does, through
+		// runAsNonRoot. So this belongs in the Restricted bucket — and it has to, because
+		// root is the state of nearly every unhardened workload, and counting it as a
+		// Baseline failure would mean labelling the whole fleet "privileged".
 		if uid, set := EffectiveRunAsUser(podSC, sc); set && uid == 0 {
 			if _, own := EffectiveRunAsUser(nil, sc); own {
-				baseline = append(baseline, cname+": runAsUser=0")
+				failsRestricted = append(failsRestricted, cname+": runAsUser=0")
 			} else {
-				baseline = append(baseline, cname+": runAsUser=0 (Pod securityContext 상속)")
+				failsRestricted = append(failsRestricted, cname+": runAsUser=0 (Pod securityContext 상속)")
 			}
 		}
 		for _, ad := range stringSlice(asAnyMap(sc["capabilities"])["add"]) {
 			if up := strings.ToUpper(ad); up != "NET_BIND_SERVICE" {
-				baseline = append(baseline, cname+": 추가 capability "+up)
+				failsBaseline = append(failsBaseline, cname+": 추가 capability "+up)
 			}
 		}
 		// hostPort
 		for _, p := range asAnySlice(c["ports"]) {
 			if numVal(asAnyMap(p)["hostPort"]) > 0 {
-				baseline = append(baseline, cname+": hostPort 사용")
+				failsBaseline = append(failsBaseline, cname+": hostPort 사용")
 			}
 		}
 	}
 
-	res.Violations = append(append(append([]string{}, priv...), baseline...), restricted...)
-	// Pod Security Standards are cumulative: a workload is at the Restricted level only
-	// when it satisfies the Restricted controls too. Ranking on priv/baseline alone
-	// labelled every pod that merely avoided host namespaces and privileged=true as
-	// "restricted" — which is nearly every unhardened pod, since running as root with
-	// the default capability set violates nothing at the baseline level. That label is
-	// the one thing consumers key on: the Pod Security table drops `level === 'restricted'`
-	// rows, the warehouse export skips them, and the summary counts them as the goal
-	// state. So the pods with the least hardening were reported as the most hardened and
-	// their violations — already computed, right here in res.Violations — were never shown.
+	res.Violations = append(append(append([]string{}, hostLevel...), failsBaseline...), failsRestricted...)
+	// Pod Security Standards are cumulative, and the level names the *weakest policy that
+	// still admits the pod* — not the list of controls it breaks. So a pod that fails a
+	// Baseline control is admitted only by the Privileged policy, whatever else it got right.
+	//
+	// Both halves of that were wrong here. A pod that failed nothing but a Restricted
+	// control came out "restricted" — the goal state — which is what the Pod Security table
+	// and the warehouse export use to *drop* a row, so the least hardened pods were reported
+	// as the most hardened. Fixing that moved them to "baseline", but it left the genuine
+	// Baseline failures — a hostPath volume, a hostPort, a capability outside the Baseline
+	// allow-list — in that same "baseline" bucket, asserting those pods meet a profile they
+	// do not. The notify scan pages on "privileged" and nothing else, so a DaemonSet mounting
+	// the host filesystem or a container holding SYS_ADMIN never produced an alert at all.
 	switch {
-	case len(priv) > 0:
+	case len(hostLevel) > 0, len(failsBaseline) > 0:
 		res.Level = "privileged"
-	case len(baseline) > 0, len(restricted) > 0:
+	case len(failsRestricted) > 0:
 		res.Level = "baseline"
 	default:
 		res.Level = "restricted"
