@@ -177,6 +177,45 @@ func notifyScanKinds() []string {
 	return kinds
 }
 
+// notifyScanTargets lists the clusters one scan must spend its query budgets on, one each.
+//
+// A request naming a cluster_id is a single target, and so is a fleet-wide request on an
+// installation that has registered no clusters: there is no fleet to enumerate, so the scan keeps
+// reading the one window it always read, with the empty cluster ID passed through unchanged. An
+// empty ClusterID is an independent identifier in this schema, not a wildcard, so synthesising
+// targets from the cluster_id column of inventory rows would change which rows the filter matches —
+// the registry is the only list of clusters this product considers its fleet.
+func (s *Server) notifyScanTargets(ctx context.Context, clusterID string) []string {
+	if clusterID != "" {
+		return []string{clusterID}
+	}
+	clusters, err := s.db.ListK8sClusters(ctx)
+	if err != nil {
+		return []string{""}
+	}
+	ids := []string{}
+	for _, c := range clusters {
+		if strings.TrimSpace(c.ID) == "" {
+			continue
+		}
+		ids = append(ids, c.ID)
+	}
+	if len(ids) == 0 {
+		return []string{""}
+	}
+	return ids
+}
+
+// notifyScanTargetError labels a per-cluster lookup failure with the cluster it came from. With a
+// single target the label carries nothing the request did not already say — and in the unregistered
+// fallback it would be an empty prefix — so the message is left exactly as it was.
+func notifyScanTargetError(fanout bool, target string, err error) string {
+	if !fanout {
+		return err.Error()
+	}
+	return target + ": " + err.Error()
+}
+
 // handleK8sNotifyScan evaluates current high/critical RCA candidates and security findings for a
 // cluster and posts deduplicated, owner-routed, quiet-hours-aware notifications (NOTI-01~08).
 // POST /admin/k8s/notify/scan?cluster_id=
@@ -190,20 +229,69 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	// Fetch only the kinds the two analyses below read, and ask for one row past the budget so
-	// truncation is detectable rather than silent.
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
-		ClusterID: clusterID,
-		Kinds:     notifyScanKinds(),
-		Limit:     notifyScanBudget + 1,
-	})
-	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
-		return
-	}
-	truncated := len(items) > notifyScanBudget
-	if truncated {
-		items = items[:notifyScanBudget]
+	// A scan without cluster_id covers the whole fleet, which is how the admin guide tells operators
+	// to schedule it: one cron entry for every cluster. Every clause below used to read a single
+	// window for all of them — inventory by updated_at, events by last_seen, revisions by observed_at
+	// — with one budget the clusters shared. A cluster whose controllers rewrite rows constantly
+	// filled those windows by itself, so the quiet clusters' privileged workloads and over-broad
+	// Roles were never evaluated, and `truncated` said only that something had been dropped, never
+	// which cluster lost its turn. Each target now spends the budget once, on its own rows.
+	targets := s.notifyScanTargets(r.Context(), clusterID)
+	fanout := len(targets) > 1
+	kinds := notifyScanKinds()
+	items := []store.K8sInventoryItem{}
+	events := []store.K8sEvent{}
+	revisions := []store.K8sResourceRevision{}
+	truncated, eventsTruncated, revisionsTruncated := false, false, false
+	eventsError, revisionsError := "", ""
+	// The clusters whose turn was cut short. `truncated` and the per-window flags stay fleet-wide
+	// "any of them" answers; this is the part that says where to look.
+	clustersTruncated := []string{}
+	for _, target := range targets {
+		// Fetch only the kinds the two analyses below read, and ask for one row past the budget so
+		// truncation is detectable rather than silent.
+		part, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+			ClusterID: target,
+			Kinds:     kinds,
+			Limit:     notifyScanBudget + 1,
+		})
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, notifyScanTargetError(fanout, target, err), "server_error", "k8s_inventory_failed")
+			return
+		}
+		inventoryFull := len(part) > notifyScanBudget
+		if inventoryFull {
+			part = part[:notifyScanBudget]
+			truncated = true
+		}
+		items = append(items, part...)
+
+		// The two correlation windows. Their errors used to go to `_` and their sizes were never
+		// reported, so a failed lookup and a window too small to hold the cluster's rows both left
+		// AnalyzeRCA correlating against nothing and produced a healthy cluster's response byte for
+		// byte: `sent: 0`, `truncated: false`, no hint that half the input was missing. Nobody reads
+		// this endpoint's output, so the only symptom was an alert that never fired.
+		ev, evErr := s.db.ListK8sEvents(r.Context(), target, notifyScanEventBudget)
+		if evErr != nil && eventsError == "" {
+			eventsError = notifyScanTargetError(fanout, target, evErr)
+		}
+		// A full window means rows were very likely dropped; see notifyScanEventBudget for why this
+		// is inferred from the count rather than detected with an extra row like the inventory fetch.
+		eventsFull := len(ev) >= notifyScanEventBudget
+		eventsTruncated = eventsTruncated || eventsFull
+		events = append(events, ev...)
+
+		rev, revErr := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: target, Limit: notifyScanRevisionBudget})
+		if revErr != nil && revisionsError == "" {
+			revisionsError = notifyScanTargetError(fanout, target, revErr)
+		}
+		revisionsFull := len(rev) >= notifyScanRevisionBudget
+		revisionsTruncated = revisionsTruncated || revisionsFull
+		revisions = append(revisions, rev...)
+
+		if inventoryFull || eventsFull || revisionsFull {
+			clustersTruncated = append(clustersTruncated, target)
+		}
 	}
 	now := time.Now()
 	quiet := s.flagValue(r.Context(), "k8s_quiet_hours")
@@ -227,30 +315,22 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The two correlation windows. Their errors used to go to `_` and their sizes were never
-	// reported, so a failed lookup and a window too small to hold the cluster's rows both left
-	// AnalyzeRCA correlating against nothing and produced a healthy cluster's response byte for
-	// byte: `sent: 0`, `truncated: false`, no hint that half the input was missing. Nobody reads
-	// this endpoint's output, so the only symptom was an alert that never fired.
-	events, eventsErr := s.db.ListK8sEvents(r.Context(), clusterID, notifyScanEventBudget)
-	revisions, revisionsErr := s.db.ListK8sRevisions(r.Context(), store.K8sRevisionFilter{ClusterID: clusterID, Limit: notifyScanRevisionBudget})
-	// A full window means rows were very likely dropped; see notifyScanEventBudget for why this is
-	// inferred from the count rather than detected with an extra row like the inventory fetch does.
 	window := map[string]any{
 		"events": len(events), "revisions": len(revisions),
-		"events_truncated":    len(events) >= notifyScanEventBudget,
-		"revisions_truncated": len(revisions) >= notifyScanRevisionBudget,
+		"events_truncated":    eventsTruncated,
+		"revisions_truncated": revisionsTruncated,
+		"clusters_scanned":    len(targets),
+		"clusters_truncated":  clustersTruncated,
 	}
-	if eventsErr != nil {
-		window["events_error"] = eventsErr.Error()
+	if eventsError != "" {
+		window["events_error"] = eventsError
 	}
-	if revisionsErr != nil {
-		window["revisions_error"] = revisionsErr.Error()
+	if revisionsError != "" {
+		window["revisions_error"] = revisionsError
 	}
 	// The scan continues either way: the security half runs off inventory alone and is still valid.
 	// What must not happen is reporting the degraded run as a clean one.
-	if window["events_error"] != nil || window["revisions_error"] != nil ||
-		window["events_truncated"] == true || window["revisions_truncated"] == true {
+	if eventsError != "" || revisionsError != "" || eventsTruncated || revisionsTruncated {
 		window["window_notice"] = "장애 상관분석에 쓰는 이벤트·리비전 조회가 실패했거나 상한에 찼습니다. 창 밖 이벤트·설정 변경은 상관분석에 반영되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하고, 오류가 있으면 수집기·DB 상태를 확인하세요."
 	}
 
