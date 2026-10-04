@@ -673,6 +673,11 @@ func (s *SQLStore) InsertK8sEvent(ctx context.Context, e K8sEvent) error {
 	return err
 }
 
+// K8sEventQueryLimit returns the effective event query limit (default 100, maximum 500).
+func K8sEventQueryLimit(limit int) int {
+	return boundedLimit(limit, 100, 500)
+}
+
 func (s *SQLStore) ListK8sEvents(ctx context.Context, clusterID string, limit int) ([]K8sEvent, error) {
 	query := `SELECT id, cluster_id, namespace, involved_kind, involved_name, reason, type, message,
 		count, source, first_seen, last_seen, created_at FROM k8s_events WHERE 1=1`
@@ -682,7 +687,7 @@ func (s *SQLStore) ListK8sEvents(ctx context.Context, clusterID string, limit in
 		args = append(args, clusterID)
 	}
 	query += ` ORDER BY last_seen DESC LIMIT ?`
-	args = append(args, boundedLimit(limit, 100, 500))
+	args = append(args, K8sEventQueryLimit(limit))
 	rows, err := s.db.QueryContext(ctx, s.bind(query), args...)
 	if err != nil {
 		return nil, err

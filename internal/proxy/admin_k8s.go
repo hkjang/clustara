@@ -475,12 +475,18 @@ func (s *Server) handleK8sEvents(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", "method_not_allowed")
 		return
 	}
-	events, err := s.db.ListK8sEvents(r.Context(), r.URL.Query().Get("cluster_id"), intParam(r.URL.Query().Get("limit"), 100))
+	limit := store.K8sEventQueryLimit(intParam(r.URL.Query().Get("limit"), 100))
+	events, err := s.db.ListK8sEvents(r.Context(), r.URL.Query().Get("cluster_id"), limit)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_events_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+	windowFull := len(events) >= limit
+	out := map[string]any{"events": events, "limit": limit, "window_full": windowFull}
+	if windowFull {
+		out["window_notice"] = "조회 상한에 도달했으며 더 오래된 이벤트가 있을 수 있습니다."
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleK8sFindings(w http.ResponseWriter, r *http.Request) {

@@ -1058,7 +1058,7 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | GET/POST | `/admin/k8s/notify/config` | 조용한 시간(`quiet_hours` `HH-HH`, 0-23·빈 값은 해제) + 판정 타임존(`timezone` IANA 이름·빈 값은 서버 로컬 시각) + 팀→채널 매핑(`team_channels` JSON 객체) — 저장 시 검증하며 잘못된 값은 400 |
 | GET/POST | `/admin/notifications/mattermost` | Mattermost 알림 설정(webhook/channel/events) + ChatOps slash 검증 토큰(`slash_token`) |
 | POST | `/integrations/mattermost/command` | **ChatOps 수신**(공개·토큰검증, x-www-form-urlencoded) — `incidents`/`rca [ns]`/`slo [목표] [일수]`/`cost`/`help` 읽기전용 조회, Mattermost 응답 포맷 |
-| GET | `/admin/k8s/events` | 이벤트 조회 |
+| GET | `/admin/k8s/events` | 최신 이벤트 조회 (`cluster_id`, `limit`), 실효 `limit`과 조회 창 포화 여부 `window_full` 반환 |
 | GET | `/admin/k8s/findings` | health/security finding 조회 |
 | GET | `/admin/k8s/rca` | Pending, CrashLoop, ImagePull, OOM, unavailable + Readiness/Liveness probe, DNS, NodePressure, 직전 config 변경·배포 후 오류·배포 후 latency 회귀 연계 원인 후보 |
 | GET | `/admin/k8s/remediation/advice` | RCA별 권장 조치 Advisor — 권장 액션·근거·위험도·승인 필요·롤백 가능성·우선순위 |
@@ -1070,6 +1070,10 @@ Pod 상세의 **코드·설정 인사이트**는 임의 셸 입력을 받지 않
 | POST | `/admin/k8s/actions/{id}/approve` | 액션 승인 (요청 생성 시 영향도 자동 산출 → dry_run_diff, blocker 시 승인 강제). 허용 전이: `pending|approval_required|pending_approval -> approved` |
 | POST | `/admin/k8s/actions/{id}/reject` | 액션 반려 |
 | GET/POST | `/admin/k8s/dev-requests` | 개발자 뷰 요청 생성. `mode=request|approve|execute`로 역할별 승인/즉시 실행 흐름 선택 |
+
+`GET /admin/k8s/events`는 `last_seen` 내림차순의 `events` 배열(빈 결과는 `[]`)과 정수 `limit`, 불리언 `window_full`을 항상 반환합니다. `cluster_id`를 지정하면 해당 클러스터만 조회하고, 생략하면 전체 클러스터를 하나의 조회 창으로 읽습니다. `limit`은 생략·빈 값·공백·정수로 해석할 수 없는 값·0·음수이면 기본 100이며, 1~500은 그대로, 500 초과는 최대 500으로 제한됩니다. 응답의 `limit`은 실제 조회에 적용한 상한입니다.
+
+`window_full`은 반환된 이벤트 수가 실효 `limit` 이상일 때 `true`이며, 이때만 `window_notice`로 조회 상한에 도달해 더 오래된 이벤트가 있을 수 있음을 안내합니다. 예를 들어 저장된 행이 정확히 500개여도, 501개여도 `limit=500`에서는 `true`입니다. 이는 조회 창의 포화 표시이며, 이벤트 누락 확정이나 정확한 전체 건수·`has_more`를 뜻하지 않습니다. 상한 미만이면 `window_full: false`이고 `window_notice`는 생략됩니다.
 
 ## 클러스터 등록
 
