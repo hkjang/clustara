@@ -185,13 +185,18 @@ func notifyScanKinds() []string {
 // empty ClusterID is an independent identifier in this schema, not a wildcard, so synthesising
 // targets from the cluster_id column of inventory rows would change which rows the filter matches —
 // the registry is the only list of clusters this product considers its fleet.
-func (s *Server) notifyScanTargets(ctx context.Context, clusterID string) []string {
+//
+// A registry that cannot be listed falls back to that same single window, because failing the
+// request would stop the fleet-wide cron scan from notifying anything at all. It is returned with
+// the error, though: the two fallbacks produce identical target lists, so a caller that discards the
+// error cannot tell a fleet it failed to enumerate from a fleet that does not exist.
+func (s *Server) notifyScanTargets(ctx context.Context, clusterID string) ([]string, error) {
 	if clusterID != "" {
-		return []string{clusterID}
+		return []string{clusterID}, nil
 	}
 	clusters, err := s.db.ListK8sClusters(ctx)
 	if err != nil {
-		return []string{""}
+		return []string{""}, err
 	}
 	ids := []string{}
 	for _, c := range clusters {
@@ -201,9 +206,9 @@ func (s *Server) notifyScanTargets(ctx context.Context, clusterID string) []stri
 		ids = append(ids, c.ID)
 	}
 	if len(ids) == 0 {
-		return []string{""}
+		return []string{""}, nil
 	}
-	return ids
+	return ids, nil
 }
 
 // notifyScanTargetError labels a per-cluster lookup failure with the cluster it came from. With a
@@ -236,7 +241,11 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	// filled those windows by itself, so the quiet clusters' privileged workloads and over-broad
 	// Roles were never evaluated, and `truncated` said only that something had been dropped, never
 	// which cluster lost its turn. Each target now spends the budget once, on its own rows.
-	targets := s.notifyScanTargets(r.Context(), clusterID)
+	targets, targetsErr := s.notifyScanTargets(r.Context(), clusterID)
+	clustersError := ""
+	if targetsErr != nil {
+		clustersError = targetsErr.Error()
+	}
 	fanout := len(targets) > 1
 	kinds := notifyScanKinds()
 	items := []store.K8sInventoryItem{}
@@ -327,6 +336,12 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if revisionsError != "" {
 		window["revisions_error"] = revisionsError
+	}
+	if clustersError != "" {
+		window["clusters_error"] = clustersError
+		// Separate from window_notice below, which is about the two correlation windows: this one says
+		// the fleet was never enumerated, so `clusters_scanned: 1` is a fallback and not a fleet of one.
+		window["clusters_notice"] = "클러스터 목록을 읽지 못해 전 클러스터 스캔이 단일 공유 창으로 퇴행했습니다. 클러스터마다 예산을 따로 쓰지 못했으므로 조용한 클러스터는 평가되지 않았을 수 있습니다. cluster_id로 클러스터별로 다시 실행하고 DB 상태를 확인하세요."
 	}
 	// The scan continues either way: the security half runs off inventory alone and is still valid.
 	// What must not happen is reporting the degraded run as a clean one.
