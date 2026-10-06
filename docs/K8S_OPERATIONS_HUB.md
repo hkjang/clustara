@@ -1,8 +1,36 @@
 # K8s Operations Hub
 
-> **버전: v0.9.297** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.298** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.297)
+## 기능 상태 (v0.9.298)
+
+### notify scan · 조용한 시간에 억제된 스캔도 조회 진단을 그대로 보고합니다
+
+`POST /admin/k8s/notify/scan` 은 조용한 시간(`k8s_quiet_hours`)에 걸리면 알림을 보내지 않고
+`{"sent": 0, "suppressed": "quiet_hours", ...}` 로 답합니다. 그런데 그 조기 반환은 진단 키를 담는
+`window` 맵이 **만들어지기 전에** 일어났습니다. 바로 위의 팬아웃 루프는 이미 모든 조회를 실행해
+대가를 치른 뒤였으므로, `clusters_error`·`events_error`·`revisions_error`·`truncated`·
+`clusters_truncated` 는 계산되자마자 버려졌습니다.
+
+그 결과 클러스터 레지스트리를 읽지 못한 설치의 조용한 시간 스캔이 건강한 설치의 스캔과 **한 글자도
+다르지 않게** 응답했습니다. `docs/ADMIN_GUIDE.md` 가 cron 에 걸라고 권하는 함대 전체 스캔은 대개
+야간 — 운영자의 quiet 창이 열려 있는 시간 — 에 돌므로, v0.9.293(이벤트·리비전)·v0.9.295
+(`clusters_truncated`)·v0.9.297(`clusters_error`) 세 회차가 쌓은 진단이 하루 중 그 구간에서 통째로
+사라졌습니다.
+
+이제 `window` 맵은 quiet 판정 **위에서** 조립되고, 억제된 응답에도 `clock` 과 같은 방식으로
+병합됩니다. `truncated` 와 `truncation_notice` 도 함께 실립니다.
+
+- 억제 응답은 `sent: 0`·`suppressed: "quiet_hours"`·`quiet_hours`·`timezone` 의 의미와 키 이름을
+  그대로 유지하고, 그 위에 비-quiet 경로가 쓰는 것과 **같은 키·같은 문구**로 진단을 더합니다.
+- 세 안내 문구(`clusters_notice`·`window_notice`·`truncation_notice`)는 패키지 상수로 뽑아, 같은
+  고장을 03시와 10시에 읽은 운영자가 서로 다른 문구를 보지 않게 했습니다. 문구 값 자체는
+  이전과 동일합니다.
+- 조회가 전부 정상이면 `*_error`·`*_notice` 키는 **붙지 않습니다** — 건강한 설치의 조용한 시간
+  응답은 `truncated: false` 가 더해지는 것 외에 지금까지와 같습니다.
+
+조회 순서와 I/O 는 바뀌지 않았습니다(순수 맵 조립만 옮겼습니다). 조용한 시간 판정 규칙,
+타임존 해석, 알림 전송 경로, 중복 제거 키, DB 스키마·설정은 모두 그대로입니다.
 
 ### notify scan · 클러스터 목록 조회 실패를 "등록된 클러스터 없음" 과 구별해 보고합니다
 
