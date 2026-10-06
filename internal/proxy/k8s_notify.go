@@ -155,6 +155,19 @@ var (
 	notifyScanRevisionBudget = 1000
 )
 
+// The operator-facing notices a degraded scan carries. They are constants because the same scan can
+// end on either of two paths — suppressed by quiet hours or run to completion — and an operator
+// reading the same fault at 03:00 and at 10:00 must not be told two different stories about it.
+const (
+	// Separate from notifyScanWindowNotice, which is about the two correlation windows: this one says
+	// the fleet was never enumerated, so `clusters_scanned: 1` is a fallback and not a fleet of one.
+	notifyClustersNotice = "클러스터 목록을 읽지 못해 전 클러스터 스캔이 단일 공유 창으로 퇴행했습니다. 클러스터마다 예산을 따로 쓰지 못했으므로 조용한 클러스터는 평가되지 않았을 수 있습니다. cluster_id로 클러스터별로 다시 실행하고 DB 상태를 확인하세요."
+
+	notifyScanWindowNotice = "장애 상관분석에 쓰는 이벤트·리비전 조회가 실패했거나 상한에 찼습니다. 창 밖 이벤트·설정 변경은 상관분석에 반영되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하고, 오류가 있으면 수집기·DB 상태를 확인하세요."
+
+	notifyScanTruncationNotice = "검사 대상이 상한을 초과해 일부만 점검했습니다. 상한 밖 워크로드는 평가되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하세요."
+)
+
 // notifyScanKinds is the union of the kinds the two analyses this scan runs actually read.
 //
 // The fetch used to take rows of any kind ordered by updated_at. On a cluster whose churn is
@@ -302,28 +315,12 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 			clustersTruncated = append(clustersTruncated, target)
 		}
 	}
-	now := time.Now()
-	quiet := s.flagValue(r.Context(), "k8s_quiet_hours")
-	teamChannels := s.flagValue(r.Context(), "mattermost_team_channels")
-	// Judging the window on time.Now().Hour() meant judging it on whichever clock the container
-	// happens to run — UTC in an image without tzdata. An operator in Seoul saving "22-08" then got
-	// the inverse of what they asked for: alerts all night, silence through the working day. The
-	// configured zone is the operator's clock; empty keeps the server's local time.
-	tz := s.flagValue(r.Context(), "k8s_notify_timezone")
-	loc, tzNotice := notifyLocation(tz)
-	clock := map[string]any{"timezone": loc.String()}
-	if tzNotice != "" {
-		clock["timezone_notice"] = tzNotice
-	}
-	if inQuietHours(quiet, now.In(loc).Hour()) {
-		out := map[string]any{"sent": 0, "suppressed": "quiet_hours", "quiet_hours": quiet}
-		for k, v := range clock {
-			out[k] = v
-		}
-		writeJSON(w, http.StatusOK, out)
-		return
-	}
-
+	// Assembled here rather than after the quiet-hours check below, because the loop above has already
+	// run — and paid for — every lookup these keys describe. The quiet branch used to return before
+	// this map existed, so a scan that ran into a broken registry or a failed correlation window
+	// during the operator's quiet window answered byte for byte like a healthy installation's. The
+	// fleet-wide cron scan the admin guide recommends runs mostly at night, which is when that window
+	// is open. This is pure map assembly: no lookup moves, so the order of I/O above is unchanged.
 	window := map[string]any{
 		"events": len(events), "revisions": len(revisions),
 		"events_truncated":    eventsTruncated,
@@ -339,14 +336,44 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if clustersError != "" {
 		window["clusters_error"] = clustersError
-		// Separate from window_notice below, which is about the two correlation windows: this one says
-		// the fleet was never enumerated, so `clusters_scanned: 1` is a fallback and not a fleet of one.
-		window["clusters_notice"] = "클러스터 목록을 읽지 못해 전 클러스터 스캔이 단일 공유 창으로 퇴행했습니다. 클러스터마다 예산을 따로 쓰지 못했으므로 조용한 클러스터는 평가되지 않았을 수 있습니다. cluster_id로 클러스터별로 다시 실행하고 DB 상태를 확인하세요."
+		window["clusters_notice"] = notifyClustersNotice
 	}
 	// The scan continues either way: the security half runs off inventory alone and is still valid.
 	// What must not happen is reporting the degraded run as a clean one.
 	if eventsError != "" || revisionsError != "" || eventsTruncated || revisionsTruncated {
-		window["window_notice"] = "장애 상관분석에 쓰는 이벤트·리비전 조회가 실패했거나 상한에 찼습니다. 창 밖 이벤트·설정 변경은 상관분석에 반영되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하고, 오류가 있으면 수집기·DB 상태를 확인하세요."
+		window["window_notice"] = notifyScanWindowNotice
+	}
+
+	now := time.Now()
+	quiet := s.flagValue(r.Context(), "k8s_quiet_hours")
+	teamChannels := s.flagValue(r.Context(), "mattermost_team_channels")
+	// Judging the window on time.Now().Hour() meant judging it on whichever clock the container
+	// happens to run — UTC in an image without tzdata. An operator in Seoul saving "22-08" then got
+	// the inverse of what they asked for: alerts all night, silence through the working day. The
+	// configured zone is the operator's clock; empty keeps the server's local time.
+	tz := s.flagValue(r.Context(), "k8s_notify_timezone")
+	loc, tzNotice := notifyLocation(tz)
+	clock := map[string]any{"timezone": loc.String()}
+	if tzNotice != "" {
+		clock["timezone_notice"] = tzNotice
+	}
+	if inQuietHours(quiet, now.In(loc).Hour()) {
+		// Suppression says nothing was delivered; it must not also say nothing went wrong. The counters
+		// and failures below are the ones the loop already produced, reported with the same keys and
+		// the same wording the non-quiet path uses, so one fault does not read as two different ones
+		// depending on the hour it happened to be noticed.
+		out := map[string]any{"sent": 0, "suppressed": "quiet_hours", "quiet_hours": quiet, "truncated": truncated}
+		for k, v := range clock {
+			out[k] = v
+		}
+		for k, v := range window {
+			out[k] = v
+		}
+		if truncated {
+			out["truncation_notice"] = notifyScanTruncationNotice
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
 	}
 
 	rca := analyzer.AnalyzeRCA(items, events)
@@ -430,7 +457,7 @@ func (s *Server) handleK8sNotifyScan(w http.ResponseWriter, r *http.Request) {
 	// A truncated scan reports `sent: 0` exactly as a clean cluster does, so say which one it was:
 	// the findings outside the window were not evaluated, not judged harmless.
 	if truncated {
-		out["truncation_notice"] = "검사 대상이 상한을 초과해 일부만 점검했습니다. 상한 밖 워크로드는 평가되지 않았으므로 알림이 없다고 해서 이상이 없다는 뜻은 아닙니다. cluster_id로 범위를 좁혀 다시 실행하세요."
+		out["truncation_notice"] = notifyScanTruncationNotice
 	}
 	writeJSON(w, http.StatusOK, out)
 }
