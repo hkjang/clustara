@@ -1,8 +1,20 @@
 # K8s Operations Hub
 
-> **버전: v0.9.298** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.299** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.298)
+## 기능 상태 (v0.9.299)
+
+### 용량 리포트 · AMD·Intel GPU 노드도 수량을 표시합니다
+
+`GET /admin/k8s/capacity`의 SCALE-08 GPU 표가 NVIDIA 전용 집계 때문에 누락하던
+AMD·Intel 노드를 표시합니다. `nvidia.com/gpu`·`amd.com/gpu`·`intel.com/gpu`의 노드
+allocatable과 배치된 Pod requests를 각각 합산하며, 혼합 공급자 노드도 한 행으로 보고합니다.
+예를 들어 AMD 4개 중 1개를 요청한 노드는 `allocatable_gpu: 4`, `requested_gpu: 1`,
+`idle_gpu: 3`으로, Intel 2개 중 1개를 요청한 노드는 `2/1/1`로 표시됩니다.
+
+기존 일반·init 컨테이너 합산, 음수 Idle, CPU packing, 클러스터·노드 격리를 유지합니다.
+비용 집계의 `podRequestGPU`와 GPU 단가는 변경하지 않았으며, MIG·추가 리소스 키나
+limits 대체는 지원 범위에 추가하지 않았습니다. DB 스키마·설정 변경은 없습니다.
 
 ### notify scan · 조용한 시간에 억제된 스캔도 조회 진단을 그대로 보고합니다
 
