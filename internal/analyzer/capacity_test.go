@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"reflect"
 	"testing"
 
 	"clustara/internal/store"
@@ -102,5 +103,69 @@ func TestAnalyzeCapacityNodePackingAndGPU(t *testing.T) {
 	}
 	if len(rep.GPU) != 1 || rep.GPU[0].Allocatable != 2 || rep.GPU[0].Requested != 1 || rep.GPU[0].Idle != 1 {
 		t.Fatalf("gpu summary wrong: %+v", rep.GPU)
+	}
+}
+
+func TestAnalyzeCapacityGPUProviderQuantities(t *testing.T) {
+	type testCase struct {
+		name               string
+		alloc              map[string]any
+		requests           []map[string]any
+		initRequests       map[string]any
+		wantAlloc, wantReq int
+	}
+	cases := []testCase{
+		{
+			name:  "mixed providers and containers",
+			alloc: map[string]any{"nvidia.com/gpu": "2", "amd.com/gpu": float64(4), "intel.com/gpu": "1", "example.com/gpu": "99"},
+			requests: []map[string]any{
+				{"nvidia.com/gpu": "1", "amd.com/gpu": float64(1), "example.com/gpu": "99"},
+				{"amd.com/gpu": "1"},
+			},
+			initRequests: map[string]any{"intel.com/gpu": float64(1)},
+			wantAlloc:    7, wantReq: 4,
+		},
+		{name: "empty GPU"},
+		{
+			name:     "unknown resource excluded",
+			alloc:    map[string]any{"example.com/gpu": "4", "nvidia.com/mig-1g.5gb": "2"},
+			requests: []map[string]any{{"example.com/gpu": "1", "nvidia.com/mig-1g.5gb": "1"}},
+		},
+	}
+	for _, key := range []string{"nvidia.com/gpu", "amd.com/gpu", "intel.com/gpu"} {
+		cases = append(cases,
+			testCase{name: key + "/string", alloc: map[string]any{key: "4"}, requests: []map[string]any{{key: "1"}}, wantAlloc: 4, wantReq: 1},
+			testCase{name: key + "/JSON number", alloc: map[string]any{key: float64(2)}, requests: []map[string]any{{key: float64(1)}}, wantAlloc: 2, wantReq: 1},
+			testCase{name: key + "/negative idle", alloc: map[string]any{key: "2"}, requests: []map[string]any{{key: "3"}}, wantAlloc: 2, wantReq: 3},
+			testCase{name: key + "/request without allocatable", requests: []map[string]any{{key: "1"}}, wantReq: 1},
+		)
+	}
+	container := func(requests map[string]any) any {
+		return map[string]any{"resources": map[string]any{"requests": requests}}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Limits never substitute for missing requests, including on GPU-free nodes.
+			containers := []any{map[string]any{"resources": map[string]any{"limits": map[string]any{
+				"nvidia.com/gpu": "99", "amd.com/gpu": "99", "intel.com/gpu": "99",
+			}}}}
+			for _, requests := range tc.requests {
+				containers = append(containers, container(requests))
+			}
+			items := []store.K8sInventoryItem{
+				{ClusterID: "c1", Kind: "Node", Name: "worker-1", StatusObject: map[string]any{"allocatable": tc.alloc}},
+				{ClusterID: "c1", Kind: "Pod", Name: "trainer", Spec: map[string]any{
+					"nodeName": "worker-1", "containers": containers,
+					"initContainers": []any{container(tc.initRequests)},
+				}},
+			}
+			want := []GPUSummary{}
+			if tc.wantAlloc > 0 || tc.wantReq > 0 {
+				want = append(want, GPUSummary{ClusterID: "c1", Node: "worker-1", Allocatable: tc.wantAlloc, Requested: tc.wantReq, Idle: tc.wantAlloc - tc.wantReq})
+			}
+			if got := AnalyzeCapacity(items, nil).GPU; !reflect.DeepEqual(got, want) {
+				t.Fatalf("GPU summary = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
