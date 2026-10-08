@@ -377,6 +377,11 @@ UI 의 YAML 딥링크가 전 클러스터 보기에서 페이지가 선택한 �
 
 ### 용량 리포트 · 노드와 Pod 를 클러스터까지 포함해 교차 참조합니다
 
+SCALE-08 GPU 표는 `nvidia.com/gpu`, `amd.com/gpu`, `intel.com/gpu` 세 키의 노드
+`status.allocatable`과 해당 클러스터·노드에 배치된 Pod의 컨테이너 `resources.requests`를
+각각 합산합니다(기존처럼 일반·init 컨테이너 모두 포함, limits 대체 없음).
+`idle_gpu`는 `allocatable_gpu - requested_gpu`이므로 요청이 더 많으면 음수입니다.
+
 `/admin/k8s/capacity` 는 `cluster_id` 가 **선택** 파라미터라, 전 클러스터 보기에서는 인벤토리와
 메트릭이 여러 클러스터를 한 번에 담습니다. 노드 이름(`worker-1` …)과 namespace/name 은
 클러스터를 건너 반복되므로, 이제 SCALE-03/04/05/07/08 의 모든 교차 참조가 노드는

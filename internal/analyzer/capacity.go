@@ -224,6 +224,7 @@ func allocFinding(pod store.K8sInventoryItem, usageByPod map[string]int) (AllocF
 // cluster's node with another cluster's Pods, and two same-named nodes shared a single row whose
 // allocatable came from whichever cluster the inventory listed last.
 func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSummary) {
+	gpuKeys := []string{"nvidia.com/gpu", "amd.com/gpu", "intel.com/gpu"}
 	type nodeAgg struct {
 		clusterID, name  string
 		allocCPU, reqCPU int
@@ -236,11 +237,15 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 			continue
 		}
 		alloc := asAnyMap(it.StatusObject["allocatable"])
+		allocGPU := 0
+		for _, key := range gpuKeys {
+			allocGPU += qtyInt(alloc[key])
+		}
 		nodes[nodeKey(it.ClusterID, it.Name)] = &nodeAgg{
 			clusterID: it.ClusterID,
 			name:      it.Name,
 			allocCPU:  qtyCPU(alloc["cpu"]),
-			allocGPU:  qtyInt(alloc["nvidia.com/gpu"]),
+			allocGPU:  allocGPU,
 		}
 	}
 	for _, it := range items {
@@ -254,7 +259,12 @@ func nodePackingAndGPU(items []store.K8sInventoryItem) ([]NodePacking, []GPUSumm
 		}
 		agg.pods++
 		agg.reqCPU += podRequestCPU(it.Spec)
-		agg.reqGPU += podRequestGPU(it.Spec)
+		for _, raw := range podContainers(it.Spec) {
+			req := asAnyMap(asAnyMap(asAnyMap(raw)["resources"])["requests"])
+			for _, key := range gpuKeys {
+				agg.reqGPU += qtyInt(req[key])
+			}
+		}
 	}
 	packing := []NodePacking{}
 	gpu := []GPUSummary{}
