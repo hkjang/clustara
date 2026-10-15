@@ -1,8 +1,30 @@
 # K8s Operations Hub
 
-> **버전: v0.9.299** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.300** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.299)
+## 기능 상태 (v0.9.300)
+
+### 용량 리포트 · 분석 대상 Kind 로만 조회하고 창 포화를 보고합니다
+
+`GET /admin/k8s/capacity`는 인벤토리를 Kind 필터 없이 `updated_at` 내림차순 4000행으로 읽었지만,
+집계를 담당하는 `AnalyzeCapacity`는 `HorizontalPodAutoscaler`·`Pod`·`Node` 세 Kind 만 읽습니다.
+분석 대상이 아니면서 자주 갱신되는 ConfigMap·Secret·Event 가 바쁜 클러스터에서는 가장 최신 행이므로
+그 창을 채우고 Node·Pod 를 밀어냈습니다. 그러면 `report.node_packing`·`report.gpu`·
+`report.projections` 가 **아무것도 안 도는 클러스터와 구별되지 않는 빈 배열**로 돌아왔고,
+응답에는 상한에 닿았다는 사실조차 없었습니다.
+
+이제 조회는 신규 `analyzer.CapacityRelevantKinds()` 의 세 Kind 로 좁혀지고, 상한보다 한 행 많은
+`capacityScanBudget + 1` 로 받아 초과분을 잘라낸 뒤 바로 옆 `/admin/k8s/security` 와 같은 결의
+`scan` 블록을 함께 돌려줍니다.
+
+- `scan.status` — 창이 전부를 담았으면 `checked`, 상한에 닿았으면 `partial`.
+- `scan.resources` — 집계에 실제로 들어간 용량 관련 리소스 수(상한 이하).
+- `scan.reason` — `partial` 일 때만, 노드 packing·GPU·증가 추세가 실제 수요보다 낮게 보일 수 있으니
+  이 결과만으로 증설을 판단하지 말라는 안내.
+
+UI 가 직접 렌더하는 `report`·`note` 키와 집계·금액 로직(비용 경로가 공유하는 `podRequestGPU` 포함)은
+그대로입니다. 기본 상한 4000 과 메트릭 조회(2000행)도 바뀌지 않았으며, 응답에 키가 늘어나므로 이
+JSON 을 소비하는 스크립트는 알려지지 않은 키를 무시해야 합니다. DB 스키마·설정 변경은 없습니다.
 
 ### 용량 리포트 · AMD·Intel GPU 노드도 수량을 표시합니다
 
