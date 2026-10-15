@@ -589,15 +589,40 @@ func (s *Server) handleK8sCapacity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 4000})
+	// Fetch only the kinds this analysis reads, and ask for one row past the
+	// budget so truncation is detectable.
+	//
+	// The old fetch took 4000 rows of any kind ordered by updated_at while
+	// AnalyzeCapacity reads only HorizontalPodAutoscaler, Pod and Node. Kinds that
+	// churn without being analysed — ConfigMap, Secret, Event — are the freshest
+	// rows in a busy cluster, so they filled the window and the Nodes and Pods fell
+	// out of it: node_packing, gpu and projections came back empty, indistinguishable
+	// from a cluster that runs nothing.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: clusterID,
+		Kinds:     analyzer.CapacityRelevantKinds(),
+		Limit:     capacityScanBudget + 1,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
 	}
+	truncated := len(items) > capacityScanBudget
+	if truncated {
+		items = items[:capacityScanBudget]
+	}
 	metrics, _ := s.db.ListK8sMetricSamples(r.Context(), clusterID, 2000)
 	report := analyzer.AnalyzeCapacity(items, metrics)
+	scan := map[string]any{"status": "checked", "resources": len(items)}
+	if truncated {
+		scan = map[string]any{
+			"status": "partial", "resources": len(items),
+			"reason": "용량 분석 대상이 상한을 초과해 일부만 집계했습니다. 노드 packing·GPU·증가 추세는 실제 수요보다 낮게 보일 수 있으므로 이 결과만으로 증설을 판단하지 마세요.",
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report": report,
+		"scan":   scan,
 		"note":   "HPA 현황·과소/과다 할당·노드 packing·GPU를 인벤토리(spec+status)와 메트릭으로 산출한 결과입니다.",
 	})
 }
@@ -653,6 +678,11 @@ func (s *Server) handleK8sSecurity(w http.ResponseWriter, r *http.Request) {
 		"note":            "Pod Security Standards 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백을 인벤토리로 점검한 결과입니다.",
 	})
 }
+
+// capacityScanBudget caps how many capacity-relevant resources one capacity run
+// examines. A var so a test can drive the truncation path without seeding
+// thousands of rows.
+var capacityScanBudget = 4000
 
 // securityScanBudget caps how many security-relevant resources one posture run
 // examines. A var so a test can drive the truncation path without seeding

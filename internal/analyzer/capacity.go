@@ -134,6 +134,14 @@ func ProjectNodeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetr
 	return out
 }
 
+// CapacityRelevantKinds lists the inventory kinds the capacity analysis reads, so a caller with a
+// row budget can spend it on those instead of on kinds the analysis skips. The list must track the
+// kind switches in AnalyzeCapacity, nodePackingAndGPU and ProjectNodeCapacity: a kind missing here
+// is not reported as unfetched, its findings simply never appear.
+func CapacityRelevantKinds() []string {
+	return []string{"HorizontalPodAutoscaler", "Node", "Pod"}
+}
+
 // AnalyzeCapacity computes HPA status, allocation efficiency, node packing and GPU usage from
 // the stored inventory (spec + status) and the latest metric samples.
 func AnalyzeCapacity(items []store.K8sInventoryItem, metrics []store.K8sMetricSample) CapacityReport {
