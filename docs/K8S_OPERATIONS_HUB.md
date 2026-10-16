@@ -1,8 +1,32 @@
 # K8s Operations Hub
 
-> **버전: v0.9.300** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
+> **버전: v0.9.301** · 이 문서는 Clustara Kubernetes 운영 허브 API를 설명합니다. (바이너리 `AppVersion`과 최신 릴리즈 태그가 동일하게 정렬됩니다.)
 
-## 기능 상태 (v0.9.300)
+## 기능 상태 (v0.9.301)
+
+### 원인 분석 API · 분석 대상 Kind 로만 조회하고 창 포화를 보고합니다
+
+`GET /admin/k8s/rca`는 인벤토리를 Kind 필터 없이 `updated_at` 내림차순 1000행으로 읽었지만,
+후보를 만드는 `AnalyzeRCA`는 `analyzer.RCARelevantKinds()` 의 일곱 Kind
+(`CronJob`·`DaemonSet`·`Deployment`·`Job`·`Node`·`Pod`·`StatefulSet`)만 읽습니다.
+분석 대상이 아니면서 자주 갱신되는 ConfigMap·Secret·Endpoints 가 바쁜 클러스터에서는 가장 최신
+행이므로 그 창을 채우고 Pod 를 밀어냈습니다. 그러면 CrashLoopBackOff·OOMKilled Pod 가 있어도
+`candidates` 가 **건강한 클러스터와 구별되지 않는 빈 배열**로 돌아왔고, 응답에는 상한에 닿았다는
+사실조차 없었습니다.
+
+이제 조회는 `analyzer.RCARelevantKinds()` 의 일곱 Kind 로 좁혀지고, 상한보다 한 행 많은
+`rcaScanBudget + 1` 로 받아 초과분을 잘라낸 뒤 바로 옆 `/admin/k8s/capacity`·`/admin/k8s/security`
+와 같은 결의 `scan` 블록을 함께 돌려줍니다.
+
+- `scan.status` — 창이 전부를 담았으면 `checked`, 상한에 닿았으면 `partial`.
+- `scan.resources` — 후보 산출에 실제로 들어간 RCA 관련 리소스 수(상한 이하).
+- `scan.reason` — `partial` 일 때만, 창 밖으로 밀려난 워크로드의 장애는 후보에 나타나지 않으므로
+  후보가 없다는 것을 정상으로 판단하지 말라는 안내.
+
+UI 가 직접 렌더하는 `candidates`·`count`·`note` 키와 후보 판정 로직은 그대로입니다. 조회 예산은
+기존 상한 그대로 1000 이며 같은 핸들러의 Event 500행·spec 리비전 1000행·메트릭 4000행 조회도
+바뀌지 않았습니다. 응답에 키가 늘어나므로 이 JSON 을 소비하는 스크립트는 알려지지 않은 키를
+무시해야 합니다. DB 스키마·설정 변경은 없습니다.
 
 ### 용량 리포트 · 분석 대상 Kind 로만 조회하고 창 포화를 보고합니다
 
