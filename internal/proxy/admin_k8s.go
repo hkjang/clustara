@@ -522,10 +522,26 @@ func (s *Server) handleK8sRCA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.URL.Query().Get("cluster_id")
-	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{ClusterID: clusterID, Limit: 1000})
+	// Fetch only the kinds this analysis reads, and ask for one row past the
+	// budget so truncation is detectable.
+	//
+	// The old fetch took 1000 rows of any kind ordered by updated_at while
+	// AnalyzeRCA reads only the kinds RCARelevantKinds names. Kinds that churn
+	// without being analysed — ConfigMap, Secret, Endpoints — are the freshest rows
+	// in a busy cluster, so they filled the window and the failing Pods fell out of
+	// it: candidates came back empty, indistinguishable from a healthy cluster.
+	items, err := s.db.ListK8sInventory(r.Context(), store.K8sInventoryFilter{
+		ClusterID: clusterID,
+		Kinds:     analyzer.RCARelevantKinds(),
+		Limit:     rcaScanBudget + 1,
+	})
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "server_error", "k8s_inventory_failed")
 		return
+	}
+	truncated := len(items) > rcaScanBudget
+	if truncated {
+		items = items[:rcaScanBudget]
 	}
 	events, err := s.db.ListK8sEvents(r.Context(), clusterID, 500)
 	if err != nil {
@@ -547,9 +563,17 @@ func (s *Server) handleK8sRCA(w http.ResponseWriter, r *http.Request) {
 	if latency, lerr := s.db.ListK8sMetricSamples(r.Context(), clusterID, 4000); lerr == nil {
 		candidates = append(candidates, analyzer.AnalyzeLatencyRegressions(revisions, latency, now, 24*time.Hour)...)
 	}
+	scan := map[string]any{"status": "checked", "resources": len(items)}
+	if truncated {
+		scan = map[string]any{
+			"status": "partial", "resources": len(items),
+			"reason": "분석 대상이 상한을 초과해 일부만 조회했습니다. 창 밖으로 밀려난 워크로드의 장애는 후보에 나타나지 않으므로 후보가 없다는 것을 정상으로 판단하지 마세요.",
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"candidates": candidates,
 		"count":      len(candidates),
+		"scan":       scan,
 		"note":       "저장된 인벤토리·Kubernetes Event·spec 리비전을 바탕으로 산출한 규칙 기반 원인 후보입니다. (probe·DNS·config 변경 포함)",
 	})
 }
@@ -678,6 +702,10 @@ func (s *Server) handleK8sSecurity(w http.ResponseWriter, r *http.Request) {
 		"note":            "Pod Security Standards 등급, RBAC 위험, 이미지 태그, Secret 참조, NetworkPolicy 공백을 인벤토리로 점검한 결과입니다.",
 	})
 }
+
+// rcaScanBudget caps how many RCA-relevant resources one root-cause run examines.
+// A var so a test can drive the truncation path without seeding thousands of rows.
+var rcaScanBudget = 1000
 
 // capacityScanBudget caps how many capacity-relevant resources one capacity run
 // examines. A var so a test can drive the truncation path without seeding
