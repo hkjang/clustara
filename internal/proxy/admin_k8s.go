@@ -635,14 +635,28 @@ func (s *Server) handleK8sCapacity(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		items = items[:capacityScanBudget]
 	}
-	metrics, _ := s.db.ListK8sMetricSamples(r.Context(), clusterID, 2000)
+	// Allocation efficiency (SCALE-03/04) and the node projections (SCALE-05) come from
+	// the metric samples alone, so a failed lookup here answers with the same empty
+	// allocation and projections as a cluster whose collectors have not reported yet —
+	// and the UI reads that as "과소 할당 0 · 30일 내 소진 0". Report the failure the way
+	// the notify window reports its own rather than dropping the error: the
+	// inventory-derived half of the report is still sound, so this degrades instead of
+	// failing the request.
+	metrics, merr := s.db.ListK8sMetricSamples(r.Context(), clusterID, 2000)
 	report := analyzer.AnalyzeCapacity(items, metrics)
 	scan := map[string]any{"status": "checked", "resources": len(items)}
+	reasons := []string{}
 	if truncated {
-		scan = map[string]any{
-			"status": "partial", "resources": len(items),
-			"reason": "용량 분석 대상이 상한을 초과해 일부만 집계했습니다. 노드 packing·GPU·증가 추세는 실제 수요보다 낮게 보일 수 있으므로 이 결과만으로 증설을 판단하지 마세요.",
-		}
+		scan["status"] = "partial"
+		reasons = append(reasons, capacityTruncationReason)
+	}
+	if merr != nil {
+		scan["status"] = "partial"
+		scan["metrics_error"] = merr.Error()
+		reasons = append(reasons, capacityMetricsReason)
+	}
+	if len(reasons) > 0 {
+		scan["reason"] = strings.Join(reasons, " ")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"report": report,
@@ -711,6 +725,14 @@ var rcaScanBudget = 1000
 // examines. A var so a test can drive the truncation path without seeding
 // thousands of rows.
 var capacityScanBudget = 4000
+
+// capacityTruncationReason explains a capacity window that overflowed its budget.
+const capacityTruncationReason = "용량 분석 대상이 상한을 초과해 일부만 집계했습니다. 노드 packing·GPU·증가 추세는 실제 수요보다 낮게 보일 수 있으므로 이 결과만으로 증설을 판단하지 마세요."
+
+// capacityMetricsReason explains a capacity report whose metric samples could not be
+// read: the allocation and projection tables are empty because the lookup failed, not
+// because the workloads are sized correctly.
+const capacityMetricsReason = "메트릭 표본을 읽지 못해 할당 효율(과소/과다 할당)과 노드 소진 예측을 계산하지 못했습니다. 두 항목이 비어 있는 것은 '이상 없음'이 아니므로 DB 상태를 확인하고 다시 조회하세요."
 
 // securityScanBudget caps how many security-relevant resources one posture run
 // examines. A var so a test can drive the truncation path without seeding
